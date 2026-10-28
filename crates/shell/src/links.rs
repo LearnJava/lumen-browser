@@ -115,6 +115,18 @@ pub fn same_document_fragment(current: &str, resolved: &str) -> Option<String> {
     Some(resolved_frag.unwrap_or("").to_string())
 }
 
+/// [`same_document_fragment`] for `navigation.navigate(url)`: besides another
+/// fragment, the very same URL with a non-empty fragment is a same-document
+/// navigation too (HTML LS §7.4.2) — it replaces the current entry instead of
+/// reloading. Returns `(fragment, replaces_entry)`.
+pub fn same_document_fragment_target(current: &str, resolved: &str) -> Option<(String, bool)> {
+    if let Some(fragment) = same_document_fragment(current, resolved) {
+        return Some((fragment, false));
+    }
+    let (_, fragment) = resolved.split_once('#')?;
+    (resolved == current && !fragment.is_empty()).then(|| (fragment.to_owned(), true))
+}
+
 /// Walk the document tree and return the first element whose `id` attribute
 /// equals `id_value` (case-sensitive per HTML LS §3.2.6). Returns `None` if
 /// no such element exists.
@@ -175,6 +187,33 @@ mod tests {
         assert_eq!(fragment_url("http://x/p", ""), "http://x/p");
         // Only the first '#' splits the base from the fragment.
         assert_eq!(fragment_url("http://x/a#b#c", "z"), "http://x/a#z");
+    }
+
+    #[test]
+    fn fragment_target_other_fragment_pushes() {
+        assert_eq!(
+            same_document_fragment_target("http://x/p", "http://x/p#a"),
+            Some(("a".to_owned(), false))
+        );
+    }
+
+    #[test]
+    fn fragment_target_same_url_with_fragment_replaces() {
+        assert_eq!(
+            same_document_fragment_target("http://x/p#a", "http://x/p#a"),
+            Some(("a".to_owned(), true))
+        );
+    }
+
+    #[test]
+    fn fragment_target_same_url_without_fragment_is_a_reload() {
+        assert_eq!(same_document_fragment_target("http://x/p", "http://x/p"), None);
+        assert_eq!(same_document_fragment_target("http://x/p#", "http://x/p#"), None);
+    }
+
+    #[test]
+    fn fragment_target_other_document_is_not_same_document() {
+        assert_eq!(same_document_fragment_target("http://x/p#a", "http://x/q#a"), None);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # BUG-1700 — `navigation.navigate("#frag")`/`back()`/`traverseTo()` между записями одного документа — полная навигация (повторная загрузка, новый realm), страница уходит в цикл перезагрузок
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-28 (P1)
 **Заведён:** 2026-10-26 (P2, WPT-NAV-SCOUT)
 **Область:** shell (`crates/shell/src/app/about_to_wait.rs` — разбор `take_nav_updates`, действия 0/1/2/3/4; `crates/shell/src/lumen/navigation.rs` — `navigate_to_inner`, `navigate_back`, `navigate_to_key`)
 
@@ -23,3 +23,19 @@ WPT-NAV-SCOUT, кластер A (`docs/wpt-vendor-notes/navigation-api.md`): 95 
 ## Как проверить
 
 Страница из пробы выше: `navigation.navigate("#foo")` → в логе нет `Reload:`/`GET …#foo`, `window.__marker` переживает вызов, `navigation.entries().length` растёт ровно на 1. `run_corpus.py --prefixes navigation-api/scroll-behavior` — ни одного TIMEOUT «BiDi call».
+
+## Исправление (2026-10-28, P1)
+
+Корень: `navigate_to_inner`/`navigate_replace` (`crates/shell/src/lumen/navigation.rs`) не знали о фрагментных целях — любой `navigation.navigate(url)` без перехвата шёл в `reload()`. Теперь URL, отличающийся от текущего только фрагментом (и тот же URL с непустым фрагментом — HTML LS §7.4.2, замена записи), идёт через `navigate_fragment_inner(.., dispatch_navigate=false, replace)` (`page_load.rs`): тот же документ, тот же realm, `:target`/прокрутка/`hashchange`; событие `navigate` отдано страницей до этого (`hashChange: true`, `destination.sameDocument: true`).
+
+Сопутствующее, без чего `navigation.entries()` не отражал результат:
+
+* дренаж `HistoryUrlUpdate` в `about_to_wait.rs` публикует стеки (`commit_nav_state`) и стреляет `currententrychange` + `navigatesuccess` — раньше `pushState`/`location.hash =`/клик по `#x` записи в `entries()` не добавляли; общий хелпер `push_same_document_entry`;
+* `commit_nav_state` берёт URL записи из `display_url` (для same-document записей `source` — это документ, а не запись); перехваченный `push` клал в стек новый URL вместо старого;
+* `_lumen_navigate_or_fragment`: тот же URL с фрагментом — замена без перезагрузки и без `hashchange`;
+* `Navigation._request`: фрагментная цель не закрывается таймерным запасным путём (он срабатывал раньше оболочки и отдавал старую запись), `committed` закрывается на `currententrychange`, `finished` — на `navigatesuccess`.
+
+Замер `run_corpus.py --prefixes navigation-api` (dev-release): 4.96 % → 6.74 % (32 из 478), TIMEOUT 158 → 86, «browser did not answer a BiDi call» 88 → 16 — все 16 остались у `navigation.reload()`/`window.stop()` (`reload()` из оболочки всегда полная загрузка, событие `navigate` типа `reload` не диспатчится — [NAV-API-2](../ROADMAP.md)), `navigation-methods` и `scroll-behavior` без таких таймаутов.
+
+Остаток (не этот баг): `navigate` приходит асинхронно — BUG-1703; `currententrychange` для `replaceState`/`navigate(.., {history: "replace"})` не стреляет (запись с тем же ключом и id, `_sync` не видит смены); `entries()` содержит записи предыдущих документов вкладки.
+
