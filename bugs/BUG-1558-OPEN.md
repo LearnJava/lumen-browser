@@ -29,3 +29,22 @@ WPT-RUN-14 срез 25: `css/cssom-view/{getClientRects-*,getBoundingClientRect-
 ## Как проверить
 
 `css/cssom-view/getBoundingClientRect-empty-inline.html`, `getClientRects-inline.html`.
+
+## Срез 1 (2026-10-28, P3) — влит
+
+Сделано:
+
+- `DOMRectList`/`DOMRect`/`DOMRectReadOnly`/`DOMPoint*`/`DOMMatrix*`/`DOMQuad` — `@@toStringTag` (`[object DOMRectList]`).
+- Пустой inline-элемент (`<span></span>`) получает место: layout оставляет нулевой сегмент-маркер (`InlineSegment::is_empty_inline_marker`), `for_each_empty_inline_element` ставит нулевой по ширине прямоугольник высотой в строку после предыдущего текста (за схлопнутым пробелом — в начале следующего фрагмента) или в начале следующего текста; `getBoundingClientRect`/`getClientRects`/`offsetLeft`/`offsetTop` больше не нули. Фазовый случай (рана нет) не строится.
+- `Range.getClientRects()`/`getBoundingClientRect()` по спецификации: прямоугольники содержащихся элементов (`display: contents` — через детей) и выделенных частей строк каждого Text (`_lumen_text_frag_rects`; мягкий перенос без ширины, границы внутри суррогатной пары сдвигаются наружу); таблица фрагментов теперь включает поддеревья `content-visibility: hidden`.
+- `offsetParent`: любой `<body>` и безрамочный элемент (`display: none`-поддерево) — `null`; `position: fixed` — ближайший предок, образующий containing block (`transform`/`perspective`/`filter`/`backdrop-filter`/`transform-style: preserve-3d`/`contain: paint|layout`/`will-change`), иначе `null`; `perspective` и `transform-style` опубликованы в computed-style.
+
+WPT `css/cssom-view` (файлы `DOMRectList`, `getBoundingClientRect-*`, `getClientRects-*`, `offset*`, `range-*`, `cssom-get*Rect*`): +25 сабтестов к базе того же main (`offsetTopLeft-empty-inline*`, `offsetParent-body-and-html`, `offsetParent-fixed`, `DOMRectList`, три `range-*`, `getBoundingClientRect-newline`). Display list 194 страниц корпуса (`graphic_tests`, `samples`) — без изменений; `css/CSS2/linebox`, `css/CSS2/normal-flow`, `css/css-display` — без регрессий.
+
+Остаток:
+
+- Пустой inline в фазовой строке (`<span></span>` единственный в блоке): `getBoundingClientRect-empty-inline-002` ждёт `(8, 8, 0, 0)`, ран не строится — нужен ран без строк и без влияния на схлопывание полей.
+- `getBoundingClientRect-empty-inline` — пустой `<span>` рядом с `inline-block` на одной строке (базовая линия, `y` 92); раскладка строк однородной высоты.
+- `<br>`: прямоугольник в rtl/вертикальных режимах (`getClientRects-br-*-rtl`), `getClientRects-inline-atomic-child`/`-inline-child`/`-with-block-child`.
+- Ширина части фрагмента пропорциональна длине (нет посимвольных advance) — `getBoundingClientRect-shy`, `getBoundingClientRect-svg` (`<tspan>`), `*-zoom`.
+- `offsetParent_element_test` (`<svg>` без `offsetParent`), `offsetTopLeft-trailing-space-inline`, `offsetTop-offsetLeft-nested-offsetParents`/`-with-zoom`.

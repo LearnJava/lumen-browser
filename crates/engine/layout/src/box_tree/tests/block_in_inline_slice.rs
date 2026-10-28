@@ -60,8 +60,9 @@ fn empty_inline_box_with_margin_left_keeps_an_edge_segment() {
 }
 
 #[test]
-fn empty_inline_box_without_edges_stays_empty() {
-    assert!(pieces(r#"x<span></span>y"#).is_empty());
+fn empty_inline_box_without_edges_leaves_only_a_marker() {
+    // No edge to paint or space: only the zero-width place-holder (BUG-1558), no width in the line.
+    assert_eq!(pieces(r#"x<span></span>y"#), vec![(String::new(), 0.0, 0.0, 0.0, 0.0)]);
 }
 
 #[test]

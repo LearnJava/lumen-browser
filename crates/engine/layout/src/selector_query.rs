@@ -2343,6 +2343,13 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("shape-image-threshold".into(), number_str(style.shape_image_threshold));
 
     // ── Perspective ──────────────────────────────────────────────────
+    // Both decide whether the element is the containing block of `position: fixed` descendants,
+    // which `offsetParent` reports (BUG-1558).
+    m.insert("perspective".into(), style.perspective.map_or_else(|| "none".to_owned(), px_str));
+    m.insert("transform-style".into(), match style.transform_style {
+        crate::style::TransformStyle::Flat => "flat",
+        crate::style::TransformStyle::Preserve3d => "preserve-3d",
+    }.into());
     m.insert("perspective-origin".into(), format!(
         "{} {}",
         position_component_to_css(style.perspective_origin.0),

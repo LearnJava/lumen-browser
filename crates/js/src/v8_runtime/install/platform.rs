@@ -374,6 +374,31 @@ pub(crate) fn install_element_geometry(
         });
     }
 
+    // BUG-1558: the laid-out fragments of one text node — flat `[x, y, w, h, utf16Start, utf16End,
+    // …]` per fragment, in line order — backing `Range.getClientRects()` (CSSOM View §«Range»: a
+    // rect per line for the selected part of every Text node). Same opt-in table as above.
+    {
+        let table = Arc::clone(&flush.text_frag_rects);
+        let needed = Arc::clone(&flush.text_frags_needed);
+        let flush_tf = flush.clone();
+        reg!(scope, ctx, store, "_lumen_text_frag_rects", move |nid: u32| -> Vec<f64> {
+            needed.store(true, Ordering::Relaxed);
+            flush_tf.maybe_flush();
+            let t = table.lock().unwrap();
+            t.get(&nid)
+                .map(|frags| {
+                    frags
+                        .iter()
+                        .flat_map(|f| {
+                            let [x, y, w, h] = f.rect;
+                            [x, y, w, h, f.start as f32, f.end as f32].map(f64::from)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        });
+    }
+
     // CSSOM-11: border box and edge widths of a pseudo-element box, backing `CSSPseudoElement`'s
     // geometry — `[x, y, w, h, border t/r/b/l, padding t/r/b/l, margin t/r/b/l]`, or `undefined`
     // when the pseudo-element owns no box (not generated, `display: none`, or inline — see

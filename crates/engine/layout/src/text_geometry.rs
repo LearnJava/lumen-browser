@@ -107,7 +107,7 @@ pub fn collect_text_frag_rects(
                             continue;
                         };
                         let byte_start = span.source_char_offset as usize;
-                        let byte_end = byte_start.saturating_add(span.text.len());
+                        let byte_end = source_end_byte(source, byte_start, span.text);
                         let start = utf16_offset_of_byte(source, byte_start);
                         let end = utf16_offset_of_byte(source, byte_end);
                         if end <= start {
@@ -122,9 +122,32 @@ pub fn collect_text_frag_rects(
                 }
             }
         }
+        // `content-visibility: hidden` (BUG-1400): the skipped subtree, laid out as a probe.
+        stack.extend(b.cv_hidden.iter().rev());
         stack.extend(b.children.iter().rev());
     }
     out
+}
+
+/// Byte offset in `source` where the text of a fragment ends, given that it starts at `start`.
+/// The fragment's text lacks the soft hyphens (U+00AD) `source` carries, so its length alone would
+/// land short of them and shift every later offset (BUG-1558). A fragment that is not a plain
+/// subsequence of the source (`text-transform`, collapsed whitespace) keeps the length-based end.
+fn source_end_byte(source: &str, start: usize, text: &str) -> usize {
+    let fallback = start.saturating_add(text.len());
+    let Some(rest) = source.get(start..) else { return fallback };
+    let mut src = rest.char_indices().peekable();
+    let mut end = 0;
+    for c in text.chars() {
+        while c != '\u{ad}' && matches!(src.peek(), Some(&(_, '\u{ad}'))) {
+            src.next();
+        }
+        match src.next() {
+            Some((i, sc)) if sc == c => end = i + sc.len_utf8(),
+            _ => return fallback,
+        }
+    }
+    start + end
 }
 
 /// Every `(text node index, UTF-16 offset)` whose character box contains
@@ -211,5 +234,26 @@ mod tests {
             frag([0.0, 20.0, 50.0, 20.0], 5, 10),
         ]);
         assert_eq!(text_hits_at_point(&t, 15.0, 30.0), vec![(3, 6)]);
+    }
+}
+
+#[cfg(test)]
+mod source_end_tests {
+    use super::source_end_byte;
+
+    #[test]
+    fn a_fragment_ends_after_the_soft_hyphens_it_skipped() {
+        // "12\u{ad}456": the fragment "12456" covers all 6 source bytes + the 2-byte hyphen.
+        let src = "12\u{ad}456";
+        assert_eq!(source_end_byte(src, 0, "12456"), src.len());
+        // Broken at the hyphen: the first fragment stops before it, the second starts after it.
+        assert_eq!(source_end_byte(src, 0, "12"), 2);
+        assert_eq!(source_end_byte(src, 4, "456"), src.len());
+    }
+
+    #[test]
+    fn a_fragment_that_is_not_a_subsequence_keeps_its_length() {
+        assert_eq!(source_end_byte("a  b", 0, "a b"), 3);
+        assert_eq!(source_end_byte("abc", 1, "BC"), 3);
     }
 }

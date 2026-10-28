@@ -458,7 +458,8 @@ pub(crate) fn split_inline_pieces(
     out_items: &mut Vec<LayoutBox>,
 ) {
     let push_run = |chunk: Vec<InlineSegment>, out_items: &mut Vec<LayoutBox>| {
-        if chunk.is_empty() {
+        // A chunk of nothing but empty-element markers is a phantom line (CSS Inline 3 §3.4).
+        if chunk.iter().all(InlineSegment::is_empty_inline_marker) {
             return;
         }
         let mut chunk = chunk;
@@ -535,7 +536,7 @@ fn inline_space_width(b: &LayoutBox, measurer: Option<&dyn TextMeasurer>) -> f32
         return 0.0;
     };
     let em = b.style.font_size;
-    segments.first().map_or_else(
+    segments.iter().find(|s| !s.is_empty_inline_marker()).map_or_else(
         || m.char_width(' ', em),
         |seg| m.char_width_with_families(' ', em, &seg.style.font_family),
     )
@@ -1371,6 +1372,14 @@ pub(crate) fn collect_inline_segments(
                 // margin/border/padding (even summing to zero or negative) is not a phantom line
                 // box: it takes its width in the line and paints its background/border (BUG-1530).
                 out.push(edge(pre, post));
+            } else if added == 0 {
+                // A phantom inline box (CSS Inline 3 §3.4) has no fragment and no effect on the line,
+                // but `getBoundingClientRect`/`offsetLeft` still answer for it (BUG-1558): this
+                // zero-edge segment only marks its place in the run's `segments` for
+                // `inline_run_empty_elements`; `wrap_inline_run` skips it like any empty text.
+                let mut marker = edge(0.0, 0.0);
+                marker.source_char_offset = InlineSegment::EMPTY_INLINE_OFFSET;
+                out.push(marker);
             }
             // Filter Effects L1 §3 / Compositing L1 §3.1: `opacity` and `filter` apply to an inline
             // element as one group over all its boxes, not to each glyph run separately.
