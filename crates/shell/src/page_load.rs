@@ -517,6 +517,7 @@ impl Lumen {
         }
         // Record navigation start for PerformanceNavigationTiming (Navigation Timing L2 §4.2).
         self.nav_start = Some(std::time::Instant::now());
+        self.load_marks.reset(std::time::Instant::now());
         // BUG-640: a DOM-milestone mark from the outgoing document must never
         // leak into the incoming one's entry — same reasoning as
         // `resource_timing::clear()` below.
@@ -800,6 +801,7 @@ impl Lumen {
                         });
                     }
                 }
+                self.load_marks.mark_final_applied(std::time::Instant::now());
                 click_log::log_load_ok(&self.source.describe(), title);
                 click_log::log_page_ready(&self.source.describe(), self.scroll_y);
                 self.record_render_health();
@@ -1174,7 +1176,11 @@ impl Lumen {
         let dl = crate::display_list_metrics::paint_ordered_in(&layout, viewport);
 
         (self.content_height, self.content_width) = crate::display_list_metrics::page_content_extent(&dl, &layout, self.viewport_width_css());
+        let has_content = !dl.is_empty();
         self.set_display_list(dl);
+        if has_content {
+            self.load_marks.mark_first_content(std::time::Instant::now());
+        }
         // BUG-341 S7: streaming layout is a separate incremental mechanism
         // (`layout_streaming_incremental`, no `CounterMap`) — invalidate the
         // restyle cache so it isn't diffed against this tree by mistake.

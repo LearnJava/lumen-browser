@@ -146,6 +146,21 @@ pub fn log_render_health(url: &str, dom_nodes: usize, layout_boxes: usize, rende
     append(obj);
 }
 
+/// LOAD-0: метки загрузки страницы в живом окне (мс от старта навигации).
+/// `first_content_ms` отсутствует, если потоковая отрисовка не успела.
+pub fn log_load_timing(url: &str, t: crate::load_marks::LoadTimings) {
+    if !is_enabled() {
+        return;
+    }
+    let mut obj = base("load_timing", url);
+    if let Some(ms) = t.first_content_ms {
+        obj.insert("first_content_ms".into(), JsonValue::Number(ms));
+    }
+    obj.insert("final_applied_ms".into(), JsonValue::Number(t.final_applied_ms));
+    obj.insert("final_frame_ms".into(), JsonValue::Number(t.final_frame_ms));
+    append(obj);
+}
+
 // ── Internals ────────────────────────────────────────────────────────────────
 
 /// Install a panic hook that appends a `panic` record (message + location +
