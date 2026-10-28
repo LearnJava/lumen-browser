@@ -53,6 +53,9 @@ BUG-1116, `docs/perf/journal.md:358`): HTML сразу, CSS +700 мс, карт�
 4. Базовый замер: `perf_audit.py` в режиме stability на сайтах пользователя
    `docs/perf/corpus-user-ru.txt` (30 RU-сайтов, **без прокси**: в `data/fingerprint.toml` нет
    `proxy =`), запись в `docs/perf/journal.md`. Этот же список — замер «до/после» для всех LOAD-*.
+   База снимается **до** LOAD-1: если к моменту замера LOAD-1 уже влит (`git log --grep=LOAD-1
+   origin/main`), собрать `dev-release` в отдельном worktree из родителя merge-коммита LOAD-1 с
+   cherry-pick коммита LOAD-0 и замерить на нём; в журнале указать оба хеша.
 
 **Done when:** поля есть в JSON perf_audit; unit-тест на сброс/заполнение меток; запись
 базы в журнале (медианы `first_content_s`, `final_frame_s`, `ready_s`).
