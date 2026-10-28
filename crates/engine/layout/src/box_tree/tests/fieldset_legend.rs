@@ -324,3 +324,111 @@ fn empty_multicol_fieldset_keeps_legend_offset() {
     );
     assert_eq!(rect_of(&root, &doc, "f").height, 10.0 + 10.0 + 20.0 + 10.0 + 10.0);
 }
+
+// ── FIELDSET-LEGEND-4: flex/grid-fieldset в вертикальном writing-mode ──
+
+const VLG: &str = "legend{width:30px;height:50px;padding:0}#a{width:40px;height:20px}#b{width:40px;height:60px}";
+const VFLEX: &str = r#"<fieldset id="f"><legend id="l">L</legend><div id="a"></div><div id="b"></div></fieldset>"#;
+
+/// `vertical-rl` flex: legend на правой границе и не элемент, ряд идёт сверху вниз, элементы
+/// прижаты к правой кромке content box (левее legend); ширина fieldset включает смещение legend.
+#[test]
+fn vertical_rl_flex_fieldset_items_beside_legend() {
+    let (root, doc) = lay(
+        VFLEX,
+        &format!("fieldset{{margin:0;padding:10px;border:solid 10px;writing-mode:vertical-rl;display:flex;height:200px}}{VLG}"),
+    );
+    let f = rect_of(&root, &doc, "f");
+    let (l, a, b) = (rect_of(&root, &doc, "l"), rect_of(&root, &doc, "a"), rect_of(&root, &doc, "b"));
+    assert_eq!((l.x - f.x, l.y - f.y, l.width, l.height), (f.width - 30.0, 20.0, 30.0, 50.0), "{l:?} {f:?}");
+    // content box: правая кромка = f.right − 30 (legend) − 10 (padding).
+    let right = f.x + f.width - 30.0 - 10.0;
+    assert_eq!((a.x + a.width, a.y - f.y), (right, 20.0), "{a:?}");
+    assert_eq!((b.x + b.width, b.y - f.y), (right, 40.0), "{b:?}");
+    assert_eq!(f.width, 30.0 + 10.0 + 40.0 + 10.0 + 10.0, "{f:?}");
+    let fl = super::find_by_id_all(&root, &doc, "f").unwrap().fieldset_legend.unwrap();
+    assert!(fl.placed);
+    assert_eq!((fl.border_inset, fl.content_offset), (10.0, 20.0));
+}
+
+/// `vertical-lr` flex: legend на левой границе, элементы правее него.
+#[test]
+fn vertical_lr_flex_fieldset_items_beside_legend() {
+    let (root, doc) = lay(
+        VFLEX,
+        &format!("fieldset{{margin:0;padding:10px;border:solid 10px;writing-mode:vertical-lr;display:flex;height:200px}}{VLG}"),
+    );
+    let f = rect_of(&root, &doc, "f");
+    let (l, a) = (rect_of(&root, &doc, "l"), rect_of(&root, &doc, "a"));
+    assert_eq!((l.x - f.x, l.y - f.y), (0.0, 20.0), "{l:?}");
+    assert_eq!((a.x - f.x, a.y - f.y), (30.0 + 10.0, 20.0), "{a:?}");
+    assert_eq!(f.width, 30.0 + 10.0 + 40.0 + 10.0 + 10.0, "{f:?}");
+}
+
+/// Явная `width` делится за вычетом legend (как явная высота горизонтального fieldset).
+#[test]
+fn vertical_flex_fieldset_explicit_width_excludes_legend() {
+    let (root, doc) = lay(
+        VFLEX,
+        &format!(
+            "fieldset{{margin:0;padding:10px;border:solid 10px;writing-mode:vertical-rl;display:flex;\
+             flex-direction:column;height:200px;width:200px}}{VLG}#a{{flex:1;height:auto}}"
+        ),
+    );
+    let f = rect_of(&root, &doc, "f");
+    let (a, b) = (rect_of(&root, &doc, "a"), rect_of(&root, &doc, "b"));
+    assert_eq!(f.width, 200.0 + 20.0 + 20.0, "{f:?}");
+    // Контейнер содержимого: 200 − 20 (legend − border) = 180; b — 40, a — остаток.
+    assert_eq!(b.width, 40.0, "{b:?}");
+    assert_eq!(a.width, 140.0, "{a:?}");
+}
+
+/// `vertical-rl` grid: строки (block-ось) идут справа налево левее legend, legend не ячейка.
+#[test]
+fn vertical_rl_grid_fieldset_rows_beside_legend() {
+    let (root, doc) = lay(
+        VFLEX,
+        &format!(
+            "fieldset{{margin:0;padding:10px;border:solid 10px;writing-mode:vertical-rl;display:grid;height:200px}}{VLG}"
+        ),
+    );
+    let f = rect_of(&root, &doc, "f");
+    let (l, a, b) = (rect_of(&root, &doc, "l"), rect_of(&root, &doc, "a"), rect_of(&root, &doc, "b"));
+    assert_eq!(l.x + l.width, f.x + f.width, "{l:?} {f:?}");
+    let right = f.x + f.width - 30.0 - 10.0;
+    assert_eq!(a.x + a.width, right, "{a:?}");
+    assert_eq!(b.x + b.width, right - 40.0, "{b:?}");
+    assert_eq!(f.width, 30.0 + 10.0 + 40.0 + 40.0 + 10.0 + 10.0, "{f:?}");
+}
+
+/// В вертикальном режиме `justify-self` legend не действует (Edge): он у начала inline-оси.
+#[test]
+fn vertical_legend_ignores_justify_self() {
+    let (root, doc) = lay(
+        VHTML,
+        &format!("{VFS}#w{{writing-mode:vertical-rl}}legend{{justify-self:end}}"),
+    );
+    let (f, l) = (rect_of(&root, &doc, "f"), rect_of(&root, &doc, "l"));
+    assert_eq!(l.y - f.y, 20.0, "{l:?}");
+}
+
+/// Собственный `writing-mode` fieldset'а (из автор-CSS, а не от предка): UA `min-inline-size` и
+/// padding раскладываются по его осям — без этого `min-width: min-content` раздувал вертикальный
+/// flex-fieldset сверх явной ширины.
+#[test]
+fn own_vertical_writing_mode_retargets_ua_fieldset_box() {
+    let (root, doc) = lay(
+        r#"<fieldset id="f"><div id="a"></div><div id="b"></div></fieldset>"#,
+        "fieldset{margin:0;border:solid 2px;writing-mode:vertical-rl;display:flex;width:150px;height:100px;\
+         box-sizing:border-box}#a{width:70px;height:60px}#b{width:70px;height:60px}",
+    );
+    let f = rect_of(&root, &doc, "f");
+    assert_eq!(f.width, 150.0, "{f:?}");
+    let st = &super::find_by_id_all(&root, &doc, "f").unwrap().style;
+    assert!(st.min_width.is_none(), "min-inline-size ушёл на вертикальную ось: {:?}", st.min_width);
+    assert!(st.min_height.is_some());
+    let em = st.font_size;
+    assert_eq!(st.padding_right.resolve_or_zero(em, 0.0, Size::new(800.0, 600.0)), 0.35 * em);
+    // Автор, обнуливший сторону, остаётся при своём: `margin: 0` не заменяется UA-значением.
+    assert_eq!(st.margin_top.resolve_or_zero(em, 0.0, Size::new(800.0, 600.0)), 0.0);
+}

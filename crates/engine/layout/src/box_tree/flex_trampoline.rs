@@ -1419,6 +1419,14 @@ fn finish_frame(
     super::layout_cache::clamp_min_max_height(
         &mut frame.b, &s, em, frame.init.available_height, viewport, padding_top, padding_bottom, 0.0,
     );
+    if frame.init.vertical.is_some() {
+        super::fieldset::settle_legend_vertical(
+            &mut frame.b,
+            s.border_top_width + padding_top,
+            s.border_top_width + s.border_bottom_width + padding_top + padding_bottom,
+            viewport,
+        );
+    }
 
     let flex_abs: Vec<(usize, f32, f32)> = frame
         .b

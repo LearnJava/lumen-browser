@@ -57,7 +57,6 @@ use crate::style::{
     WhiteSpace,
     WhiteSpaceCollapse,
     WordBreak,
-    WritingMode,
     parse_font_family,
     parse_font_feature_settings,
     parse_font_palette,
@@ -638,18 +637,9 @@ pub(in crate::style) fn apply_decl_text(
             }
         }
         "writing-mode" => {
-            style.writing_mode = match val.trim() {
-                "horizontal-tb" => WritingMode::HorizontalTb,
-                "vertical-rl" => WritingMode::VerticalRl,
-                "vertical-lr" => WritingMode::VerticalLr,
-                "sideways-rl" => WritingMode::SidewaysRl,
-                "sideways-lr" => WritingMode::SidewaysLr,
-                "lr" | "lr-tb" => WritingMode::HorizontalTb,
-                "rl" | "rl-tb" => WritingMode::HorizontalTb,
-                "tb" | "tb-rl" => WritingMode::VerticalRl,
-                "tb-lr" => WritingMode::VerticalLr,
-                _ => style.writing_mode,
-            };
+            if let Some(wm) = crate::style::parse_writing_mode(val) {
+                style.writing_mode = wm;
+            }
         }
         "text-orientation" => {
             style.text_orientation = match val.trim() {

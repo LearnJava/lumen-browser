@@ -1412,6 +1412,7 @@ fn stretch_replaced_inline(
 fn finish_frame(frame: &mut Frame, measurer: Option<&dyn TextMeasurer>, viewport: Size, hp: &dyn HyphenationProvider) {
     if let Some(geom) = frame.init.vertical {
         super::grid_vertical::finish_container(&mut frame.b, &frame.init, geom);
+        super::grid_vertical::settle_legend(&mut frame.b, &frame.init.s, viewport);
         frame.b.grid_baselines = super::grid_vertical::container_baselines(&frame.b, &frame.init, geom, measurer);
         let init = &*frame.init;
         let content = Rect::new(

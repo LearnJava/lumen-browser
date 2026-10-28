@@ -381,6 +381,62 @@ pub(in crate::style) fn apply_ua_fieldset_style(doc: &Document, node: NodeId, st
         _ => {}
     }
 }
+
+/// Поля UA-стиля `<fieldset>`/`<legend>`, которые раскладываются по осям `writing-mode`: поля,
+/// padding и `min-inline-size`. Снимок до UA-фазы нужен, чтобы пересчитать их, когда выяснится
+/// собственный `writing-mode` элемента ([`redo_ua_fieldset_for_writing_mode`]).
+#[derive(Clone)]
+pub(in crate::style) struct UaFieldsetFields {
+    margin: [LengthOrAuto; 4],
+    padding: [Length; 4],
+    min_width: Option<Length>,
+    min_height: Option<Length>,
+}
+
+/// Поля `<fieldset>`/`<legend>` до UA-фазы (дёшево, снимается только для этих элементов).
+pub(in crate::style) fn read_ua_fieldset_fields(doc: &Document, node: NodeId, s: &ComputedStyle) -> Option<UaFieldsetFields> {
+    let NodeData::Element { name, .. } = &doc.get(node).data else { return None };
+    matches!(name.local.as_str(), "fieldset" | "legend").then(|| UaFieldsetFields {
+        margin: [s.margin_top.clone(), s.margin_right.clone(), s.margin_bottom.clone(), s.margin_left.clone()],
+        padding: [s.padding_top.clone(), s.padding_right.clone(), s.padding_bottom.clone(), s.padding_left.clone()],
+        min_width: s.min_width.clone(),
+        min_height: s.min_height.clone(),
+    })
+}
+
+/// Значения `writing-mode` из CSS: `None` для чего-то кроме ключевого слова режима.
+pub(in crate::style) fn parse_writing_mode(val: &str) -> Option<WritingMode> {
+    Some(match val.trim() {
+        "horizontal-tb" | "lr" | "lr-tb" | "rl" | "rl-tb" => WritingMode::HorizontalTb,
+        "vertical-rl" | "tb" | "tb-rl" => WritingMode::VerticalRl,
+        "vertical-lr" | "tb-lr" => WritingMode::VerticalLr,
+        "sideways-rl" => WritingMode::SidewaysRl,
+        "sideways-lr" => WritingMode::SidewaysLr,
+        _ => return None,
+    })
+}
+
+/// UA-значения fieldset/legend логические, а UA-фаза пишет физические стороны по `writing-mode`,
+/// унаследованному к этому моменту. Собственный `writing-mode` из автор-CSS приходит позже: если он
+/// отличается, UA-фаза повторяется для него поверх полей `pre` — до применения автор-деклараций,
+/// которые перекроют результат как обычно.
+pub(in crate::style) fn redo_ua_fieldset_for_writing_mode(
+    doc: &Document,
+    node: NodeId,
+    style: &mut ComputedStyle,
+    pre: UaFieldsetFields,
+    wm: WritingMode,
+) {
+    if style.writing_mode == wm {
+        return;
+    }
+    let UaFieldsetFields { margin: [mt, mr, mb, ml], padding: [pt, pr, pb, pl], min_width, min_height } = pre;
+    (style.margin_top, style.margin_right, style.margin_bottom, style.margin_left) = (mt, mr, mb, ml);
+    (style.padding_top, style.padding_right, style.padding_bottom, style.padding_left) = (pt, pr, pb, pl);
+    (style.min_width, style.min_height) = (min_width, min_height);
+    style.writing_mode = wm;
+    apply_ua_fieldset_style(doc, node, style);
+}
 /// UA stylesheet для `<body>` (HTML Rendering §14.3.3): `body { margin: 8px }`.
 ///
 /// Без этого правила `<body>` прижимается вплотную к краю viewport, и весь
