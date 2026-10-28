@@ -269,6 +269,9 @@ impl Lumen {
         // (the engine thread + `lumen-js` thread are busy anyway). Off the flag
         // `raf_turn_inflight()` is always `false`, so the gate is byte-identical.
         if self.js_present && !self.raf_turn_inflight() {
+            // LOAD-3A: скачавшиеся `async`-скрипты страницы — до тика таймеров, чтобы правки DOM
+            // этого же прохода увидел `take_dom_dirty` ниже, а не следующий пробуждённый цикл.
+            self.drive_async_scripts();
             // BUG-839: subresource loads the network layer recorded since the
             // last step. Drained only when there is a runtime to hand them to —
             // most of a page's images finish before its JS context exists, and
@@ -532,6 +535,9 @@ impl Lumen {
             if let Some(at) = self.drive_deferred_frames() {
                 next_wakeup = Some(next_wakeup.map_or(at, |t| t.min(at)));
             }
+            // LOAD-3A: без JS-хэндла блок выше не сработал — очередь всё равно надо опустошить,
+            // иначе `load` ждал бы скрипты, которым негде исполниться.
+            self.drive_async_scripts();
             self.apply_stream_intrinsic_sizes();
             self.maybe_fire_window_load();
         }

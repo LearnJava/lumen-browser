@@ -130,6 +130,7 @@ pub(crate) fn render_bytes(
             animated_gifs: parsed.animated_gifs,
             lazy_pairs: parsed.lazy_pairs,
             images_deferred: parsed.images_deferred,
+            async_scripts: parsed.async_scripts,
             fired_image_events: parsed.fired_image_events,
             layout_box,
             font_registry: parsed.font_registry,
@@ -349,6 +350,9 @@ pub(crate) struct LoadedPage {
     /// LOAD-1B: то же для `<iframe>` — `frames` пуст, их загружает
     /// `Lumen::drive_deferred_frames` после `RenderDone`, и `load` ждёт и их.
     pub(crate) images_deferred: bool,
+    /// LOAD-3A: очередь внешних классических `async`-скриптов (живое окно) — их качает
+    /// `AsyncScriptFeed`, `load` ждёт последний (`Lumen::drive_async_scripts`).
+    pub(crate) async_scripts: Option<Arc<crate::async_scripts::AsyncScriptFeed>>,
     /// LOAD-1: `(узел, url)`, чей `load` конвейер уже доставил новому JS-рантайму.
     pub(crate) fired_image_events: Vec<(u32, String)>,
     /// Layout-дерево страницы — используется animation scheduler-ом.
@@ -415,6 +419,7 @@ impl LoadedPage {
             animated_gifs: Vec::new(),
             lazy_pairs: Vec::new(),
             images_deferred: false,
+            async_scripts: None,
             fired_image_events: Vec::new(),
             layout_box: lumen_layout::LayoutBox {
                 anchor_scroll: None, cv_hidden: Vec::new(),
@@ -470,6 +475,8 @@ pub(crate) struct ParsedPage {
     pub(crate) lazy_pairs: Vec<(u32, String)>,
     /// См. [`LoadedPage::images_deferred`].
     pub(crate) images_deferred: bool,
+    /// См. [`LoadedPage::async_scripts`].
+    pub(crate) async_scripts: Option<Arc<crate::async_scripts::AsyncScriptFeed>>,
     /// См. [`LoadedPage::fired_image_events`].
     pub(crate) fired_image_events: Vec<(u32, String)>,
     /// Subresource-хинты, найденные preload-сканером ДО DOM-парсинга.
@@ -1160,12 +1167,46 @@ pub(crate) fn parse_and_layout(
     // BUG-164: collect classic + module scripts in document order and fetch
     // external `<script src>` bodies via the subresource fetcher, so SPA
     // bundles execute (lenta.ru owlBundle.js etc.), not just inline scripts.
+    //
+    // LOAD-3A: в живом окне (`defer_images`) внешний классический `async` не входит в
+    // `fetch-scripts`: его качает `AsyncScriptFeed` параллельно конвейеру, а исполняет UI
+    // после `RenderDone`. Headless/детерминированные режимы остаются на порядке документа.
+    let mut async_scripts = None;
     let (classic_scripts, deferred_scripts) = {
         let _s = lumen_core::trace::span("fetch-scripts", "net");
         let mut classic_items = Vec::new();
         let mut deferred_items = Vec::new();
-        collect_scripts_ordered(&doc, doc.root(), &mut classic_items, &mut deferred_items);
+        let mut async_items = Vec::new();
+        if defer_images {
+            crate::scripts::collect_scripts_split_async(
+                &doc, doc.root(), &mut classic_items, &mut deferred_items, &mut async_items,
+            );
+        } else {
+            collect_scripts_ordered(&doc, doc.root(), &mut classic_items, &mut deferred_items);
+        }
         let eff_base = effective_base(&doc, base);
+        if !async_items.is_empty()
+            && let Some(proxy) = dynamic_image_hook_ctx.as_ref().map(|c| c.proxy.clone())
+        {
+            let env = crate::scripts::ScriptFetchEnv::of(&doc, &eff_base);
+            let items = async_items
+                .into_iter()
+                .map(|item| {
+                    let meta = crate::scripts::ScriptElementMeta::of(&doc, item.node());
+                    (item, meta)
+                })
+                .collect();
+            async_scripts = Some(crate::async_scripts::AsyncScriptFeed::spawn(
+                items,
+                env,
+                eff_base.clone(),
+                Arc::clone(sink),
+                cookie_jar.clone(),
+                move || {
+                    let _ = proxy.send_event(LoadEvent::AsyncScriptReady);
+                },
+            ));
+        }
         (
             resolve_script_sources(&classic_items, &eff_base, sink, cookie_jar.clone(), &doc),
             resolve_script_sources(&deferred_items, &eff_base, sink, cookie_jar.clone(), &doc),
@@ -1962,6 +2003,7 @@ pub(crate) fn parse_and_layout(
         animated_gifs,
         lazy_pairs,
         images_deferred: defer_images,
+        async_scripts,
         fired_image_events,
         preload_hints,
         html_source: source,

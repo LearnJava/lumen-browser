@@ -43,10 +43,11 @@ def make_png(r: int, g: int, b: int, size: int = 64) -> bytes:
     )
 
 
-def page(img_ms: int) -> str:
+def page(img_ms: int, async_ms: int = -1) -> str:
     imgs = "\n".join(
         f'<img src="/img/{i}.png" width="64" height="64" alt="">' for i in range(IMG_COUNT)
     )
+    async_tag = '<script async src="/async.js"></script>' if async_ms >= 0 else ""
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>load-lab</title>
 <link rel="stylesheet" href="/style.css">
@@ -58,7 +59,7 @@ window.addEventListener('load', function () {{ mark('load'); document.title = 'l
 <body><h1>load-lab</h1><p>HTML сразу, CSS +700 мс, картинки и iframe +{img_ms} мс.</p>
 {imgs}
 <iframe src="/frame.html" width="300" height="120"></iframe>
-<p id="end">конец страницы</p></body></html>"""
+<p id="end">конец страницы</p>{async_tag}</body></html>"""
 
 
 class Lab(BaseHTTPRequestHandler):
@@ -87,7 +88,7 @@ class Lab(BaseHTTPRequestHandler):
                 st["t0"] = now
                 st["events"].clear()
             st["events"].append(("html", 0.0))
-            return self._send(200, page(st["img_ms"]).encode("utf-8"), "text/html; charset=utf-8")
+            return self._send(200, page(st["img_ms"], st["async_ms"]).encode("utf-8"), "text/html; charset=utf-8")
         t = now - st["t0"] if st["t0"] else 0.0
         if path == "/mark":
             name = urlparse(self.path).query.split("&")[0]
@@ -104,6 +105,10 @@ class Lab(BaseHTTPRequestHandler):
             i = int(path[5:-4] or 0)
             st["events"].append((f"img{i}", round(time.monotonic() - st["t0"], 3)))
             return self._send(200, make_png((i * 40) % 256, (i * 90) % 256, 160), "image/png")
+        if path == "/async.js":
+            time.sleep(st["async_ms"] / 1000)
+            st["events"].append(("async", round(time.monotonic() - st["t0"], 3)))
+            return self._send(200, b"mark('async-ran');", "application/javascript")
         if path == "/frame.html":
             time.sleep(st["frame_ms"] / 1000)
             st["events"].append(("frame", round(time.monotonic() - st["t0"], 3)))
@@ -117,6 +122,7 @@ def main():
     ap.add_argument("--css-ms", type=int, default=700)
     ap.add_argument("--img-ms", type=int, default=3000)
     ap.add_argument("--frame-ms", type=int, default=-1, help="задержка iframe; по умолчанию как --img-ms, 0 — изолировать картинки")
+    ap.add_argument("--async-ms", type=int, default=-1, help="добавить <script async src> с этой задержкой (LOAD-3A); -1 — без него")
     ap.add_argument("--exit-on", default="", help="метка, после которой сервер завершается (например load)")
     ap.add_argument("--timeout", type=float, default=0, help="секунд до принудительного выхода")
     ap.add_argument("--json", default="", help="куда записать журнал меток")
@@ -124,7 +130,7 @@ def main():
     srv = ThreadingHTTPServer(("127.0.0.1", args.port), Lab)
     srv.state = {
         "t0": 0.0, "events": [], "lock": threading.Lock(), "done": threading.Event(),
-        "css_ms": args.css_ms, "img_ms": args.img_ms,
+        "css_ms": args.css_ms, "img_ms": args.img_ms, "async_ms": args.async_ms,
         "frame_ms": args.img_ms if args.frame_ms < 0 else args.frame_ms, "exit_on": args.exit_on,
     }
     threading.Thread(target=srv.serve_forever, daemon=True).start()

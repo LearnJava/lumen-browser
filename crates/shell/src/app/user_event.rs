@@ -137,6 +137,7 @@ impl Lumen {
                     w.request_redraw();
                 }
             }
+            LoadEvent::AsyncScriptReady => self.drive_async_scripts(),
             LoadEvent::ImageDecodeFailed { src } => {
                 // BUG-1048: streaming/dynamic decode gave up on `src` — record
                 // it the same way a successful decode records its size

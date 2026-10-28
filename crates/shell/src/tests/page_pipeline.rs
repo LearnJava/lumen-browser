@@ -1843,20 +1843,20 @@ fn load1_window_load_waits_for_last_image_and_the_events_pass() {
     let mut errors: std::collections::HashSet<String> = std::collections::HashSet::new();
     // RenderDone уже был, картинки ещё в пути: `load` не приходит.
     assert_eq!(unsettled_images(&requested, &sizes, &errors), 3);
-    assert!(!window_load_due(true, false, 3, false));
+    assert!(!window_load_due(true, false, 3, false, false));
     sizes.insert("a.png".into(), (1, 1));
     errors.insert("b.png".into());
     assert_eq!(unsettled_images(&requested, &sizes, &errors), 1);
-    assert!(!window_load_due(true, true, 1, false));
+    assert!(!window_load_due(true, true, 1, false, false));
     // Последняя осела, но проход, раздающий `load`/`error` картинкам, ещё не прошёл.
     sizes.insert("c.png".into(), (2, 2));
     assert_eq!(unsettled_images(&requested, &sizes, &errors), 0);
-    assert!(!window_load_due(true, true, 0, false));
+    assert!(!window_load_due(true, true, 0, false, false));
     // Проход прошёл: теперь окно получает `load`, и только раз.
-    assert!(window_load_due(true, false, 0, false));
-    assert!(!window_load_due(false, false, 0, false));
+    assert!(window_load_due(true, false, 0, false, false));
+    assert!(!window_load_due(false, false, 0, false, false));
     // LOAD-1B: все картинки осели, но `<iframe>` ещё грузится — `load` ждёт и его.
-    assert!(!window_load_due(true, false, 0, true));
+    assert!(!window_load_due(true, false, 0, true, false));
 }
 
 /// LOAD-1B: живое окно отдаёт страницу без `<iframe>` (их грузит `Lumen::drive_deferred_frames`
@@ -1900,4 +1900,103 @@ fn load1_live_only_image_is_decodable() {
         lumen_network::ReferrerPolicy::default_policy(),
     );
     assert!(decoded.is_some());
+}
+
+/// LOAD-3A: стенд — отвечает скриптом `body` через `delay_ms`, считает запросы.
+#[cfg(windows)]
+fn load3a_server(delay_ms: u64, body: &'static str) -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let hits_srv = Arc::clone(&hits);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { return };
+            let hits = Arc::clone(&hits_srv);
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                while reader.read_line(&mut line).is_ok_and(|n| n > 0) && line.trim() != "" {
+                    line.clear();
+                }
+                hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            });
+        }
+    });
+    (port, hits)
+}
+
+fn load3a_page(port: u16) -> String {
+    format!(
+        "<html><head><title>t</title></head><body><p>x</p>\
+         <script async src=\"http://127.0.0.1:{port}/a.js\"></script></body></html>"
+    )
+}
+
+/// Живое окно: `async`-скрипт, который стенд отдаёт через 3 с, не задерживает возврат страницы;
+/// потом он скачивается фоном, исполняется на JS-хэндле страницы, и `pending()` падает до нуля.
+#[cfg(windows)]
+#[test]
+fn load3a_live_async_script_does_not_delay_the_page() {
+    let (port, hits) = load3a_server(3000, "document.title = 'async-ran:' + document.currentScript.src.length;");
+    let started = std::time::Instant::now();
+    let parsed = load1_parse_html(true, deterministic::DetConfig::default(), &load3a_page(port));
+    let returned_in = started.elapsed();
+    assert!(
+        returned_in < std::time::Duration::from_millis(2900),
+        "async script must not hold the page: returned after {returned_in:?}"
+    );
+    let feed = parsed.async_scripts.clone().expect("live page has an async feed");
+    assert_eq!(feed.pending(), 1);
+    assert!(feed.take_ready().is_empty(), "the stand answers only after 3 s");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let ready = loop {
+        let ready = feed.take_ready();
+        if !ready.is_empty() || std::time::Instant::now() > deadline {
+            break ready;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    assert_eq!(ready.len(), 1);
+    assert_eq!(ready[0].external_ok, Some(true));
+    assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1, "script is fetched once");
+    #[cfg(feature = "v8")]
+    {
+        let js = parsed.js_ctx.as_ref().expect("page runtime");
+        assert_eq!(js.eval_js_value("document.title").unwrap(), "\"t\"", "async body has not run yet");
+        js.run_async_script(&ready[0]);
+        let title = js.eval_js_value("document.title").unwrap();
+        assert!(title.starts_with("\"async-ran:"), "currentScript names the async element: {title}");
+    }
+    feed.mark_executed(1);
+    assert_eq!(feed.pending(), 0);
+}
+
+/// Headless и `--deterministic` не меняются: `async` идёт в порядке документа и ждётся до возврата.
+#[cfg(windows)]
+#[test]
+fn load3a_headless_async_script_keeps_document_order() {
+    let (port, _hits) = load3a_server(1000, "document.title = 'ran';");
+    let started = std::time::Instant::now();
+    let parsed = load1_parse_html(false, deterministic::DetConfig::default(), &load3a_page(port));
+    assert!(started.elapsed() >= std::time::Duration::from_millis(1000));
+    assert!(parsed.async_scripts.is_none());
+    #[cfg(feature = "v8")]
+    assert_eq!(parsed.js_ctx.as_ref().unwrap().eval_js_value("document.title").unwrap(), "\"ran\"");
+}
+
+/// `load` ждёт `async`-скрипт, `DOMContentLoaded` — нет (его уже доставил конвейер).
+#[test]
+fn load3a_window_load_waits_for_async_scripts() {
+    use crate::page_load::window_load_due;
+    assert!(!window_load_due(true, false, 0, false, true));
+    assert!(window_load_due(true, false, 0, false, false));
 }

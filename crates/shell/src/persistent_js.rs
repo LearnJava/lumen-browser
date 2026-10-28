@@ -503,6 +503,10 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Call after all subresources (images, fonts) are decoded and registered.
     #[allow(dead_code)]
     fn notify_window_loaded(&self);
+    /// LOAD-3A: исполнить скачавшийся внешний классический `async`-скрипт страницы
+    /// (`document.currentScript`, `window.onerror`, `load`/`error` на его элементе).
+    /// Зовётся уже после разбора и `DOMContentLoaded`.
+    fn run_async_script(&self, script: &crate::scripts::ResolvedScript);
     /// Notify all registered `MediaQueryList` instances that the viewport or
     /// user preferences changed (CSS Media Queries L4 §4.2). Each MQL whose
     /// `matches` flipped fires a `change` event on its listeners.
@@ -1357,6 +1361,9 @@ impl PersistentJs for V8PersistentJs {
     }
     fn notify_window_loaded(&self) {
         self.eval_js("_lumen_apply_ready_state('complete')");
+    }
+    fn run_async_script(&self, script: &crate::scripts::ResolvedScript) {
+        crate::scripts::run_async_classic_script(&self.rt, script);
     }
     fn deliver_media_query_changes(
         &self,
