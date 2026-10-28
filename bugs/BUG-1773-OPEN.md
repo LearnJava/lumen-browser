@@ -44,3 +44,13 @@
 ## Done when
 
 `css/css-page/fixedpos-001-print.html` и два теста выше проходят через `run_corpus.py` свежим бинарём; `print-reftest` в следующем полном прогоне не ниже 187 баллов (WPT-RUN-16).
+
+## Бисект (WPT-DROP-1027-S3, 2026-10-28)
+
+Проверено на 3 print-reftest из `html/` (`table-row-pagination-002-print`, `details-page-break-after-1-print`,
+`object-image-display-none-loading-for-print`) по сетке `--first-parent`, бинари `dev-release`, `lumen.py` из
+`a76e4c7b9`: `59ac93a0b` PASS, `ce13bf8d4` PASS, `6d22b7ada` TIMEOUT, **`a73fc1c15` TIMEOUT**.
+Первый плохой — `a73fc1c15` «Влить ветку p1-textq-2: TEXTQ-2, гамма и контраст покрытия глифа»
+(`ce13bf8d4` — его родитель по first-parent). Диф — растеризация глифов и снимки `graphic_tests/snapshots/cpu`;
+как это замедляет `--print-to-pdf` на wptserve — неизвестно, подтвердить сборкой с откатом TEXTQ-2.
+Это уточняет окно подозрения выше (BUG-1714 / VT-API-2 в нём ни при чём — `ce13bf8d4` уже после них).
