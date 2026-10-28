@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-10-27",
+ "generated": "2026-10-28",
  "counts": {
-  "open": 306,
-  "fixed": 1369,
+  "open": 327,
+  "fixed": 1380,
   "inprogress": 0,
   "wontfix": 3
  },
- "total_bugs": 1678,
+ "total_bugs": 1710,
  "phases": [
   {
    "id": "P0",
@@ -1223,6 +1223,37 @@
      "note": "Постквантовые алгоритмы SubtleCrypto (tentative, кластер C3 разведки WPT-CRYPTO-SCOUT, `docs/wpt-vendor-notes/WebCryptoAPI.md`: ≈20 id, потолок ≈5.7 п.п. `WebCryptoAPI`). **Сделать:** (1) ML-KEM-512/768/1024 — `generateKey`, импорт/экспорт, `encapsulateBits`/`encapsulateKey`/`decapsulateBits`/`decapsulateKey`; (2) ML-DSA-44/65/87 — `sign`/`verify` с `context`; (3) форматы `raw-public`/`raw-private`/`raw-seed`; (4) `SubtleCrypto.supports()` по реестру поддержанных алгоритмов (после WEBCRYPTO-CURVES/SYM отражает их). Крейты `ml-kem`, `ml-dsa` (RustCrypto) — с `**Why this dependency:**` по ADR-027 (provisional: спека tentative). **Готово, когда:** `run_corpus.py --prefixes WebCryptoAPI` — `*ML-KEM*`, `*ML-DSA*`, `supports*` без `NotSupportedError`/`TypeError: not a function`; прирост ≥ +3 п.п.; `scoped-test.sh` по `lumen-js` (`--features v8-backend`) зелёный; `CAPABILITIES.md` обновлён.",
      "bugs": [
       "BUG-1736"
+     ]
+    },
+    {
+     "id": "SW-MSG",
+     "title": "SW-MSG: postMessage страница↔SW, ExtendableMessageEvent, Clients API, waitUntil",
+     "status": "planned",
+     "size": "L",
+     "note": "Обмен сообщениями страница↔сервис-воркер и Clients API (кластер B разведки WPT-SW-SCOUT, `docs/wpt-vendor-notes/service-workers.md`: 79 id — TIMEOUT 59, OK 20; потолок ≈74.6 балла = 22.5 п.п. `service-workers`, крупнейший кластер категории; почти все тесты SW шлют результат из воркера через `postMessage`). Сейчас `ServiceWorker.postMessage` — no-op (`crates/js/src/shim/web_api_shim_mid_b.js:475`), `clients.get`/`matchAll` — заглушки (`crates/js/src/sw_worker.rs:92-97`), `waitUntil` ничего не ждёт. **Сделать:** (1) `ServiceWorker.postMessage` → задача в изолят SW, событие `message` как `ExtendableMessageEvent` (`data` через structured clone, `source` = `Client`, `origin`, `ports`), `MessagePort` в обе стороны; (2) `client.postMessage` / `MessagePort` из SW → `message` на `navigator.serviceWorker` страницы, очередь до `startMessages()` / присвоения `onmessage` (SW §client message queue); (3) `Clients`: `get`, `matchAll({type, includeUncontrolled})`, `claim` с реальным списком окон и воркеров origin, `Client`/`WindowClient` (`id`, `url`, `type`, `frameType`, `focus`, `navigate`), `clients.openWindow`; (4) `ExtendableEvent.waitUntil` продлевает жизнь события, `install`/`activate` ждут промисы (стык с BUG-1742); (5) конструктор `ExtendableMessageEvent`. **Готово, когда:** `run_corpus.py --prefixes service-workers/service-worker --processes 6` — `postmessage*`, `clients-*`, `client-navigate`, `claim-*`, `ServiceWorkerGlobalScope/extendable-message-event*` без TIMEOUT, прирост ≥ +12 п.п. категории; `scoped-test.sh` по `lumen-js` (`--features v8-backend`) зелёный; `CAPABILITIES.md` обновлён.",
+     "bugs": [
+      "BUG-1742"
+     ]
+    },
+    {
+     "id": "SW-MODULE",
+     "title": "SW-MODULE: type:'module' для сервис-воркеров",
+     "status": "planned",
+     "size": "M",
+     "note": "Модульные сервис-воркеры `register(url, {type: 'module'})` (кластер I разведки WPT-SW-SCOUT, `docs/wpt-vendor-notes/service-workers.md`: 12 id, TIMEOUT 9; потолок ≈11.7 балла = 3.5 п.п. `service-workers`). Сейчас скрипт SW всегда исполняется как classic: в логе прогона 26 «Cannot use import statement outside a module». **Сделать** в `crates/js/src/sw_worker.rs` + `web_api_shim_mid_b.js` (`_sw_container.register`): (1) опция `type` в регистрации и в `update()`, хранится в реестре; (2) модульный граф в изоляте SW (V8 `Module` API, как у модульных Dedicated Worker), статические `import` грузятся при Update и входят в byte-check; (3) `importScripts` в модульном SW бросает `TypeError`, динамический `import()` в SW отклоняется (SW §Run Service Worker); (4) MIME-проверка модулей. **Готово, когда:** `run_corpus.py --prefixes service-workers/service-worker --processes 6` — `registration-script-module`, `registration-scope-module-static-import`, `update-registration-with-type`, `update-bytecheck*`, `no-dynamic-import-in-module.any.serviceworker-module` без TIMEOUT; `scoped-test.sh` по `lumen-js` (`--features v8-backend`) зелёный; `CAPABILITIES.md` обновлён.",
+     "bugs": [
+      "BUG-1742"
+     ]
+    },
+    {
+     "id": "SW-PRELOAD-ROUTER",
+     "title": "SW-PRELOAD-ROUTER: navigationPreload, addRoutes",
+     "status": "planned",
+     "size": "M",
+     "note": "Navigation preload и static routing API (кластеры H и H2 разведки WPT-SW-SCOUT, `docs/wpt-vendor-notes/service-workers.md`: 7 + 13 id, потолок ≈19.2 балла = 5.8 п.п. `service-workers`). Сейчас нет ни `registration.navigationPreload`, ни `InstallEvent.addRoutes` (в шиме и в `sw_worker.rs` их нет вовсе). **Сделать:** (1) `NavigationPreloadManager` (`enable`, `disable`, `setHeaderValue`, `getState`) на регистрации, состояние в реестре SW; при включённом preload навигационный запрос параллельно уходит в сеть с заголовком `Service-Worker-Navigation-Preload`, ответ доступен как `FetchEvent.preloadResponse`; (2) `InstallEvent.addRoutes(rules)` — условия `urlPattern`, `requestMethod`, `requestMode`, `requestDestination`, `runningStatus`, `or`/`not`; источники `network`, `cache` (с `cacheName`), `fetch-event`, `race-network-and-fetch-handler`; правила применяются в перехватчике до диспатча `FetchEvent` (`crates/storage/src/sw_interceptor.rs`). **Готово, когда:** `run_corpus.py --prefixes service-workers/service-worker/navigation-preload,service-workers/service-worker/tentative/static-router --processes 6` — без TIMEOUT, прирост ≥ +4 п.п. категории; `scoped-test.sh` по `lumen-js` и `lumen-storage` зелёный; `CAPABILITIES.md` обновлён.",
+     "bugs": [
+      "BUG-1744",
+      "BUG-1747"
      ]
     }
    ],
@@ -6753,7 +6784,7 @@
       {
        "id": "WPT-FETCH-SCOUT",
        "title": "cors\" BUGS.md`. **Готово, когда:** `docs/wpt-vendor-notes/fetch.md` содержит таблицу кластеров (группа, число id, статус, причина, ожидаемый прирост в баллах); дефекты — `bugs/BUG-NNN-OPEN.md` + `BUGS.md` + указатель в `STATUS-P3.md`; фичи — строка `ROADMAP.md` + указатель в `STATUS-P1.md`; раннер — `.ini`/таймаут или задача для P2; строка `fetch` в `docs/wpt-status.md` ссылается на заметку.",
-       "status": "planned",
+       "status": "done",
        "size": "S",
        "note": "Разведка категории `fetch` (заведено 2026-10-23, сессия Chat, решение пользователя): 921 тест (testharness 906), **30.32 %**, балл 279.28; в прогоне 2026-10-22 (`docs/wpt/runs/2026-10-22-popups.json`, `scored.per_category.fetch`) harness OK у 638, сабтесты 4 083 / 10 274. Самая крупная из сетевых категорий. **Сделать:** (1) `tests/wpt/run_corpus.py --binary <dev-release свежего main> --prefixes fetch`; (2) разложить не-OK и не-PASS id по статусу и подкаталогу (`api/` — basic/cors/redirect/request/response/headers/body/abort, `metadata/` (Sec-Fetch-*), `corb/`/`orb/`, `range/`, `private-network-access/`, `content-type/`, `stale-while-revalidate/`, `fetch-later/`); (3) на каждую группу — причина по одному-двум представителям, «движок» (`crates/network` — CORS, редиректы, заголовки, кэш; `crates/js` — `Request`/`Response`/`Headers`/потоковое тело) или «раннер/бюджет» (поддомены, порты, HTTP/2, таймауты); (4) **код не чинить**; сверить с открытыми багами `grep -i \"fetch\\"
       }
@@ -9822,13 +9853,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-492": {
-   "status": "open",
-   "title": "`border-image` (CSS Backgrounds/Borders Level 3, зрелая спека) не реализован вовсе — ни `border-image-source`/`-slice`/`-width`/`-outset`/`-repeat`, ни шорткод;…",
-   "component": "css-parser/layout (`crates/engine/layout/src/style.rs::apply_declaration`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-495": {
    "status": "open",
    "title": "`background-position-x`/`background-position-y` (отдельные лонгхенды CSS Backgrounds/Borders Level 4) не реализованы вовсе — только шорткод `background-position…",
@@ -10783,22 +10807,8 @@
   },
   "BUG-1541": {
    "status": "open",
-   "title": "CSSOM `filter`/`backdrop-filter`: `backdrop-filter` нет в `getComputedStyle`; недопустимое принимается; `blur(0)` не канонизируется; `flood-*`/`lighting-color`/…",
+   "title": "CSSOM `filter`/`backdrop-filter` (срез 1 2026-10-27 влит: `backdrop-filter` в computed, строгий разбор/канон `filter` и `style.filter`, пустые скобки, клампы, `…",
    "component": "css-parser/layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`; `style/parse/transform.rs` — разбор `filter`/`backdrop-filter`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1542": {
-   "status": "open",
-   "title": "Размытие от `filter: blur()` выходит за границу `overflow:hidden` предка. `overflow:hidden` блок 100×100 с потомком `filter:blur(20px)` 100×100: пиксели размыти…",
-   "component": "paint (`crates/engine/paint/src/cpu_raster.rs` — `PushFilter` с `blur` внутри `PushClipRect` предка с `overflow:hidden`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1543": {
-   "status": "open",
-   "title": "`filter` на `<span>` не применяется к вложенному float/блоку (блок-в-инлайне). `<span style=\"filter:blur(2px)\"><div style=\"float:left;width:100px;height:100px;b…",
-   "component": "layout/paint (`filter` на `display:inline` элементе с блочным/плавающим потомком)",
    "date": null,
    "debtor": false
   },
@@ -10806,55 +10816,6 @@
    "status": "open",
    "title": "`filter: grayscale(300%)` и `sepia(300%)` не ограничиваются 100 %: цвет получается неверным. Filter Effects 1: значения `grayscale()`, `sepia()`, `invert()`, `o…",
    "component": "layout/paint (`crates/engine/layout/src/style/parse/transform.rs:236` `parse_filter_fn` — `grayscale`/`sepia` не ограничены 1)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1545": {
-   "status": "open",
-   "title": "`baseline-shift` не сдвигает текст HTML-элемента (`<span>`): `<length-percentage>`, `sub`, `top`. `<span style=\"baseline-shift:10px\">HH</span>` в строке рисуетс…",
-   "component": "layout (`crates/engine/layout/src/box_tree/` — `baseline-shift` подключён только к SVG-тексту, `emit_svg_text`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1547": {
-   "status": "open",
-   "title": "`<ol>`: маркер по умолчанию — `disc`, атрибуты `start`, `reversed`, `<li value>` и `type` не действуют, `li.value` — пустая строка. `<ol>`: маркер по умолчанию…",
-   "component": "layout (`crates/engine/layout/src/style/ua.rs`, `crates/engine/layout/src/box_tree/inline_build.rs::li_ordinal`, `crates/engine/layout/src/counters.rs`), js (`HTMLLIElement.value`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1549": {
-   "status": "open",
-   "title": "Пустой `<li>` с `list-style-position: inside` имеет высоту 0: маркеры соседних `li` ложатся в одну точку. Пустой `<li>` с `list-style-position: inside` — высота…",
-   "component": "layout (`crates/engine/layout/src/box_tree/` — высота строки для `inside`-маркера у `li` без содержимого)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1550": {
-   "status": "open",
-   "title": "`counter(name, <custom-style>)` добавляет `prefix` и `suffix` стиля (по умолчанию `\". \"`): `counter(a, f)` — `X.` вместо `X`. `counter(a, f)` с пользовательским…",
-   "component": "layout (`crates/engine/layout/src/counters.rs` — `format_counter_with_registry` и вызов из `counter()`/`counters()`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1551": {
-   "status": "open",
-   "title": "CSSOM: значения в `style`/`cssText` не канонизируются — `rgba(5,7,9,.5)` → `rgba(5, 7, 9, 0.502)`, `.5%`/`-0px`/`url(a)` остаются как написаны. CSSOM: значения…",
-   "component": "js (`crates/js/src/shim/web_api_shim_mid.js::_lumen_canonicalize_longhand`), css-parser (`serialize-values`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1552": {
-   "status": "open",
-   "title": "`style.cssFloat = \"left\"` пишет `css-float: left;`; `style.length` — строка; `item()` нет; `border: 1px` из длинных свойств не сворачивается. `style.cssFloat =…",
-   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_make_style`, сериализация шорткодов)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1553": {
-   "status": "open",
-   "title": "`MediaList`: `appendMedium`, `deleteMedium`, `mediaText =` не меняют список; `matchMedia(\"bogus\").media` — `bogus`. `MediaList`: `appendMedium`/`deleteMedium`/`…",
-   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `MediaList`, `matchMedia`)",
    "date": null,
    "debtor": false
   },
@@ -10869,13 +10830,6 @@
    "status": "open",
    "title": "`adoptedStyleSheets`: стили не применяются в shadow root, `push` бросает `TypeError`, `adoptedStyleSheets !== adoptedStyleSheets`. `adoptedStyleSheets`: в shado…",
    "component": "js/layout (`crates/js/src/shim/web_api_shim_mid.js` — `adoptedStyleSheets`; применение в каскаде `crates/shell/src/page_pipeline.rs::build_page_cascade`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1556": {
-   "status": "open",
-   "title": "`getComputedStyle`: used values инсетов — `top: 1em` у статического бокса, `20px` вместо `23.2px` у абсолютного, `-1px` вместо `3px` у относительного. `getCompu…",
-   "component": "layout (`crates/engine/layout/src/resolved_geometry.rs`, `crates/engine/layout/src/selector_query.rs::computed_style_to_map`)",
    "date": null,
    "debtor": false
   },
@@ -11814,6 +11768,230 @@
    "status": "open",
    "title": "Найден WPT-STREAMS-SCOUT: `transformer.cancel` не вызывается, `readableType`/`writableType` не отвергаются, `terminate()` не закрывает запись, исключение `start…",
    "component": "js (`streams_shim.js` — `TransformStream`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1742": {
+   "status": "open",
+   "title": "Найден WPT-SW-SCOUT: регистрация SW — таймерная имитация: `updatefound` до резолва `register()`, состояния без исполнения скрипта, scope не резолвится в URL, `u…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid_b.js` `_sw_container.register`, `_sw_run_lifecycle`; `sw_worker.rs` install/activate)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1743": {
+   "status": "open",
+   "title": "Найден WPT-SW-SCOUT: `iframe.contentWindow.<глобал>` пересекает границу изолятов по значению — `navigator.serviceWorker`, промис `fetch()`, `performance` теряют…",
+   "component": "js (`crates/js/src/frame_bridge.rs` `wrapWinFacadeGlobals`, `frame_bridge_globals.rs`, `v8_runtime/eval.rs` `peer_global_get`/`peer_global_call`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1744": {
+   "status": "open",
+   "title": "Найден WPT-SW-SCOUT: из `respondWith` доходит только тело (status всегда 200, без заголовков), `preventDefault`/reject не дают network error, метод всегда GET,…",
+   "component": "network/js (`core/src/ext.rs` `SwFetchRequest`, `network/src/lib.rs:4731`, `storage/src/sw_interceptor.rs`, `sw_worker.rs` `_sw_fire_fetch`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1745": {
+   "status": "open",
+   "title": "Найден WPT-SW-SCOUT: Cache API в окне — нет класса `Cache`, тело возвращается строкой «101,103,…», `statusText` «OK» вместо \"\", нет `url`, не работают ignoreSea…",
+   "component": "js (`web_api_shim_mid_b.js` `_lumen_build_cache_object`, `_lumen_build_response`; нативы `_lumen_cache_*`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1746": {
+   "status": "open",
+   "title": "Найден WPT-SW-SCOUT: `self.caches` не определён в Dedicated/SharedWorker, cleanup `cache_test` падает → ERROR у всех `cache-storage/*.any.worker.html`/`.sharedw…",
+   "component": "js (`crates/js/src/worker.rs`, `shared_worker.rs` — глобал `caches`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1747": {
+   "status": "open",
+   "title": "Найден WPT-SW-SCOUT: нет интерфейсных объектов `ServiceWorker`, `ServiceWorkerContainer`, `ServiceWorkerRegistration`, `NavigationPreloadManager` — `ReferenceEr…",
+   "component": "js (`web_api_shim_mid_b.js` — фабрики `_sw_make_registration`, `_sw_make_event_target`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1748": {
+   "status": "open",
+   "title": "Найден WPT-VTT-SCOUT: оверлей cue субтитров дописывается в display list только перед GPU-кадром окна — в `--screenshot`/`--ipc-server` cue не рисуется при `acti…",
+   "component": "shell (`app/window_event/redraw_requested.rs:1172` `tracks::build_cue_overlay`; `lumen/automation.rs` `render_current_page_to_png`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1749": {
+   "status": "open",
+   "title": "Найден WPT-VTT-SCOUT: `cuechange` перепроверяется только по тику воспроизведения/seek и одним `setTimeout(0)` до загрузки `<track>` (ложное событие при пустом н…",
+   "component": "js (`crates/js/src/shim/video_element.js` `checkCueChanges`, `_activeSig`, `patchVideoElement`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1750": {
+   "status": "open",
+   "title": "Найден WPT-VTT-SCOUT: `<span style=\"background\">a <b>bold</b> c</span>` — `FillRect` только под «a » и « c», под вложенным `<b>` дыра (и GPU, и CPU); из-за этог…",
+   "component": "layout/paint (фон inline-бокса по собственным текстовым прогонам)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1751": {
+   "status": "open",
+   "title": "Найден WPT-VTT-SCOUT (кластер H6): `VTTCue` — собственные data-свойства без IDL-аксессоров на прототипе, нет `IndexSizeError`/фильтра enum/`TypeError` на NaN, н…",
+   "component": "js (`crates/js/src/shim/video_element.js:286` `VTTCue`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1752": {
+   "status": "open",
+   "title": "Найден WPT-WASM-SCOUT: очередь задач платформы V8 разбирается только в путях GC (`run_gc_pass`), цикл JS-потока не зовёт `Platform::pump_message_loop` — `Atomic…",
+   "component": "js (`crates/js/src/v8_runtime/thread.rs` — цикл JS-потока)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1753": {
+   "status": "open",
+   "title": "Найден WPT-IDB-RUNNER: после `abort()` upgrade-транзакции открытия новой БД запись `_idb_databases[name]` (version 0) остаётся, `indexedDB.databases()` её переч…",
+   "component": "js (`crates/js/src/shim/idb_shim.js` — откат прерванного первого upgrade, `databases()`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1754": {
+   "status": "open",
+   "title": "`filter` на `display:inline` не создаёт containing block для `position:absolute\\",
+   "component": "layout (`crates/engine/layout/src/box_tree/multicol_abspos.rs::establishes_abs_cb`, escape-ы inline-бокса)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1755": {
+   "status": "open",
+   "title": "`fetch()`: `Response.type` всегда `\"default\"`, отфильтрованных ответов (`basic`/`cors`/`opaque`/`opaqueredirect`) нет. Кластер T разведки WPT-FETCH-SCOUT: 45 id…",
+   "component": "js (`crates/js/src/shim/fetch_body_shim.js` — `_lumen_response_from_fetch_cache`, `responseSlots`), network (`crates/network/src/js_providers.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1756": {
+   "status": "open",
+   "title": "`fetch()` отвергает корректные запросы network error-ом: POST/OPTIONS/DELETE без тела и нестандартные методы («Phase 0 supports GET/HEAD only»), `data:;base64`,…",
+   "component": "network (`crates/network/src/js_providers.rs::fetch_request_impl`, разбор `data:`, 3xx, `Content-Encoding`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1757": {
+   "status": "open",
+   "title": "Глобалы воркеров: нет `atob`/`btoa` в SharedWorker, нет `URL.createObjectURL` в DedicatedWorker. Кластер W WPT-FETCH-SCOUT: 10 id (`http-cache`, `api/credential…",
+   "component": "js (`crates/js/src/shared_worker.rs`, `crates/js/src/worker.rs`/`worker_shims.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1758": {
+   "status": "open",
+   "title": "`fetch()`: `redirect: 'error'\\",
+   "component": "js (`fetch_body_shim.js` — `Request.redirect`), core (`lumen_core::ext::JsFetchRequest`), network (`crates/network/src/js_providers.rs`, `cors.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1759": {
+   "status": "open",
+   "title": "Отсоединённые `<audio src>` и `<img srcset>` не шлют ни `load`, ни `error` — тесты `fetch/metadata/` висят до TIMEOUT. Кластер M(в) WPT-FETCH-SCOUT.",
+   "component": "js (`crates/js/src/audio_element.rs::startLoad`, загрузка `<img srcset>` вне документа)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1760": {
+   "status": "open",
+   "title": "`Sec-Fetch-*` уходят на не потенциально доверенные URL (`http://`), спецификация Fetch Metadata шлёт их только на trustworthy. Кластер M(г) WPT-FETCH-SCOUT, ≤ +…",
+   "component": "network (`crates/network/src/fetch_metadata.rs::fetch_metadata_headers`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1761": {
+   "status": "open",
+   "title": "Пробел между inline-кусками с разным кеглем/шрифтом и вокруг `<img>` меряется не так, как пробел внутри текста. `<div><span style=\"font:20px Ahem\">X <span>X</sp…",
+   "component": "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs` — `space_w`, `img_space`; `inline_build.rs` — пробельный узел после `<img>`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1762": {
+   "status": "open",
+   "title": "Заголовок `Host` без нестандартного порта: `http://x:54321/` → `Host: x` (RFC 9110 §7.2, Chrome шлёт `x:54321`). Абсолютные редиректы серверов из `Host` уходят…",
+   "component": "network (`crates/network/src/lib.rs` — `fetch_single(…, &host_ascii, …)`, `request_host_header`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1763": {
+   "status": "open",
+   "title": "`getComputedStyle(el).fontFamily` не нормализует имена: `'Times New Roman'` остаётся в одинарных кавычках, а ожидается `Times New Roman`; `'34J'` → `\"34J\"`, `\"s…",
+   "component": "layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map` — сериализация `font-family` в getComputedStyle)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1764": {
+   "status": "open",
+   "title": "Сериализация `cssText` не сворачивает `outline`, `list-style` и `font`-шорткод по длинным свойствам (`outline-width/-style/-color` → `outline: blue dotted 2px`,…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_serialize_style`, `_lumen_expand_border_shorthand`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1765": {
+   "status": "open",
+   "title": "`<style media=\"print\">` применяется в каскаде как без `media`: атрибут `media` у `<style>` игнорируется (у `<link>` гейт есть), поэтому `styleSheet.media.mediaT…",
+   "component": "shell/css (`crates/shell/src/doc_extract.rs` — `walk_style_blocks`, `crates/engine/css-parser/src/parser/media.rs` — `serialize`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1766": {
+   "status": "open",
+   "title": "`<link rel=icon>` при неудачной загрузке шлёт `error` (и `load` при успехе): иконка идёт общим путём preload-подсказок, а для `icon` событий нет (`html/links/ic…",
+   "component": "js shim (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_link_hint_kind`, `_lumen_link_hint_fetch`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1767": {
+   "status": "open",
+   "title": "`credentials: \"omit\"` всё равно сохраняет `Set-Cookie` и шлёт `Cookie` same-origin; нет флага host-only — cookie без `Domain` уходит на поддомены (`fetch/api/co…",
+   "component": "network/storage (`crates/network/src/lib.rs` — `fetch_with_redirect`, `credentials_allowed`; `crates/storage/src/cookies.rs` — `domain_matches`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1768": {
+   "status": "open",
+   "title": "`cookies/attributes/domain.sub.html` виснет на первом сабтесте: `test_driver.delete_all_cookies()` с `set_test_context(top.opener.top)` из iframe в кросс-ориджи…",
+   "component": "раннер или движок — проверить (`tools/wptrunner/wptrunner/executors/executorlumen.py`; testdriver из кросс-ориджин iframe в popup)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1769": {
+   "status": "open",
+   "title": "Ошибка компиляции/выполнения кросс-ориджин скрипта в `importScripts` пробрасывается как есть, а не глушится в `DOMException` `NetworkError` (`workers/interfaces…",
+   "component": "js workers (`crates/js/src/worker_shims.rs`, `shared_worker.rs` — `importScripts`; `crates/js/src/worker.rs` — `_lumen_import_script`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1770": {
+   "status": "open",
+   "title": "`sendBeacon` с https на http возвращает `true`, а POST на отдельном потоке молча блокируется как mixed content (`let _ =`) — `beacon/headers/header-referrer-uns…",
+   "component": "js/network (`crates/js/src/v8_runtime/install/net.rs` — `_lumen_send_beacon`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1771": {
+   "status": "open",
+   "title": "`getComputedStyle` инсетов: `position: absolute` внутри `position: relative` **inline**-контейнера считается от ближайшего блока, а не от inline-бокса (`getComp…",
+   "component": "layout (`crates/engine/layout/src/box_tree/` — containing block abspos; `resolved_geometry.rs::child_ctx`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1772": {
+   "status": "open",
+   "title": "Синхронное чтение стиля после `document.head.prepend(<style>)`: лист, которого нет в тексте каскада флаша, вливается в **конец** каскада, а не на своё место в д…",
+   "component": "js (`crates/js/src/v8_runtime/sheet_sync.rs::patched_cascade`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1773": {
+   "status": "open",
+   "title": "Найден WPT-RUN-19: print-reftest — `lumen --print-to-pdf` страницы с wptserve занимает ~20 с (file:// 0.7 с, http.server 3.9 с), 59 тестов PASS→TIMEOUT (`print-…",
+   "component": "shell (`crates/shell/src/dump_mode.rs::do_print_to_pdf`) / js / net",
    "date": null,
    "debtor": false
   },
@@ -21420,6 +21598,83 @@
    "component": "paint (`crates/engine/paint/src/cpu_raster.rs` `PushBackdropFilter`; `display_list/box_layer.rs:268` — порядок `PushBackdropFilter`/`PushTransform`/`PushClipPath`/`PushOpacity`)",
    "date": "2026-10-27",
    "debtor": false
+  },
+  "BUG-1542": {
+   "status": "fixed",
+   "title": "Размытие от `filter: blur()` выходит за границу `overflow:hidden` предка. `overflow:hidden` блок 100×100 с потомком `filter:blur(20px)` 100×100: пиксели размыти…",
+   "component": "paint (`crates/engine/paint/src/cpu_raster.rs` — `PushFilter` с `blur` внутри `PushClipRect` предка с `overflow:hidden`)",
+   "date": "2026-10-27",
+   "debtor": false
+  },
+  "BUG-1543": {
+   "status": "fixed",
+   "title": "`filter` на `<span>` не применяется к вложенному float/блоку (блок-в-инлайне). `<span style=\"filter:blur(2px)\"><div style=\"float:left;width:100px;height:100px;b…",
+   "component": "layout/paint (`filter` на `display:inline` элементе с блочным/плавающим потомком)",
+   "date": "2026-10-27",
+   "debtor": false
+  },
+  "BUG-1545": {
+   "status": "fixed",
+   "title": "`baseline-shift` не сдвигает текст HTML-элемента (`<span>`): `<length-percentage>`, `sub`, `top`. `<span style=\"baseline-shift:10px\">HH</span>` в строке рисуетс…",
+   "component": "layout (`crates/engine/layout/src/box_tree/` — `baseline-shift` подключён только к SVG-тексту, `emit_svg_text`)",
+   "date": "2026-10-27",
+   "debtor": false
+  },
+  "BUG-1547": {
+   "status": "fixed",
+   "title": "`<ol>`: маркер по умолчанию — `disc`, атрибуты `start`, `reversed`, `<li value>` и `type` не действуют, `li.value` — пустая строка. `<ol>`: маркер по умолчанию…",
+   "component": "layout (`crates/engine/layout/src/style/ua.rs::apply_ua_list`, `counters.rs` — неявный счётчик `list-item`, `box_tree/build.rs`), js (`HTMLLIElement.value`/`type`)",
+   "date": "2026-10-27",
+   "debtor": false
+  },
+  "BUG-1549": {
+   "status": "fixed",
+   "title": "Пустой `<li>` с `list-style-position: inside` имеет высоту 0: маркеры соседних `li` ложатся в одну точку. Пустой `<li>` с `list-style-position: inside` — высота…",
+   "component": "layout (`crates/engine/layout/src/box_tree/` — высота строки для `inside`-маркера у `li` без содержимого)",
+   "date": "2026-10-27",
+   "debtor": false
+  },
+  "BUG-1550": {
+   "status": "fixed",
+   "title": "`counter(name, <custom-style>)` добавляет `prefix` и `suffix` стиля (по умолчанию `\". \"`): `counter(a, f)` — `X.` вместо `X`. `counter(a, f)` с пользовательским…",
+   "component": "layout (`crates/engine/layout/src/counters.rs` — `format_counter_with_registry` и вызов из `counter()`/`counters()`)",
+   "date": "2026-10-27",
+   "debtor": false
+  },
+  "BUG-1551": {
+   "status": "fixed",
+   "title": "CSSOM: значения в `style`/`cssText` не канонизируются — `rgba(5,7,9,.5)` → `rgba(5, 7, 9, 0.502)`, `.5%`/`-0px`/`url(a)` остаются как написаны. CSSOM: значения…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js::_lumen_canonicalize_longhand`), css-parser (`serialize-values`)",
+   "date": "2026-10-27",
+   "debtor": false
+  },
+  "BUG-1552": {
+   "status": "fixed",
+   "title": "`style.cssFloat = \"left\"` пишет `css-float: left;`; `style.length` — строка; `item()` нет; `border: 1px` из длинных свойств не сворачивается. `style.cssFloat =…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_make_style`, сериализация шорткодов)",
+   "date": "2026-10-27",
+   "debtor": false
+  },
+  "BUG-1553": {
+   "status": "fixed",
+   "title": "`MediaList`: `appendMedium`, `deleteMedium`, `mediaText =` не меняют список; `matchMedia(\"bogus\").media` — `bogus`. `MediaList`: `appendMedium`/`deleteMedium`/`…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `MediaList`, `matchMedia`)",
+   "date": "2026-10-27",
+   "debtor": false
+  },
+  "BUG-492": {
+   "status": "fixed",
+   "title": "`border-image` (CSS Backgrounds/Borders Level 3, зрелая спека) не реализован вовсе — ни `border-image-source`/`-slice`/`-width`/`-outset`/`-repeat`, ни шорткод;…",
+   "component": "css-parser/layout (`crates/engine/layout/src/style.rs::apply_declaration`)",
+   "date": "2026-10-27",
+   "debtor": false
+  },
+  "BUG-1556": {
+   "status": "fixed",
+   "title": "`getComputedStyle`: used values инсетов. Исправлено: `clientWidth`/`clientHeight` отдавали border-box (теперь padding box, добавлены `clientLeft`/`clientTop`) —…",
+   "component": "layout/js (`crates/engine/layout/src/resolved_geometry.rs`, `selector_query.rs::inset_computed_css`, `box_tree/multicol_abspos.rs::static_edges`, `vertical_trampoline.rs`, `crates/js/src/shim/web_api_shim_mid.js` — `clientWidth`/`clientHeight`)",
+   "date": "2026-10-28",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -21905,6 +22160,9 @@
   "js (`crates/js/src/audio_element.rs::startLoad`)": [
    "BUG-924"
   ],
+  "js (`crates/js/src/audio_element.rs::startLoad`, загрузка `<img srcset>` вне документа)": [
+   "BUG-1759"
+  ],
   "js (`crates/js/src/audio_element.rs` — `patchAudioElement`; `crates/js/src/shim/video_element.js` — `patchVideoElement`; `crates/js/src/shim/web_api_shim_tail_b.js` — рефлексия `loading` у `<img>`/`<iframe>`)": [
    "BUG-925"
   ],
@@ -22111,6 +22369,9 @@
   "js (`crates/js/src/frame_bridge.rs` `docFacade` — нет `open`/`write`/`writeln`/`close`)": [
    "BUG-1690"
   ],
+  "js (`crates/js/src/frame_bridge.rs` `wrapWinFacadeGlobals`, `frame_bridge_globals.rs`, `v8_runtime/eval.rs` `peer_global_get`/`peer_global_call`)": [
+   "BUG-1743"
+  ],
   "js (`crates/js/src/frame_bridge.rs` — геттер `window.name` ребёнка зовёт `_lumen_f_attr(p, host, 'name')` на КАЖДОЕ чтение)": [
    "BUG-921"
   ],
@@ -22174,6 +22435,9 @@
   "js (`crates/js/src/shared_worker.rs`, `SHARED_WORKER_GLOBAL_SHIM` — объект для `onconnect` собирается литералом с одним полем `ports`)": [
    "BUG-867"
   ],
+  "js (`crates/js/src/shared_worker.rs`, `crates/js/src/worker.rs`/`worker_shims.rs`)": [
+   "BUG-1757"
+  ],
   "js (`crates/js/src/shim/` — `matchMedia`, `MediaQueryList`)": [
    "BUG-1562"
   ],
@@ -22189,11 +22453,17 @@
   "js (`crates/js/src/shim/event_target_shim.js:21-25` — метод работает только с `this._listeners`; `web_api_shim_mid.js:3215` `function Node` — `Node.prototype` не наследует `EventTarget.prototype`; `crates/js/src/xhr.rs:59` `_XhrEventTarget` — своя база)": [
    "BUG-1123"
   ],
+  "js (`crates/js/src/shim/fetch_body_shim.js` — `_lumen_response_from_fetch_cache`, `responseSlots`), network (`crates/network/src/js_providers.rs`)": [
+   "BUG-1755"
+  ],
   "js (`crates/js/src/shim/idb_shim.js` — `_idb_error(name, message)`)": [
    "BUG-915"
   ],
   "js (`crates/js/src/shim/idb_shim.js` — `_idb_persist_if_dirty`/`_idb_serialize`/`_idb_persist_schema`)": [
    "BUG-917"
+  ],
+  "js (`crates/js/src/shim/idb_shim.js` — откат прерванного первого upgrade, `databases()`)": [
+   "BUG-1753"
   ],
   "js (`crates/js/src/shim/performance_shim.js` — `Performance.prototype.mark`/`measure`)": [
    "BUG-899"
@@ -22215,6 +22485,12 @@
   ],
   "js (`crates/js/src/shim/url_shim.js:254` `URL`, `:166` `_url_resolve`)": [
    "BUG-1173"
+  ],
+  "js (`crates/js/src/shim/video_element.js:286` `VTTCue`)": [
+   "BUG-1751"
+  ],
+  "js (`crates/js/src/shim/video_element.js` `checkCueChanges`, `_activeSig`, `patchVideoElement`)": [
+   "BUG-1749"
   ],
   "js (`crates/js/src/shim/web_api_shim_head.js`)": [
    "BUG-1104"
@@ -22341,6 +22617,9 @@
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_script_prepare`, `_lumen_resource_try_prepare`)": [
    "BUG-882"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_serialize_style`, `_lumen_expand_border_shorthand`)": [
+   "BUG-1764"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_wrapper_proto_for` → `_lumen_install_node_members`)": [
    "BUG-1122"
@@ -22575,6 +22854,9 @@
   "js (`crates/js/src/v8_runtime/runtime.rs` — `pending_page_scrolls`/`page_scroll_y`; `install/platform.rs:349`)": [
    "BUG-949"
   ],
+  "js (`crates/js/src/v8_runtime/sheet_sync.rs::patched_cascade`)": [
+   "BUG-1772"
+  ],
   "js (`crates/js/src/v8_runtime/style_flush.rs::FlushHandles::maybe_flush`)": [
    "BUG-965"
   ],
@@ -22583,6 +22865,9 @@
   ],
   "js (`crates/js/src/v8_runtime/tests/mod.rs:98`)": [
    "BUG-1243"
+  ],
+  "js (`crates/js/src/v8_runtime/thread.rs` — цикл JS-потока)": [
+   "BUG-1752"
   ],
   "js (`crates/js/src/v8_runtime/value.rs::from_v8_bounded` — `ancestors.contains(&hash)` по `get_identity_hash()`)": [
    "BUG-1200"
@@ -22656,6 +22941,9 @@
   "js (`crates/js/src/worker.rs` — `run_worker_thread_v8`)": [
    "BUG-937"
   ],
+  "js (`crates/js/src/worker.rs`, `shared_worker.rs` — глобал `caches`)": [
+   "BUG-1746"
+  ],
   "js (`crates/js/src/xhr.rs` `deliver`: последнее `progress` при `readyState` 3 до `_setReadyState(4)`; было: после)": [
    "BUG-1141"
   ],
@@ -22679,6 +22967,9 @@
   ],
   "js (`dom_core.rs` — `queue_img_after_attr_change`/`queue_img_element`) + shell (`frames.rs`, `tab_lifecycle/hibernate.rs`, `dynamic_image_hook.rs`)": [
    "BUG-1148"
+  ],
+  "js (`fetch_body_shim.js` — `Request.redirect`), core (`lumen_core::ext::JsFetchRequest`), network (`crates/network/src/js_providers.rs`, `cors.rs`)": [
+   "BUG-1758"
   ],
   "js (`grep -rn \"valueAsNumber\\": [
    "BUG-893"
@@ -22712,6 +23003,9 @@
   ],
   "js (`web_api_shim_mid.js`: `importNode`, апгрейд custom element, обёртка `DocumentFragment`)": [
    "BUG-1239"
+  ],
+  "js (`web_api_shim_mid_b.js` `_lumen_build_cache_object`, `_lumen_build_response`; нативы `_lumen_cache_*`)": [
+   "BUG-1745"
   ],
   "js (`web_api_shim_mid_b.js` `_sw_make_event_target`)": [
    "BUG-1638"
@@ -22770,8 +23064,14 @@
   "js shim (`crates/js/src/shim/web_api_shim_mid.js` — `_LUMEN_WRAPPER_MEMBERS`)": [
    "BUG-494"
   ],
+  "js shim (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_link_hint_kind`, `_lumen_link_hint_fetch`)": [
+   "BUG-1766"
+  ],
   "js shim (`crates/js/src/shim/web_api_shim_tail_b.js` — `_wa_compute_at_p`, интерполятор Web Animations)": [
    "BUG-1305"
+  ],
+  "js workers (`crates/js/src/worker_shims.rs`, `shared_worker.rs` — `importScripts`; `crates/js/src/worker.rs` — `_lumen_import_script`)": [
+   "BUG-1769"
   ],
   "js — не локализовано (оркестратор челленджа Cloudflare `cdn-cgi/challenge-platform/.../orchestrate/chl_page/v1`, падение на тике таймера; кандидат — `iframe.contentWindow === null` синхронно после `appendChild`, BUG-480)": [
    "BUG-1176"
@@ -22880,6 +23180,9 @@
   ],
   "js/network (`crates/js/src/shim/web_api_shim_mid_b3.js:82-339::_lumen_fetch` + `crates/network/src/lib.rs:479-509::require_http_scheme`)": [
    "BUG-1098"
+  ],
+  "js/network (`crates/js/src/v8_runtime/install/net.rs` — `_lumen_send_beacon`)": [
+   "BUG-1770"
   ],
   "js/network граница (`crates/network/src/lib.rs::HttpClient::fetch_subresource_inner`; `crates/shell/src/page_load.rs`/`frames.rs`)": [
    "BUG-520"
@@ -23073,6 +23376,9 @@
   "layout (`crates/engine/layout/src/box_tree/` — `position:absolute`/`fixed` потомок внутри строки: разрыв строки и статическая позиция)": [
    "BUG-1470"
   ],
+  "layout (`crates/engine/layout/src/box_tree/` — containing block abspos; `resolved_geometry.rs::child_ctx`)": [
+   "BUG-1771"
+  ],
   "layout (`crates/engine/layout/src/box_tree/` — абсолютно позиционированные `<button>`, `<input>`, `<select>`: «semi-replaced» растяжение по инсетам)": [
    "BUG-1482"
   ],
@@ -23246,6 +23552,9 @@
   "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs` — `measure_text_w_varied(…, tab_size, …)`)": [
    "BUG-1326"
   ],
+  "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs` — `space_w`, `img_space`; `inline_build.rs` — пробельный узел после `<img>`)": [
+   "BUG-1761"
+  ],
   "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs` — выбор отступа строки; `style/apply/text.rs` — ключевые слова `each-line`/`hanging` не доходят до `ComputedStyle`)": [
    "BUG-1332"
   ],
@@ -23321,6 +23630,9 @@
   ],
   "layout (`crates/engine/layout/src/box_tree/multicol_abspos.rs::abs_box_shrinks_to_fit`)": [
    "BUG-1047"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/multicol_abspos.rs::establishes_abs_cb`, escape-ы inline-бокса)": [
+   "BUG-1754"
   ],
   "layout (`crates/engine/layout/src/box_tree/multicol_abspos.rs::place_abs_child` — `auto`-поля через `resolve_or_zero`)": [
    "BUG-1282"
@@ -23448,9 +23760,6 @@
   "layout (`crates/engine/layout/src/lib.rs::scrollable_extent_x`/`scrollable_extent_y`/`collect_scroll_containers_inner`)": [
    "BUG-960"
   ],
-  "layout (`crates/engine/layout/src/resolved_geometry.rs`, `crates/engine/layout/src/selector_query.rs::computed_style_to_map`)": [
-   "BUG-1556"
-  ],
   "layout (`crates/engine/layout/src/selector_query.rs:1591` — `computed_style_to_map` сериализует `transform` как задан)": [
    "BUG-1157"
   ],
@@ -23459,6 +23768,9 @@
   ],
   "layout (`crates/engine/layout/src/selector_query.rs:688` `computed_style_to_map` — 88 свойств, обоих нет) + shell (`crates/shell/src/main.rs:22950` `take_cv_events` — вызывающих нет)": [
    "BUG-852"
+  ],
+  "layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map` — сериализация `font-family` в getComputedStyle)": [
+   "BUG-1763"
   ],
   "layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`)": [
    "BUG-1050",
@@ -23763,6 +24075,9 @@
   "layout/js (`crates/engine/layout/src/lib.rs::collect_pseudo_computed_styles_box`, `inject_marker`)": [
    "BUG-1667"
   ],
+  "layout/js (`crates/engine/layout/src/resolved_geometry.rs`, `selector_query.rs::inset_computed_css`, `box_tree/multicol_abspos.rs::static_edges`, `vertical_trampoline.rs`, `crates/js/src/shim/web_api_shim_mid.js` — `clientWidth`/`clientHeight`)": [
+   "BUG-1556"
+  ],
   "layout/js (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`, `crates/js/src/v8_runtime.rs::_lumen_get_computed_style`)": [
    "BUG-499"
   ],
@@ -23880,6 +24195,9 @@
   "layout/paint (распространение `overflow` корня на viewport)": [
    "BUG-1423"
   ],
+  "layout/paint (фон inline-бокса по собственным текстовым прогонам)": [
+   "BUG-1750"
+  ],
   "layout/paint/shell": [
    "BUG-242"
   ],
@@ -23916,6 +24234,9 @@
   "network (`crates/network/src/dns.rs::SystemDnsResolver::resolve` — целиком `getaddrinfo`)": [
    "BUG-1070"
   ],
+  "network (`crates/network/src/fetch_metadata.rs::fetch_metadata_headers`)": [
+   "BUG-1760"
+  ],
   "network (`crates/network/src/filter/easylist.rs` — `DomainCondition`, `RuleOptions::matches`; `crates/core/src/ext.rs` — `RequestContext::document_host`; `crates/network/src/lib.rs` — `fetch_with_redirect(document_host)`)": [
    "BUG-1146"
   ],
@@ -23942,6 +24263,9 @@
   ],
   "network (`crates/network/src/intercept.rs`, тест `tests::global_intercept_pauses_real_fetch_until_resolved`)": [
    "BUG-783"
+  ],
+  "network (`crates/network/src/js_providers.rs::fetch_request_impl`, разбор `data:`, 3xx, `Content-Encoding`)": [
+   "BUG-1756"
   ],
   "network (`crates/network/src/lib.rs:1041` — `type PageResponse = (Vec<u8>, Vec<(String, String)>)`; `Response` без URL, `lib.rs:461`; цепочка проходится внутри `fetch_with_redirect`, `lib.rs:2601`), shell (`crates/shell/src/main.rs:3577` — `base: ResourceBase::Url(url.clone())`)": [
    "BUG-757"
@@ -23972,6 +24296,9 @@
   ],
   "network (`crates/network/src/lib.rs` — `bind_ephemeral_listener`, `mod bad_port`)": [
    "BUG-911"
+  ],
+  "network (`crates/network/src/lib.rs` — `fetch_single(…, &host_ascii, …)`, `request_host_header`)": [
+   "BUG-1762"
   ],
   "network (`crates/network/src/lib.rs` — `fetch_with_redirect`; `http1/response.rs` — `read_response`; `http1/chunked.rs` — `read_response_streamed`, `response_has_no_body`)": [
    "BUG-1665"
@@ -24026,6 +24353,9 @@
   ],
   "network/shell/js/storage (`network/src/lib.rs` `COOKIE_PARTITION`, `js/src/v8_runtime/install/storage.rs`, `shell/src/frames.rs`)": [
    "BUG-1628"
+  ],
+  "network/storage (`crates/network/src/lib.rs` — `fetch_with_redirect`, `credentials_allowed`; `crates/storage/src/cookies.rs` — `domain_matches`)": [
+   "BUG-1767"
   ],
   "paint": [
    "BUG-015",
@@ -24315,6 +24645,9 @@
   "shell (`PageSource::from_arg`)": [
    "BUG-1636"
   ],
+  "shell (`app/window_event/redraw_requested.rs:1172` `tracks::build_cue_overlay`; `lumen/automation.rs` `render_current_page_to_png`)": [
+   "BUG-1748"
+  ],
   "shell (`chrome_ui.rs:365` `loading: …nav_start.is_some()` + спиннер вкладки, UX-LOADING)": [
    "BUG-1597"
   ],
@@ -24347,6 +24680,9 @@
   ],
   "shell (`crates/shell/src/download.rs:1781` — тест поверх `start_download`, который поднимает настоящий поток загрузки)": [
    "BUG-1201"
+  ],
+  "shell (`crates/shell/src/dump_mode.rs::do_print_to_pdf`) / js / net": [
+   "BUG-1773"
   ],
   "shell (`crates/shell/src/dump_mode.rs::render_source_to_png` — `pending_web_fonts` не ждутся)": [
    "BUG-1273"
@@ -24561,6 +24897,9 @@
   "shell/chrome (`relayout_chrome_host`, `build_chrome_overlay_strips`)": [
    "BUG-1605"
   ],
+  "shell/css (`crates/shell/src/doc_extract.rs` — `walk_style_blocks`, `crates/engine/css-parser/src/parser/media.rs` — `serialize`)": [
+   "BUG-1765"
+  ],
   "shell/driver (`automation_server.rs`, `InProcessSession::set_http_client_hook`, `config::apply_proxies`)": [
    "BUG-1635"
   ],
@@ -24704,6 +25043,9 @@
   ],
   "не локализовано — снимок стилей для JS (`crates/shell/src/page_pipeline.rs:842` `collect_js_layout_snapshot`) или CSSOM-листы (`update_stylesheet_nodes`)": [
    "BUG-1184"
+  ],
+  "раннер или движок — проверить (`tools/wptrunner/wptrunner/executors/executorlumen.py`; testdriver из кросс-ориджин iframe в popup)": [
+   "BUG-1768"
   ],
   "тулинг (`tests/wpt/run_report.py`/`run_corpus.py`, `tests/wpt/heavy_lock.py`, `scripts/cargo-heavy.sh`)": [
    "BUG-1029"
