@@ -266,6 +266,7 @@ fn fetch_request_file_url_reads_local_disk_without_network() {
             body: None,
             mode: "",
             destination: "",
+            cache: "",
             token: None,
         })
         .unwrap();

@@ -5,6 +5,23 @@
 
 use super::*;
 
+/// A stored cache entry as the page-facing result of `fetch()`: lowercase
+/// header names, the cache's bookkeeping header left out.
+fn fetch_result_from(snap: http_cache::CacheEntrySnapshot, url: &Url) -> JsFetchResult {
+    JsFetchResult {
+        status_text: http_status_text(snap.status).to_string(),
+        status: snap.status,
+        headers: snap
+            .headers
+            .into_iter()
+            .filter(|(k, _)| !k.eq_ignore_ascii_case(fetch_cache::VARY_MARKER_HEADER))
+            .map(|(k, v)| (k.to_ascii_lowercase(), v))
+            .collect(),
+        body: snap.body,
+        url: url.to_string(),
+    }
+}
+
 fn http_status_text(status: u16) -> &'static str {
     match status {
         100 => "Continue", 101 => "Switching Protocols", 200 => "OK",
@@ -61,6 +78,7 @@ impl JsFetchProvider for HttpClient {
                 body: None,
                 mode: "",
                 destination: "",
+                cache: "",
                 token: None,
             },
             false,
@@ -75,6 +93,7 @@ impl JsFetchProvider for HttpClient {
             body: None,
             mode: "",
             destination: "",
+            cache: "",
             token: None,
         })
     }
@@ -93,6 +112,7 @@ impl JsFetchProvider for HttpClient {
             body: Some(JsFetchBody { content_type, bytes: body }),
             mode: "",
             destination: "",
+            cache: "",
             token: None,
         })
     }
@@ -179,6 +199,7 @@ impl JsFetchProvider for HttpClient {
             body: None,
             mode: "",
             destination: "",
+            cache: "",
             token: Some(token),
         })
     }
@@ -205,6 +226,7 @@ impl JsFetchProvider for HttpClient {
             body: Some(JsFetchBody { content_type, bytes: body }),
             mode: "",
             destination: "",
+            cache: "",
             token: Some(token),
         })
     }
@@ -1002,6 +1024,10 @@ impl HttpClient {
                     "fetch: Phase 0 supports GET/HEAD only, got {m}"
                 )));
             }
+            // Fetch accepts any method token with a body (the HTTP cache tests
+            // send `FOO`); GET/HEAD cannot carry one, CONNECT/TRACE/TRACK are
+            // forbidden.
+            (true, m) if !matches!(m, "GET" | "HEAD" | "CONNECT" | "TRACE" | "TRACK") && is_header_token(m) => {}
             (true, m) => {
                 return Err(Error::Network(format!(
                     "fetch_with_body: unsupported method {m}"
@@ -1033,6 +1059,44 @@ impl HttpClient {
                     body,
                     url: url.to_string(),
                 });
+            }
+        }
+        // FETCH-HTTP-CACHE: the shared HTTP cache answers (or revalidates) a
+        // plain GET according to `Request.cache` and the request's own
+        // `Cache-Control` directives. Anything else is written straight to the
+        // network; a successful unsafe request invalidates what it touched.
+        let cache_mode = fetch_cache::CacheMode::parse(req.cache).for_request(req.headers);
+        let request_cc = fetch_cache::RequestCc::from_headers(req.headers);
+        // An element's own load (`<script src>`, `@import`) keeps its old path.
+        let cache = self.http_cache.as_deref().filter(|_| req.destination.is_empty());
+        let cacheable_get = method_upper == "GET" && req.body.is_none();
+        let mut revalidating: Option<http_cache::CacheEntrySnapshot> = None;
+        let mut conditional = String::new();
+        if let Some(cache) = cache
+            && cacheable_get
+        {
+            let entry = cache
+                .get(url.as_str())
+                .and_then(|e| fetch_cache::vary_match(e, req.headers));
+            match fetch_cache::plan(cache_mode, &request_cc, entry) {
+                fetch_cache::Plan::Serve(snap) => return Ok(fetch_result_from(snap, &url)),
+                fetch_cache::Plan::GatewayTimeout => {
+                    return Ok(JsFetchResult {
+                        status: 504,
+                        status_text: http_status_text(504).to_string(),
+                        headers: vec![],
+                        body: Vec::new(),
+                        url: url.to_string(),
+                    });
+                }
+                fetch_cache::Plan::NetworkError => {
+                    return Err(Error::Network(format!("fetch: only-if-cached miss for {url}")));
+                }
+                fetch_cache::Plan::Revalidate(snap) => {
+                    conditional = snap.conditional_headers.clone();
+                    revalidating = Some(snap);
+                }
+                fetch_cache::Plan::Network => {}
             }
         }
         // Тот же путь, что у GET: куки, редиректы, HSTS, ad-block-фильтр,
@@ -1085,6 +1149,13 @@ impl HttpClient {
             fetch_metadata::dest_token(req.destination),
             mode,
         ));
+        // Request lines of the cache mode (Fetch §4.5) and, when revalidating,
+        // the stored entry's validators. Only a page `fetch()` (empty
+        // destination) has a mode; an element's own load keeps the profile's.
+        if req.destination.is_empty() {
+            author_headers.push_str(&cache_mode.request_lines(req.headers));
+        }
+        author_headers.push_str(&conditional);
         let accept_encoding = self.accept_encoding_header();
         let destination = self.mixed_content.as_ref().map(|_| RequestDestination::Other);
         let (resp, final_url) = fetch_with_redirect(
@@ -1121,6 +1192,37 @@ impl HttpClient {
             &method_upper, // BUG-1665: метод fetch()-запроса (GET/HEAD)
             true, // BUG-1114: fetch() resolves ok:false on 4xx/5xx, doesn't reject
         )?;
+        if let Some(cache) = cache {
+            if cacheable_get {
+                if resp.status == 304
+                    && let Some(stored) = revalidating
+                {
+                    // The origin confirmed the stored copy: fold the 304's
+                    // headers in and answer from the refreshed entry.
+                    cache.revalidate(url.as_str(), &resp.headers);
+                    let refreshed = cache.get(url.as_str()).unwrap_or(stored);
+                    return Ok(fetch_result_from(refreshed, &final_url));
+                }
+                if cache_mode.stores_response()
+                    && !request_cc.no_store
+                    && final_url.as_str() == url.as_str()
+                    && resp.body.len() <= fetch_cache::MAX_STORED_BODY
+                {
+                    let mut stored_headers = resp.headers.clone();
+                    match fetch_cache::vary_marker(&resp.headers, req.headers) {
+                        fetch_cache::VaryMarker::Unstorable => {}
+                        marker => {
+                            if let fetch_cache::VaryMarker::Values(v) = marker {
+                                stored_headers.push((fetch_cache::VARY_MARKER_HEADER.to_owned(), v));
+                            }
+                            cache.store(url.as_str(), resp.status, resp.body.clone(), &stored_headers);
+                        }
+                    }
+                }
+            } else if fetch_cache::is_unsafe_method(&method_upper) && (200..400).contains(&resp.status) {
+                fetch_cache::invalidate(cache, &url, &resp.headers);
+            }
+        }
         Ok(JsFetchResult {
             status_text: http_status_text(resp.status).to_string(),
             status: resp.status,
