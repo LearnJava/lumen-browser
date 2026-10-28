@@ -322,3 +322,28 @@ fn match_media_webkit_device_pixel_ratio_follows_zoom() {
         lumen_core::JsValue::String("(-webkit-min-device-pixel-ratio: 2)".into())
     );
 }
+
+// ── BUG-1562: канонический `media`, toStringTag, instanceof ───────────────
+
+#[test]
+fn match_media_non_ident_type_serializes_as_not_all() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.update_viewport_size(800.0, 600.0);
+    let r = rt.eval("matchMedia('::').media + '|' + matchMedia('bogus').media").unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("not all|bogus".into()));
+    let r = rt.eval("matchMedia('::').matches").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(false));
+}
+
+#[test]
+fn match_media_list_is_event_target_with_class_string() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            r"[Object.prototype.toString.call(matchMedia('all')),
+               String(matchMedia('::') instanceof MediaQueryList),
+               String(matchMedia('all') instanceof EventTarget)].join('|')",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("[object MediaQueryList]|true|true".into()));
+}

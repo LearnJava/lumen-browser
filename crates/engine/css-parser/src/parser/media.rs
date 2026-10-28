@@ -978,6 +978,18 @@ pub fn parse_media_query(s: &str) -> MediaQuery {
     MediaQuery { clauses, raw: s.to_string() }
 }
 
+/// `<media-type>` — это `<ident>` (Media Queries L4 §2.1): неизвестное имя
+/// (`foo`) валидно и сериализуется как написано, а не-идентификатор (`::`,
+/// `1x`) делает clause невалидной.
+fn is_media_type_ident(t: &str) -> bool {
+    let mut chars = t.chars();
+    let starts_ok = match chars.next() {
+        Some(c) => c.is_ascii_alphabetic() || c == '_' || c == '-' || !c.is_ascii(),
+        None => false,
+    };
+    starts_ok && !t.starts_with("--") && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || !c.is_ascii())
+}
+
 pub(crate) fn parse_media_clause(s: &str) -> MediaQueryClause {
     let mut input = s.trim();
 
@@ -1060,7 +1072,17 @@ pub(crate) fn parse_media_clause(s: &str) -> MediaQueryClause {
                     conditions: vec![MediaCondition::Unsupported],
                 };
             }
-            conditions.push(MediaCondition::MediaType(word.to_ascii_lowercase()));
+            // BUG-1562: слово, не являющееся `<ident>` (`::`), делает clause
+            // невалидной — `.media` обязан быть `not all`.
+            let lower = word.to_ascii_lowercase();
+            if !is_media_type_ident(&lower) {
+                return MediaQueryClause {
+                    negated,
+                    only,
+                    conditions: vec![MediaCondition::Unsupported],
+                };
+            }
+            conditions.push(MediaCondition::MediaType(lower));
         }
     }
 
