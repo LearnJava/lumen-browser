@@ -15,6 +15,7 @@ mod bug1191_boxless_computed_style;
 mod bug1480_display_inline_computed;
 mod bug1425_color_space_computed;
 mod bug1430_math_functions;
+mod bug1556_inset_resolved_values;
 mod transform_box_computed;
 mod bug1505_register_property;
 mod bug1329_text_transform_lang;

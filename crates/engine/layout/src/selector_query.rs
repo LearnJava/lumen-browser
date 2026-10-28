@@ -833,6 +833,18 @@ fn length_or_auto_to_css(l: &LengthOrAuto) -> String {
     }
 }
 
+/// Computed value of an inset (`top`/`right`/`bottom`/`left`): CSS Values L4 §computed-value turns
+/// `em`/`rem` into an absolute length, so a box without a used geometry (`position: static`,
+/// `display: none` — `apply_used_geometry` skips them) reports `10px` for `1em` at `font-size: 10px`
+/// and not the specified `1em` (BUG-1556). Percentages and `calc()` keep their specified form.
+fn inset_computed_css(l: &LengthOrAuto, font_size: f32, zoom: f32) -> String {
+    match l {
+        LengthOrAuto::Length(Length::Em(v)) => px_str(v * font_size / zoom),
+        LengthOrAuto::Length(Length::Rem(v)) => px_str(v * crate::style::ROOT_FONT_SIZE / zoom),
+        _ => length_or_auto_to_css(l),
+    }
+}
+
 pub(crate) fn border_style_to_css(bs: BorderStyle) -> &'static str {
     match bs {
         BorderStyle::None => "none",
@@ -1562,10 +1574,11 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("border-image".into(), style.border_image.shorthand_css());
 
     // ── Inset (positioned elements) ───────────────────────────────
-    m.insert("top".into(), length_or_auto_to_css(&style.top));
-    m.insert("right".into(), length_or_auto_to_css(&style.right));
-    m.insert("bottom".into(), length_or_auto_to_css(&style.bottom));
-    m.insert("left".into(), length_or_auto_to_css(&style.left));
+    let inset_zoom = if z > 0.0 { z } else { 1.0 };
+    m.insert("top".into(), inset_computed_css(&style.top, style.font_size, inset_zoom));
+    m.insert("right".into(), inset_computed_css(&style.right, style.font_size, inset_zoom));
+    m.insert("bottom".into(), inset_computed_css(&style.bottom, style.font_size, inset_zoom));
+    m.insert("left".into(), inset_computed_css(&style.left, style.font_size, inset_zoom));
 
     // ── Colors ────────────────────────────────────────────────────
     // BUG-1425: lab()/oklch()/color()/color-mix() сохраняют своё пространство в computed-значении.

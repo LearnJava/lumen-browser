@@ -72,10 +72,12 @@ pub(crate) struct GeomCtx {
     /// flow — the only context whose `auto` horizontal margins are recovered
     /// from geometry.
     pub parent_block_flow: bool,
-    /// Padding box of the nearest ancestor that is a scroll container
+    /// Content box of the nearest ancestor that is a scroll container
     /// (`overflow` other than `visible`/`clip` on either axis), or the
     /// viewport — the scrollport `position: sticky` percentage insets resolve
-    /// against (css-position §sticky-pos, csswg-drafts #3115).
+    /// against (css-position §sticky-pos, csswg-drafts #3115). The padding is
+    /// taken off: that is the rectangle the sticky box is kept inside and the
+    /// one `getComputedStyle-insets-sticky*.html` measures (BUG-1556).
     pub scrollport: Rect,
     /// Padding box of the nearest ancestor that is a containing block for
     /// fixed-position descendants (`transform`, `perspective`, `filter`,
@@ -196,12 +198,14 @@ fn resolve_opt(l: &LengthOrAuto, em: f32, basis: f32, vp: Size) -> Option<f32> {
     }
 }
 
-/// Used inset pair along one axis for a relatively positioned box
-/// (CSS 2.1 §9.4.3): one `auto` side mirrors the other; both `auto` is 0;
-/// both set is over-constrained and the start side wins.
+/// Resolved inset pair along one axis for a relatively positioned box (CSS 2.1 §9.4.3): one `auto`
+/// side mirrors the other, both `auto` is 0, both set is over-constrained for *layout* (the start
+/// side wins) but each side still reports its own value (CSSOM
+/// §resolved-value-special-case-property-like-top, BUG-1556).
 fn relative_pair(start: Option<f32>, end: Option<f32>) -> (f32, f32) {
     match (start, end) {
-        (Some(s), _) => (s, -s),
+        (Some(s), Some(e)) => (s, e),
+        (Some(s), None) => (s, -s),
         (None, Some(e)) => (-e, e),
         (None, None) => (0.0, 0.0),
     }
@@ -248,7 +252,7 @@ pub(crate) fn child_ctx(b: &LayoutBox, ctx: &GeomCtx, vp: Size) -> GeomCtx {
         flow_cb: content_box,
         abs_cb: if positioned { padding_box } else { ctx.abs_cb },
         parent_block_flow: lays_out_block_flow(s.display),
-        scrollport: if scrolls(s.overflow_x) || scrolls(s.overflow_y) { padding_box } else { ctx.scrollport },
+        scrollport: if scrolls(s.overflow_x) || scrolls(s.overflow_y) { content_box } else { ctx.scrollport },
         fixed_cb: if contains_fixed_descendants(s) { Some(padding_box) } else { ctx.fixed_cb },
         container: match s.container_type {
             ContainerType::Normal => ctx.container,
@@ -347,7 +351,7 @@ pub(crate) fn apply_used_geometry(m: &mut StyleMap, b: &LayoutBox, ctx: &GeomCtx
         }
         Position::Sticky => {
             // The used value of a sticky inset is the specified one; percentages
-            // are taken of the nearest scrollport, not the containing block.
+            // are taken of the nearest scrollport's content box, not the containing block.
             let sp = ctx.scrollport;
             for (name, val, basis) in [
                 ("top", &s.top, sp.height),

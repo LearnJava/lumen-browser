@@ -265,7 +265,7 @@ fn step_child(
 
 /// The inline-start edge of a vertical container is its bottom one: `direction: rtl`
 /// (bottom-to-top), or top-to-bottom for `sideways-lr`.
-fn vertical_inline_start_at_end(s: &ComputedStyle) -> bool {
+pub(super) fn vertical_inline_start_at_end(s: &ComputedStyle) -> bool {
     (s.direction == crate::style::Direction::Rtl) != matches!(s.writing_mode, crate::style::WritingMode::SidewaysLr)
 }
 
@@ -294,12 +294,19 @@ fn finish_child(frame: &mut Frame, i: usize, viewport: Size, caches: &mut Margin
         let cursor_block_consumed = frame.init.cursor_block_consumed + gap;
         let child = &frame.b.children[i];
         let ml = child.style.margin_left.resolve_or_zero(cem, content_inline, viewport);
-        let static_x = if is_rtl {
+        // BUG-1556: the margin edge touches the container's block-start (right edge in
+        // `vertical-rl`) and inline-start (bottom edge when `rtl`) — see `static_edges`; the
+        // box is shifted by its final size when it is placed.
+        let (right_edge, bottom_edge) = super::multicol_abspos::static_edges(&frame.b);
+        let static_x = if right_edge {
+            content_x_left + content_block_avail - cursor_block_consumed
+        } else if is_rtl {
             content_x_left + content_block_avail - cursor_block_consumed - child_block - ml
         } else {
             content_x_left + cursor_block_consumed - ml
         };
-        frame.abs_deferred.push((i, static_x, frame.init.content_y));
+        let static_y = if bottom_edge { frame.init.content_y + content_inline } else { frame.init.content_y };
+        frame.abs_deferred.push((i, static_x, static_y));
         return;
     }
     // CSS 2.1 §8.3.1: an empty block's margins collapse through it, joining those
