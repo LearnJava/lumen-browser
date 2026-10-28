@@ -456,8 +456,12 @@ pub(crate) fn resolve_script_sources(
                         sink.clone(), cookie_jar.clone(), referrer_policy,
                     );
                     client
-                        .fetch_subresource(&sub_url, RequestDestination::Script)
-                        .map(|body| crate::prefetch::CachedResource { body, content_type: None })
+                        .fetch_subresource_with_links(&sub_url, RequestDestination::Script)
+                        .map(|(body, _content_type, links)| {
+                            // BUG-906: `Link:` header of the script response.
+                            crate::page_source::emit_link_hints(&links, &sub_url, sink, cookie_jar.clone(), &[]);
+                            crate::prefetch::CachedResource { body, content_type: None }
+                        })
                         .map_err(|e| e.to_string())
                 });
                 match resource {

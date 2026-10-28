@@ -2413,15 +2413,18 @@ fn feed_preload_and_emit(
                     }
                     continue;
                 };
+                let link_sink = Arc::clone(&warm_client.sink);
+                let link_jar = warm_client.cookie_jar.clone();
                 crate::prefetch::PREFETCH_CACHE.warm_with(
                     generation,
                     &resolved,
                     move || {
                         client
-                            .fetch_subresource_with_content_type(&parsed, dest)
-                            .map(|(body, content_type)| crate::prefetch::CachedResource {
-                                body,
-                                content_type,
+                            .fetch_subresource_with_links(&parsed, dest)
+                            .map(|(body, content_type, links)| {
+                                // BUG-906: `Link:` header of the stylesheet/script response.
+                                crate::page_source::emit_link_hints(&links, &parsed, &link_sink, link_jar, &[]);
+                                crate::prefetch::CachedResource { body, content_type }
                             })
                             .map_err(|e| e.to_string())
                     },
