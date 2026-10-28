@@ -509,3 +509,65 @@ fn preload_hint_is_consumed_once() {
     let (body, n) = preload_fetch_body(reg, "fetch('/api').then(function() { return fetch('/api'); })");
     assert_eq!((body.as_str(), n), ("net", 1));
 }
+
+// ── BUG-907: a fetch() that runs before the parser-document pass ───────────
+
+/// Document whose `<head>` already holds `<link rel=preload as=fetch href=/api>`
+/// with the given extra attributes, the way the parser leaves it (no insertion
+/// hook, no `_lumen_link_hints_scan` yet).
+fn doc_with_fetch_preload_link(extra: &[(&str, &str)]) -> Arc<Mutex<Document>> {
+    let mut doc = Document::new();
+    let html = doc.create_element(QualName::html("html"));
+    let head = doc.create_element(QualName::html("head"));
+    let body = doc.create_element(QualName::html("body"));
+    let link = doc.create_element(QualName::html("link"));
+    if let NodeData::Element { attrs, .. } = &mut doc.get_mut(link).data {
+        for (name, value) in [("rel", "preload"), ("as", "fetch"), ("href", "/api")]
+            .into_iter()
+            .chain(extra.iter().copied())
+        {
+            attrs.push(lumen_dom::Attribute { name: QualName::html(name), value: value.into() });
+        }
+    }
+    doc.append_child(doc.root(), html);
+    doc.append_child(html, head);
+    doc.append_child(head, link);
+    doc.append_child(html, body);
+    Arc::new(Mutex::new(doc))
+}
+
+fn early_fetch_network_count(doc: Arc<Mutex<Document>>, fetch_call: &str) -> (String, usize) {
+    let provider = Arc::new(PreloadedFetch { network: std::sync::Mutex::new(vec![]) });
+    let rt = V8JsRuntime::new().unwrap();
+    rt.install_dom(
+        doc, "https://example.com/",
+        Some(Arc::clone(&provider) as Arc<dyn lumen_core::ext::JsFetchProvider>),
+        None, None, None, None, None, None, None, None, false, None,
+    ).unwrap();
+    rt.eval(&format!(
+        "globalThis.out = 'pending'; {fetch_call}.then(function(r) {{ return r.text(); }}).then(function(t) {{ out = t; }});"
+    )).unwrap();
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
+    let body = match rt.eval("out").unwrap() {
+        lumen_core::JsValue::String(s) => s,
+        other => panic!("{other:?}"),
+    };
+    let n = provider.network.lock().unwrap().len();
+    (body, n)
+}
+
+#[test]
+fn early_fetch_takes_hint_before_document_pass() {
+    // fetch() from an inline script while the parser is still running: the
+    // `as=fetch` link is already in the tree, the `interactive` pass is not.
+    let doc = doc_with_fetch_preload_link(&[("crossorigin", "")]);
+    assert_eq!(early_fetch_network_count(doc, "fetch('/api')"), ("hint".to_string(), 0));
+}
+
+#[test]
+fn early_fetch_ignores_hint_without_crossorigin_or_with_other_media() {
+    let doc = doc_with_fetch_preload_link(&[]);
+    assert_eq!(early_fetch_network_count(doc, "fetch('/api')"), ("net".to_string(), 1));
+    let doc = doc_with_fetch_preload_link(&[("crossorigin", ""), ("media", "print")]);
+    assert_eq!(early_fetch_network_count(doc, "fetch('/api')"), ("net".to_string(), 1));
+}
