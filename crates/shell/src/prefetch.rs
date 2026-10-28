@@ -28,7 +28,7 @@
 //!   clears all slots and adopts the new generation. A stale producer thread (from a
 //!   superseded navigation) bypasses the cache and never pollutes the current page.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex};
 
@@ -227,7 +227,35 @@ impl PrefetchCache {
         fetch: impl FnOnce() -> Result<CachedResource, String> + Send + 'static,
     ) {
         if let Some(reservation) = self.reserve(generation, url) {
-            std::thread::spawn(move || reservation.fill(fetch()));
+            WARM_POOL.submit(move || reservation.fill(fetch()));
+        }
+    }
+
+    /// LOAD-3C: как [`Self::warm`], но вызывающему нужен и исход загрузки —
+    /// таблица стилей для промежуточного кадра, например. `on_done` получает
+    /// результат слота в любом случае: когда загрузку выполнила эта задача,
+    /// когда URL уже занят чужим заполнителем (ждём его) и когда `generation`
+    /// устарел (грузим мимо кэша, как `fetch`).
+    ///
+    /// Слот резервируется сразу, на потоке вызывающего (окно из `warm`: потребитель
+    /// между вызовом и стартом задачи не должен уйти в сеть сам), а загрузка идёт
+    /// на [`WARM_POOL`], не на новом потоке.
+    pub(crate) fn warm_with(
+        &self,
+        generation: u64,
+        url: &str,
+        fetch: impl FnOnce() -> Result<CachedResource, String> + Send + 'static,
+        on_done: impl FnOnce(FetchResult) + Send + 'static,
+    ) {
+        match self.claim(generation, url) {
+            Claim::Filler(slot) => WARM_POOL.submit(move || {
+                on_done(Self::fill(&slot, fetch().map(Arc::new)));
+            }),
+            Claim::Waiter(slot) => WARM_POOL.submit(move || {
+                slot.used.store(true, Ordering::Relaxed);
+                on_done(Self::wait(&slot));
+            }),
+            Claim::Stale => WARM_POOL.submit(move || on_done(fetch().map(Arc::new))),
         }
     }
 
@@ -301,6 +329,85 @@ impl PrefetchCache {
         self.fetch(generation, url, fetch)
     }
 }
+
+/// LOAD-3C: потолок потоков фонового прогрева. Тот же, что у `parallel_fetch`
+/// (`MAX_PARALLEL_FETCHES`): работа I/O-bound, а браузерный лимит соединений на
+/// хост ~6, так что больше восьми потоков не ускоряют, а лишь плодят сокеты.
+pub(crate) const MAX_WARM_THREADS: usize = 8;
+
+type WarmJob = Box<dyn FnOnce() + Send + 'static>;
+
+struct PoolState {
+    queue: VecDeque<WarmJob>,
+    workers: usize,
+}
+
+/// LOAD-3C: ограниченный пул фонового прогрева `PREFETCH_CACHE`.
+///
+/// Раньше каждая подсказка сканера (стиль, скрипт, `preload`) получала свой
+/// `std::thread::spawn`: страница с 30 скриптами поднимала 30 потоков и 30
+/// одновременных соединений. Здесь работает не больше `max` потоков; очередь
+/// FIFO, поток живёт, пока в очереди есть работа, и сам уходит, когда она пуста
+/// (нет простаивающих потоков между навигациями).
+///
+/// FIFO важен для взаимной блокировки: задача-«ждун» (слот уже занят другим
+/// заполнителем) стоит в очереди после задачи-заполнителя, поэтому заполнитель
+/// всегда уже выполняется или закончен, и ждуны не могут занять все потоки.
+pub(crate) struct WarmPool {
+    max: usize,
+    state: Mutex<PoolState>,
+}
+
+impl WarmPool {
+    pub(crate) const fn new(max: usize) -> Self {
+        Self { max, state: Mutex::new(PoolState { queue: VecDeque::new(), workers: 0 }) }
+    }
+
+    /// Поставить `job` в очередь; при необходимости поднять ещё один поток.
+    #[allow(clippy::unwrap_used)]  // отравленный мьютекс очереди — паника задачи вне нашей логики
+    pub(crate) fn submit(&'static self, job: impl FnOnce() + Send + 'static) {
+        let mut state = self.state.lock().unwrap();
+        state.queue.push_back(Box::new(job));
+        if state.workers >= self.max {
+            return;
+        }
+        state.workers += 1;
+        drop(state);
+        if std::thread::Builder::new()
+            .name("prefetch-warm".to_owned())
+            .spawn(move || self.work())
+            .is_err()
+        {
+            // Поток не поднялся: очередь всё равно разберут уже живые воркеры,
+            // а если их нет — задача вернётся в `submit` следующей подсказки.
+            self.state.lock().unwrap().workers -= 1;
+        }
+    }
+
+    /// Разбирать очередь, пока она не опустеет; счётчик потоков уменьшается под
+    /// тем же замком, под которым `submit` его читает, — гонки «задача есть,
+    /// воркера нет» не бывает.
+    #[allow(clippy::unwrap_used)]  // см. `submit`
+    fn work(&self) {
+        loop {
+            let job = {
+                let mut state = self.state.lock().unwrap();
+                match state.queue.pop_front() {
+                    Some(job) => job,
+                    None => {
+                        state.workers -= 1;
+                        return;
+                    }
+                }
+            };
+            // Паника одной задачи не должна убить воркер вместе с очередью.
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+        }
+    }
+}
+
+/// Пул прогрева, общий для всех навигаций процесса.
+pub(crate) static WARM_POOL: WarmPool = WarmPool::new(MAX_WARM_THREADS);
 
 /// Process-global prefetch cache shared between the streaming thread and the
 /// UI-thread page pipeline. Reset per navigation via [`PrefetchCache::reset`].
@@ -560,5 +667,94 @@ mod tests {
         drop(cache.reserve(1, "http://x/dropped.css").unwrap());
         assert!(cache.lookup_current("http://x/dropped.css").unwrap().is_err());
         assert!(!cache.was_used(1, "http://x/dropped.css"));
+    }
+
+    #[test]
+    fn warm_pool_runs_at_most_max_threads_and_every_job() {
+        // LOAD-3C: 30 jobs on a pool of 8 never run more than 8 at once.
+        static POOL: WarmPool = WarmPool::new(MAX_WARM_THREADS);
+        let running = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let done = Arc::new(AtomicUsize::new(0));
+        for _ in 0..30 {
+            let (running, peak, done) = (Arc::clone(&running), Arc::clone(&peak), Arc::clone(&done));
+            POOL.submit(move || {
+                let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(now, Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(15));
+                running.fetch_sub(1, Ordering::SeqCst);
+                done.fetch_add(1, Ordering::SeqCst);
+            });
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while done.load(Ordering::SeqCst) < 30 && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(done.load(Ordering::SeqCst), 30);
+        assert!(peak.load(Ordering::SeqCst) <= MAX_WARM_THREADS, "peak {}", peak.load(Ordering::SeqCst));
+        assert!(peak.load(Ordering::SeqCst) > 1, "pool must actually parallelise");
+    }
+
+    #[test]
+    fn warm_pool_survives_a_panicking_job() {
+        static POOL: WarmPool = WarmPool::new(1);
+        let (tx, rx) = std::sync::mpsc::channel();
+        POOL.submit(|| panic!("job failure"));
+        POOL.submit(move || tx.send(()).unwrap());
+        rx.recv_timeout(std::time::Duration::from_secs(5)).expect("next job still runs");
+    }
+
+    #[test]
+    fn warm_with_30_scripts_fetches_each_once_on_at_most_8_threads() {
+        // LOAD-3C: 30 distinct script hints, each announced twice (the streaming
+        // scanner and a `preload` hint), every URL downloaded exactly once and
+        // never more than 8 downloads in flight.
+        let cache: &'static PrefetchCache = Box::leak(Box::new(PrefetchCache::new()));
+        cache.reset(1);
+        let fetches = Arc::new(AtomicUsize::new(0));
+        let running = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let (tx, rx) = std::sync::mpsc::channel();
+        for round in 0..2 {
+            for i in 0..30 {
+                let (fetches, running, peak) = (Arc::clone(&fetches), Arc::clone(&running), Arc::clone(&peak));
+                let tx = tx.clone();
+                cache.warm_with(
+                    1,
+                    &format!("http://x/{i}.js"),
+                    move || {
+                        fetches.fetch_add(1, Ordering::SeqCst);
+                        let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+                        peak.fetch_max(now, Ordering::SeqCst);
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        running.fetch_sub(1, Ordering::SeqCst);
+                        Ok(resource(format!("js{i}").as_bytes()))
+                    },
+                    move |result| tx.send((round, i, result.map(|r| r.body.clone()))).unwrap(),
+                );
+            }
+        }
+        drop(tx);
+        let mut seen = 0;
+        while let Ok((_, i, body)) = rx.recv_timeout(std::time::Duration::from_secs(10)) {
+            assert_eq!(body.unwrap(), format!("js{i}").into_bytes());
+            seen += 1;
+        }
+        assert_eq!(seen, 60, "every hint gets its outcome");
+        assert_eq!(fetches.load(Ordering::SeqCst), 30, "each script downloaded once");
+        assert!(peak.load(Ordering::SeqCst) <= MAX_WARM_THREADS);
+        // The final-pass consumer reads the warmed bytes without fetching.
+        let hit = cache.fetch(1, "http://x/7.js", || panic!("must be served from the cache"));
+        assert_eq!(&hit.unwrap().body, b"js7");
+    }
+
+    #[test]
+    fn warm_with_stale_generation_still_reports_an_outcome() {
+        let cache: &'static PrefetchCache = Box::leak(Box::new(PrefetchCache::new()));
+        cache.reset(2);
+        let (tx, rx) = std::sync::mpsc::channel();
+        cache.warm_with(1, "http://x/old.css", || Ok(resource(b"old")), move |r| tx.send(r.is_ok()).unwrap());
+        assert!(rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap());
+        assert!(cache.lookup_current("http://x/old.css").is_none(), "stale warm must not fill the slot");
     }
 }
