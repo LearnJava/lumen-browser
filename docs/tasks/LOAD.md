@@ -111,6 +111,19 @@ FRAME-8 `poll_dynamic_frames` для ещё не загруженных host-э�
 `fetch_frame_lazy_images` (`:1840`) — по приходу `FrameNewLoadDone`. `load` окна — после
 фреймов (счётчик `pending_new_frames`).
 
+**Сделано (2026-10-28).** Живой режим (`defer_images`) не зовёт `load_frame_sub_documents`:
+`ParsedPage::frames` пуст. `apply_loaded_page` кладёт в `PendingWindowLoad` флаг
+`frames_scan_pending`; `Lumen::drive_deferred_frames` (из `about_to_wait`, пока ждёт `load`) делает
+первый `poll_dynamic_frames`, повторяет его, если документ занят движковым потоком, и будит цикл
+для `dispatch_pending_frame_loads` (спавн отделён от скана проходом цикла). Фреймы приходят
+`FrameNewLoadDone` → `refresh_frames(None)` (это и есть `sync_frame_viewports` +
+`register_frame_lazy_images`, отдельно звать не нужно). `load` окна ждёт скан и пустые
+`pending_new_frames`/`pending_frame_load_dispatch` (`window_load_due(.., frames_busy)`). Находка:
+`on_frame_new_load_done` не сверял хозяина — ответ, переживший навигацию, вклеивал фреймы старой
+страницы в новую; теперь хозяин обязан быть документом текущей страницы или живого фрейма.
+Стенд `load_lab.py` (CSS +700 мс, картинки и iframe +3 с, dev-release): первый кадр (`raf`)
+1,16 с, запрос iframe уходит сразу после него, `load` 4,31 с — после iframe и последней картинки.
+
 **Done when:** тест: RenderDone до загрузки iframe со стенда +3 с, `load` окна после него;
 graphic_tests без изменений.
 

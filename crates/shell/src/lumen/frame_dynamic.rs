@@ -197,6 +197,38 @@ impl Lumen {
         }
     }
 
+    /// LOAD-1B: страница отдана без `<iframe>` (`LoadedPage::images_deferred`) — первый скан
+    /// и загрузка фреймов идут здесь, после `RenderDone`, тем же путём, что вставленные
+    /// скриптом. Зовётся из `about_to_wait`, пока `load` окна ждёт фреймы; возвращает момент,
+    /// когда нужен следующий проход (скан отложен занятым документом или поток фрейма ещё
+    /// не запущен — спавн отделён от скана на проход event loop, см.
+    /// [`Self::dispatch_pending_frame_loads`]).
+    pub(crate) fn drive_deferred_frames(&mut self) -> Option<std::time::Instant> {
+        let scan_due = self.pending_window_load.as_ref().is_some_and(|p| p.frames_scan_pending);
+        if scan_due {
+            self.poll_dynamic_frames();
+            if !self.frame_scan_retry
+                && let Some(pending) = self.pending_window_load.as_mut()
+            {
+                pending.frames_scan_pending = false;
+            }
+        }
+        let rescan = scan_due && self.frame_scan_retry;
+        if rescan || !self.pending_frame_load_dispatch.is_empty() {
+            let after = if rescan { 8 } else { 1 };
+            return Some(std::time::Instant::now() + std::time::Duration::from_millis(after));
+        }
+        None
+    }
+
+    /// LOAD-1B: `load` окна ещё нельзя доставлять — первый скан не прошёл либо есть фрейм,
+    /// чья загрузка запущена или стоит в очереди на запуск.
+    pub(crate) fn deferred_frames_busy(&self) -> bool {
+        self.pending_window_load.as_ref().is_some_and(|p| p.frames_scan_pending)
+            || !self.pending_new_frames.is_empty()
+            || !self.pending_frame_load_dispatch.is_empty()
+    }
+
     /// Применить ответ фонового потока [`Self::poll_dynamic_frames`]
     /// (`LoadEvent::FrameNewLoadDone`).
     pub(crate) fn on_frame_new_load_done(
@@ -208,6 +240,17 @@ impl Lumen {
     ) {
         self.pending_new_frames
             .retain(|(d, h)| !(*h == host && Arc::ptr_eq(d, host_doc)));
+        // Ответ мог пережить свою страницу (навигация, смена вкладки): хозяин, которого
+        // больше нет среди документов текущей страницы, фреймов не получает.
+        let host_alive = if is_top {
+            self.layout_source.as_ref().is_some_and(|s| Arc::ptr_eq(&s.document, host_doc))
+        } else {
+            self.frames.iter().any(|h| Arc::ptr_eq(&h.doc, host_doc))
+        };
+        if !host_alive {
+            frame_dynamic_load::release_frame_handles(handles);
+            return;
+        }
         if !frame_dynamic_load::apply_new_frame_load(&mut self.frames, host_doc, host, is_top, handles) {
             return;
         }

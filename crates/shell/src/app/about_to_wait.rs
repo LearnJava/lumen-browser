@@ -526,6 +526,10 @@ impl Lumen {
         // LOAD-1: свёрнутое окно не получает `RedrawRequested`, а `load` страницы,
         // отданной без ожидания картинок, не должен ждать показа окна.
         if self.pending_window_load.is_some() {
+            // LOAD-1B: фреймы живой страницы загружаются после `RenderDone`; `load` ждёт их.
+            if let Some(at) = self.drive_deferred_frames() {
+                next_wakeup = Some(next_wakeup.map_or(at, |t| t.min(at)));
+            }
             self.apply_stream_intrinsic_sizes();
             self.maybe_fire_window_load();
         }
