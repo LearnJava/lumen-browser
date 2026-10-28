@@ -57,8 +57,7 @@ fn net_fetch(
     url: &str,
     method: &str,
     headers_flat: &[String],
-    body: Option<&[u8]>,
-    content_type: &str,
+    body: Option<lumen_core::ext::JsFetchBody<'_>>,
     cache: &str,
 ) -> Option<String> {
     let provider = provider?;
@@ -70,7 +69,7 @@ fn net_fetch(
         url,
         method,
         headers: &headers,
-        body: body.map(|bytes| lumen_core::ext::JsFetchBody { content_type, bytes }),
+        body,
         mode: "",
         destination: "",
         cache,
@@ -125,7 +124,10 @@ pub(crate) fn install_worker_net_v8(
                   content_type: String,
                   cache: String|
                   -> Option<String> {
-                net_fetch(fetch_provider.as_deref(), &st, &url, &method, &headers_flat, body.as_deref(), &content_type, &cache)
+                let body = body
+                    .as_deref()
+                    .map(|bytes| lumen_core::ext::JsFetchBody { content_type: &content_type, bytes });
+                net_fetch(fetch_provider.as_deref(), &st, &url, &method, &headers_flat, body, &cache)
             },
         ),
     )?;
