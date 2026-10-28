@@ -230,6 +230,19 @@ use super::*;
     // Транскрипция подтестов `match-media-parsing.html`/
     // `aspect-ratio-serialization.html` (см. bugs/BUG-526-OPEN.md).
 
+    // BUG-1562: не-идентификатор и неизвестный тип носителя — невалидная clause.
+    #[test]
+    fn media_query_non_ident_media_type_is_not_all() {
+        assert_eq!(parse_media_query("::").serialize(), "not all");
+        assert_eq!(parse_media_query("not ::").serialize(), "not all");
+        assert_eq!(parse_media_query("1x, print").serialize(), "not all, print");
+        // Неизвестный, но валидный `<ident>` сохраняется как написан (WPT match-media-parsing).
+        assert_eq!(parse_media_query("Bogus").serialize(), "bogus");
+        let ctx = screen_ctx(800.0);
+        assert!(!parse_media_query("not ::").matches(&ctx));
+        assert!(parse_media_query("not print").matches(&ctx));
+    }
+
     #[test]
     fn media_query_serialize_empty() {
         assert_eq!(parse_media_query("").serialize(), "");

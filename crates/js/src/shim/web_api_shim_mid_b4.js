@@ -1819,6 +1819,16 @@ function MediaQueryList(media) {
     this.onchange    = null;
     this._listeners  = [];
 }
+// CSSOM View §4.2: `MediaQueryList : EventTarget`; the class string is
+// `[object MediaQueryList]` (BUG-1562). The methods below override the
+// generic EventTarget ones with the `change`-only registry this shim keeps.
+MediaQueryList.prototype = Object.create(EventTarget.prototype);
+MediaQueryList.prototype.constructor = MediaQueryList;
+if (typeof Symbol !== 'undefined' && Symbol.toStringTag) {
+    Object.defineProperty(MediaQueryList.prototype, Symbol.toStringTag, {
+        value: 'MediaQueryList', configurable: true
+    });
+}
 MediaQueryList.prototype.addListener = function(fn) {
     if (typeof fn === 'function') this.addEventListener('change', fn);
 };

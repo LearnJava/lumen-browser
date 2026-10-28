@@ -1,6 +1,6 @@
 # BUG-1562 — `matchMedia`: `media` недопустимой строки — как написано (`bogus`), а не `not all`; `[object Object]` вместо `[object MediaQueryList]`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-28 (P3) — `parse_media_clause` отвергает не-`<ident>` в позиции media-type (`::` → `not all`); `MediaQueryList.prototype` цепляется к `EventTarget.prototype`, `Symbol.toStringTag`. Утверждение «`bogus` → `not all`» неверно: валидный неизвестный `<ident>` сериализуется как написан (WPT `match-media-parsing.html`: `foo`). Остаток — iframe (BUG-480). Тесты: `media_query_non_ident_media_type_is_not_all`, `v8_matchmedia`.
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 25, `css/css-typed-om` + `cssom-view` + `cssom` + `css-lists` + `css-counter-styles`)
 **Область:** js (`crates/js/src/shim/` — `matchMedia`, `MediaQueryList`)
 
