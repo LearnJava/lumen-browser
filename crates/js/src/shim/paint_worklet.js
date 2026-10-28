@@ -148,13 +148,16 @@
   // `computedStyleMap()` answers a custom property with its serialised text; the worklet
   // sees a typed value instead: an unregistered (or `*`) property is a CSSUnparsedValue,
   // a registered one is reified by the component of its syntax that matches the value.
-  function CSSImageValue() { throw new TypeError('Illegal constructor'); }
-  if (typeof global.CSSImageValue === 'function') {
-    CSSImageValue = global.CSSImageValue;
-  } else if (typeof CSSStyleValue === 'function') {
-    CSSImageValue.prototype = Object.create(CSSStyleValue.prototype);
-    CSSImageValue.prototype.constructor = CSSImageValue;
-    Object.defineProperty(global, 'CSSImageValue', { value: CSSImageValue, writable: true, configurable: true });
+  // The Typed OM shim loads after this file, so the class is built on first use.
+  var CSSImageValueCtor = null;
+  function imageValueClass() {
+    if (CSSImageValueCtor) return CSSImageValueCtor;
+    if (typeof global.CSSImageValue === 'function') return (CSSImageValueCtor = global.CSSImageValue);
+    CSSImageValueCtor = function CSSImageValue() { throw new TypeError('Illegal constructor'); };
+    CSSImageValueCtor.prototype = Object.create(CSSStyleValue.prototype);
+    CSSImageValueCtor.prototype.constructor = CSSImageValueCtor;
+    Object.defineProperty(global, 'CSSImageValue', { value: CSSImageValueCtor, writable: true, configurable: true });
+    return CSSImageValueCtor;
   }
 
   // Splits `text` on top-level `sep` (',' or whitespace), outside `()` and quotes.
@@ -237,7 +240,7 @@
     if (type === 'image') {
       if (URL_FN.test(item)) {
         var v = new CSSStyleValue(item);
-        Object.setPrototypeOf(v, CSSImageValue.prototype);
+        Object.setPrototypeOf(v, imageValueClass().prototype);
         return v;
       }
       return IMAGE_FN.test(item) ? new CSSStyleValue(item) : null;
