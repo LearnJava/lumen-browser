@@ -22,7 +22,7 @@ use std::{
     num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::Mutex,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 // ── Cache-Control directives ─────────────────────────────────────────────────
@@ -40,6 +40,9 @@ pub struct CacheControl {
     pub s_maxage: Option<u64>,
     /// Freshness lifetime in seconds.
     pub max_age: Option<u64>,
+    /// `public`: the response may be heuristically cached even for a status
+    /// that is not cacheable by default (RFC 9111 §4.2.2).
+    pub public: bool,
 }
 
 impl CacheControl {
@@ -54,6 +57,8 @@ impl CacheControl {
                 cc.no_cache = true;
             } else if token.eq_ignore_ascii_case("must-revalidate") {
                 cc.must_revalidate = true;
+            } else if token.eq_ignore_ascii_case("public") {
+                cc.public = true;
             } else if let Some(v) = parse_directive_u64(token, "max-age") {
                 cc.max_age = Some(v);
             } else if let Some(v) = parse_directive_u64(token, "s-maxage") {
@@ -102,36 +107,142 @@ pub struct CacheEntry {
     pub etag: Option<String>,
     /// Last-Modified value from the response, for conditional GET.
     pub last_modified: Option<String>,
-    /// When freshness expires (wall clock at time of storage + max-age).
-    /// `None` means we have a validator but no definite expiry → revalidate every time.
-    pub expires_at: Option<Instant>,
-    /// The no-cache flag means the entry is stored but must be revalidated before use.
-    pub must_revalidate: bool,
+    /// When the entry was stored or last revalidated by a 304.
+    pub stored_at: Instant,
+    /// Age (seconds) the response had already accumulated at `stored_at`
+    /// (the `Age` header, RFC 9111 §4.2.3).
+    pub initial_age: u64,
+    /// Freshness lifetime in seconds. `None` means we have a validator but
+    /// no definite expiry → revalidate every time.
+    pub lifetime: Option<u64>,
+    /// The response said `Cache-Control: no-cache`: stored, but must be
+    /// revalidated before every use.
+    pub no_cache: bool,
 }
 
 impl CacheEntry {
+    /// Current age in milliseconds (RFC 9111 §4.2.3, `current_age`).
+    pub fn age_ms(&self) -> u64 {
+        let resident = u64::try_from(self.stored_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+        resident.saturating_add(self.initial_age.saturating_mul(1000))
+    }
+
     /// True if the entry is fresh and can be served without revalidation.
     pub fn is_fresh(&self) -> bool {
-        match self.expires_at {
-            Some(t) => !self.must_revalidate && Instant::now() < t,
-            None => false,
-        }
+        !self.no_cache && self.lifetime.is_some_and(|l| self.age_ms() < l.saturating_mul(1000))
     }
 
     /// Build conditional GET headers to revalidate this entry.
     /// Returns an extra-headers string ready to append to the request.
     pub fn conditional_headers(&self) -> String {
-        let mut out = String::new();
-        if let Some(etag) = &self.etag {
-            out.push_str("If-None-Match: ");
-            out.push_str(etag);
-            out.push_str("\r\n");
-        } else if let Some(lm) = &self.last_modified {
-            out.push_str("If-Modified-Since: ");
-            out.push_str(lm);
-            out.push_str("\r\n");
+        conditional_headers_for(self.etag.as_deref(), self.last_modified.as_deref())
+    }
+}
+
+/// `If-None-Match` (preferred) or `If-Modified-Since` request lines for the
+/// given validators; empty when there is none.
+fn conditional_headers_for(etag: Option<&str>, last_modified: Option<&str>) -> String {
+    let mut out = String::new();
+    if let Some(etag) = etag {
+        out.push_str("If-None-Match: ");
+        out.push_str(etag);
+        out.push_str("\r\n");
+    } else if let Some(lm) = last_modified {
+        out.push_str("If-Modified-Since: ");
+        out.push_str(lm);
+        out.push_str("\r\n");
+    }
+    out
+}
+
+/// Storage-time freshness facts of a response (RFC 9111 §4.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResponseMeta {
+    /// Freshness lifetime in seconds; `None` — no explicit or heuristic one.
+    pub lifetime: Option<u64>,
+    /// `Age` header value in seconds (0 when absent).
+    pub initial_age: u64,
+}
+
+/// Statuses a cache may keep with heuristic freshness without `public`
+/// (RFC 9110 §15.1).
+fn heuristically_cacheable(status: u16) -> bool {
+    matches!(status, 200 | 203 | 204 | 206 | 300 | 301 | 308 | 404 | 405 | 410 | 414 | 501)
+}
+
+/// Statuses never stored: partial content is not reassembled, 304 carries no
+/// body of its own, 1xx are interim.
+pub(crate) fn status_storable(status: u16) -> bool {
+    !(status < 200 || status == 206 || status == 304)
+}
+
+/// Freshness lifetime of a response, in the order RFC 9111 §4.2.1 gives:
+/// `max-age` (`s-maxage` is for shared caches, this one is private), then
+/// `Expires - Date`, then heuristic 10 % of `Date - Last-Modified`. An
+/// unparsable `Expires` means already expired (§5.3).
+pub fn response_meta(status: u16, headers: &[(String, String)], now_unix: u64) -> ResponseMeta {
+    let cc = CacheControl::parse(header_value(headers, "cache-control").unwrap_or_default());
+    let date = header_value(headers, "date")
+        .and_then(parse_http_date_to_unix)
+        .unwrap_or(now_unix);
+    let lifetime = if let Some(max_age) = cc.max_age {
+        Some(max_age)
+    } else if let Some(expires) = header_value(headers, "expires") {
+        Some(parse_http_date_to_unix(expires).map_or(0, |e| e.saturating_sub(date)))
+    } else if let Some(lm) = header_value(headers, "last-modified")
+        && (cc.public || heuristically_cacheable(status))
+    {
+        parse_http_date_to_unix(lm).map(|lm| date.saturating_sub(lm) / 10)
+    } else {
+        None
+    };
+    let initial_age = header_value(headers, "age")
+        .and_then(|a| a.trim().parse::<u64>().ok())
+        .unwrap_or(0);
+    ResponseMeta { lifetime, initial_age }
+}
+
+/// Fold the headers of a 304 into the stored ones (RFC 9111 §3.2): same-named
+/// stored fields are replaced, except those describing the body we keep.
+pub(crate) fn merge_304_headers(stored: &mut Vec<(String, String)>, headers_304: &[(String, String)]) {
+    const KEEP: &[&str] = &[
+        "content-length", "content-encoding", "content-range", "transfer-encoding",
+        "connection", "keep-alive", "proxy-connection", "te", "trailer", "upgrade",
+    ];
+    for (name, value) in headers_304 {
+        if KEEP.iter().any(|k| name.eq_ignore_ascii_case(k)) {
+            continue;
         }
-        out
+        stored.retain(|(k, _)| !k.eq_ignore_ascii_case(name));
+        stored.push((name.clone(), value.clone()));
+    }
+}
+
+/// Snapshot of a stored response with its current age and freshness lifetime.
+fn make_snapshot(
+    body: Vec<u8>,
+    headers: Vec<(String, String)>,
+    status: u16,
+    validators: (Option<String>, Option<String>),
+    age_ms: u64,
+    lifetime: Option<u64>,
+) -> CacheEntrySnapshot {
+    let (etag, last_modified) = validators;
+    let cc = CacheControl::parse(header_value(&headers, "cache-control").unwrap_or_default());
+    let is_fresh = !cc.no_cache && lifetime.is_some_and(|l| age_ms < l.saturating_mul(1000));
+    let conditional_headers = conditional_headers_for(etag.as_deref(), last_modified.as_deref());
+    CacheEntrySnapshot {
+        body,
+        headers,
+        status,
+        etag,
+        last_modified,
+        is_fresh,
+        conditional_headers,
+        age_secs: age_ms / 1000,
+        lifetime_secs: lifetime,
+        no_cache: cc.no_cache,
+        must_revalidate: cc.must_revalidate,
     }
 }
 
@@ -154,6 +265,14 @@ pub struct CacheEntrySnapshot {
     pub is_fresh: bool,
     /// Pre-built conditional GET headers string (If-None-Match or If-Modified-Since).
     pub conditional_headers: String,
+    /// Current age in whole seconds (stored `Age` plus time in the cache).
+    pub age_secs: u64,
+    /// Freshness lifetime in seconds; `None` — validator-only entry.
+    pub lifetime_secs: Option<u64>,
+    /// The response carried `Cache-Control: no-cache`.
+    pub no_cache: bool,
+    /// The response carried `Cache-Control: must-revalidate`.
+    pub must_revalidate: bool,
 }
 
 // ── Backend trait ──────────────────────────────────────────────────────────────
@@ -178,6 +297,10 @@ pub trait HttpCacheBackend: Send + Sync {
     /// Delete every entry whose URL satisfies `matches` (UX-PARTITION: clear one
     /// site's cache). Returns the number of removed entries.
     fn clear_matching(&self, matches: &dyn Fn(&str) -> bool) -> usize;
+
+    /// Delete the entry stored for `url`, if any (cache invalidation after an
+    /// unsafe request, RFC 9111 §4.4).
+    fn remove(&self, url: &str);
 
     /// Number of entries stored. Used in integration tests.
     #[cfg(test)]
@@ -252,14 +375,15 @@ impl HttpCacheBackend for HttpCache {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn get(&self, url: &str) -> Option<CacheEntrySnapshot> {
         let mut entries = self.entries.lock().unwrap();
-        entries.get(&cache_key(url)).map(|e| CacheEntrySnapshot {
-            body: e.body.clone(),
-            headers: e.headers.clone(),
-            status: e.status,
-            etag: e.etag.clone(),
-            last_modified: e.last_modified.clone(),
-            is_fresh: e.is_fresh(),
-            conditional_headers: e.conditional_headers(),
+        entries.get(&cache_key(url)).map(|e| {
+            make_snapshot(
+                e.body.clone(),
+                e.headers.clone(),
+                e.status,
+                (e.etag.clone(), e.last_modified.clone()),
+                e.age_ms(),
+                e.lifetime,
+            )
         })
     }
 
@@ -268,27 +392,15 @@ impl HttpCacheBackend for HttpCache {
         let cc_value = header_value(headers, "cache-control").unwrap_or_default();
         let cc = CacheControl::parse(cc_value);
 
-        if cc.no_store {
+        if cc.no_store || !status_storable(status) {
             return;
         }
 
         let etag = header_value(headers, "etag").map(str::to_owned);
         let last_modified = header_value(headers, "last-modified").map(str::to_owned);
+        let meta = response_meta(status, headers, unix_now());
 
-        let expires_at: Option<Instant> = if let Some(max_age) = cc.max_age_secs() {
-            Some(Instant::now() + Duration::from_secs(max_age))
-        } else if let Some(lm) = &last_modified {
-            let expires_header = header_value(headers, "expires");
-            if expires_header.is_none() {
-                heuristic_freshness(lm)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        if expires_at.is_none() && etag.is_none() && last_modified.is_none() {
+        if meta.lifetime.is_none() && etag.is_none() && last_modified.is_none() {
             return;
         }
 
@@ -298,8 +410,10 @@ impl HttpCacheBackend for HttpCache {
             status,
             etag,
             last_modified,
-            expires_at,
-            must_revalidate: cc.no_cache || cc.must_revalidate,
+            stored_at: Instant::now(),
+            initial_age: meta.initial_age,
+            lifetime: meta.lifetime,
+            no_cache: cc.no_cache,
         };
 
         let entry_size = self.calculate_entry_size(&entry);
@@ -333,21 +447,24 @@ impl HttpCacheBackend for HttpCache {
             return;
         };
 
-        if let Some(etag) = header_value(headers_304, "etag") {
-            entry.etag = Some(etag.to_owned());
-        }
-        if let Some(lm) = header_value(headers_304, "last-modified") {
-            entry.last_modified = Some(lm.to_owned());
-        }
+        merge_304_headers(&mut entry.headers, headers_304);
+        entry.etag = header_value(&entry.headers, "etag").map(str::to_owned);
+        entry.last_modified = header_value(&entry.headers, "last-modified").map(str::to_owned);
+        let meta = response_meta(entry.status, &entry.headers, unix_now());
+        entry.stored_at = Instant::now();
+        entry.initial_age = meta.initial_age;
+        entry.lifetime = meta.lifetime;
+        entry.no_cache =
+            CacheControl::parse(header_value(&entry.headers, "cache-control").unwrap_or_default()).no_cache;
+    }
 
-        let cc_value = header_value(headers_304, "cache-control").unwrap_or_default();
-        let cc = CacheControl::parse(cc_value);
-        if let Some(max_age) = cc.max_age_secs() {
-            entry.expires_at = Some(Instant::now() + Duration::from_secs(max_age));
-        } else if let Some(lm) = &entry.last_modified.clone() {
-            entry.expires_at = heuristic_freshness(lm);
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    fn remove(&self, url: &str) {
+        let mut entries = self.entries.lock().unwrap();
+        if let Some(old) = entries.pop(&cache_key(url)) {
+            let mut size = self.current_size_bytes.lock().unwrap();
+            *size = size.saturating_sub(self.calculate_entry_size(&old));
         }
-        entry.must_revalidate = cc.no_cache || cc.must_revalidate;
     }
 
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
@@ -443,6 +560,11 @@ impl DiskHttpCache {
                 expires_at     INTEGER
             );",
         )?;
+        // Age bookkeeping added with the fetch() cache path; databases written
+        // before it lack the columns (the ALTER fails harmlessly once they exist).
+        for col in ["stored_at_ms INTEGER", "initial_age INTEGER", "lifetime INTEGER"] {
+            let _ = conn.execute(&format!("ALTER TABLE cache_entries ADD COLUMN {col}"), []);
+        }
         Ok(Self { conn: Mutex::new(conn) })
     }
 
@@ -462,7 +584,8 @@ impl HttpCacheBackend for DiskHttpCache {
         let conn = self.conn.lock().unwrap();
         let key = cache_key(url);
         let result = conn.query_row(
-            "SELECT etag, last_modified, status, headers_json, body_blob, expires_at
+            "SELECT etag, last_modified, status, headers_json, body_blob, expires_at,
+                    stored_at_ms, initial_age, lifetime
              FROM cache_entries WHERE url = ?1",
             params![key],
             |row| {
@@ -473,77 +596,66 @@ impl HttpCacheBackend for DiskHttpCache {
                     row.get::<_, String>(3)?,
                     row.get::<_, Vec<u8>>(4)?,
                     row.get::<_, Option<i64>>(5)?,
+                    row.get::<_, Option<i64>>(6)?,
+                    row.get::<_, Option<i64>>(7)?,
+                    row.get::<_, Option<i64>>(8)?,
                 ))
             },
         );
 
-        let (etag, last_modified, status, headers_json, body, expires_unix) =
+        let (etag, last_modified, status, headers_json, body, expires_unix, stored_ms, initial_age, lifetime_col) =
             result.ok()?;
         let headers = deserialize_headers(&headers_json);
 
-        let is_fresh = match expires_unix {
-            Some(exp) if exp > 0 => unix_now() < exp as u64,
-            _ => false,
+        // Rows written before the age columns existed have no `stored_at_ms`:
+        // treat them as stored just now, with whatever expiry remains.
+        let (age_ms, lifetime) = match stored_ms {
+            Some(stored) => {
+                let initial = u64::try_from(initial_age.unwrap_or(0)).unwrap_or(0);
+                let age = unix_now_ms()
+                    .saturating_sub(u64::try_from(stored).unwrap_or(0))
+                    .saturating_add(initial.saturating_mul(1000));
+                (age, lifetime_col.and_then(|l| u64::try_from(l).ok()))
+            }
+            None => match expires_unix {
+                Some(exp) if exp > 0 => (0, Some((exp as u64).saturating_sub(unix_now()))),
+                _ => (0, None),
+            },
         };
 
-        let cond_entry = CacheEntry {
-            body: vec![],
-            headers: vec![],
-            status,
-            etag: etag.clone(),
-            last_modified: last_modified.clone(),
-            expires_at: None,
-            must_revalidate: false,
-        };
-        let conditional_headers = cond_entry.conditional_headers();
-
-        Some(CacheEntrySnapshot {
-            body,
-            headers,
-            status,
-            etag,
-            last_modified,
-            is_fresh,
-            conditional_headers,
-        })
+        Some(make_snapshot(body, headers, status, (etag, last_modified), age_ms, lifetime))
     }
 
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn store(&self, url: &str, status: u16, body: Vec<u8>, headers: &[(String, String)]) {
         let cc_value = header_value(headers, "cache-control").unwrap_or_default();
         let cc = CacheControl::parse(cc_value);
-        if cc.no_store {
+        if cc.no_store || !status_storable(status) {
             return;
         }
 
         let etag = header_value(headers, "etag").map(str::to_owned);
         let last_modified = header_value(headers, "last-modified").map(str::to_owned);
+        let meta = response_meta(status, headers, unix_now());
 
-        let expires_unix: Option<i64> = if let Some(max_age) = cc.max_age_secs() {
-            Some((unix_now() + max_age) as i64)
-        } else if let Some(lm) = &last_modified {
-            let expires_header = header_value(headers, "expires");
-            if expires_header.is_none() {
-                heuristic_freshness_unix(lm).map(|u| u as i64)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        if expires_unix.is_none() && etag.is_none() && last_modified.is_none() {
+        if meta.lifetime.is_none() && etag.is_none() && last_modified.is_none() {
             return;
         }
 
         let headers_json = serialize_headers(headers);
         let key = cache_key(url);
+        let now_ms = unix_now_ms();
+        let expires_unix = write_expiry(now_ms, &meta);
         let conn = self.conn.lock().unwrap();
         let _ = conn.execute(
             "INSERT OR REPLACE INTO cache_entries
-             (url, etag, last_modified, status, headers_json, body_blob, expires_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![key, etag, last_modified, status as i64, headers_json, body, expires_unix],
+             (url, etag, last_modified, status, headers_json, body_blob, expires_at,
+              stored_at_ms, initial_age, lifetime)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                key, etag, last_modified, status as i64, headers_json, body, expires_unix,
+                now_ms as i64, meta.initial_age as i64, meta.lifetime.map(|l| l as i64)
+            ],
         );
     }
 
@@ -551,31 +663,36 @@ impl HttpCacheBackend for DiskHttpCache {
     fn revalidate(&self, url: &str, headers_304: &[(String, String)]) {
         let key = cache_key(url);
         let conn = self.conn.lock().unwrap();
+        let Ok((status, headers_json)) = conn.query_row(
+            "SELECT status, headers_json FROM cache_entries WHERE url = ?1",
+            params![key],
+            |row| Ok((row.get::<_, i64>(0)? as u16, row.get::<_, String>(1)?)),
+        ) else {
+            return;
+        };
 
-        let new_etag = header_value(headers_304, "etag").map(str::to_owned);
-        let new_lm = header_value(headers_304, "last-modified").map(str::to_owned);
-        let cc_value = header_value(headers_304, "cache-control").unwrap_or_default();
-        let cc = CacheControl::parse(cc_value);
+        let mut headers = deserialize_headers(&headers_json);
+        merge_304_headers(&mut headers, headers_304);
+        let etag = header_value(&headers, "etag").map(str::to_owned);
+        let last_modified = header_value(&headers, "last-modified").map(str::to_owned);
+        let meta = response_meta(status, &headers, unix_now());
+        let now_ms = unix_now_ms();
+        let _ = conn.execute(
+            "UPDATE cache_entries
+             SET etag = ?1, last_modified = ?2, headers_json = ?3, expires_at = ?4,
+                 stored_at_ms = ?5, initial_age = ?6, lifetime = ?7
+             WHERE url = ?8",
+            params![
+                etag, last_modified, serialize_headers(&headers), write_expiry(now_ms, &meta),
+                now_ms as i64, meta.initial_age as i64, meta.lifetime.map(|l| l as i64), key
+            ],
+        );
+    }
 
-        if let Some(max_age) = cc.max_age_secs() {
-            let new_exp = (unix_now() + max_age) as i64;
-            let _ = conn.execute(
-                "UPDATE cache_entries
-                 SET etag = COALESCE(?1, etag),
-                     last_modified = COALESCE(?2, last_modified),
-                     expires_at = ?3
-                 WHERE url = ?4",
-                params![new_etag, new_lm, new_exp, key],
-            );
-        } else {
-            let _ = conn.execute(
-                "UPDATE cache_entries
-                 SET etag = COALESCE(?1, etag),
-                     last_modified = COALESCE(?2, last_modified)
-                 WHERE url = ?3",
-                params![new_etag, new_lm, key],
-            );
-        }
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    fn remove(&self, url: &str) {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute("DELETE FROM cache_entries WHERE url = ?1", params![cache_key(url)]);
     }
 
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
@@ -647,29 +764,18 @@ fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a s
         .map(|(_, v)| v.as_str())
 }
 
-/// RFC 7234 §4.2.2 heuristic freshness: 10% of (now − Last-Modified).
-/// Only applicable when no explicit freshness information is present.
-fn heuristic_freshness(last_modified: &str) -> Option<Instant> {
-    let age_secs = parse_http_date_to_unix(last_modified)?;
-    let now_unix = unix_now();
-    let age = now_unix.saturating_sub(age_secs);
-    let freshness = age / 10;
-    if freshness == 0 {
-        return None;
-    }
-    Some(Instant::now() + Duration::from_secs(freshness))
+/// Current Unix timestamp in milliseconds.
+fn unix_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
 }
 
-/// Same as [`heuristic_freshness`] but returns a Unix timestamp instead of an `Instant`.
-fn heuristic_freshness_unix(last_modified: &str) -> Option<u64> {
-    let age_secs = parse_http_date_to_unix(last_modified)?;
-    let now_unix = unix_now();
-    let age = now_unix.saturating_sub(age_secs);
-    let freshness = age / 10;
-    if freshness == 0 {
-        return None;
-    }
-    Some(now_unix + freshness)
+/// Absolute expiry (Unix seconds) written to the legacy `expires_at` column.
+fn write_expiry(now_ms: u64, meta: &ResponseMeta) -> Option<i64> {
+    meta.lifetime
+        .map(|l| ((now_ms / 1000).saturating_add(l).saturating_sub(meta.initial_age)) as i64)
 }
 
 /// Current Unix timestamp in seconds.
@@ -982,8 +1088,10 @@ mod tests {
             status: 200,
             etag: Some("\"abc\"".to_owned()),
             last_modified: Some("Mon, 01 Jan 2024 00:00:00 GMT".to_owned()),
-            expires_at: None,
-            must_revalidate: false,
+            stored_at: Instant::now(),
+            initial_age: 0,
+            lifetime: None,
+            no_cache: false,
         };
         let hdrs = entry.conditional_headers();
         assert!(hdrs.contains("If-None-Match: \"abc\""));
@@ -998,8 +1106,10 @@ mod tests {
             status: 200,
             etag: None,
             last_modified: Some("Mon, 01 Jan 2024 00:00:00 GMT".to_owned()),
-            expires_at: None,
-            must_revalidate: false,
+            stored_at: Instant::now(),
+            initial_age: 0,
+            lifetime: None,
+            no_cache: false,
         };
         let hdrs = entry.conditional_headers();
         assert!(hdrs.contains("If-Modified-Since:"));
@@ -1243,5 +1353,197 @@ mod tests {
         assert_eq!(json, "[]");
         let back = deserialize_headers(&json);
         assert!(back.is_empty());
+    }
+
+    // ── FETCH-HTTP-CACHE: freshness lifetime, Age, 304 header merge ──────────
+
+    fn hdrs(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).collect()
+    }
+
+    const NOW: u64 = 784_111_777; // Sun, 06 Nov 1994 08:49:37 GMT
+    const NOW_DATE: &str = "Sun, 06 Nov 1994 08:49:37 GMT";
+
+    #[test]
+    fn meta_prefers_max_age_over_expires_and_ignores_s_maxage() {
+        let m = response_meta(
+            200,
+            &hdrs(&[
+                ("Cache-Control", "max-age=60, s-maxage=3600"),
+                ("Expires", "Sun, 06 Nov 1994 09:49:37 GMT"),
+            ]),
+            NOW,
+        );
+        assert_eq!(m.lifetime, Some(60));
+    }
+
+    #[test]
+    fn meta_expires_is_measured_from_date_and_bad_expires_is_stale() {
+        let m = response_meta(
+            200,
+            &hdrs(&[("Date", NOW_DATE), ("Expires", "Sun, 06 Nov 1994 09:49:37 GMT")]),
+            NOW + 500,
+        );
+        assert_eq!(m.lifetime, Some(3600), "Date, not receipt time, is the origin");
+        assert_eq!(response_meta(200, &hdrs(&[("Expires", "0")]), NOW).lifetime, Some(0));
+        let past = response_meta(200, &hdrs(&[("Expires", "Sun, 06 Nov 1994 07:49:37 GMT")]), NOW);
+        assert_eq!(past.lifetime, Some(0));
+    }
+
+    #[test]
+    fn meta_heuristic_is_a_tenth_of_age_for_cacheable_statuses_only() {
+        let lm = hdrs(&[("Date", NOW_DATE), ("Last-Modified", "Sun, 06 Nov 1994 07:09:37 GMT")]);
+        assert_eq!(response_meta(200, &lm, NOW).lifetime, Some(600));
+        assert_eq!(response_meta(404, &lm, NOW).lifetime, Some(600));
+        assert_eq!(response_meta(201, &lm, NOW).lifetime, None, "201 is not heuristically cacheable");
+        let public = hdrs(&[
+            ("Date", NOW_DATE),
+            ("Last-Modified", "Sun, 06 Nov 1994 07:09:37 GMT"),
+            ("Cache-Control", "public"),
+        ]);
+        assert_eq!(response_meta(201, &public, NOW).lifetime, Some(600), "`public` allows it");
+        assert_eq!(response_meta(200, &[], NOW).lifetime, None);
+    }
+
+    #[test]
+    fn meta_reads_the_age_header() {
+        assert_eq!(response_meta(200, &hdrs(&[("Age", "1800")]), NOW).initial_age, 1800);
+        assert_eq!(response_meta(200, &hdrs(&[("Age", "junk")]), NOW).initial_age, 0);
+    }
+
+    #[test]
+    fn age_header_counts_against_the_lifetime() {
+        let cache = HttpCache::new();
+        let h = hdrs(&[("Cache-Control", "max-age=3600"), ("Age", "3600")]);
+        cache.store("https://example.com/aged", 200, b"x".to_vec(), &h);
+        let snap = cache.get("https://example.com/aged").unwrap();
+        assert!(!snap.is_fresh);
+        assert_eq!((snap.age_secs, snap.lifetime_secs), (3600, Some(3600)));
+    }
+
+    #[test]
+    fn must_revalidate_alone_does_not_make_a_fresh_entry_stale() {
+        let cache = HttpCache::new();
+        let h = hdrs(&[("Cache-Control", "max-age=3600, must-revalidate")]);
+        cache.store("https://example.com/m", 200, b"x".to_vec(), &h);
+        let snap = cache.get("https://example.com/m").unwrap();
+        assert!(snap.is_fresh && snap.must_revalidate);
+        let h = hdrs(&[("Cache-Control", "max-age=3600, no-cache")]);
+        cache.store("https://example.com/n", 200, b"x".to_vec(), &h);
+        assert!(!cache.get("https://example.com/n").unwrap().is_fresh);
+    }
+
+    #[test]
+    fn partial_and_not_modified_responses_are_not_stored() {
+        let cache = HttpCache::new();
+        let h = hdrs(&[("Cache-Control", "max-age=3600")]);
+        cache.store("https://example.com/p", 206, b"x".to_vec(), &h);
+        cache.store("https://example.com/q", 304, Vec::new(), &h);
+        assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn merge_304_replaces_named_headers_but_keeps_the_body_description() {
+        let mut stored = hdrs(&[
+            ("Test-Header", "A"),
+            ("Content-Length", "4"),
+            ("Content-Encoding", "gzip"),
+            ("ETag", "\"v1\""),
+        ]);
+        merge_304_headers(
+            &mut stored,
+            &hdrs(&[("Test-Header", "B"), ("Content-Length", "0"), ("Content-Encoding", "identity")]),
+        );
+        let get = |n: &str| header_value(&stored, n).map(str::to_owned);
+        assert_eq!(get("test-header").as_deref(), Some("B"));
+        assert_eq!(get("content-length").as_deref(), Some("4"));
+        assert_eq!(get("content-encoding").as_deref(), Some("gzip"));
+        assert_eq!(get("etag").as_deref(), Some("\"v1\""));
+    }
+
+    #[test]
+    fn revalidate_merges_headers_and_recomputes_freshness_in_memory() {
+        let cache = HttpCache::new();
+        let h = hdrs(&[("Cache-Control", "max-age=0"), ("ETag", "\"v1\""), ("Test-Header", "A")]);
+        cache.store("https://example.com/r", 200, b"body".to_vec(), &h);
+        cache.revalidate(
+            "https://example.com/r",
+            &hdrs(&[("Cache-Control", "max-age=600"), ("Test-Header", "B")]),
+        );
+        let snap = cache.get("https://example.com/r").unwrap();
+        assert!(snap.is_fresh);
+        assert_eq!(header_value(&snap.headers, "test-header"), Some("B"));
+        assert_eq!(snap.body, b"body");
+    }
+
+    #[test]
+    fn disk_revalidate_merges_headers_and_survives_reopen() {
+        let tmp = TmpDbGuard::new();
+        {
+            let cache = DiskHttpCache::new(&tmp.0).unwrap();
+            let h = hdrs(&[("Cache-Control", "max-age=0"), ("ETag", "\"v1\""), ("Test-Header", "A")]);
+            cache.store("https://example.com/r", 200, b"body".to_vec(), &h);
+            assert!(!cache.get("https://example.com/r").unwrap().is_fresh);
+            cache.revalidate(
+                "https://example.com/r",
+                &hdrs(&[("Cache-Control", "max-age=600"), ("Test-Header", "B")]),
+            );
+        }
+        let cache = DiskHttpCache::new(&tmp.0).unwrap();
+        let snap = cache.get("https://example.com/r").unwrap();
+        assert!(snap.is_fresh);
+        assert_eq!(header_value(&snap.headers, "test-header"), Some("B"));
+        assert_eq!(snap.lifetime_secs, Some(600));
+    }
+
+    #[test]
+    fn disk_age_header_counts_against_the_lifetime() {
+        let tmp = TmpDbGuard::new();
+        let cache = DiskHttpCache::new(&tmp.0).unwrap();
+        let h = hdrs(&[("Cache-Control", "max-age=1500"), ("Age", "2000")]);
+        cache.store("https://example.com/aged", 200, b"x".to_vec(), &h);
+        let snap = cache.get("https://example.com/aged").unwrap();
+        assert!(!snap.is_fresh);
+        assert_eq!(snap.lifetime_secs, Some(1500));
+        assert!(snap.age_secs >= 2000);
+    }
+
+    #[test]
+    fn remove_drops_one_entry_in_both_backends() {
+        let mem = HttpCache::new();
+        let tmp = TmpDbGuard::new();
+        let disk = DiskHttpCache::new(&tmp.0).unwrap();
+        let h = hdrs(&[("Cache-Control", "max-age=60")]);
+        for cache in [&mem as &dyn HttpCacheBackend, &disk] {
+            cache.store("https://example.com/a#frag", 200, b"a".to_vec(), &h);
+            cache.store("https://example.com/b", 200, b"b".to_vec(), &h);
+            cache.remove("https://example.com/a");
+            assert!(cache.get("https://example.com/a").is_none());
+            assert!(cache.get("https://example.com/b").is_some());
+        }
+    }
+
+    #[test]
+    fn disk_cache_opens_a_database_written_before_the_age_columns() {
+        let tmp = TmpDbGuard::new();
+        {
+            let conn = Connection::open(&tmp.0).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE cache_entries (
+                    url TEXT PRIMARY KEY, etag TEXT, last_modified TEXT, status INTEGER NOT NULL,
+                    headers_json TEXT NOT NULL, body_blob BLOB NOT NULL, expires_at INTEGER);",
+            )
+            .unwrap();
+            let exp = (unix_now() + 600) as i64;
+            conn.execute(
+                "INSERT INTO cache_entries VALUES ('https://example.com/old', NULL, NULL, 200, '[]', x'6f6c64', ?1)",
+                params![exp],
+            )
+            .unwrap();
+        }
+        let cache = DiskHttpCache::new(&tmp.0).unwrap();
+        let snap = cache.get("https://example.com/old").unwrap();
+        assert!(snap.is_fresh, "legacy row keeps its expiry");
+        assert_eq!(snap.body, b"old");
     }
 }

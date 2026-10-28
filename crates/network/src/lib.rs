@@ -76,6 +76,7 @@ mod cors;
 mod dns;
 mod doh;
 mod dot;
+mod fetch_cache;
 mod fetch_metadata;
 pub mod filter;
 pub mod h2;
@@ -2163,13 +2164,20 @@ fn build_h2_headers(
     accept_encoding: Option<&str>,
     extra_headers: &str,
 ) -> Vec<(Vec<u8>, Vec<u8>)> {
-    let parsed_extra = parse_extra_headers_str(extra_headers);
+    let mut parsed_extra = parse_extra_headers_str(extra_headers);
+    // FETCH-HTTP-CACHE: `X-Lumen-Drop: <name>` removes a profile default
+    // without a replacement (see `http::headers::DROP_DEFAULT_HEADER`).
+    let dropped: Vec<Vec<u8>> = http::headers::drop_default_names(extra_headers)
+        .into_iter()
+        .map(String::into_bytes)
+        .collect();
+    parsed_extra.retain(|(k, _)| k.as_slice() != http::headers::DROP_DEFAULT_HEADER.as_bytes());
     let extra_names: std::collections::HashSet<&[u8]> =
         parsed_extra.iter().map(|(k, _)| k.as_slice()).collect();
     let mut out: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     for (name, value) in http::h2_fingerprint_headers(http_profile, accept_encoding.unwrap_or("")) {
         let name_bytes = name.into_bytes();
-        if !extra_names.contains(name_bytes.as_slice()) {
+        if !extra_names.contains(name_bytes.as_slice()) && !dropped.contains(&name_bytes) {
             out.push((name_bytes, value.into_bytes()));
         }
     }
@@ -5956,6 +5964,7 @@ mod tests {
             body: None,
             mode: "",
             destination: "",
+            cache: "",
             token: None,
         });
         match result {
@@ -5995,6 +6004,7 @@ mod tests {
             body: None,
             mode: "",
             destination: "",
+            cache: "",
             token: None,
         });
         assert!(!matches!(result, Err(Error::CspConnectSrcBlocked { .. })));
@@ -6022,6 +6032,7 @@ mod tests {
             body: None,
             mode: "",
             destination: "",
+            cache: "",
             token: None,
         });
         match result {
@@ -6655,6 +6666,7 @@ mod tests {
             body: None,
             mode: "no-cors",
             destination,
+            cache: "",
             token: None,
         };
         assert!(matches!(client.fetch_request(&request("")), Err(Error::CspConnectSrcBlocked { .. })));
@@ -10154,6 +10166,7 @@ world\r\n\
                 body: None,
                 mode: "",
                 destination: "",
+                cache: "",
                 token: None,
             })
             .expect("GET must succeed");
@@ -10184,6 +10197,7 @@ world\r\n\
                 body: None,
                 mode: "",
                 destination: "",
+                cache: "",
                 token: None,
             })
             .expect("GET must succeed");
@@ -10222,6 +10236,7 @@ world\r\n\
                 body: None,
                 mode: "",
                 destination: "",
+                cache: "",
                 token: None,
             })
             .expect("GET must succeed");
@@ -10254,6 +10269,7 @@ world\r\n\
                 body: Some(JsFetchBody { content_type: "text/plain", bytes: b"x" }),
                 mode: "",
                 destination: "",
+                cache: "",
                 token: None,
             })
             .expect("POST must succeed");
@@ -10285,6 +10301,7 @@ world\r\n\
                 body: None,
                 mode: "",
                 destination: "",
+                cache: "",
                 token: None,
             })
             .expect("GET must succeed");
@@ -10319,6 +10336,7 @@ world\r\n\
                 body: Some(JsFetchBody { content_type: "text/plain", bytes: b"x" }),
                 mode: "",
                 destination: "",
+                cache: "",
                 token: None,
             })
             .expect("POST must succeed");
@@ -10352,6 +10370,7 @@ world\r\n\
                 body: None,
                 mode: "",
                 destination: "",
+                cache: "",
                 token: None,
             })
             .expect("GET must succeed");
@@ -10450,6 +10469,7 @@ world\r\n\
                     token: None,
                     mode,
                     destination,
+                    cache: "",
                 })
                 .expect("GET must succeed");
         }
@@ -10506,6 +10526,7 @@ world\r\n\
                 }),
                 mode: "",
                 destination: "",
+                cache: "",
                 token: None,
             })
             .expect("POST must succeed");
@@ -11858,6 +11879,9 @@ mod interceptor_tests;
 
 #[cfg(test)]
 mod http_cache_tests;
+
+#[cfg(test)]
+mod fetch_cache_http_tests;
 
 #[cfg(test)]
 mod proxy_tests;

@@ -19,7 +19,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use crate::v8_compat::{into_v8_fn0, into_v8_fn1, into_v8_fn2, into_v8_fn3, into_v8_fn5};
+use crate::v8_compat::{into_v8_fn0, into_v8_fn1, into_v8_fn2, into_v8_fn3, into_v8_fn6};
 use crate::v8_runtime::V8JsRuntime;
 use lumen_core::JsResult;
 use lumen_core::ext::JsRuntime as _;
@@ -59,6 +59,7 @@ fn net_fetch(
     headers_flat: &[String],
     body: Option<&[u8]>,
     content_type: &str,
+    cache: &str,
 ) -> Option<String> {
     let provider = provider?;
     let headers: Vec<(String, String)> = headers_flat
@@ -72,6 +73,7 @@ fn net_fetch(
         body: body.map(|bytes| lumen_core::ext::JsFetchBody { content_type, bytes }),
         mode: "",
         destination: "",
+        cache,
         token: None,
     };
     let resp = match provider.fetch_request(&req) {
@@ -100,7 +102,7 @@ fn net_fetch(
 
 /// Registers the worker's network natives and evaluates [`WORKER_NET_SHIM`].
 ///
-/// Natives: `_lumen_worker_net_fetch(url, method, headers_flat, body, content_type)`,
+/// Natives: `_lumen_worker_net_fetch(url, method, headers_flat, body, content_type, cache)`,
 /// the page-shaped `_lumen_fetch_body_length`/`_lumen_fetch_body_chunk` (the
 /// last body) and `_lumen_stream_alloc`/`_length`/`_chunk`/`_free` (a body
 /// moved into its own slot). Call after [`crate::dom::install_worker_exposed_v8`]
@@ -115,14 +117,15 @@ pub(crate) fn install_worker_net_v8(
     let st = Arc::clone(&store);
     rt.register_native(
         "_lumen_worker_net_fetch",
-        into_v8_fn5(
+        into_v8_fn6(
             move |url: String,
                   method: String,
                   headers_flat: Vec<String>,
                   body: Option<Vec<u8>>,
-                  content_type: String|
+                  content_type: String,
+                  cache: String|
                   -> Option<String> {
-                net_fetch(fetch_provider.as_deref(), &st, &url, &method, &headers_flat, body.as_deref(), &content_type)
+                net_fetch(fetch_provider.as_deref(), &st, &url, &method, &headers_flat, body.as_deref(), &content_type, &cache)
             },
         ),
     )?;

@@ -1852,6 +1852,10 @@ pub struct JsFetchRequest<'a> {
     /// element load; `""` for a plain `fetch()`/XHR (serialised as `empty`
     /// in `Sec-Fetch-Dest`).
     pub destination: &'a str,
+    /// `Request.cache` mode (`"default"`, `"no-store"`, `"reload"`,
+    /// `"no-cache"`, `"force-cache"`, `"only-if-cached"`); `""` is `default`.
+    /// Selects how the HTTP cache serves and stores the response (FETCH-HTTP-CACHE).
+    pub cache: &'a str,
 }
 
 /// Process-global, per-navigation cache of subresource bytes (BUG-1116).

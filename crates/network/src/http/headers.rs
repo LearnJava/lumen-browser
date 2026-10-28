@@ -341,13 +341,22 @@ pub fn build_request_headers_for(
     // восстанавливается симметрия H1↔H2 (расхождение между ними — само по
     // себе отпечаток). `Host` не вытесняется никогда: он задаёт адресата
     // запроса, и author-код его ставить не вправе (Fetch §2.2.2).
+    let stripped_extra;
+    let mut extra_headers = extra_headers;
     if !extra_headers.is_empty() {
-        let overridden: std::collections::HashSet<String> = extra_headers
+        let mut overridden: std::collections::HashSet<String> = extra_headers
             .split("\r\n")
             .filter_map(|line| line.split_once(':'))
             .map(|(name, _)| name.trim().to_ascii_lowercase())
             .filter(|name| name != "host")
             .collect();
+        // FETCH-HTTP-CACHE: `X-Lumen-Drop: <name>` removes the profile's
+        // default `<name>` without sending a replacement.
+        if overridden.contains(DROP_DEFAULT_HEADER) {
+            overridden.extend(drop_default_names(extra_headers));
+            stripped_extra = strip_drop_default_lines(extra_headers);
+            extra_headers = &stripped_extra;
+        }
         headers.retain(|name| !overridden.contains(&name.to_ascii_lowercase()));
     }
 
@@ -359,6 +368,39 @@ pub fn build_request_headers_for(
     format!("{}{}", header_block.trim_end_matches("\r\n\r\n"), "\r\n")
         + extra_headers
         + "\r\n"
+}
+
+/// Pseudo request line telling the header builders to drop the profile
+/// default named in its value (`X-Lumen-Drop: cache-control`) instead of
+/// replacing it. The profile sends `Cache-Control: max-age=0` as a navigation
+/// reload signal; a page `fetch()` with the default cache mode must not carry it.
+pub(crate) const DROP_DEFAULT_HEADER: &str = "x-lumen-drop";
+
+/// Names listed by the `X-Lumen-Drop` lines of an extra-headers block.
+pub(crate) fn drop_default_names(extra_headers: &str) -> Vec<String> {
+    extra_headers
+        .split("\r\n")
+        .filter_map(|line| line.split_once(':'))
+        .filter(|(name, _)| name.trim().eq_ignore_ascii_case(DROP_DEFAULT_HEADER))
+        .map(|(_, value)| value.trim().to_ascii_lowercase())
+        .collect()
+}
+
+/// The extra-headers block without its `X-Lumen-Drop` lines.
+pub(crate) fn strip_drop_default_lines(extra_headers: &str) -> String {
+    extra_headers
+        .split("\r\n")
+        .filter(|line| {
+            line.split_once(':')
+                .is_none_or(|(name, _)| !name.trim().eq_ignore_ascii_case(DROP_DEFAULT_HEADER))
+        })
+        .fold(String::new(), |mut acc, line| {
+            if !line.is_empty() {
+                acc.push_str(line);
+                acc.push_str("\r\n");
+            }
+            acc
+        })
 }
 
 /// Connection-management field names that are illegal or auto-generated in
