@@ -497,13 +497,28 @@ pub(super) fn dispatch(
 
     let content_inline =
         (b.rect.height - frame_vert - scrollbar_gutter_block(s)).max(0.0);
-    let content_x = b.rect.x + s.border_left_width + padding_left;
+    let mut content_x = b.rect.x + s.border_left_width + padding_left;
     let content_y = b.rect.y + s.border_top_width + padding_top + scrollbar_gutter_block_start(s);
-    let definite_block = explicit_width.map(|w| (w - frame_horiz).max(0.0));
-    let block_avail = match explicit_width {
+    let mut block_avail = match explicit_width {
         Some(w) => (w - frame_horiz).max(0.0),
         None => (available_width - margin_left - frame_horiz).max(0.0),
     };
+    // HTML Rendering §15.3.13: legend на границе блока-начала сдвигает сетку по block-оси
+    // (физическая ширина); как в горизонтальном режиме, это часть content box, а не рамки.
+    let legend_extra = if b.fieldset_legend.is_some() {
+        super::fieldset::lay_out_legend_vertical(b, content_inline, block_avail, measurer, viewport, pcb, hp)
+    } else {
+        0.0
+    };
+    if legend_extra > 0.0 {
+        if !geom_rl(s) {
+            content_x += legend_extra;
+        }
+        block_avail = (block_avail - legend_extra).max(0.0);
+    }
+    let legend_idx = super::fieldset::placed_legend_idx(b);
+    let definite_block = explicit_width.map(|w| (w - frame_horiz - legend_extra).max(0.0));
+    let frame_horiz = frame_horiz + legend_extra;
 
     let is_positioned = super::multicol_abspos::establishes_abs_cb(s);
     let children_pcb = if is_positioned {
@@ -517,7 +532,7 @@ pub(super) fn dispatch(
         pcb
     };
     let geom = VGridGeom {
-        rl: matches!(s.writing_mode, WritingMode::VerticalRl | WritingMode::SidewaysRl),
+        rl: geom_rl(s),
         inline_rev: (s.direction == crate::style::Direction::Rtl) != (s.writing_mode == WritingMode::SidewaysLr),
         block_avail,
         frame_horiz,
@@ -532,13 +547,14 @@ pub(super) fn dispatch(
     match super::grid::build_grid_init(
         &b.children, s, content_x, content_y, content_inline, definite_block, viewport, children_pcb,
         em, available_height, padding_top, padding_bottom, size_contained, is_positioned, pcb,
-        measurer, Some(geom), None,
+        measurer, Some(geom), legend_idx,
     ) {
         Some(init) => DispatchOutcome::NeedsGridLoop(init),
         None => {
             // Нет элементов: ширина — явная или только рамка.
             b.rect.width = explicit_width.unwrap_or(frame_horiz).min(max_block).max(min_block);
             let content = Rect::new(content_x, content_y, (b.rect.width - frame_horiz).max(0.0), content_inline);
+            settle_legend(b, s, viewport);
             super::grid_abspos::lay_out_abs(b, s, None, is_positioned, pcb, content, measurer, viewport, hp);
             DispatchOutcome::Done
         }
@@ -553,6 +569,28 @@ pub(super) fn finish_container(b: &mut LayoutBox, init: &GridInit, geom: VGridGe
         .unwrap_or(geom.frame_horiz + content_block)
         .min(geom.max_block)
         .max(geom.min_block);
+}
+
+/// Legend вертикального grid-fieldset встаёт на границу, когда размер контейнера окончателен.
+pub(super) fn settle_legend(b: &mut LayoutBox, s: &ComputedStyle, viewport: Size) {
+    if b.fieldset_legend.is_none() {
+        return;
+    }
+    let em = s.font_size;
+    let pct_base = b.rect.height.max(0.0);
+    let padding_top = s.padding_top.resolve_or_zero(em, pct_base, viewport);
+    let padding_bottom = s.padding_bottom.resolve_or_zero(em, pct_base, viewport);
+    super::fieldset::settle_legend_vertical(
+        b,
+        s.border_top_width + padding_top,
+        s.border_top_width + s.border_bottom_width + padding_top + padding_bottom,
+        viewport,
+    );
+}
+
+/// block-ось идёт справа налево.
+fn geom_rl(s: &ComputedStyle) -> bool {
+    matches!(s.writing_mode, WritingMode::VerticalRl | WritingMode::SidewaysRl)
 }
 
 /// Подъём элемента вертикальной сетки для baseline-выравнивания: расстояние от кромки начала

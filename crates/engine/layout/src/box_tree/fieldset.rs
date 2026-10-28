@@ -51,6 +51,11 @@ fn legend_inline_align(justify_self: AlignValue, start_at_far_edge: bool) -> Inl
     }
 }
 
+/// В вертикальном режиме Edge не применяет `justify-self` legend (`end`/`center`/`align`-атрибут):
+/// место по inline-оси задают только `direction` и `auto`-поля (проба 2026-10-28, `vertical-rl` и
+/// `vertical-lr`). Поэтому вертикальные пути выравнивают как по `start`.
+const VERTICAL_LEGEND_JUSTIFY: AlignValue = AlignValue::Start;
+
 /// Legend блокифицируется для раскладки (HTML Rendering §15.3.13), а `getComputedStyle` читает
 /// стиль бокса после неё и должен видеть автор-значение: на время раскладки ставим `block`, после
 /// неё [`restore_display`] возвращает прежнее. Нужно там, где внутренние алгоритмы (интринсики,
@@ -83,9 +88,18 @@ pub(super) fn rendered_legend_idx_of(b: &LayoutBox) -> Option<usize> {
         .map(|l| l.idx)
 }
 
-/// На сколько legend сдвинул содержимое fieldset вниз (0 без поставленного legend).
+/// На сколько legend сдвинул содержимое fieldset вниз (0 без поставленного legend). В вертикальном
+/// режиме сдвиг идёт по block-оси (ширина) и в высоту контейнера не входит.
 pub(super) fn placed_content_offset(b: &LayoutBox) -> f32 {
+    if b.style.writing_mode != WritingMode::HorizontalTb {
+        return 0.0;
+    }
     b.fieldset_legend.filter(|l| l.placed).map_or(0.0, |l| l.content_offset)
+}
+
+/// Block-начало вертикального режима лежит справа (`vertical-rl`, `sideways-rl`).
+fn block_start_is_right(wm: WritingMode) -> bool {
+    matches!(wm, WritingMode::VerticalRl | WritingMode::SidewaysRl)
 }
 
 /// Контейнер пересобрал `children` (multicol режет и переставляет детей): находит legend по узлу и
@@ -160,6 +174,81 @@ pub(super) fn place_rendered_legend(
     extra
 }
 
+/// Flex/grid-fieldset в вертикальном режиме: раскладывает legend и возвращает, на сколько
+/// содержимое сдвинуто по block-оси (`max(margin box legend − border блока-начала, 0)`, физическая
+/// ширина). Где legend стоит, зависит от итоговой ширины и высоты fieldset, поэтому контейнер
+/// зовёт [`settle_legend_vertical`], когда они известны. `room_inline` — inline-размер content box
+/// (физическая высота), если он определён; `room_block` — доступная ширина.
+pub(super) fn lay_out_legend_vertical(
+    b: &mut LayoutBox,
+    room_inline: f32,
+    room_block: f32,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    pcb: Rect,
+    hp: &dyn HyphenationProvider,
+) -> f32 {
+    let Some(fl) = b.fieldset_legend else { return 0.0 };
+    let border_start = if block_start_is_right(b.style.writing_mode) {
+        b.style.border_right_width
+    } else {
+        b.style.border_left_width
+    };
+    let (x, y) = (b.rect.x, b.rect.y);
+    let Some(child) = b.children.get_mut(fl.idx).filter(|c| c.node == fl.node) else { return 0.0 };
+
+    let author_display = blockify_for_layout(child);
+    let cem = child.style.font_size;
+    let [m_left, m_right, m_top, m_bottom] = [
+        &child.style.margin_left, &child.style.margin_right, &child.style.margin_top, &child.style.margin_bottom,
+    ]
+    .map(|m| m.resolve_or_zero(cem, room_inline, viewport));
+    let inline_room = if child.style.height.is_some() {
+        room_inline
+    } else {
+        room_inline.min(max_content_outer_height(child, measurer, viewport) + m_top + m_bottom)
+    };
+    lay_out(child, x, y, room_block, Some(inline_room), measurer, viewport, pcb, hp, false);
+    let margin_box_block = m_left + child.rect.width + m_right;
+    restore_display(child, author_display);
+
+    let extra = (margin_box_block - border_start).max(0.0);
+    let inset = ((margin_box_block - border_start) / 2.0).max(0.0);
+    b.fieldset_legend = Some(FieldsetLegend { placed: true, border_inset: inset, content_offset: extra, ..fl });
+    extra
+}
+
+/// Ставит legend, разложенный [`lay_out_legend_vertical`], на границу блока-начала итогового
+/// border box `b` (его `rect` уже окончательный): по block-оси margin box центруется на границе,
+/// по inline-оси — в content box по `justify-self` и `auto`-полям. `frame_top`/`frame_vert` —
+/// `border + padding` сверху и сверху+снизу.
+pub(super) fn settle_legend_vertical(b: &mut LayoutBox, frame_top: f32, frame_vert: f32, viewport: Size) {
+    let Some(fl) = b.fieldset_legend.filter(|l| l.placed) else { return };
+    let st = b.style.clone();
+    let rl = block_start_is_right(st.writing_mode);
+    let border_start = if rl { st.border_right_width } else { st.border_left_width };
+    let content_inline = (b.rect.height - frame_vert).max(0.0);
+    let (box_x, box_w, content_y) = (b.rect.x, b.rect.width, b.rect.y + frame_top);
+    let Some(child) = b.children.get_mut(fl.idx).filter(|c| c.node == fl.node) else { return };
+
+    let cem = child.style.font_size;
+    let (mt_auto, mb_auto) = (child.style.margin_top.is_auto(), child.style.margin_bottom.is_auto());
+    let [m_left, m_right, m_top, m_bottom] = [
+        &child.style.margin_left, &child.style.margin_right, &child.style.margin_top, &child.style.margin_bottom,
+    ]
+    .map(|m| m.resolve_or_zero(cem, content_inline, viewport));
+    let (m_start, m_end) = if rl { (m_right, m_left) } else { (m_left, m_right) };
+    let (lw, lh) = (child.rect.width, child.rect.height);
+    let margin_box_block = m_start + lw + m_end;
+    let off = if margin_box_block >= border_start { 0.0 } else { (border_start - margin_box_block) / 2.0 };
+    let final_x = if rl { box_x + box_w - off - m_start - lw } else { box_x + off + m_start };
+    let start_at_far = (child.style.direction == Direction::Rtl) != (st.writing_mode == WritingMode::SidewaysLr);
+    let align = legend_inline_align(VERTICAL_LEGEND_JUSTIFY, start_at_far);
+    let y_off = legend_inline_offset(align, content_inline - lh, (m_top, mt_auto), (m_bottom, mb_auto));
+    let (dx, dy) = (final_x - child.rect.x, content_y + y_off - child.rect.y);
+    shift_tree(child, dx, dy);
+}
+
 /// То же для вертикального режима записи: legend встаёт на border блока-начала (`border-right`
 /// у `vertical-rl`/`sideways-rl`, `border-left` у `vertical-lr`/`sideways-lr`), по inline-оси
 /// (физический y) выравнивается в content box, а содержимое сдвигается на `cursor_block_consumed`.
@@ -218,7 +307,7 @@ pub(super) fn place_rendered_legend_vertical(
     };
     // Inline-начало — сверху, кроме rtl (снизу) и `sideways-lr` (там строка идёт снизу вверх).
     let start_at_far = (child.style.direction == Direction::Rtl) != sideways_lr;
-    let align = legend_inline_align(child.style.justify_self, start_at_far);
+    let align = legend_inline_align(VERTICAL_LEGEND_JUSTIFY, start_at_far);
     let y_off = legend_inline_offset(align, content_inline - lh, (m_top, mt_auto), (m_bottom, mb_auto));
     let final_y = content_y + y_off;
     let (dx, dy) = (final_x - child.rect.x, final_y - child.rect.y);

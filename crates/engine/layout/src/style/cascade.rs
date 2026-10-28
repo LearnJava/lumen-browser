@@ -31,7 +31,7 @@ use crate::style::{
     apply_quirks_html_height,
     apply_quirks_line_height, apply_quirks_table_reset, apply_svg_presentational_hints,
     apply_table_cell_width_hint, apply_text_color_presentational_hint, apply_ua_body_margin,
-    apply_ua_dialog_display, apply_ua_fieldset_style, apply_ua_form_controls, apply_ua_form_controls_field_sizing_clear,
+    apply_ua_dialog_display, apply_ua_fieldset_style, read_ua_fieldset_fields, redo_ua_fieldset_for_writing_mode, parse_writing_mode, apply_ua_form_controls, apply_ua_form_controls_field_sizing_clear,
     apply_ua_block_margins, snapshot_ua_block_box, swap_ua_block_box_for_vertical, apply_ua_heading_style, apply_ua_hidden, apply_ua_hr_style, apply_ua_inert_important, apply_ua_interactivity, apply_ua_list, apply_ua_slot, apply_ua_table_cell_padding,
     apply_ua_text_decoration, apply_webkit_scrollbar_pseudos, coerce_overflow_axes,
     complex_has_host, default_display, ensure_cascade_index, expand_attr_val,
@@ -357,6 +357,7 @@ pub(crate) fn compute_style_shareable(
     apply_ua_block_margins(doc, node, &mut style);
     let ua_block_box = snapshot_ua_block_box(doc, node, &style);
     // UA stylesheet: <fieldset> / <legend>. HTML Rendering §15.3.13. Author CSS перекроет.
+    let ua_fieldset_pre = read_ua_fieldset_fields(doc, node, &style);
     apply_ua_fieldset_style(doc, node, &mut style);
     // UA stylesheet: <body> → margin: 8px. HTML Rendering §14.3.3. Author CSS перекроет.
     apply_ua_body_margin(doc, node, &mut style);
@@ -1253,6 +1254,19 @@ pub(crate) fn compute_style_shareable(
         .as_ref()
         .zip(doc.enclosing_shadow_host(node))
         .and_then(|(s, host)| shadow_function_chain(doc, s, host));
+
+    // HTML Rendering §15.3.13: UA-значения `<fieldset>`/`<legend>` логические, а первая UA-фаза
+    // знает только унаследованный `writing-mode`. Собственный режим из автор-CSS (последнее
+    // объявление-ключевое слово в каскаде) повторяет UA-фазу для него до автор-деклараций.
+    if let Some(pre) = ua_fieldset_pre
+        && let Some(wm) = matched
+            .iter()
+            .rev()
+            .find(|m| m.6.property.eq_ignore_ascii_case("writing-mode"))
+            .and_then(|m| parse_writing_mode(&m.6.value))
+    {
+        redo_ua_fieldset_for_writing_mode(doc, node, &mut style, pre, wm);
+    }
 
     for (_, _, _, _, _, _, decl, shadow_origin) in &matched {
         // CSS Cascade L5 §6.4.6 / §revert-rule-keyword: a `revert-layer`/

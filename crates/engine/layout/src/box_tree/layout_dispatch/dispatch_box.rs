@@ -955,7 +955,6 @@ pub(in crate::box_tree) fn dispatch_box(
                         b, content_x, content_width, None, measurer, viewport, children_pcb, hp,
                     )
                 };
-                let legend_idx = super::fieldset::placed_legend_idx(b);
                 let content_y = content_y + legend_extra;
                 let frame_vert = padding_top + padding_bottom
                     + s.border_top_width + s.border_bottom_width;
@@ -971,6 +970,20 @@ pub(in crate::box_tree) fn dispatch_box(
                             (available_height.unwrap_or(viewport.height) - frame_vert).max(0.0)
                         })
                     });
+                // Вертикальный fieldset: legend на границе блока-начала сдвигает содержимое по
+                // block-оси (физическая ширина); окончательно он встанет в `finish_frame`.
+                let (content_x, content_width, v_legend_extra) = if vertical_flex && b.fieldset_legend.is_some() {
+                    let extra = super::fieldset::lay_out_legend_vertical(
+                        b, explicit_height.unwrap_or(viewport.height), content_width, measurer, viewport,
+                        children_pcb, hp,
+                    );
+                    let x = if s.writing_mode == crate::style::WritingMode::VerticalLr
+                        || s.writing_mode == crate::style::WritingMode::SidewaysLr { content_x + extra } else { content_x };
+                    (x, (content_width - extra).max(0.0), extra)
+                } else {
+                    (content_x, content_width, 0.0)
+                };
+                let legend_idx = super::fieldset::placed_legend_idx(b);
                 // For row flex, align-content needs the explicit container height (cross axis).
                 let flex_explicit_cross = if !main_vertical { explicit_height } else { None };
                 // CSS Flexbox §9.7: for a column flex container with a definite
@@ -983,7 +996,7 @@ pub(in crate::box_tree) fn dispatch_box(
                     block_size_auto: s.width.is_none(),
                     fill_inline_size: s.display == Display::Flex,
                     frame_horiz: padding_left + padding_right
-                        + s.border_left_width + s.border_right_width,
+                        + s.border_left_width + s.border_right_width + v_legend_extra,
                 });
                 // LAYOUT-2 срез 3: Steps 1–3/justify precompute run here
                 // (native — see `build_flex_init`'s doc comment for why), but

@@ -271,6 +271,9 @@ const PAGES: &[&str] = &[
     // FIELDSET-LEGEND-3: `<fieldset>` с `column-count`/`column-width` — legend на границе, колонки ниже него;
     // без текста.
     "167-fieldset-multicol",
+    // FIELDSET-LEGEND-4: flex/grid-`<fieldset>` в вертикальном `writing-mode` — legend на границе
+    // блока-начала, раскладка рядом с ним; без текста.
+    "172-fieldset-vertical-flex-grid",
     // CSS Backgrounds L4 §3.8 — background-clip: border-area. Фон под нарисованной рамкой
     // (PushMaskLayer alpha-маска из DrawBorder); без текста.
     "171-background-clip-border-area",
