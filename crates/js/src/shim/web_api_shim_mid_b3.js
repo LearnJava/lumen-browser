@@ -182,6 +182,7 @@ function _lumen_fetch_hint_register(url, crossorigin) {
 // credentials mode) and carries nothing the hint's request could not have had:
 // GET, no body, no author headers, default cache mode. The hint is spent either way.
 function _lumen_fetch_take_hint(url, init, input, method, hasBody, authorHeaders) {
+    if (typeof _lumen_link_hints_scanned !== 'undefined' && !_lumen_link_hints_scanned) _lumen_link_fetch_hints_prescan();
     var want = _lumen_fetch_hints[url];
     if (want === undefined) return false;
     if (method !== 'GET' || hasBody || authorHeaders.length !== 0) return false;

@@ -681,8 +681,8 @@ the time — read dates.
   it (`_lumen_make_class_list` generalized to `_lumen_make_attr_token_list(nid, attrName)`),
   declared per interface rather than in the shared wrapper table for the BUG-796 reason: the
   supported-token sets of `<link>` and `<a>` differ. Residual: the `Link:` response-header form
-  ([BUG-906](../bugs/BUG-906-FIXED.md)) and both the preload cache and the early start
-  ([BUG-907](../bugs/BUG-907-OPEN.md)).
+  ([BUG-906](../bugs/BUG-906-FIXED.md)) and (when this was written) both the preload cache and the early start
+  (both since done, [BUG-907](../bugs/BUG-907-FIXED.md)).
 - **`document.currentScript` ([P3], 2026-08-09, closes
   [BUG-486](../bugs/BUG-486-FIXED.md), last blocker of
   [BUG-703](../bugs/BUG-703-FIXED.md)).** Missing from the engine outright until now. It is a
