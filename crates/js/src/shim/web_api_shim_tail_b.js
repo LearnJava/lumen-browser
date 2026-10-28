@@ -6091,9 +6091,8 @@ function _wa_custom_leaf_interp(kind, a, b, t) {
     if (kind.leaf === 'color') {
         var ca = _wa_color_rgba(a), cb = _wa_color_rgba(b);
         if (!ca || !cb) return t < 0.5 ? a : b;
-        var o = [];
-        for (var i = 0; i < 4; i++) o.push(Math.max(0, Math.min(255, Math.round(ca[i] + (cb[i] - ca[i]) * t))));
-        return _wa_custom_color_text(o);
+        // CSS Color 4 §12.3: premultiplied, so a translucent end weighs by its alpha.
+        return _wa_mix_rgba(ca, cb, t);
     }
     if (kind.leaf === 'scalar') {
         // `10px` against `20%` (or a `calc()` of both): a sum of a percentage and a length.

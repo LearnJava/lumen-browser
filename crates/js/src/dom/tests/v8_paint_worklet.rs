@@ -47,6 +47,7 @@ fn job(key: &str, name: &str, args: &[&str], w: f32, h: f32, dpr: f32) -> PaintR
 const FAKE_EL: &str = "var __vals = {}; _lumen_make_element = function(nid) { return { __nid__: nid, \
     computedStyleMap: function() { return { \
       get: function(p) { return __vals[p]; }, \
+      __lookup__: function(p) { return p in __vals ? String(__vals[p]) : ''; }, \
       getAll: function(p) { return p in __vals ? [__vals[p]] : []; } }; } }; };";
 
 #[test]
@@ -153,4 +154,130 @@ fn a_throwing_paint_publishes_nothing() {
     add_module(&rt, "registerPaint('bad', class { paint(){ throw new Error('x'); } })");
     rt.set_paint_jobs(&[job("paint:1:b", "bad", &[], 2.0, 2.0, 1.0)]);
     assert!(rt.flush_paint_images().is_empty());
+}
+
+#[test]
+fn register_paint_twice_is_an_invalid_modification_error() {
+    let rt = rt();
+    add_module(
+        &rt,
+        "try { registerPaint('foo', class { paint(){} }); registerPaint('foo', class { paint(){} }); } \
+         catch (e) { globalThis.__name = e.name; }",
+    );
+    assert!(eval_bool(&rt, "__name === 'InvalidModificationError'"));
+}
+
+#[test]
+fn a_module_with_top_level_await_still_registers() {
+    let rt = rt();
+    add_module(&rt, "await 1; registerPaint('late', class { paint(){} }); globalThis.__after = true;");
+    rt.eval("0").unwrap();
+    assert!(eval_bool(&rt, "__done === true && __after === true"), "{:?}", rt.eval("String(__err)"));
+}
+
+#[test]
+fn dynamic_import_in_a_worklet_rejects_with_a_type_error() {
+    let rt = rt();
+    add_module(
+        &rt,
+        "registerPaint('imp', class { async paint() { \
+           try { await import('./x.mjs'); globalThis.__imp = 'resolved'; } \
+           catch (e) { globalThis.__imp = e.constructor === TypeError ? 'TypeError' : 'other'; } } })",
+    );
+    rt.eval(FAKE_EL).unwrap();
+    rt.set_paint_jobs(&[job("paint:1:i", "imp", &[], 2.0, 2.0, 1.0)]);
+    rt.flush_paint_images();
+    assert!(eval_bool(&rt, "__imp === 'TypeError'"));
+}
+
+#[test]
+fn an_async_paint_publishes_after_it_settles() {
+    let rt = rt();
+    rt.eval(FAKE_EL).unwrap();
+    add_module(
+        &rt,
+        "registerPaint('slow', class { async paint(ctx, g) { await 0; \
+           ctx.fillStyle = 'rgb(1,2,3)'; ctx.fillRect(0, 0, g.width, g.height); } })",
+    );
+    rt.set_paint_jobs(&[job("paint:1:s", "slow", &[], 2.0, 2.0, 1.0)]);
+    let images = rt.flush_paint_images();
+    assert_eq!(images.len(), 1);
+    assert_eq!(&images[0].3[..4], &[1, 2, 3, 255], "pixels drawn after the await are published");
+}
+
+#[test]
+fn a_class_whose_input_arguments_differ_between_reads_is_never_painted() {
+    let rt = rt();
+    rt.eval(FAKE_EL).unwrap();
+    add_module(
+        &rt,
+        "var __n = 0; registerPaint('flaky', class { static get inputArguments() { return ['x' + (__n++)]; } \
+           paint(ctx){ ctx.fillStyle = 'red'; ctx.fillRect(0, 0, 1, 1); } })",
+    );
+    rt.set_paint_jobs(&[job("paint:1:f", "flaky", &[], 2.0, 2.0, 1.0)]);
+    assert!(rt.flush_paint_images().is_empty());
+}
+
+#[test]
+fn custom_properties_reach_the_worklet_as_typed_values() {
+    let rt = rt();
+    rt.eval(FAKE_EL).unwrap();
+    rt.eval(
+        "CSS.registerProperty({ name: '--len', syntax: '<length>+ | none', initialValue: 'none', inherits: false }); \
+         CSS.registerProperty({ name: '--lp', syntax: '<length-percentage>', initialValue: '0px', inherits: false }); \
+         CSS.registerProperty({ name: '--img', syntax: '<image> | none', initialValue: 'none', inherits: false }); \
+         __vals['--len'] = '8px 16px'; __vals['--lp'] = 'calc(10% + 10px)'; \
+         __vals['--img'] = 'url(\"http://a/\")'; __vals['--free'] = 'bar';",
+    )
+    .unwrap();
+    add_module(
+        &rt,
+        "registerPaint('typed', class { static get inputProperties() { return ['--len', '--lp', '--img', '--free', '--none']; } \
+           paint(ctx, g, m) { var s = v => v.constructor.name + ' ' + v; \
+             globalThis.__seen = ['--len', '--lp', '--img', '--free', '--none'] \
+               .map(k => k + '=' + m.getAll(k).map(s).join(',')).join(' | '); } })",
+    );
+    rt.set_paint_jobs(&[job("paint:1:t", "typed", &[], 2.0, 2.0, 1.0)]);
+    rt.flush_paint_images();
+    assert!(eval_bool(
+        &rt,
+        "__seen === '--len=CSSUnitValue 8px,CSSUnitValue 16px | --lp=CSSMathSum calc(10% + 10px) \
+         | --img=CSSImageValue url(\"http://a/\") | --free=CSSUnparsedValue bar | --none=CSSUnparsedValue '"
+    ), "{:?}", rt.eval("__seen"));
+}
+
+#[test]
+fn offscreen_get_transform_tracks_the_matrix_and_ignores_non_finite_input() {
+    let rt = rt();
+    assert!(eval_bool(
+        &rt,
+        "var c = new OffscreenCanvas(4, 4).getContext('2d'); \
+         c.translate(3, 4); c.scale(2, 2); var m = c.getTransform(); \
+         c.setTransform({ a: Infinity, d: 5 }); c.setTransform(1, 0, 0, NaN, 0, 0); var kept = c.getTransform(); \
+         c.save(); c.setTransform({ a: 3, d: 3 }); c.restore(); var restored = c.getTransform(); \
+         m.a === 2 && m.d === 2 && m.e === 3 && m.f === 4 && kept.a === 2 && restored.a === 2 && restored.e === 3"
+    ));
+}
+
+#[test]
+fn offscreen_stroke_and_fill_take_a_path2d() {
+    let rt = rt();
+    assert!(eval_bool(
+        &rt,
+        "var c = new OffscreenCanvas(8, 8).getContext('2d'); \
+         var p = new Path2D(); p.rect(0, 0, 8, 8); c.fillStyle = 'rgb(0,255,0)'; c.fill(p); \
+         var px = c.getImageData(4, 4, 1, 1).data; px[1] >= 253 && px[0] <= 2 && px[3] >= 253"
+    ));
+}
+
+#[test]
+fn alpha_false_canvases_start_and_stay_opaque() {
+    let rt = rt();
+    assert!(eval_bool(
+        &rt,
+        "var c = new OffscreenCanvas(2, 2).getContext('2d', { alpha: false }); \
+         c.clearRect(0, 0, 2, 2); var px = c.getImageData(0, 0, 1, 1).data; \
+         var t = new OffscreenCanvas(2, 2).getContext('2d').getImageData(0, 0, 1, 1).data; \
+         globalThis.__r = [px[3], px[0], t[3]].join(); px[3] >= 253 && px[0] <= 2 && t[3] <= 2"
+    ), "{:?}", rt.eval("String(globalThis.__r)"));
 }

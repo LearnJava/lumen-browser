@@ -535,6 +535,14 @@ mod tests {
     const VP: Size = Size { width: 800.0, height: 600.0 };
 
     #[test]
+    fn source_accepts_a_paint_function() {
+        let (img, css) = parse_border_image_source("paint(geometry, 3px)", 16.0, VP).unwrap();
+        assert_eq!(img, BackgroundImage::Paint { name: "geometry".into(), args: vec!["3px".into()] });
+        assert_eq!(css.as_deref(), Some("paint(geometry, 3px)"));
+        assert!(parse_border_image_source("paint(", 16.0, VP).is_none(), "an unclosed paint() is invalid");
+    }
+
+    #[test]
     fn slice_forms() {
         let (s, f) = parse_border_image_slice("fill 30% 10").unwrap();
         assert!(f);

@@ -123,3 +123,7 @@ this is a straightforward "not yet built" entry, not a regression).
 ## Срез PAINT-WORKLET (2026-10-23)
 
 Закрыта часть про Paint Worklet: общий `Worklet`, `CSS.paintWorklet.addModule()` загружает и выполняет модуль, `registerPaint` виден только модулю, `paint()` в `background-image` рисуется (живое окно, `--screenshot`, `InProcessSession`). Остаётся `CSS.layoutWorklet`/`registerLayout` (PAINT-WORKLET-LAYOUT), `CSS.animationWorklet`, `audioWorklet.addModule` — баг остаётся OPEN.
+
+## Срез PAINT-WORKLET-2 (2026-10-28)
+
+Paint API: `paint()` в `border-image-source`, типизированный `styleMap`, `async paint()`, top-level `await`, анимация зарегистрированного custom property, `alpha:false`, `getTransform`/`Path2D` в `OffscreenCanvas`; 109 из 112 reftest `css/css-paint-api` совпадают с эталоном (было 79). Остаток Paint API — PAINT-WORKLET-3; Layout API — PAINT-WORKLET-LAYOUT. Баг остаётся OPEN.

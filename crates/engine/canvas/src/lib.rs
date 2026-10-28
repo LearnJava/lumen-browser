@@ -1665,6 +1665,19 @@ mod tests {
     }
 
     #[test]
+    fn opaque_canvas_starts_black_and_clear_rect_keeps_it_opaque() {
+        let mut ctx = Context2D::new(2, 2);
+        ctx.set_opaque();
+        assert!(ctx.pixels().chunks_exact(4).all(|p| p == [0, 0, 0, 255]));
+        ctx.fill_style = CanvasColor::rgba(255, 0, 0, 255).into();
+        ctx.fill_rect(0.0, 0.0, 2.0, 2.0);
+        ctx.clear_rect(0.0, 0.0, 1.0, 2.0);
+        let p = ctx.pixels();
+        assert_eq!(&p[0..4], &[0, 0, 0, 255], "cleared pixel is opaque black");
+        assert_eq!(&p[4..8], &[255, 0, 0, 255], "untouched pixel keeps its paint");
+    }
+
+    #[test]
     fn fill_rect_clips_to_bounds() {
         let mut ctx = Context2D::new(4, 4);
         ctx.fill_style = CanvasColor::rgba(0, 255, 0, 255).into();

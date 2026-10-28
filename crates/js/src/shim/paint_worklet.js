@@ -291,14 +291,12 @@
   }
 
   // StylePropertyMapReadOnly restricted to the worklet's `inputProperties`.
-  function InputStyleMap(map, props, el) {
+  function InputStyleMap(map, props) {
     this._map = map;
     this._props = props;
-    this._el = el;
   }
   InputStyleMap.prototype._values = function (p) {
-    // `getComputedStyle()` carries the running CSS animations / transitions of the property.
-    if (p.slice(0, 2) === '--') return customValues(p, String(getComputedStyle(this._el).getPropertyValue(p) || '').trim());
+    if (p.slice(0, 2) === '--') return customValues(p, String(this._map.__lookup__(p) || '').trim());
     var v = this._map.get(p);
     return v === undefined ? [] : [v];
   };
@@ -356,7 +354,7 @@
     if (!def || def.invalid) return;
     var el = _lumen_make_element(req.node);
     if (!el || typeof el.computedStyleMap !== 'function') return;
-    var styleMap = new InputStyleMap(el.computedStyleMap(), def.inputProperties, el);
+    var styleMap = new InputStyleMap(el.computedStyleMap(), def.inputProperties);
     var sig = signature(req, def, styleMap);
     if (rendered.get(req.key) === sig) return;
 
