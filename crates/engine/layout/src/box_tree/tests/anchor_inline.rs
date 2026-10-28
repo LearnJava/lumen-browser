@@ -92,3 +92,14 @@ fn inline_block_anchor_keeps_its_box_rect() {
     let t = target(&root, &doc);
     assert_eq!((t.x, t.y), (a.x, a.y + a.height));
 }
+
+/// BUG-1774: the space between an `inline-block` and the next inline element keeps its width.
+#[test]
+fn space_after_inline_block_survives_before_inline_element() {
+    let block = r#"<span style="display:inline-block;width:100px;height:20px"></span>"#;
+    let (_, rects, doc) = build(&format!(r#"<div>{block} <b id="b">foo</b></div>"#), "");
+    let (_, bare, bare_doc) = build(&format!(r#"<div>{block} <span id="b">foo</span></div>"#), "");
+    let b = gbcr(&rects, &doc, "b");
+    assert_eq!(b[0], 100.0 + 8.0, "пробел шириной в `char_width(' ')` между блоком и <b>");
+    assert_eq!(b[0], gbcr(&bare, &bare_doc, "b")[0]);
+}

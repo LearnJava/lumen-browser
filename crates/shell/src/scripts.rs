@@ -67,12 +67,37 @@ pub(crate) fn is_classic_script_type(t: Option<&str>) -> bool {
 /// the latter ran in document order, before inline scripts further down, and a
 /// bundle reading data that a tail-of-body inline script sets died on start).
 /// `defer` on an inline classic script is ignored, as the spec requires.
-/// Classic `async` is not modelled: such a script still runs in document order.
+/// Classic `async` is not modelled here: such a script still runs in document
+/// order. Живое окно берёт [`collect_scripts_split_async`] (LOAD-3A).
 pub(crate) fn collect_scripts_ordered(
     doc: &Document,
     id: NodeId,
     classic: &mut Vec<ScriptSource>,
     deferred: &mut Vec<ScriptSource>,
+) {
+    collect_scripts_impl(doc, id, classic, deferred, None);
+}
+
+/// LOAD-3A: как [`collect_scripts_ordered`], но внешний классический `<script async src>`
+/// уходит в `asyncs` — его не ждёт ни парсер, ни `DOMContentLoaded` (HTML LS §4.12.1.1
+/// шаг 31: «выполнить как можно скорее»). Остальные списки те же. Асинхронный модуль
+/// по-прежнему идёт в `deferred`.
+pub(crate) fn collect_scripts_split_async(
+    doc: &Document,
+    id: NodeId,
+    classic: &mut Vec<ScriptSource>,
+    deferred: &mut Vec<ScriptSource>,
+    asyncs: &mut Vec<ScriptSource>,
+) {
+    collect_scripts_impl(doc, id, classic, deferred, Some(asyncs));
+}
+
+fn collect_scripts_impl(
+    doc: &Document,
+    id: NodeId,
+    classic: &mut Vec<ScriptSource>,
+    deferred: &mut Vec<ScriptSource>,
+    mut asyncs: Option<&mut Vec<ScriptSource>>,
 ) {
     let node = doc.get(id);
     if let NodeData::Element { name, .. } = &node.data
@@ -121,7 +146,15 @@ pub(crate) fn collect_scripts_ordered(
                 && name.namespace == Namespace::Html
                 && node.get_attr("defer").is_some()
                 && node.get_attr("async").is_none());
-        let target = if is_deferred { deferred } else { classic };
+        let is_async_classic = !is_module
+            && external_src.is_some()
+            && name.namespace == Namespace::Html
+            && node.get_attr("async").is_some();
+        let target = match asyncs.as_deref_mut() {
+            Some(asyncs) if is_async_classic => asyncs,
+            _ if is_deferred => deferred,
+            _ => classic,
+        };
         if let Some(src) = external_src {
             let src = src.trim();
             if !src.is_empty() {
@@ -141,7 +174,7 @@ pub(crate) fn collect_scripts_ordered(
         return;
     }
     for &child in &node.children {
-        collect_scripts_ordered(doc, child, classic, deferred);
+        collect_scripts_impl(doc, child, classic, deferred, asyncs.as_deref_mut());
     }
 }
 
@@ -192,7 +225,7 @@ impl ResolvedScript {
     /// цикл исполнения его пропускает, но элемент по HTML LS §4.12.1 обязан
     /// сообщить странице об отказе. Заодно узел остаётся границей отрезка в
     /// [`ParserInsertLog`] — настоящий парсер тоже вставил его в дерево.
-    fn failed(node: NodeId) -> Self {
+    pub(crate) fn failed(node: NodeId) -> Self {
         Self { node, source: String::new(), url: None, external_ok: Some(false), csp_blocked: Vec::new() }
     }
 
@@ -329,6 +362,63 @@ pub(crate) fn flush_parser_inserts(
     log.cursor = end;
 }
 
+/// Всё, что решение «брать ли скрипт и как» берёт от документа, а не от элемента.
+///
+/// LOAD-3A: вынесено из [`resolve_script_sources`], чтобы фоновый поток async-скриптов
+/// работал без `&Document` — снимок снимается один раз на потоке конвейера.
+pub(crate) struct ScriptFetchEnv {
+    csp_gate: Option<(Vec<lumen_network::csp::CspPolicy>, String)>,
+    self_origin: Option<lumen_network::Origin>,
+    referrer_policy: lumen_network::ReferrerPolicy,
+}
+
+impl ScriptFetchEnv {
+    pub(crate) fn of(doc: &Document, base: &ResourceBase) -> Self {
+        let csp_gate = {
+            let root = doc.root();
+            crate::csp_enforce::document_csp_policy(doc, root)
+        };
+        Self {
+            csp_gate,
+            self_origin: base.origin(),
+            // GAP-REFERRER срез 3: `<script src>`'s `Referer` respects the
+            // document's own `<meta name=referrer>`/`Referrer-Policy` header instead
+            // of always the project default — see
+            // `resource_base::document_referrer_policy`'s doc comment.
+            referrer_policy: crate::resource_base::document_referrer_policy(doc),
+        }
+    }
+}
+
+/// Атрибуты самого `<script>`, от которых зависит его fetch (снимок для [`resolve_one_script`]).
+pub(crate) struct ScriptElementMeta {
+    referrer_policy: Option<lumen_network::ReferrerPolicy>,
+    nonce: Option<String>,
+    integrity: Option<String>,
+}
+
+impl ScriptElementMeta {
+    pub(crate) fn of(doc: &Document, nid: NodeId) -> Self {
+        let node = doc.get(nid);
+        Self {
+            referrer_policy: node
+                .get_attr("referrerpolicy")
+                .and_then(lumen_network::ReferrerPolicy::parse),
+            nonce: node.get_attr("nonce").map(str::to_owned),
+            integrity: node.get_attr("integrity").map(str::to_owned),
+        }
+    }
+}
+
+impl ScriptSource {
+    /// Узел `<script>`, из которого взят источник.
+    pub(crate) fn node(&self) -> NodeId {
+        match self {
+            ScriptSource::Inline(nid, _) | ScriptSource::External(nid, _) => *nid,
+        }
+    }
+}
+
 /// Resolve [`ScriptSource`] items to JS source strings in document order,
 /// fetching external `<script src>` bodies via the subresource fetcher
 /// (mirrors [`load_linked_stylesheets`]). A failed fetch is logged and kept in
@@ -351,22 +441,30 @@ pub(crate) fn resolve_script_sources(
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     doc: &Document,
 ) -> Vec<ResolvedScript> {
-    let csp_gate = {
-        let root = doc.root();
-        crate::csp_enforce::document_csp_policy(doc, root)
-    };
-    let self_origin = base.origin();
-    // GAP-REFERRER срез 3: `<script src>`'s `Referer` respects the
-    // document's own `<meta name=referrer>`/`Referrer-Policy` header instead
-    // of always the project default — see
-    // `resource_base::document_referrer_policy`'s doc comment.
-    let referrer_policy = crate::resource_base::document_referrer_policy(doc);
-
+    let env = ScriptFetchEnv::of(doc, base);
     // Внешние `<script src>` грузятся параллельно (сеть — главный тормоз), но
     // результат собирается строго в исходном порядке: классические скрипты
     // обязаны выполняться в порядке документа (HTML LS §8.1.3.1). Inline-тела
     // проходят насквозь без сети.
-    let fetched = parallel_map(items, |_, item| match item {
+    let fetched = parallel_map(items, |_, item| {
+        let meta = ScriptElementMeta::of(doc, item.node());
+        resolve_one_script(item, &meta, base, sink, &cookie_jar, &env)
+    });
+    fetched.into_iter().flatten().collect()
+}
+
+/// Один источник скрипта: inline проходит насквозь, внешний проверяется `script-src` и
+/// скачивается (или читается с диска). Вся политика — в [`resolve_script_sources`].
+pub(crate) fn resolve_one_script(
+    item: &ScriptSource,
+    meta: &ScriptElementMeta,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: &Option<Arc<lumen_storage::CookieJar>>,
+    env: &ScriptFetchEnv,
+) -> Option<ResolvedScript> {
+    let ScriptFetchEnv { csp_gate, self_origin, referrer_policy } = env;
+    match item {
         ScriptSource::Inline(nid, body) => Some(ResolvedScript {
             node: *nid,
             source: body.clone(),
@@ -376,15 +474,9 @@ pub(crate) fn resolve_script_sources(
         }),
         ScriptSource::External(nid, src) => {
             // GAP-REFERRER срез 6: `referrerpolicy` on this `<script>` element
-            // overrides the document policy for its own fetch only — `doc`
-            // is already in scope here (CSP gate above reads it too), so the
-            // attribute is read straight off the node rather than threaded
-            // through `ScriptSource`.
-            let referrer_policy = doc
-                .get(*nid)
-                .get_attr("referrerpolicy")
-                .and_then(lumen_network::ReferrerPolicy::parse)
-                .unwrap_or(referrer_policy);
+            // overrides the document policy for its own fetch only — the
+            // attribute comes from the `ScriptElementMeta` snapshot.
+            let referrer_policy = meta.referrer_policy.unwrap_or(*referrer_policy);
             let resolved_url = base.resolve_str(src);
             // GAP-CSPENF срез 45: `upgrade-insecure-requests` переписывает
             // схему ДО гейта `script-src` (тот же порядок Fetch §4.1, что
@@ -401,10 +493,9 @@ pub(crate) fn resolve_script_sources(
                 // чем по URL (CSP3 §6.7.1.1): совпавший nonce или хэши
                 // `integrity` пропускают запрос, `'strict-dynamic'` отключает
                 // host-источники. Все скрипты этого пути вставлены парсером.
-                let node = doc.get(*nid);
                 let request = lumen_network::csp::ScriptRequestMetadata {
-                    nonce: node.get_attr("nonce"),
-                    integrity: node.get_attr("integrity"),
+                    nonce: meta.nonce.as_deref(),
+                    integrity: meta.integrity.as_deref(),
                     parser_inserted: true,
                 };
                 let violated: Vec<String> = crate::csp_enforce::violating_script_element_policy(
@@ -456,8 +547,12 @@ pub(crate) fn resolve_script_sources(
                         sink.clone(), cookie_jar.clone(), referrer_policy,
                     );
                     client
-                        .fetch_subresource(&sub_url, RequestDestination::Script)
-                        .map(|body| crate::prefetch::CachedResource { body, content_type: None })
+                        .fetch_subresource_with_links(&sub_url, RequestDestination::Script)
+                        .map(|(body, _content_type, links)| {
+                            // BUG-906: `Link:` header of the script response.
+                            crate::page_source::emit_link_hints(&links, &sub_url, sink, cookie_jar.clone(), &[]);
+                            crate::prefetch::CachedResource { body, content_type: None }
+                        })
                         .map_err(|e| e.to_string())
                 });
                 match resource {
@@ -482,8 +577,7 @@ pub(crate) fn resolve_script_sources(
             }
             }
         }
-    });
-    fetched.into_iter().flatten().collect()
+    }
 }
 
 /// Collect `<script>` elements from the DOM, separating classic from module scripts.
@@ -588,8 +682,7 @@ fn run_parser_classic_script(
     csp_policy: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
     script: &ResolvedScript,
 ) {
-    use lumen_core::ext::JsRuntime as _;
-    let ResolvedScript { node: nid, source: src, url, external_ok, csp_blocked } = script;
+    let ResolvedScript { node: nid, source: src, external_ok, .. } = script;
     // BUG-804: внешний файл не пришёл — исполнять нечего, но
     // элемент обязан сообщить об отказе на своём месте в
     // порядке документа. GAP-CSPENF срез 6: если файл не
@@ -598,12 +691,7 @@ fn run_parser_classic_script(
     // нарушение — `securitypolicyviolation` с резолвленным
     // `url` как `blockedURI`.
     if *external_ok == Some(false) {
-        // Срез 58: одно событие на каждую нарушенную политику.
-        let blocked_uri = url.as_deref().unwrap_or("");
-        for policy_text in csp_blocked {
-            crate::csp_enforce::fire_script_src_violation(rt, blocked_uri, policy_text);
-        }
-        fire_parser_script_event(rt, *nid, *external_ok);
+        report_external_script_failure(rt, script);
         return;
     }
     // GAP-CSPENF срез 1: `script-src` против инлайна — только
@@ -634,6 +722,33 @@ fn run_parser_classic_script(
             return;
         }
     }
+    execute_classic_script_body(rt, script);
+}
+
+/// Внешний `<script src>`, чей файл не пришёл: тела нет, но элемент обязан сообщить об
+/// отказе (`error`, BUG-804), а если fetch запретил CSP — ещё и `securitypolicyviolation`
+/// (GAP-CSPENF срез 6/58: одно событие на каждую нарушенную политику).
+#[cfg(feature = "v8")]
+pub(crate) fn report_external_script_failure(
+    rt: &lumen_js::v8_runtime::V8JsRuntime,
+    script: &ResolvedScript,
+) {
+    let blocked_uri = script.url.as_deref().unwrap_or("");
+    for policy_text in &script.csp_blocked {
+        crate::csp_enforce::fire_script_src_violation(rt, blocked_uri, policy_text);
+    }
+    fire_parser_script_event(rt, script.node, script.external_ok);
+}
+
+/// Исполнить тело классического скрипта в скобках `currentScript` и выстрелить `load`
+/// внешнему. Общий хвост парсерного пути и `async`-скриптов (LOAD-3A).
+#[cfg(feature = "v8")]
+pub(crate) fn execute_classic_script_body(
+    rt: &lumen_js::v8_runtime::V8JsRuntime,
+    script: &ResolvedScript,
+) {
+    use lumen_core::ext::JsRuntime as _;
+    let ResolvedScript { node: nid, source: src, external_ok, .. } = script;
     // BUG-486: `document.currentScript` must name the element
     // being executed for the whole body and nothing else, so the
     // push/pop pair brackets the eval — including the error paths
@@ -669,6 +784,21 @@ fn run_parser_classic_script(
     // внешний классический скрипт стреляет `load` сразу после
     // тела. Инлайновый — ничего (`external_ok` = `None`).
     fire_parser_script_event(rt, *nid, *external_ok);
+}
+
+/// LOAD-3A: исполнить внешний классический `async`-скрипт, когда он скачался (после разбора
+/// страницы, на её JS-хэндле). Отказ или запрет CSP отдают элементу `error`, остальное —
+/// тот же путь, что у парсерных скриптов: `currentScript`, `window.onerror`, `load`.
+#[cfg(feature = "v8")]
+pub(crate) fn run_async_classic_script(
+    rt: &lumen_js::v8_runtime::V8JsRuntime,
+    script: &ResolvedScript,
+) {
+    if script.external_ok == Some(false) {
+        report_external_script_failure(rt, script);
+        return;
+    }
+    execute_classic_script_body(rt, script);
 }
 
 /// Выполнить inline `<script>` блоки с DOM-доступом (V8 + install_dom).

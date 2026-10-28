@@ -265,6 +265,13 @@ pub(crate) fn inline_element_ancestors(
     stop_at: lumen_dom::NodeId,
 ) -> Vec<lumen_dom::NodeId> {
     let mut out = Vec::new();
+    // An anonymous flex/grid text item keeps its text node as the run's `node`
+    // (`build_anon_text_item`): no DOM ancestor ever equals `stop_at`, so the walk
+    // below would run to the root and widen `html`/`body` (and every box-owning
+    // ancestor) by the item's frags (BUG-1644). Such a run holds only that text.
+    if matches!(doc.get(stop_at).data, lumen_dom::NodeData::Text(_)) {
+        return out;
+    }
     let mut cur = if matches!(doc.get(source_node).data, lumen_dom::NodeData::Element { .. }) {
         source_node
     } else {

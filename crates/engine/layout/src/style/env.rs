@@ -317,7 +317,7 @@ pub struct StyleEnvSnapshot {
     forced_colors: bool,
     print_media: bool,
     device_pixel_ratio: f32,
-    shadow_sheets: std::collections::HashMap<NodeId, lumen_css_parser::Stylesheet>,
+    shadow_sheets: std::collections::HashMap<NodeId, std::sync::Arc<lumen_css_parser::Stylesheet>>,
 }
 
 impl StyleEnvSnapshot {

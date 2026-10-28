@@ -182,6 +182,7 @@ function _lumen_fetch_hint_register(url, crossorigin) {
 // credentials mode) and carries nothing the hint's request could not have had:
 // GET, no body, no author headers, default cache mode. The hint is spent either way.
 function _lumen_fetch_take_hint(url, init, input, method, hasBody, authorHeaders) {
+    if (typeof _lumen_link_hints_scanned !== 'undefined' && !_lumen_link_hints_scanned) _lumen_link_fetch_hints_prescan();
     var want = _lumen_fetch_hints[url];
     if (want === undefined) return false;
     if (method !== 'GET' || hasBody || authorHeaders.length !== 0) return false;
@@ -378,6 +379,14 @@ function _lumen_fetch(input) {
                     if (_lumen_fetch_take_hint(url, init, input, method, hasBody, authorHeaders)) {
                         _fetchLoad += '|preloaded';
                     }
+                }
+                // FETCH-HTTP-CACHE: `Request.cache` rides as the fourth segment.
+                var _fetchCache = (init && init.cache !== undefined) ? String(init.cache)
+                    : ((typeof input === 'object' && input && typeof input.cache === 'string') ? input.cache : '');
+                if (_fetchCache !== '' && _fetchCache !== 'default') {
+                    var _loadSegs = _fetchLoad.split('|');
+                    while (_loadSegs.length < 3) { _loadSegs.push(''); }
+                    _fetchLoad = _loadSegs.slice(0, 3).join('|') + '|' + _fetchCache;
                 }
                 var handle = _lumen_fetch_async_start(url, method, contentType || '', bodyBytes || [], !!hasBody, authorHeaders, _fetchLoad);
                 if (!handle) {

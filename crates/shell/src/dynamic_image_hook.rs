@@ -58,6 +58,12 @@ pub(crate) struct DynamicImageHookCtx {
     /// `ImageDecodeFailed` back to the shell's event loop, same as every
     /// other background decode thread.
     pub(crate) proxy: winit::event_loop::EventLoopProxy<LoadEvent>,
+    /// LOAD-3B: the streaming draft's tree builder, handed to the final pipeline
+    /// so a UTF-8 page is not parsed a second time. Lives here because, like
+    /// the rest of this bundle, only a live `Lumen` has one (`None` for
+    /// frames, hibernation and headless callers); `parse_and_layout` takes
+    /// it out before the bundle travels on to the script runtime.
+    pub(crate) stream_builder: Option<lumen_html_parser::IncrementalTreeBuilder>,
 }
 
 /// See the module doc comment.

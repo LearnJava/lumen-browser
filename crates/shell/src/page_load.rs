@@ -554,6 +554,7 @@ impl Lumen {
             self.stream_image_sizes_dirty = false;
             self.stream_image_errors.clear();
             self.stream_image_events_fired.clear();
+            self.pending_window_load = None;
             self.stream_sheet = lumen_css_parser::Stylesheet::default();
             self.stream_layout_seeded = false;
             self.stream_builder = None;
@@ -881,6 +882,9 @@ impl Lumen {
             images: rendered.images.into_iter().map(|(s, i)| (s, Arc::new(i))).collect(),
             animated_gifs: Vec::new(), // lumen-driver path has no animated GIF support yet
             lazy_pairs: Vec::new(), // Phase 4c: TODO integrate lazy loading
+            images_deferred: false,
+            async_scripts: None,
+            fired_image_events: Vec::new(),
             layout_box: rendered.layout_box,
             // Driver path renders via lumen-driver which uses Arc<dyn FontProvider>;
             // shell's LoadedPage now requires Arc<FontRegistry> for PH3-19 dynamic
@@ -1018,8 +1022,7 @@ impl Lumen {
                 let chunk_proxy = proxy.clone();
                 // Separate clones for prefetch warm-up: `cookie_jar`/`sink` below are
                 // moved into the streaming call, so the per-chunk closure keeps its own.
-                let cj_prefetch = Some(Arc::clone(&cookie_jar));
-                let sink_prefetch = Arc::clone(&sink);
+                let mut warm_client = WarmClient::new(Arc::clone(&sink), Some(Arc::clone(&cookie_jar)));
                 // BUG-1185: CSP заголовка ответа, чьё тело течёт, — разбирается
                 // один раз на hop (у каждого ответа цепочки свои заголовки).
                 let mut header_csp: Option<(String, Vec<lumen_network::csp::CspPolicy>)> = None;
@@ -1043,11 +1046,11 @@ impl Lumen {
                         chunk,
                         &base,
                         header_csp.as_ref().map_or(&[][..], |(_, p)| p),
+                        crate::page_source::referrer_policy_header(headers).as_deref(),
                         &chunk_proxy,
                         tab_id,
                         generation,
-                        &sink_prefetch,
-                        cj_prefetch.as_ref(),
+                        &mut warm_client,
                         &media_ctx,
                     );
                     let _ = chunk_proxy.send_event(LoadEvent::HtmlChunk(chunk.to_vec(), tab_id, generation));
@@ -1088,7 +1091,7 @@ impl Lumen {
                     }
                 }
             } else {
-                let cj_prefetch = Some(Arc::clone(&cookie_jar));
+                let mut warm_client = WarmClient::new(Arc::clone(&sink), Some(Arc::clone(&cookie_jar)));
                 let raw = match source.load_bytes(Arc::clone(&sink), Some(cookie_jar)) {
                     Ok(r) => r,
                     Err(e) => {
@@ -1109,11 +1112,11 @@ impl Lumen {
                         chunk,
                         &raw.base,
                         &[],
+                        None,
                         &proxy,
                         tab_id,
                         generation,
-                        &sink,
-                        cj_prefetch.as_ref(),
+                        &mut warm_client,
                         &media_ctx,
                     );
                     if proxy.send_event(LoadEvent::HtmlChunk(chunk.to_vec(), tab_id, generation)).is_err() {
@@ -1352,7 +1355,12 @@ impl Lumen {
         // `(nid, url)` этого прохода, чью картинку canvas `drawImage`/
         // `createImageBitmap` до сих пор не видел (регистрация была только
         // одноразовым проходом по снапшоту разбора, см. `page_pipeline.rs`).
-        let mut bitmap_regs: Vec<(u32, Arc<lumen_image::Image>)> = Vec::new();
+        let mut bitmap_regs: Vec<(u32, Arc<lumen_image::Image>, bool)> = Vec::new();
+        // LOAD-1: картинки, которые конвейер не ждал, едут сюда, а не через его проход
+        // с проверкой origin — без этого cross-origin пиксели попадали бы в canvas чистыми.
+        // CORS на этом пути не проверяется, поэтому taint консервативный: любой чужой
+        // origin заражает, `crossorigin` его не снимает.
+        let doc_base = self.document_resource_base();
         // BUG-935 срез 94: узлы, которым этот проход дописал `width`/`height`.
         let mut written: Vec<u32> = Vec::new();
         let changed = {
@@ -1388,7 +1396,10 @@ impl Lumen {
                     if self.stream_image_events_fired.insert((nid, req.url.clone())) {
                         fires.push((nid, Some((w, h))));
                         if let Some(image) = self.stream_image_pixels.get(&req.url) {
-                            bitmap_regs.push((nid, Arc::clone(image)));
+                            let tainted = doc_base
+                                .as_ref()
+                                .is_some_and(|b| crate::subresources::is_cross_origin_url(b, &req.url));
+                            bitmap_regs.push((nid, Arc::clone(image), tainted));
                         }
                     }
                 } else if self.stream_image_errors.contains(&req.url)
@@ -1423,7 +1434,7 @@ impl Lumen {
                 if self.stream_image_events_fired.insert((*nid, url.clone())) {
                     fires.push((*nid, size));
                     if let (Some(_), Some(image)) = (size, self.stream_image_pixels.get(url)) {
-                        bitmap_regs.push((*nid, Arc::clone(image)));
+                        bitmap_regs.push((*nid, Arc::clone(image), false));
                     }
                 }
                 false
@@ -1437,9 +1448,9 @@ impl Lumen {
         // BUG-1048: queued before the events — `route_task_js` runs tasks in
         // order, and an `onload` that draws the image into a canvas (the
         // usual reason to wait for it) must find the pixels already there.
-        for (nid, image) in bitmap_regs {
+        for (nid, image, tainted) in bitmap_regs {
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-                j.set_img_bitmap(nid, image, false);
+                j.set_img_bitmap(nid, image, tainted);
             });
         }
         for (nid, size) in fires {
@@ -1462,6 +1473,81 @@ impl Lumen {
         self.note_shell_attr_writes(written);
         self.page_prev_cascade_styles = None;
         self.relayout_raf_dirty();
+    }
+
+    /// LOAD-3A: исполнить `async`-скрипты страницы, которые успели скачаться, на её JS-хэндле
+    /// (как задачу таймера: правки DOM подхватит тот же `take_dom_dirty`). Зовётся каждый проход
+    /// `about_to_wait` и по `LoadEvent::AsyncScriptReady`; пока хоть один не исполнен, `load` не идёт.
+    pub(crate) fn drive_async_scripts(&mut self) {
+        let Some(feed) = self.pending_window_load.as_ref().and_then(|p| p.async_scripts.clone())
+        else {
+            return;
+        };
+        let ready = feed.take_ready();
+        if ready.is_empty() {
+            return;
+        }
+        let count = ready.len();
+        #[cfg(feature = "v8")]
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+            for script in &ready {
+                js.run_async_script(script);
+            }
+        });
+        #[cfg(not(feature = "v8"))]
+        drop(ready);
+        // Движковый поток исполняет задачи по порядку, так что `load`, поставленный следом,
+        // встанет после скриптов.
+        feed.mark_executed(count);
+    }
+
+    /// LOAD-1: доставить `load`, `readyState=complete` и `pageshow` страницы, отданной без
+    /// ожидания картинок (HTML LS §8.2.3: `load` ждёт все отложенные ресурсы документа).
+    ///
+    /// Условие — проход `apply_stream_intrinsic_sizes` отработал (картинки получили своё
+    /// `load`/`error` раньше окна, как в браузере) и незавершённых картинок нет. Зовётся
+    /// после каждого такого прохода и из `about_to_wait`, чтобы свёрнутое окно, которому не
+    /// приходит `RedrawRequested`, не держало страницу в `loading` вечно.
+    pub(crate) fn maybe_fire_window_load(&mut self) {
+        if self.pending_window_load.is_none() {
+            return;
+        }
+        let unsettled = {
+            let ledger = self.stream_images_requested.lock().unwrap_or_else(|e| e.into_inner());
+            unsettled_images(&ledger.urls, &self.stream_image_sizes, &self.stream_image_errors)
+        };
+        let async_busy = self
+            .pending_window_load
+            .as_ref()
+            .and_then(|p| p.async_scripts.as_ref())
+            .is_some_and(|feed| feed.pending() > 0);
+        if !window_load_due(
+            true,
+            self.stream_image_sizes_dirty,
+            unsettled,
+            self.deferred_frames_busy(),
+            async_busy,
+        ) {
+            return;
+        }
+        let Some(pending) = self.pending_window_load.take() else { return };
+        let PendingWindowLoad { pageshow_persisted, nav_timing, .. } = pending;
+        #[cfg(feature = "v8")]
+        {
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+                crate::nav_timing::record_load_start();
+                js.notify_window_loaded();
+                crate::nav_timing::record_load_end();
+                js.fire_page_lifecycle("pageshow", pageshow_persisted);
+            });
+            // Navigation Timing считается по меткам `load`, поэтому запись, которую
+            // `RenderDone` не мог собрать до них, уходит только теперь.
+            if let Some(delivery) = nav_timing {
+                delivery.deliver(self);
+            }
+        }
+        #[cfg(not(feature = "v8"))]
+        let _ = (pageshow_persisted, nav_timing);
     }
 
     /// База для разрешения относительных подресурсов текущего документа.
@@ -1944,7 +2030,16 @@ impl Lumen {
             }
         }
         // Clear GIF animation state from previous page.
-        self.animated_gifs.clear();
+        // LOAD-1: страница, отданная без ожидания картинок, не несёт GIF, которые
+        // `ImageDecoded` успел принести до `RenderDone` — они уже в карте, и сносить
+        // нужно только остатки предыдущей страницы (`stream_image_pixels` — текущей
+        // навигации).
+        if page.images_deferred {
+            let current = &self.stream_image_pixels;
+            self.animated_gifs.retain(|url, _| current.contains_key(url));
+        } else {
+            self.animated_gifs.clear();
+        }
         self.gif_last_frame.clear();
         // Populate animated GIFs from new page; reset frame tracking.
         for (url, gif) in page.animated_gifs {
@@ -2053,8 +2148,35 @@ impl Lumen {
                 }
                 self.image_cache.insert(lumen_image::ImageKey::new(src), (**image).clone());
             }
+            // LOAD-1: `ImageDecoded`, пришедшие до `RenderDone`, зарегистрировались у
+            // рендерера, а `clear_images` их только что снёс; в `page.images` попало лишь
+            // то, что конвейер успел увидеть в кэше. Возвращаем остальное.
+            if page.images_deferred {
+                let known: std::collections::HashSet<&str> =
+                    page.images.iter().map(|(src, _)| src.as_str()).collect();
+                for (src, image) in &self.stream_image_pixels {
+                    if known.contains(src.as_str()) {
+                        continue;
+                    }
+                    if let Err(err) = r.register_image(src.clone(), Arc::clone(image)) {
+                        eprintln!("Картинка {src} не зарегистрирована: {err}");
+                    }
+                    self.image_cache.insert(lumen_image::ImageKey::new(src), (**image).clone());
+                }
+            }
         } else {
             self.pending_images = page.images;
+            if page.images_deferred {
+                // Окно ещё без рендерера: `ImageDecoded` положил декодированное в
+                // `pending_images`, но присвоение выше его затёрло.
+                let known: std::collections::HashSet<String> =
+                    self.pending_images.iter().map(|(src, _)| src.clone()).collect();
+                for (src, image) in &self.stream_image_pixels {
+                    if !known.contains(src) {
+                        self.pending_images.push((src.clone(), Arc::clone(image)));
+                    }
+                }
+            }
         }
         if let Some(w) = self.window.as_ref() {
             w.set_title(&window_title(self.title.as_deref()));
@@ -2166,16 +2288,39 @@ impl Lumen {
         // уходят off-UI-thread одним `task` (порядок сохранён), без флага (по
         // умолчанию) — синхронный вызов по UI-хэндлу, байт-идентично прежнему.
         #[cfg(feature = "v8")]
-        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
-            // BUG-640: `domComplete`/`loadEventStart` share the "before"
-            // instant, `loadEventEnd` is the "after" one.
-            // HTML LS §7.11.9: the first rendering opportunity of the new document.
-            js.fire_page_reveal(pagereveal_transition);
-            crate::nav_timing::record_load_start();
-            js.notify_window_loaded();
-            crate::nav_timing::record_load_end();
-            js.fire_page_lifecycle("pageshow", pageshow_persisted);
-        });
+        if page.images_deferred {
+            // LOAD-1: страница отдана без ожидания картинок. `pagereveal` — первая
+            // возможность отрисовки — уходит сейчас; `load` ждёт последнюю картинку.
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+                js.fire_page_reveal(pagereveal_transition);
+            });
+            // Конвейер уже доставил `load` тем картинкам, что нашёл в кэше; остальным
+            // исход доставит проход `apply_stream_intrinsic_sizes` — он же разнесёт
+            // intrinsic-размеры уже декодированных, поэтому взводим его сразу.
+            self.stream_image_events_fired = page.fired_image_events.drain(..).collect();
+            self.stream_image_sizes_dirty = true;
+            self.pending_window_load = Some(PendingWindowLoad {
+                pageshow_persisted,
+                nav_timing: None,
+                frames_scan_pending: true,
+                async_scripts: page.async_scripts.take(),
+            });
+            // Всё, что конвейер не ждал и что ещё не в полёте, уходит в сеть сейчас.
+            let viewport = self.relayout_viewport().unwrap_or_else(|| Size::new(1024.0, 720.0));
+            self.spawn_dynamic_image_loads(viewport);
+            self.spawn_dynamic_background_image_loads();
+        } else {
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+                // BUG-640: `domComplete`/`loadEventStart` share the "before"
+                // instant, `loadEventEnd` is the "after" one.
+                // HTML LS §7.11.9: the first rendering opportunity of the new document.
+                js.fire_page_reveal(pagereveal_transition);
+                crate::nav_timing::record_load_start();
+                js.notify_window_loaded();
+                crate::nav_timing::record_load_end();
+                js.fire_page_lifecycle("pageshow", pageshow_persisted);
+            });
+        }
         #[cfg(not(feature = "v8"))]
         let _ = pageshow_persisted;
 
@@ -2194,7 +2339,9 @@ impl Lumen {
 }
 
 mod css_pending;
-pub(crate) use css_pending::{stream_css_pending, stream_css_pending_add, stream_css_pending_done};
+pub(crate) use css_pending::{stream_css_outstanding, stream_css_pending, stream_css_pending_add, stream_css_pending_done};
+#[cfg(test)]
+pub(crate) use css_pending::TEST_LOCK as STREAM_CSS_TEST_LOCK;
 
 /// Прогнать порцию HTML через preload-сканер, эмитнуть `EarlyPreloadHints` и
 /// параллельно загрузить найденные стили (PH1-2 / PH1-8). Общая логика для обоих
@@ -2213,11 +2360,11 @@ fn feed_preload_and_emit(
     chunk: &[u8],
     base: &ResourceBase,
     header_csp: &[lumen_network::csp::CspPolicy],
+    header_referrer: Option<&str>,
     proxy: &EventLoopProxy<LoadEvent>,
     tab_id: usize,
     generation: u64,
-    sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<&Arc<lumen_storage::CookieJar>>,
+    warm_client: &mut WarmClient,
     media_ctx: &lumen_css_parser::MediaContext,
 ) {
     use lumen_network::RequestDestination;
@@ -2237,7 +2384,9 @@ fn feed_preload_and_emit(
     // BUG-1491: gated by the same header + `<meta>` policies as the
     // stylesheet/script warm-up below.
     let doc_csp: Vec<_> = header_csp.iter().chain(&meta_csp).cloned().collect();
-    crate::page_pipeline::warm_preload_cache(&early, base, sink, cookie_jar.cloned(), &doc_csp);
+    crate::page_pipeline::warm_preload_cache(
+        &early, base, &warm_client.sink, warm_client.cookie_jar.clone(), &doc_csp,
+    );
     let self_origin = base.origin();
     // PH1-2 + BUG-171: speculatively fetch subresources off the UI thread while the
     // HTML is still streaming. Linked stylesheets AND external classic scripts are
@@ -2246,6 +2395,10 @@ fn feed_preload_and_emit(
     // bytes instantly instead of blocking on the socket (cascade + script order
     // untouched — a cache miss simply re-fetches there). Stylesheets additionally
     // parse here to feed progressive intermediate frames (the previous PH1-2 path).
+    let referrer_policy = crate::resource_base::referrer_policy_of(
+        header_referrer,
+        scanner.meta_referrer().iter().map(String::as_str),
+    );
     for hint in &early {
         let (raw_url, dest, is_css) = match hint {
             lumen_html_parser::PreloadHint::Stylesheet { url, media, .. } => {
@@ -2286,44 +2439,98 @@ fn feed_preload_and_emit(
                 }
             }
             ResolvedResource::Url(resolved) => {
+                // LOAD-3C: загрузка идёт на ограниченном пуле (`WARM_POOL`, ≤ 8
+                // потоков), а не на потоке под каждую подсказку, и тем же клиентом
+                // с той же referrer-политикой, что финальный проход
+                // (`scripts.rs`, `document_referrer_policy`): общий пул соединений,
+                // один и тот же `Referer`.
+                let client = warm_client.client(base, referrer_policy);
                 let proxy2 = proxy.clone();
-                let base = base.clone();
-                let sink = Arc::clone(sink);
-                let cookie_jar = cookie_jar.cloned();
-                std::thread::spawn(move || {
-                    use lumen_core::url::Url;
-                    let Ok(parsed) = Url::parse(&resolved) else {
-                        if is_css {
-                            let _ = proxy2.send_event(LoadEvent::CssLoaded(
-                                Box::default(), tab_id, generation));
-                        }
-                        return;
-                    };
-                    let resource = crate::prefetch::PREFETCH_CACHE.fetch(generation, &resolved, || {
-                        let client = base.http_client_for_subresource(sink, cookie_jar);
+                let Ok(parsed) = lumen_core::url::Url::parse(&resolved) else {
+                    if is_css {
+                        let _ = proxy2.send_event(LoadEvent::CssLoaded(Box::default(), tab_id, generation));
+                    }
+                    continue;
+                };
+                let link_sink = Arc::clone(&warm_client.sink);
+                let link_jar = warm_client.cookie_jar.clone();
+                crate::prefetch::PREFETCH_CACHE.warm_with(
+                    generation,
+                    &resolved,
+                    move || {
                         client
-                            .fetch_subresource_with_content_type(&parsed, dest)
-                            .map(|(body, content_type)| crate::prefetch::CachedResource {
-                                body,
-                                content_type,
+                            .fetch_subresource_with_links(&parsed, dest)
+                            .map(|(body, content_type, links)| {
+                                // BUG-906: `Link:` header of the stylesheet/script response.
+                                crate::page_source::emit_link_hints(&links, &parsed, &link_sink, link_jar, &[]);
+                                crate::prefetch::CachedResource { body, content_type }
                             })
                             .map_err(|e| e.to_string())
-                    });
-                    if is_css {
-                        // Progressive preview frame only — the authoritative
-                        // parse (BUG-509 fallback-encoding algorithm) happens
-                        // later in `stylesheets::fetch_stylesheet_text` once
-                        // the full document (and its own charset) is known.
-                        // Сбой загрузки → пустая таблица: `CssLoaded` обязан
-                        // прийти ровно один раз (BUG-1225, счётчик ожидания).
-                        let sheet = resource
-                            .map(|r| lumen_css_parser::parse(&String::from_utf8_lossy(&r.body[..])))
-                            .unwrap_or_default();
-                        let _ = proxy2.send_event(LoadEvent::CssLoaded(Box::new(sheet), tab_id, generation));
-                    }
-                });
+                    },
+                    move |resource| {
+                        if is_css {
+                            // Progressive preview frame only — the authoritative
+                            // parse (BUG-509 fallback-encoding algorithm) happens
+                            // later in `stylesheets::fetch_stylesheet_text` once
+                            // the full document (and its own charset) is known.
+                            // Сбой загрузки → пустая таблица: `CssLoaded` обязан
+                            // прийти ровно один раз (BUG-1225, счётчик ожидания).
+                            let sheet = resource
+                                .map(|r| lumen_css_parser::parse(&String::from_utf8_lossy(&r.body[..])))
+                                .unwrap_or_default();
+                            let _ = proxy2.send_event(LoadEvent::CssLoaded(Box::new(sheet), tab_id, generation));
+                        }
+                    },
+                );
             }
         }
+    }
+}
+
+/// LOAD-3C: клиент раннего прогрева одной навигации. Один `HttpClient` на пару
+/// (база документа, referrer-политика) — у клиента свой пул keep-alive
+/// соединений, поэтому 30 скриптов одного хоста идут по нескольким сокетам, а не
+/// каждый по новому. Смена базы (редирект) или политики (`<meta name=referrer>`
+/// появился в очередном chunk-е) пересобирает клиент.
+pub(crate) struct WarmClient {
+    sink: Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    shared: Option<WarmClientKey>,
+}
+
+struct WarmClientKey {
+    base: String,
+    policy: lumen_network::ReferrerPolicy,
+    client: Arc<lumen_network::HttpClient>,
+}
+
+impl WarmClient {
+    pub(crate) fn new(sink: Arc<dyn EventSink>, cookie_jar: Option<Arc<lumen_storage::CookieJar>>) -> Self {
+        Self { sink, cookie_jar, shared: None }
+    }
+
+    fn client(
+        &mut self,
+        base: &ResourceBase,
+        policy: lumen_network::ReferrerPolicy,
+    ) -> Arc<lumen_network::HttpClient> {
+        let base_key = match base {
+            ResourceBase::Url(u) => u.clone(),
+            ResourceBase::File(p) => p.to_string_lossy().into_owned(),
+        };
+        if let Some(shared) = &self.shared
+            && shared.base == base_key
+            && shared.policy == policy
+        {
+            return Arc::clone(&shared.client);
+        }
+        let client = Arc::new(base.http_client_for_subresource_with_policy(
+            Arc::clone(&self.sink),
+            self.cookie_jar.clone(),
+            policy,
+        ));
+        self.shared = Some(WarmClientKey { base: base_key, policy, client: Arc::clone(&client) });
+        client
     }
 }
 
@@ -2404,6 +2611,9 @@ pub(crate) enum LoadEvent {
     /// script-created `<img>` whose fetch 404s never got `onerror` and
     /// `complete` stayed `false` forever.
     ImageDecodeFailed { src: String },
+    /// LOAD-3A: фоновая загрузка `async`-скрипта страницы закончилась — будит цикл, чтобы
+    /// `about_to_wait` ([`Lumen::drive_async_scripts`]) исполнил его, не дожидаясь иного события.
+    AsyncScriptReady,
     /// PH3-19: web-шрифт из @font-face url() декодирован в фоновом потоке.
     /// Регистрируется в FontRegistry + MultiFontMeasurer и вызывает relayout —
     /// текст появляется в fallback-шрифте сразу, подменяется по приходу (FOUT).
@@ -2499,3 +2709,65 @@ pub(crate) enum LoadEvent {
 pub(crate) const STREAM_CHUNK_BYTES: usize = 8 * 1024;
 /// Минимальный интервал между промежуточными кадрами при streaming (мс) — ~60 Гц.
 pub(crate) const STREAM_PAINT_INTERVAL_MS: u128 = 16;
+
+/// LOAD-1: `load` страницы, отданной без ожидания картинок, ещё не доставлен.
+///
+/// Лежит в `Lumen::pending_window_load`, пока осядет последняя картинка; потом
+/// `Lumen::maybe_fire_window_load` доставляет `load`, `readyState=complete` и `pageshow`.
+pub(crate) struct PendingWindowLoad {
+    /// `persisted` для `pageshow` — забирается при загрузке страницы, а не при `load`.
+    pub(crate) pageshow_persisted: bool,
+    /// Запись Navigation Timing, которую `RenderDone` не мог отправить до меток `load`.
+    pub(crate) nav_timing: Option<NavTimingDelivery>,
+    /// LOAD-1B: первый скан `<iframe>` страницы ещё не прошёл (`Lumen::drive_deferred_frames`):
+    /// фреймов, о которых окно не знает, быть не может только после него.
+    pub(crate) frames_scan_pending: bool,
+    /// LOAD-3A: `async`-скрипты страницы, которых `load` ещё ждёт (`Lumen::drive_async_scripts`).
+    pub(crate) async_scripts: Option<Arc<crate::async_scripts::AsyncScriptFeed>>,
+}
+
+/// Всё, что нужно, чтобы отправить `PerformanceNavigationTiming` в JS-рантайм страницы.
+pub(crate) struct NavTimingDelivery {
+    pub(crate) meta: nav_timing::NavResponseMeta,
+    pub(crate) start: std::time::Instant,
+    pub(crate) url: String,
+}
+
+impl NavTimingDelivery {
+    /// BUG-640: метки считаются от `start` в момент вызова, поэтому звать после `load`.
+    #[cfg(feature = "v8")]
+    pub(crate) fn deliver(self, lumen: &Lumen) {
+        let duration_ms = self.start.elapsed().as_secs_f64() * 1000.0;
+        let detail_json = nav_timing::detail_json(self.meta, self.start);
+        let url = self.url;
+        route_task_js(lumen.engine_thread.as_ref(), lumen.js_ctx.as_ref(), move |j| {
+            j.deliver_nav_timing(&url, duration_ms, &detail_json);
+        });
+    }
+
+    #[cfg(not(feature = "v8"))]
+    pub(crate) fn deliver(self, _lumen: &Lumen) {}
+}
+
+/// LOAD-1: сколько запрошенных URL ещё не осели — ни декодированы (`sizes`), ни провалены (`errors`).
+pub(crate) fn unsettled_images(
+    requested: &std::collections::HashSet<String>,
+    sizes: &HashMap<String, (u32, u32)>,
+    errors: &std::collections::HashSet<String>,
+) -> usize {
+    requested.iter().filter(|url| !sizes.contains_key(*url) && !errors.contains(*url)).count()
+}
+
+/// LOAD-1: пора ли доставлять отложенный `load` — ждёт и проход, раздающий картинкам их
+/// `load`/`error` (`dirty`), и последнюю незавершённую картинку. LOAD-1B: и последний
+/// `<iframe>` (`frames_busy`) — HTML LS §8.2.3 держит `load` до `load` вложенных документов.
+/// LOAD-3A: и последний `async`-скрипт (`async_busy`) — он задерживает `load`, но не `DOMContentLoaded`.
+pub(crate) fn window_load_due(
+    pending: bool,
+    dirty: bool,
+    unsettled: usize,
+    frames_busy: bool,
+    async_busy: bool,
+) -> bool {
+    pending && !dirty && unsettled == 0 && !frames_busy && !async_busy
+}

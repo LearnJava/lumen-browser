@@ -610,3 +610,21 @@
         clear_shadow_sheets();
         assert_eq!(color_of(&s), (0, 128, 0));
     }
+
+    #[test]
+    fn shadow_sheet_lookup_shares_the_stylesheet_instead_of_cloning_it() {
+        // BUG-1676: the cascade looked the shadow sheet up for every element and deep-cloned
+        // it (design-system sheets: thousands of rules), so a page with many Lit components
+        // never finished styling. A lookup and a worker-thread snapshot must share one `Arc`.
+        let (_doc, host) = make_shadow_host();
+        install_shadow_sheet(host, ":host { color: red; }");
+        let first = SHADOW_SHEETS.with(|c| c.borrow().get(&host).cloned()).expect("sheet installed");
+        let second = SHADOW_SHEETS.with(|c| c.borrow().get(&host).cloned()).expect("sheet installed");
+        let snapshot = crate::style::env::StyleEnvSnapshot::capture();
+        clear_shadow_sheets();
+        snapshot.install();
+        let restored = SHADOW_SHEETS.with(|c| c.borrow().get(&host).cloned()).expect("sheet restored");
+        clear_shadow_sheets();
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+        assert!(std::sync::Arc::ptr_eq(&first, &restored));
+    }

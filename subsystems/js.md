@@ -681,8 +681,8 @@ the time — read dates.
   it (`_lumen_make_class_list` generalized to `_lumen_make_attr_token_list(nid, attrName)`),
   declared per interface rather than in the shared wrapper table for the BUG-796 reason: the
   supported-token sets of `<link>` and `<a>` differ. Residual: the `Link:` response-header form
-  ([BUG-906](../bugs/BUG-906-OPEN.md)) and both the preload cache and the early start
-  ([BUG-907](../bugs/BUG-907-OPEN.md)).
+  ([BUG-906](../bugs/BUG-906-FIXED.md)) and (when this was written) both the preload cache and the early start
+  (both since done, [BUG-907](../bugs/BUG-907-FIXED.md)).
 - **`document.currentScript` ([P3], 2026-08-09, closes
   [BUG-486](../bugs/BUG-486-FIXED.md), last blocker of
   [BUG-703](../bugs/BUG-703-FIXED.md)).** Missing from the engine outright until now. It is a
@@ -2309,6 +2309,7 @@ the time — read dates.
   accessor that only a `[[Set]]` reaches). `class X {}` at the top of an internal `eval` is re-published on the global
   by an accessor; top-level `let`/`const` make the script run *unwrapped* (no bare internal names). Module code and
   worker/page scripts cannot use `__lumen_C`; no internal name is left on the global (`import.meta` is set up by a host callback).
+- **Every `V8Command::Run` is bracketed by `StallHandle::job_started`/`job_finished`** (`thread.rs`, COMPAT-HANG, `lumen_core::script_stall`). The watchdog, the «Страница не отвечает» bar and `any_hung()` all read it; a new way to run JS on the isolate thread that bypasses `V8Command::Run` is invisible to them. `TerminateExecution` is requested from the UI thread through `IsolateHandle`; the JS thread calls `cancel_terminate_execution` before and after each job, so a stale request never kills the next task. Dropping a `V8JsRuntime` terminates a running script first (otherwise the `join` in `Drop` waits for it forever). UI-thread code that blocks on the engine thread must give up while `any_hung()` (see `route_query_js`): the engine thread is parked behind the script.
 - **There is exactly ONE event dispatch, `_lumen_propagate`, and every entry point is a wrapper over it**
   ([BUG-873](../bugs/BUG-873-FIXED.md), 2026-09-10). `_lumen_dispatch` (script), `_lumen_dispatch_bubble`
   and `_lumen_dispatch_rich` (native input) all call it, so a fix to phases, ordering or `window` delivery

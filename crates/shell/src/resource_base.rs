@@ -253,14 +253,25 @@ impl ResourceBase {
 /// within a single comma-separated value. Falls back to the project default
 /// (`docs/plan/privacy.md` §9.1) when nothing parses.
 pub(crate) fn document_referrer_policy(doc: &Document) -> lumen_network::ReferrerPolicy {
+    referrer_policy_of(doc.referrer_policy_header(), doc.meta_referrer())
+}
+
+/// The combination rule of [`document_referrer_policy`] over its raw
+/// materials, for callers that have no `Document` yet — the streaming
+/// preload warm-up (LOAD-3C) knows only the response header and the
+/// `<meta name=referrer>` the scanner has met so far.
+pub(crate) fn referrer_policy_of<S: AsRef<str>>(
+    header: Option<&str>,
+    metas: impl IntoIterator<Item = S>,
+) -> lumen_network::ReferrerPolicy {
     let mut policy = lumen_network::ReferrerPolicy::default_policy();
-    if let Some(header) = doc.referrer_policy_header()
+    if let Some(header) = header
         && let Some(parsed) = lumen_network::ReferrerPolicy::parse_list(header)
     {
         policy = parsed;
     }
-    for content in doc.meta_referrer() {
-        if let Some(parsed) = lumen_network::ReferrerPolicy::parse_list(content) {
+    for content in metas {
+        if let Some(parsed) = lumen_network::ReferrerPolicy::parse_list(content.as_ref()) {
             policy = parsed;
         }
     }

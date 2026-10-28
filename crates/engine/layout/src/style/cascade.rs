@@ -8,6 +8,7 @@
 
 use crate::style::calc::{looks_like_function_call, parse_math_function_value};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use lumen_core::geom::Size;
 use lumen_css_parser::{
@@ -747,12 +748,12 @@ pub(crate) fn compute_style_shareable(
     if node_depth > 0 {
         matched.clear();
     }
-    let own_shadow: Option<Stylesheet> = if any_shadow && doc.is_shadow_host(node) {
+    let own_shadow: Option<Arc<Stylesheet>> = if any_shadow && doc.is_shadow_host(node) {
         SHADOW_SHEETS.with(|c| c.borrow().get(&node).cloned())
     } else {
         None
     };
-    let host_shadow: Option<Stylesheet> = if any_shadow {
+    let host_shadow: Option<Arc<Stylesheet>> = if any_shadow {
         doc.get(node)
             .parent
             .filter(|&p| doc.is_shadow_host(p))
@@ -816,7 +817,7 @@ pub(crate) fn compute_style_shareable(
     // `node`'s index here) and `::slotted()` (a pseudo-element; `matches_simple`
     // always rejects `SimpleSelector::PseudoElement`), so no extra filtering
     // is needed to keep (a)/(b) semantics from being duplicated here.
-    let interior_shadow: Option<Stylesheet> = if any_shadow {
+    let interior_shadow: Option<Arc<Stylesheet>> = if any_shadow {
         doc.enclosing_shadow_host(node)
             .and_then(|host| SHADOW_SHEETS.with(|c| c.borrow().get(&host).cloned()))
     } else {
@@ -897,7 +898,7 @@ pub(crate) fn compute_style_shareable(
                         key_base + i,
                         decl_idx,
                         decl,
-                        scope.sheet.as_ref(),
+                        scope.sheet.as_deref(),
                     ));
                 }
             }
@@ -1370,7 +1371,7 @@ pub(crate) fn compute_style_shareable(
         let fn_chain = shadow_origin.and_then(|origin| {
             [(&own_shadow, &own_fn_chain), (&host_shadow, &host_fn_chain), (&interior_shadow, &interior_fn_chain)]
                 .into_iter()
-                .find(|(s, _)| s.as_ref().is_some_and(|s| std::ptr::eq(s, origin)))
+                .find(|(s, _)| s.as_deref().is_some_and(|s| std::ptr::eq(s, origin)))
                 .and_then(|(_, chain)| chain.as_ref())
         });
         let doc_fn_scope = [sheet.function_rules.as_slice()];
@@ -1782,7 +1783,7 @@ pub(in crate::style) struct PartScope {
     /// The element a `host::part()` compound must match in this tree.
     pub(in crate::style) host: NodeId,
     /// The sheet of the tree that contains `host` (`None` = the document sheet).
-    pub(in crate::style) sheet: Option<Stylesheet>,
+    pub(in crate::style) sheet: Option<Arc<Stylesheet>>,
     /// Shadow-tree depth of that sheet, the cascade's encapsulation context.
     pub(in crate::style) depth: u32,
     /// The names the element answers to from this tree.

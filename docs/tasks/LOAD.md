@@ -79,6 +79,23 @@ BUG-1116, `docs/perf/journal.md:358`): HTML сразу, CSS +700 мс, карт�
 4. Релейауты от прихода картинок — пакетно, не чаще раза в кадр (уже так в
    `apply_stream_intrinsic_sizes`; проверить на странице с 200 картинками).
 
+**Сделано (2026-10-28).** Живой режим = `dynamic_image_hook_ctx.is_some() && !--deterministic`
+(`defer_images` в `parse_and_layout`); headless и `graphic_tests` не затронуты. В живом режиме
+`fetch_and_decode_images` берёт из `IMAGE_CACHE::peek_current` только уже декодированное, фоны
+(`defer_plain`) оставляют в конвейере лишь `shape-outside: url()` и CSP-проверку, `<img crossorigin>`
+на чужой origin остаётся на синхронном пути (CORS и taint canvas только там). Остальное уходит
+`spawn_dynamic_image_loads`/`spawn_dynamic_background_image_loads` из `apply_loaded_page`;
+`load`/`readyState=complete`/`pageshow` и запись Navigation Timing ждут в
+`Lumen::pending_window_load`, пока `maybe_fire_window_load` не увидит нуль незавершённых картинок
+(`unsettled_images`) и отработавший проход `apply_stream_intrinsic_sizes` (зовётся из
+`RedrawRequested` и `about_to_wait`). Картинки, декодированные до `RenderDone`, возвращаются рендереру
+после `clear_images` из `stream_image_pixels`; `fired_image_events` страницы засевает
+`stream_image_events_fired`, чтобы `load` не уходил картинке дважды. Стенд — `scripts/load_lab.py`
+(HTML сразу, CSS +700 мс, картинки/iframe +3 с; метки `raf`/`load` в журнале сервера).
+Замер на стенде без iframe (`--frame-ms 0`, dev-release, нагруженная машина): первый кадр после HTML
+8,9 с → 5,5 с (в `--deterministic`, т.е. по-старому, он приходит после картинок), `load` 8,5 с — после
+последней картинки; 12 картинок отрисованы. Остаток: iframe всё ещё держит `RenderDone` — LOAD-1B.
+
 **Done when:** unit-тест: живой режим отдаёт RenderDone до прихода картинок, `load` — после
 последней; headless-режим без изменений (`python graphic_tests/run.py --continue-on-fail`
 зелёный без новых эталонов, `dump_golden.py` 12/12); на стенде с картинками +3 с финальный
@@ -93,6 +110,19 @@ FRAME-8 `poll_dynamic_frames` для ещё не загруженных host-э�
 подхватывает без `dom_dirty`); `sync_frame_viewports` (`:1831`) и
 `fetch_frame_lazy_images` (`:1840`) — по приходу `FrameNewLoadDone`. `load` окна — после
 фреймов (счётчик `pending_new_frames`).
+
+**Сделано (2026-10-28).** Живой режим (`defer_images`) не зовёт `load_frame_sub_documents`:
+`ParsedPage::frames` пуст. `apply_loaded_page` кладёт в `PendingWindowLoad` флаг
+`frames_scan_pending`; `Lumen::drive_deferred_frames` (из `about_to_wait`, пока ждёт `load`) делает
+первый `poll_dynamic_frames`, повторяет его, если документ занят движковым потоком, и будит цикл
+для `dispatch_pending_frame_loads` (спавн отделён от скана проходом цикла). Фреймы приходят
+`FrameNewLoadDone` → `refresh_frames(None)` (это и есть `sync_frame_viewports` +
+`register_frame_lazy_images`, отдельно звать не нужно). `load` окна ждёт скан и пустые
+`pending_new_frames`/`pending_frame_load_dispatch` (`window_load_due(.., frames_busy)`). Находка:
+`on_frame_new_load_done` не сверял хозяина — ответ, переживший навигацию, вклеивал фреймы старой
+страницы в новую; теперь хозяин обязан быть документом текущей страницы или живого фрейма.
+Стенд `load_lab.py` (CSS +700 мс, картинки и iframe +3 с, dev-release): первый кадр (`raf`)
+1,16 с, запрос iframe уходит сразу после него, `load` 4,31 с — после iframe и последней картинки.
 
 **Done when:** тест: RenderDone до загрузки iframe со стенда +3 с, `load` окна после него;
 graphic_tests без изменений.
@@ -114,6 +144,17 @@ graphic_tests без изменений.
 **Done when:** тест рядом с `stream_css_pending_gates_frames_per_generation`
 (`subdocument_frames.rs:1488`): черновик рисуется по CssLoaded и по дедлайну; на стенде с
 CSS +5 с первый кадр с контентом ≤ 2,2 с (LOAD-0).
+
+**Сделано (2026-10-28).** `css_pending.rs`: счётчик хранит момент первого `add`; через
+`STREAM_CSS_DEADLINE` (2 с) `stream_css_pending` становится `false`, а `stream_css_pending_expired`
+отдаёт дедлайн ровно один раз. `Lumen::stream_css_deadline_tick` (из `about_to_wait`) рисует черновик
+и вкладывает дедлайн в `WaitUntil`; `CssLoaded` после снятия ожидания тоже рисует
+(`paint_stream_draft`, без 16-мс троттлинга). Находка: `LoadDone` сбрасывал `stream_builder` и
+`stream_sheet`, и пока финальный pipeline ждал медленный CSS, рисовать было не из чего — сброс
+перенесён в `RenderDone`. Стенд `load_lab.py --css-ms 5000` (dev-release): `first_content_ms`
+(LOAD-0) 2,03 с; без дедлайна черновика не было вовсе. Финальный `build_page_cascade`
+(`stylesheets.rs:336`) по-прежнему ждёт тот же CSS: `final_applied_ms` 8,6 с при CSS +5 с и
+картинках/iframe +3 с (CSS 5,0 с + скрипты/iframe), не менялся.
 
 ## LOAD-3C — прогрев скриптов без потока на каждую подсказку (P1, S)
 

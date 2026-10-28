@@ -1487,6 +1487,7 @@ fn fetch_embedded_source_yields_document_only_for_document_resources() {
 #[test]
 fn stream_css_pending_gates_frames_per_generation() {
     use crate::page_load::{stream_css_pending, stream_css_pending_add, stream_css_pending_done};
+    let _serial = crate::page_load::STREAM_CSS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let g = 9_000_001;
     assert!(!stream_css_pending(g));
     stream_css_pending_add(g);

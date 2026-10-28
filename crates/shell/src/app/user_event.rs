@@ -5,7 +5,7 @@
 //! (`super`) как есть; параметр `_event_loop` в теле не использовался
 //! и в переходнике не передаётся.
 
-use crate::page_load::{stream_css_pending, stream_css_pending_done};
+use crate::page_load::{stream_css_outstanding, stream_css_pending, stream_css_pending_done};
 use crate::page_pipeline::is_xml_flavoured_document;
 use crate::*;
 
@@ -71,10 +71,7 @@ impl Lumen {
                 if self.stream_last_paint.elapsed().as_millis() >= STREAM_PAINT_INTERVAL_MS
                     && !stream_css_pending(generation)
                 {
-                    // Клонируем снапшот для layout — builder остаётся живым.
-                    let doc_snap = builder.as_doc().clone();
-                    self.paint_partial_dom(&doc_snap);
-                    self.stream_last_paint = std::time::Instant::now();
+                    self.paint_stream_draft(generation);
                 }
             }
             LoadEvent::CssLoaded(boxed, tab_id, generation) => {
@@ -92,6 +89,11 @@ impl Lumen {
                 // fields behind the struct.
                 self.stream_sheet.merge_from(*boxed);
                 stream_css_pending_done(generation);
+                // LOAD-2: HTML мог прийти раньше CSS — без этого кадра черновика
+                // не было бы до следующего куска HTML (или до `LoadDone`).
+                // Последняя таблица снимает ожидание — рисуем сразу, без
+                // 16-мс троттлинга: следующего куска может не быть.
+                self.paint_stream_draft(generation);
             }
             LoadEvent::ImageDecoded { src, image, animated } => {
                 // PH1-2c: картинка декодирована параллельным потоком во время
@@ -135,6 +137,7 @@ impl Lumen {
                     w.request_redraw();
                 }
             }
+            LoadEvent::AsyncScriptReady => self.drive_async_scripts(),
             LoadEvent::ImageDecodeFailed { src } => {
                 // BUG-1048: streaming/dynamic decode gave up on `src` — record
                 // it the same way a successful decode records its size
@@ -248,8 +251,9 @@ impl Lumen {
                 {
                     eprintln!("[frame:cold-start] LoadDone (spawning render_bytes) at {ms:.0}ms");
                 }
-                self.stream_builder = None;
-                self.stream_sheet = lumen_css_parser::Stylesheet::default();
+                // LOAD-2: builder и stream_sheet живут до RenderDone — пока финальный
+                // pipeline ждёт медленный CSS, по дедлайну (или по приходу CSS)
+                // из них ещё рисуется черновик (`paint_stream_draft`).
                 let viewport = self.renderer.as_ref().map_or_else(
                     || Size::new(1024.0, 720.0),
                     |r| {
@@ -294,6 +298,13 @@ impl Lumen {
                     generation,
                     dedup: Arc::clone(&self.stream_images_requested),
                     proxy: proxy.clone(),
+                    // LOAD-3B: builder уезжает в финальный проход, если ему больше
+                    // не рисовать черновик; пока ждут таблицы стилей — остаётся тут.
+                    stream_builder: if stream_css_outstanding(generation) {
+                        None
+                    } else {
+                        self.stream_builder.take()
+                    },
                 });
                 // BUG-1027: поток гоняет весь финальный pipeline, включая
                 // сборку дерева боксов — рекурсию по глубине DOM ценой ~10.4 КБ
@@ -388,6 +399,8 @@ impl Lumen {
                 self.preload_dispatched = preload_dispatched;
                 match result {
                     Ok((page, new_layout_source, new_js_ctx)) => {
+                        self.stream_builder = None;
+                        self.stream_sheet = lumen_css_parser::Stylesheet::default();
                         click_log::log_load_ok(&self.source.describe(), page.title.as_deref().unwrap_or(""));
                         // BUG-640: captured before `page` moves into `apply_loaded_page` below —
                         // `nav` is the only field this handler still needs afterward.
@@ -407,11 +420,14 @@ impl Lumen {
                             if let (true, Some(start), Some(url)) =
                                 (self.js_present, nav_start, self.source.url_str().map(str::to_owned))
                             {
-                                let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
-                                let detail_json = nav_timing::detail_json(nav_meta, start);
-                                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-                                    j.deliver_nav_timing(&url, duration_ms, &detail_json);
-                                });
+                                let delivery = crate::page_load::NavTimingDelivery { meta: nav_meta, start, url };
+                                // LOAD-1: страница без ожидания картинок ещё не получила
+                                // `load` — метки `loadEvent*` появятся позже, запись уйдёт
+                                // вместе с ним (`Lumen::maybe_fire_window_load`).
+                                match self.pending_window_load.as_mut() {
+                                    Some(pending) => pending.nav_timing = Some(delivery),
+                                    None => delivery.deliver(self),
+                                }
                             }
                         }
                         click_log::log_page_ready(&self.source.describe(), self.scroll_y);

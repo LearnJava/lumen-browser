@@ -194,6 +194,11 @@ pub(crate) trait PersistentJs: Send + Sync {
     fn navigate_listeners_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
         None
     }
+    /// COMPAT-HANG: учёт долгих задач рантайма (плашка «страница не отвечает»).
+    /// `None` — не поддерживается (по умолчанию).
+    fn stall_handle(&self) -> Option<lumen_core::script_stall::StallHandle> {
+        None
+    }
     /// BUG-935 S80: сброс набора затронутых узлов ([`Self::take_dom_touched`]),
     /// который UI-поток может звать сам, не ставя запрос в очередь движкового
     /// потока. `None` — не поддерживается (по умолчанию).
@@ -498,6 +503,10 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Call after all subresources (images, fonts) are decoded and registered.
     #[allow(dead_code)]
     fn notify_window_loaded(&self);
+    /// LOAD-3A: исполнить скачавшийся внешний классический `async`-скрипт страницы
+    /// (`document.currentScript`, `window.onerror`, `load`/`error` на его элементе).
+    /// Зовётся уже после разбора и `DOMContentLoaded`.
+    fn run_async_script(&self, script: &crate::scripts::ResolvedScript);
     /// Notify all registered `MediaQueryList` instances that the viewport or
     /// user preferences changed (CSS Media Queries L4 §4.2). Each MQL whose
     /// `matches` flipped fires a `change` event on its listeners.
@@ -1170,6 +1179,9 @@ impl PersistentJs for V8PersistentJs {
         let nodes: Vec<lumen_dom::NodeId> = nids.iter().map(|&n| lumen_dom::NodeId::from_raw(n)).collect();
         self.rt.note_shell_attr_writes(&nodes, &["width", "height"]);
     }
+    fn stall_handle(&self) -> Option<lumen_core::script_stall::StallHandle> {
+        Some(self.rt.stall_handle())
+    }
     fn dom_touched_drain(&self) -> Option<DomTouchedDrain> {
         let read = self.rt.dom_changes_reader();
         Some(Arc::new(move || {
@@ -1349,6 +1361,9 @@ impl PersistentJs for V8PersistentJs {
     }
     fn notify_window_loaded(&self) {
         self.eval_js("_lumen_apply_ready_state('complete')");
+    }
+    fn run_async_script(&self, script: &crate::scripts::ResolvedScript) {
+        crate::scripts::run_async_classic_script(&self.rt, script);
     }
     fn deliver_media_query_changes(
         &self,

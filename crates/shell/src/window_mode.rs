@@ -325,6 +325,14 @@ fn run_window_mode_inner(
             let _ = wake_proxy.send_event(LoadEvent::AutomationWake);
         }));
     }
+    // COMPAT-HANG: сторож зависших JS-задач будит цикл событий, чтобы плашка
+    // «Страница не отвечает» появилась, не дожидаясь ввода пользователя.
+    {
+        let hang_proxy = load_proxy.clone();
+        lumen_core::script_stall::set_wake(move || {
+            let _ = hang_proxy.send_event(LoadEvent::AutomationWake);
+        });
+    }
     let (input_tx, input_rx) = input::channel();
     let (read_later_tx, read_later_rx) =
         std::sync::mpsc::channel::<(String, String, Vec<u8>)>();
@@ -530,6 +538,7 @@ fn run_window_mode_inner(
         stream_image_sizes_dirty: false,
         stream_image_errors: std::collections::HashSet::new(),
         stream_image_events_fired: std::collections::HashSet::new(),
+        pending_window_load: None,
         pending_restore_scroll: None,
         pending_pageshow_persisted: false,
         pending_post_reload_traversal: None,
@@ -684,6 +693,8 @@ fn run_window_mode_inner(
         update_ui: update_ui::UpdateUi::new(),
         login_offer: None,
         media_bar: crate::media_bar::MediaBar::default(),
+        script_hang: crate::script_hang::ScriptHang::default(),
+        js_stall: None,
         page_dialog: None,
         page_dialog_wired: false,
         pending_leave: None,

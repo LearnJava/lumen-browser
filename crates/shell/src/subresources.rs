@@ -65,6 +65,7 @@ pub(crate) fn fetch_vtt_text(
 /// вызывающей стороны есть URL и до, и после фетча — здесь удобнее вернуть уже
 /// резолвленный, раз gate его всё равно резолвит; политика захватывается тут
 /// же, а не пересчитывается заново в точке диспатча).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn fetch_and_decode_background_images(
     layout: &LayoutBox,
     base: &ResourceBase,
@@ -73,6 +74,11 @@ pub(crate) fn fetch_and_decode_background_images(
     target: lumen_core::ColorSpace,
     csp_gate: Option<(&[lumen_network::csp::CspPolicy], Option<&lumen_network::Origin>)>,
     referrer_policy: lumen_network::ReferrerPolicy,
+    // LOAD-1: в живом окне фоны не ждут сети — их докачивает
+    // `Lumen::spawn_dynamic_background_image_loads` после `RenderDone`. Здесь остаются
+    // только `shape-outside: url()` (раскладка не может ждать пикселей) и CSP-проверка
+    // всех URL, чтобы `securitypolicyviolation` ушёл как раньше.
+    defer_plain: bool,
 ) -> BackgroundImagesOutcome {
     // DPR 1.0 — тот же, что у `build_display_list_ordered` (обёртка без dpr),
     // иначе выбранный здесь кандидат `image-set()` не совпал бы с ключом,
@@ -81,9 +87,10 @@ pub(crate) fn fetch_and_decode_background_images(
     // CSS Shapes L1 §6.2: `shape-outside: url()` images ride the same fetch (CSP,
     // cache, referrer policy); the caller turns them into alpha planes instead of
     // painting them ([`report_shape_images`](crate::page_shape_images)).
-    for url in lumen_layout::collect_shape_image_requests(layout) {
-        if !urls.contains(&url) {
-            urls.push(url);
+    let shape_urls = lumen_layout::collect_shape_image_requests(layout);
+    for url in &shape_urls {
+        if !urls.contains(url) {
+            urls.push(url.clone());
         }
     }
     // Параллельная загрузка+декодирование, порядок сохраняем (ключи уникальны).
@@ -108,6 +115,9 @@ pub(crate) fn fetch_and_decode_background_images(
             if !violated.is_empty() {
                 return Err((abs, violated.into_iter().map(str::to_owned).collect::<Vec<_>>()));
             }
+        }
+        if defer_plain && !shape_urls.contains(url) {
+            return Ok(None);
         }
         let Some(image) = decode_background_image(
             image_cache::IMAGE_CACHE.current_generation(),
@@ -407,6 +417,18 @@ pub(crate) fn parse_font_weight(s: Option<&str>) -> u16 {
     }
 }
 
+/// LOAD-1: чужой ли origin у `raw_url` (разрешённого против `base`) относительно документа.
+/// Тот же критерий, что `is_cross_origin` в [`fetch_and_decode_images`]: непрозрачный origin
+/// документа и схемы без origin (`data:`, `blob:`) не заражают.
+pub(crate) fn is_cross_origin_url(base: &ResourceBase, raw_url: &str) -> bool {
+    let Some(self_origin) = base.origin() else { return false };
+    let Ok(parsed) = lumen_core::url::Url::parse(&base.resolve_str(raw_url)) else { return false };
+    match lumen_network::Origin::from_url(&parsed) {
+        Ok(origin) => !self_origin.same_origin(&origin),
+        Err(_) => false,
+    }
+}
+
 /// Обходит DOM через `lumen_layout::collect_image_requests` — picker учитывает
 /// `<picture>`/`srcset`/`sizes`, поэтому ключ совпадает с тем, что layout
 /// эмитит в `DisplayCommand::DrawImage.src`. Для каждого запроса скачивает
@@ -440,7 +462,7 @@ pub(crate) fn parse_font_weight(s: Option<&str>) -> u16 {
 ///   (срез 4, BUG-941: `CredentialsMode::cross_origin_credentials()` в
 ///   `fetch_cors`) — раньше это не было так, теперь Fetch §4.7 шаг 3 не
 ///   нарушается. Без атрибута — прежнее консервативное поведение (всегда taint).
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(crate) fn fetch_and_decode_images(
     doc: &mut Document,
     base: &ResourceBase,
@@ -451,6 +473,13 @@ pub(crate) fn fetch_and_decode_images(
     // BUG-935 срез 94: узлы, которым `apply_intrinsic_size` дописал `width`/`height` —
     // вызывающий сообщает их трекеру мутаций страницы (см. `Lumen::note_shell_attr_writes`).
     written: &mut Vec<u32>,
+    // LOAD-1: живое окно не ждёт сеть ради картинок — берёт только то, что
+    // прогрессивные загрузчики уже декодировали (`IMAGE_CACHE::peek_current`), остальное
+    // докачивает `Lumen::spawn_dynamic_image_loads` после `RenderDone`. Без флага (headless,
+    // `--deterministic`) поведение прежнее: страница отдаётся полностью загруженной.
+    // `<img crossorigin>` на чужой origin остаётся на синхронном пути — CORS-проверка и
+    // taint canvas-а живут только в нём.
+    defer_undecoded: bool,
 ) -> (
     Vec<(String, Arc<lumen_image::Image>)>,
     Vec<(String, lumen_image::AnimatedGif)>,
@@ -483,6 +512,8 @@ pub(crate) fn fetch_and_decode_images(
         Lazy,
         /// Пропуск (ошибка сети/декодирования) — уже залогировано.
         Skip,
+        /// LOAD-1: картинка ещё не декодирована, живой режим её не ждёт.
+        Deferred,
         /// `img-src`/`default-src` запретил этот URL — фетч не выполнялся.
         Blocked,
         /// Статическая картинка (включая 1-кадровый GIF). `Arc<Image>` (BUG-272
@@ -604,6 +635,10 @@ pub(crate) fn fetch_and_decode_images(
                 }),
                 false,
             ),
+            _ if defer_undecoded => match image_cache::IMAGE_CACHE.peek_current(&req.url) {
+                Some(decoded) => (decoded, url_cross_origin),
+                None => return ImgOutcome::Deferred,
+            },
             _ => (
                 image_cache::IMAGE_CACHE.get_or_decode_current(&req.url, || {
                     decode_image(fetch_url, base, sink, cookie_jar.clone(), target, referrer_policy)
@@ -634,7 +669,7 @@ pub(crate) fn fetch_and_decode_images(
     for (req, outcome) in requests.into_iter().zip(outcomes) {
         match outcome {
             ImgOutcome::Lazy => lazy_pairs.push((req.node_id.index() as u32, req.url)),
-            ImgOutcome::Skip => {}
+            ImgOutcome::Skip | ImgOutcome::Deferred => {}
             ImgOutcome::Blocked => blocked_by_img_src.push(base.resolve_str(&req.url)),
             ImgOutcome::Static { image, intrinsic, cross_origin } => {
                 if let Some((w, h)) = intrinsic

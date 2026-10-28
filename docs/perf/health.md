@@ -31,6 +31,7 @@
 | `panic` | паника Rust на любом потоке (panic-hook, цепляется к прежнему) | `detail` (message), `location`, `backtrace`, `url` (страница на момент падения) |
 | `console_error` | страница вызвала `console.error(...)` | `detail` (текст), `url` |
 | `load_error` | навигация не загрузилась (сеть/TLS/декод/render) | `detail` (ошибка), `url` |
+| `script_stall` | скрипт страницы держал JS-поток дольше порога «Страница не отвечает» (5 с, `LUMEN_SCRIPT_STALL_MS`; COMPAT-HANG) | `detail` (сколько секунд), `url` |
 | `broken_render` | страница загрузилась, но **ничего не отрисовала** при содержательном DOM | `dom_nodes`, `layout_boxes`, `rendered_units`, `url` |
 
 **Эвристика белого экрана** (`broken_render`): фиксируется, только когда

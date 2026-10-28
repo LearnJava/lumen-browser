@@ -76,6 +76,7 @@ mod cors;
 mod dns;
 mod doh;
 mod dot;
+mod fetch_cache;
 mod fetch_metadata;
 pub mod filter;
 pub mod h2;
@@ -933,6 +934,11 @@ fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a s
         .iter()
         .find(|(k, _)| k.to_ascii_lowercase() == name_lc)
         .map(|(_, v)| v.as_str())
+}
+
+/// Every `Link:` header value of a response, in arrival order (BUG-906).
+fn link_header_values(headers: &[(String, String)]) -> Vec<String> {
+    all_header_values(headers, "link").map(str::to_owned).collect()
 }
 
 /// Returns an iterator over all values for the given header name (case-insensitive).
@@ -2158,13 +2164,20 @@ fn build_h2_headers(
     accept_encoding: Option<&str>,
     extra_headers: &str,
 ) -> Vec<(Vec<u8>, Vec<u8>)> {
-    let parsed_extra = parse_extra_headers_str(extra_headers);
+    let mut parsed_extra = parse_extra_headers_str(extra_headers);
+    // FETCH-HTTP-CACHE: `X-Lumen-Drop: <name>` removes a profile default
+    // without a replacement (see `http::headers::DROP_DEFAULT_HEADER`).
+    let dropped: Vec<Vec<u8>> = http::headers::drop_default_names(extra_headers)
+        .into_iter()
+        .map(String::into_bytes)
+        .collect();
+    parsed_extra.retain(|(k, _)| k.as_slice() != http::headers::DROP_DEFAULT_HEADER.as_bytes());
     let extra_names: std::collections::HashSet<&[u8]> =
         parsed_extra.iter().map(|(k, _)| k.as_slice()).collect();
     let mut out: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     for (name, value) in http::h2_fingerprint_headers(http_profile, accept_encoding.unwrap_or("")) {
         let name_bytes = name.into_bytes();
-        if !extra_names.contains(name_bytes.as_slice()) {
+        if !extra_names.contains(name_bytes.as_slice()) && !dropped.contains(&name_bytes) {
             out.push((name_bytes, value.into_bytes()));
         }
     }
@@ -4318,7 +4331,7 @@ impl HttpClient {
         destination: RequestDestination,
     ) -> Result<Vec<u8>> {
         self.fetch_subresource_inner(url, destination, false)
-            .map(|(body, _content_type)| body)
+            .map(|(body, _content_type, _links)| body)
     }
 
     /// Same fetch as [`Self::fetch_subresource`], plus the response's
@@ -4332,6 +4345,19 @@ impl HttpClient {
         url: &Url,
         destination: RequestDestination,
     ) -> Result<(Vec<u8>, Option<String>)> {
+        self.fetch_subresource_inner(url, destination, false)
+            .map(|(body, content_type, _links)| (body, content_type))
+    }
+
+    /// Same fetch as [`Self::fetch_subresource_with_content_type`], plus every
+    /// `Link:` response header value (BUG-906): HTML LS §4.6.6 processes them
+    /// on a subresource response like the equivalent `<link>` elements, and
+    /// only the shell knows how to start the hinted fetches.
+    pub fn fetch_subresource_with_links(
+        &self,
+        url: &Url,
+        destination: RequestDestination,
+    ) -> Result<(Vec<u8>, Option<String>, Vec<String>)> {
         self.fetch_subresource_inner(url, destination, false)
     }
 
@@ -4347,7 +4373,7 @@ impl HttpClient {
     /// upgrade, not the child's own, not-yet-fetched policy).
     pub fn fetch_subresource_document(&self, url: &Url, send_uir_header: bool) -> Result<Vec<u8>> {
         self.fetch_subresource_inner(url, RequestDestination::Document, send_uir_header)
-            .map(|(body, _content_type)| body)
+            .map(|(body, _content_type, _links)| body)
     }
 
     /// Same fetch as [`Self::fetch_subresource_document`], plus the response's
@@ -4360,6 +4386,7 @@ impl HttpClient {
         send_uir_header: bool,
     ) -> Result<(Vec<u8>, Option<String>)> {
         self.fetch_subresource_inner(url, RequestDestination::Document, send_uir_header)
+            .map(|(body, content_type, _links)| (body, content_type))
     }
 
     fn fetch_subresource_inner(
@@ -4367,7 +4394,7 @@ impl HttpClient {
         url: &Url,
         destination: RequestDestination,
         send_uir_header: bool,
-    ) -> Result<(Vec<u8>, Option<String>)> {
+    ) -> Result<(Vec<u8>, Option<String>, Vec<String>)> {
         let uir_header = if send_uir_header { "Upgrade-Insecure-Requests: 1\r\n" } else { "" };
         // GAP-REFERRER срез 2: `Referer` for engine-issued subresource fetches
         // (`<img>`/`<script src>`/`<link>`/cascade `@import`/`@font-face`/…) —
@@ -4422,7 +4449,8 @@ impl HttpClient {
                     "cache",
                 );
                 let content_type = header_value(&snap.headers, "content-type").map(str::to_owned);
-                return Ok((snap.body, content_type));
+                let links = link_header_values(&snap.headers);
+                return Ok((snap.body, content_type, links));
             }
             if !snap.conditional_headers.is_empty() {
                 // Stale entry with validators — conditional GET.
@@ -4476,7 +4504,8 @@ impl HttpClient {
                     );
                     let content_type =
                         header_value(&snap.headers, "content-type").map(str::to_owned);
-                    return Ok((snap.body, content_type));
+                    let links = link_header_values(&snap.headers);
+                    return Ok((snap.body, content_type, links));
                 }
                 cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
                 self.emit_resource_timing(
@@ -4490,7 +4519,8 @@ impl HttpClient {
                     "",
                 );
                 let content_type = header_value(&resp.headers, "content-type").map(str::to_owned);
-                return Ok((resp.body, content_type));
+                let links = link_header_values(&resp.headers);
+                return Ok((resp.body, content_type, links));
             }
         }
 
@@ -4543,7 +4573,8 @@ impl HttpClient {
             "",
         );
         let content_type = header_value(&resp.headers, "content-type").map(str::to_owned);
-        Ok((resp.body, content_type))
+        let links = link_header_values(&resp.headers);
+        Ok((resp.body, content_type, links))
     }
 
     /// Publish a [`Event::ResourceTimed`] for a completed subresource load
@@ -5933,6 +5964,7 @@ mod tests {
             body: None,
             mode: "",
             destination: "",
+            cache: "",
             token: None,
         });
         match result {
@@ -5972,6 +6004,7 @@ mod tests {
             body: None,
             mode: "",
             destination: "",
+            cache: "",
             token: None,
         });
         assert!(!matches!(result, Err(Error::CspConnectSrcBlocked { .. })));
@@ -5999,6 +6032,7 @@ mod tests {
             body: None,
             mode: "",
             destination: "",
+            cache: "",
             token: None,
         });
         match result {
@@ -6632,6 +6666,7 @@ mod tests {
             body: None,
             mode: "no-cors",
             destination,
+            cache: "",
             token: None,
         };
         assert!(matches!(client.fetch_request(&request("")), Err(Error::CspConnectSrcBlocked { .. })));
@@ -10131,6 +10166,7 @@ world\r\n\
                 body: None,
                 mode: "",
                 destination: "",
+                cache: "",
                 token: None,
             })
             .expect("GET must succeed");
@@ -10161,6 +10197,7 @@ world\r\n\
                 body: None,
                 mode: "",
                 destination: "",
+                cache: "",
                 token: None,
             })
             .expect("GET must succeed");
@@ -10199,6 +10236,7 @@ world\r\n\
                 body: None,
                 mode: "",
                 destination: "",
+                cache: "",
                 token: None,
             })
             .expect("GET must succeed");
@@ -10231,6 +10269,7 @@ world\r\n\
                 body: Some(JsFetchBody { content_type: "text/plain", bytes: b"x" }),
                 mode: "",
                 destination: "",
+                cache: "",
                 token: None,
             })
             .expect("POST must succeed");
@@ -10262,6 +10301,7 @@ world\r\n\
                 body: None,
                 mode: "",
                 destination: "",
+                cache: "",
                 token: None,
             })
             .expect("GET must succeed");
@@ -10296,6 +10336,7 @@ world\r\n\
                 body: Some(JsFetchBody { content_type: "text/plain", bytes: b"x" }),
                 mode: "",
                 destination: "",
+                cache: "",
                 token: None,
             })
             .expect("POST must succeed");
@@ -10329,6 +10370,7 @@ world\r\n\
                 body: None,
                 mode: "",
                 destination: "",
+                cache: "",
                 token: None,
             })
             .expect("GET must succeed");
@@ -10427,6 +10469,7 @@ world\r\n\
                     token: None,
                     mode,
                     destination,
+                    cache: "",
                 })
                 .expect("GET must succeed");
         }
@@ -10483,6 +10526,7 @@ world\r\n\
                 }),
                 mode: "",
                 destination: "",
+                cache: "",
                 token: None,
             })
             .expect("POST must succeed");
@@ -11156,6 +11200,27 @@ ok".to_vec()
     }
 
     #[test]
+    fn fetch_subresource_with_links_returns_every_link_header() {
+        // BUG-906: HTML LS §4.6.6 — a `Link:` response header on a subresource
+        // is a hint source like the equivalent `<link>`; the shell needs the raw
+        // values, in order, to start the hinted fetches.
+        let (port, server) = mock_http_server(1, |_| {
+            b"HTTP/1.1 200 OK\r\nLink: <a.js>; rel=preload; as=script\r\nlink: <b.css>; rel=prefetch\r\nContent-Type: text/css\r\nContent-Length: 4\r\nConnection: close\r\n\r\nbody".to_vec()
+        });
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/s.css")).unwrap();
+        let client = HttpClient::new();
+
+        let (body, content_type, links) = client
+            .fetch_subresource_with_links(&url, RequestDestination::Style)
+            .unwrap();
+
+        assert_eq!(body, b"body");
+        assert_eq!(content_type.as_deref(), Some("text/css"));
+        assert_eq!(links, vec!["<a.js>; rel=preload; as=script", "<b.css>; rel=prefetch"]);
+        server.join().unwrap();
+    }
+
+    #[test]
     fn fetch_subresource_strict_blocks_optionally_blockable_image() {
         // Strict-режим: image тоже блокируется. Хост — не trustworthy.
         let sink = Arc::new(CollectingSink::new());
@@ -11814,6 +11879,9 @@ mod interceptor_tests;
 
 #[cfg(test)]
 mod http_cache_tests;
+
+#[cfg(test)]
+mod fetch_cache_http_tests;
 
 #[cfg(test)]
 mod proxy_tests;

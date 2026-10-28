@@ -1732,6 +1732,25 @@ fn document_referrer_policy_reads_the_response_header() {
 }
 
 #[test]
+fn referrer_policy_of_matches_the_document_rule() {
+    // LOAD-3C: the streaming warm-up resolves the policy from raw header +
+    // metas; it must agree with the finished-document rule (last valid meta wins).
+    use lumen_network::ReferrerPolicy;
+    assert_eq!(
+        crate::resource_base::referrer_policy_of(None, std::iter::empty::<&str>()),
+        ReferrerPolicy::default_policy()
+    );
+    assert_eq!(
+        crate::resource_base::referrer_policy_of(Some("origin"), ["bogus"]),
+        ReferrerPolicy::Origin
+    );
+    assert_eq!(
+        crate::resource_base::referrer_policy_of(Some("origin"), ["no-referrer"]),
+        ReferrerPolicy::NoReferrer
+    );
+}
+
+#[test]
 fn document_referrer_policy_reads_meta_referrer() {
     let doc = lumen_html_parser::parse(
         r#"<html><head><meta name="referrer" content="same-origin"></head><body></body></html>"#,

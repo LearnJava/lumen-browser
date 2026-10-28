@@ -2,7 +2,7 @@
 // (BUG-778; WORKER-1 срез 5). Runs after `worker_exposed_shim`, so it builds on
 // the page's own Headers/Response/Request (HEADERS_SHIM + FETCH_BODY_SHIM), not
 // on a second copy of them. Natives, all from `crate::worker_net`:
-//   _lumen_worker_net_fetch(url, method, headersFlat, bytes|null, contentType)
+//   _lumen_worker_net_fetch(url, method, headersFlat, bytes|null, contentType, cacheMode)
 //       → JSON {status, statusText, headers:[[n,v]…], url, redirected} | undefined;
 //         the body waits in the scope's "last body" slot, read back through
 //         _lumen_stream_alloc (fetch) or _lumen_fetch_body_* (XHR).
@@ -42,7 +42,7 @@
     var bodyP = req.body === null ? Promise.resolve(null) : req.arrayBuffer();
     return bodyP.then(function(buf) {
       var raw = _lumen_worker_net_fetch(req.url, req.method, flat,
-        buf === null ? null : new Uint8Array(buf), ctype);
+        buf === null ? null : new Uint8Array(buf), ctype, req.cache || '');
       if (!raw) throw new TypeError('Failed to fetch');
       var res = JSON.parse(raw);
       return _lumen_response_from_fetch_cache(res.status, res.statusText, res.headers, res.url, res.redirected);
@@ -280,7 +280,7 @@
     }
     var raw;
     try {
-      raw = _lumen_worker_net_fetch(x.url, x.method, flat, bodyInfo === null ? null : bodyInfo.bytes, ctype);
+      raw = _lumen_worker_net_fetch(x.url, x.method, flat, bodyInfo === null ? null : bodyInfo.bytes, ctype, '');
     } catch (e) { raw = undefined; }
     if (!raw) return false;
     var res = JSON.parse(raw);

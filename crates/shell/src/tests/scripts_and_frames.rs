@@ -777,3 +777,33 @@ fn rekey_frame_images_rewrites_background_image_and_cross_fade() {
         other => panic!("ожидался DrawCrossFade, получено {other:?}"),
     }
 }
+
+/// LOAD-3A: внешний классический `async` уходит в отдельный список (даже с `defer`), всё
+/// остальное — как раньше; без списка (headless) `async` остаётся в порядке документа.
+#[test]
+fn collect_scripts_split_async_separates_external_classic_async() {
+    let doc = lumen_html_parser::parse(
+        r#"<html><head>
+              <script src="/sync.js"></script>
+              <script async src="/a.js"></script>
+              <script async defer src="/ad.js"></script>
+              <script async>inlineAsync=1;</script>
+              <script async type="module" src="/am.js"></script>
+              <script defer src="/d.js"></script>
+            </head></html>"#,
+    );
+    let describe = |s: &ScriptSource| match s {
+        ScriptSource::Inline(_, b) => b.trim().to_owned(),
+        ScriptSource::External(_, u) => u.clone(),
+    };
+    let (mut classic, mut deferred, mut asyncs) = (Vec::new(), Vec::new(), Vec::new());
+    crate::scripts::collect_scripts_split_async(&doc, doc.root(), &mut classic, &mut deferred, &mut asyncs);
+    let names = |v: &[ScriptSource]| v.iter().map(describe).collect::<Vec<_>>();
+    assert_eq!(names(&classic), ["/sync.js", "inlineAsync=1;"]);
+    assert_eq!(names(&deferred), ["/am.js", "/d.js"]);
+    assert_eq!(names(&asyncs), ["/a.js", "/ad.js"]);
+
+    let (mut classic, mut deferred) = (Vec::new(), Vec::new());
+    collect_scripts_ordered(&doc, doc.root(), &mut classic, &mut deferred);
+    assert_eq!(names(&classic), ["/sync.js", "/a.js", "/ad.js", "inlineAsync=1;"]);
+}

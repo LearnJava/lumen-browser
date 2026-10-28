@@ -459,6 +459,7 @@ pub(crate) fn install_fetch(
                 body: None,
                 mode: "",
                 destination: "",
+                cache: "",
                 token: None,
             }) {
                 Ok(resp) => {
@@ -628,6 +629,7 @@ pub(crate) fn install_fetch(
                         }),
                         mode: "",
                         destination: "",
+                        cache: "",
                         token: None,
                     }) {
                         Ok(resp) => {
@@ -723,6 +725,7 @@ pub(crate) fn install_fetch(
                 body: None,
                 mode: "",
                 destination: "",
+                cache: "",
                 token: Some(&token),
             }) {
                 Ok(resp) => {
@@ -772,6 +775,7 @@ pub(crate) fn install_fetch(
                     }),
                     mode: "",
                     destination: "",
+                    cache: "",
                     token: Some(&token),
                 }) {
                     Ok(resp) => {
@@ -843,6 +847,9 @@ pub(crate) fn install_fetch(
             // when there are none. A page `fetch()` has an empty destination and
             // does so only for a hint the shim matched (BUG-1151, `|preloaded`).
             //
+            // FETCH-HTTP-CACHE: an optional fourth segment is the request's
+            // `cache` mode (`Request.cache`, `""` = `default`).
+            //
             // BUG-1714: the third segment `preload:<nonce>` marks a `<link
             // rel=preload|modulepreload|prefetch>` hint's own fetch — the
             // destination segment is then the hint's `as` and the request goes
@@ -866,12 +873,14 @@ pub(crate) fn install_fetch(
                         .insert(id, AsyncFetchState { token: token.clone(), outcome: None });
                     let map = Arc::clone(&am_start);
                     let headers = pairs_from_flat(headers);
-                    let mut load_parts = load.splitn(3, '|');
+                    let mut load_parts = load.splitn(4, '|');
                     let mode = load_parts.next().unwrap_or("").to_owned();
                     let destination = load_parts.next().unwrap_or("").to_owned();
                     // BUG-1151: the shim matched a page `fetch()` to a `<link
                     // rel=preload as=fetch>` hint (third segment `preloaded`).
                     let third = load_parts.next();
+                    // FETCH-HTTP-CACHE: the fourth segment is `Request.cache`.
+                    let cache_mode = load_parts.next().unwrap_or("").to_owned();
                     let hinted = third == Some("preloaded");
                     let hint_nonce = third.and_then(|t| t.strip_prefix("preload:")).map(str::to_owned);
                     let use_preloaded = (!destination.is_empty() || hinted) && method == "GET" && !has_body
@@ -891,6 +900,7 @@ pub(crate) fn install_fetch(
                                 }),
                                 mode: &mode,
                                 destination: &destination,
+                                cache: &cache_mode,
                                 token: Some(&token),
                             }),
                         };

@@ -1723,3 +1723,365 @@ fn bug1156_document_referrer_is_seeded_from_navigation_referer() {
     let without = parse_and_layout_for_test(html);
     assert_eq!(probe_attr(&without, "data-r"), "");
 }
+
+// ── LOAD-1: живое окно отдаёт страницу, не дожидаясь картинок ───────────
+
+/// 1×1 PNG: достаточно, чтобы `decode_image` дал реальную картинку без сети.
+const LOAD1_PNG: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+/// `IMAGE_CACHE` — процессный синглтон, а тесты идут параллельно: живой тест берёт адрес,
+/// которого не касается ни один другой, иначе чужой декод оказался бы «уже в кэше».
+const LOAD1_LIVE_ONLY: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+
+fn load1_page(src: &str) -> String {
+    format!("<html><body><img src=\"{src}\"><div style=\"background-image:url({src}?bg)\">x</div></body></html>")
+}
+
+/// `parse_and_layout` с настоящим `EventLoopProxy` (контекст хука живого окна) или без него.
+#[cfg(windows)]
+fn load1_parse(live: bool, det: deterministic::DetConfig, src: &str) -> crate::page_pipeline::ParsedPage {
+    load1_parse_html(live, det, &load1_page(src))
+}
+
+#[cfg(windows)]
+fn load1_parse_html(live: bool, det: deterministic::DetConfig, html: &str) -> crate::page_pipeline::ParsedPage {
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+    // Один цикл событий на процесс тестов: winit не даёт создать второй.
+    static PROXY: std::sync::OnceLock<Mutex<EventLoopProxy<LoadEvent>>> = std::sync::OnceLock::new();
+    let ctx = live.then(|| {
+        let proxy = PROXY
+            .get_or_init(|| {
+                let event_loop = EventLoop::<LoadEvent>::with_user_event()
+                    .with_any_thread(true)
+                    .build()
+                    .expect("event loop for the LOAD-1 test");
+                let proxy = event_loop.create_proxy();
+                // Цикл не запускаем, но и не роняем: прокси жив, пока жив он.
+                std::mem::forget(event_loop);
+                Mutex::new(proxy)
+            })
+            .lock()
+            .unwrap()
+            .clone();
+        crate::dynamic_image_hook::DynamicImageHookCtx {
+            generation: 0,
+            dedup: Arc::default(),
+            proxy,
+            stream_builder: None,
+        }
+    });
+    parse_and_layout(
+        html.as_bytes(),
+        Some("text/html"),
+        &ResourceBase::File(std::env::temp_dir().join("load1.html")),
+        &(Arc::new(StdoutEventSink) as Arc<dyn EventSink>),
+        Size::new(1024.0, 720.0),
+        &mut std::collections::HashSet::new(),
+        None, None, None, None,
+        &NullHyphenationProvider,
+        false,
+        det,
+        false,
+        None,
+        false,
+        None, None,
+        None,
+        lumen_core::ColorSpace::Srgb,
+        false,
+        &[],
+        &std::collections::HashMap::new(),
+        None,
+        None,
+        None,
+        None,
+        ctx,
+    )
+    .expect("pipeline must not fail on a well-formed page")
+}
+
+/// Headless (без `Lumen`) по-прежнему отдаёт страницу полностью загруженной.
+#[cfg(windows)]
+#[test]
+fn load1_headless_page_waits_for_images() {
+    let parsed = load1_parse(false, deterministic::DetConfig::default(), LOAD1_PNG);
+    assert!(!parsed.images_deferred);
+    assert!(
+        parsed.images.iter().any(|(src, _)| src == LOAD1_PNG),
+        "headless: <img> must be decoded before the page is returned"
+    );
+}
+
+/// Живое окно: страница уходит без картинок, остальное доедет `ImageDecoded`.
+#[cfg(windows)]
+#[test]
+fn load1_live_page_is_returned_before_images_arrive() {
+    let parsed = load1_parse(true, deterministic::DetConfig::default(), LOAD1_LIVE_ONLY);
+    assert!(parsed.images_deferred);
+    // Тот же адрес, который headless-проход декодирует сразу: тут его никто не ждал.
+    assert!(
+        parsed.images.is_empty(),
+        "live: nothing was decoded yet, the pipeline must not wait for the network: {:?}",
+        parsed.images.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>()
+    );
+}
+
+/// `--deterministic` (graphic_tests, gdigrab-снимки) остаётся полностью загруженным.
+#[cfg(windows)]
+#[test]
+fn load1_deterministic_live_page_still_waits_for_images() {
+    let det = deterministic::DetConfig { enabled: true, ..Default::default() };
+    let parsed = load1_parse(true, det, LOAD1_PNG);
+    assert!(!parsed.images_deferred);
+    assert!(parsed.images.iter().any(|(src, _)| src == LOAD1_PNG));
+}
+
+#[test]
+fn load1_window_load_waits_for_last_image_and_the_events_pass() {
+    use crate::page_load::{unsettled_images, window_load_due};
+    let requested: std::collections::HashSet<String> =
+        ["a.png", "b.png", "c.png"].iter().map(|s| (*s).to_owned()).collect();
+    let mut sizes: HashMap<String, (u32, u32)> = HashMap::new();
+    let mut errors: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // RenderDone уже был, картинки ещё в пути: `load` не приходит.
+    assert_eq!(unsettled_images(&requested, &sizes, &errors), 3);
+    assert!(!window_load_due(true, false, 3, false, false));
+    sizes.insert("a.png".into(), (1, 1));
+    errors.insert("b.png".into());
+    assert_eq!(unsettled_images(&requested, &sizes, &errors), 1);
+    assert!(!window_load_due(true, true, 1, false, false));
+    // Последняя осела, но проход, раздающий `load`/`error` картинкам, ещё не прошёл.
+    sizes.insert("c.png".into(), (2, 2));
+    assert_eq!(unsettled_images(&requested, &sizes, &errors), 0);
+    assert!(!window_load_due(true, true, 0, false, false));
+    // Проход прошёл: теперь окно получает `load`, и только раз.
+    assert!(window_load_due(true, false, 0, false, false));
+    assert!(!window_load_due(false, false, 0, false, false));
+    // LOAD-1B: все картинки осели, но `<iframe>` ещё грузится — `load` ждёт и его.
+    assert!(!window_load_due(true, false, 0, true, false));
+}
+
+/// LOAD-1B: живое окно отдаёт страницу без `<iframe>` (их грузит `Lumen::drive_deferred_frames`
+/// после `RenderDone`), headless и `--deterministic` — по-прежнему с готовыми под-документами.
+#[cfg(windows)]
+#[test]
+fn load1b_live_page_is_returned_before_iframes_load() {
+    let html = "<html><body><p>host</p><iframe srcdoc=\"<p>child</p>\"></iframe></body></html>";
+    let live = load1_parse_html(true, deterministic::DetConfig::default(), html);
+    assert!(live.images_deferred);
+    assert!(live.frames.is_empty(), "live: the pipeline must not wait for <iframe> documents");
+    let headless = load1_parse_html(false, deterministic::DetConfig::default(), html);
+    assert_eq!(headless.frames.len(), 1, "headless: sub-documents are loaded before the page is returned");
+    let det = deterministic::DetConfig { enabled: true, ..Default::default() };
+    let deterministic = load1_parse_html(true, det, html);
+    assert_eq!(deterministic.frames.len(), 1, "--deterministic keeps the fully loaded page");
+}
+
+/// Cross-origin пиксели без CORS заражают canvas и на пути, который конвейер не ждал.
+#[test]
+fn load1_cross_origin_url_is_tainted_same_origin_is_not() {
+    let base = ResourceBase::Url("https://site.example/dir/page.html".to_owned());
+    assert!(crate::subresources::is_cross_origin_url(&base, "https://cdn.example/a.png"));
+    assert!(!crate::subresources::is_cross_origin_url(&base, "https://site.example/a.png"));
+    assert!(!crate::subresources::is_cross_origin_url(&base, "a.png"));
+    assert!(!crate::subresources::is_cross_origin_url(&base, "data:image/png;base64,AAAA"));
+}
+
+/// Парный к живому тесту выше: адрес декодируется (минуя `IMAGE_CACHE`, чтобы не подсадить живому
+/// тесту готовый слот), так что пустой `images` у живого — результат отложенной загрузки.
+#[cfg(windows)]
+#[test]
+fn load1_live_only_image_is_decodable() {
+    let sink = Arc::new(StdoutEventSink) as Arc<dyn EventSink>;
+    let decoded = crate::subresources::decode_image(
+        LOAD1_LIVE_ONLY,
+        &ResourceBase::File(std::env::temp_dir().join("load1.html")),
+        &sink,
+        None,
+        lumen_core::ColorSpace::Srgb,
+        lumen_network::ReferrerPolicy::default_policy(),
+    );
+    assert!(decoded.is_some());
+}
+
+/// LOAD-3A: стенд — отвечает скриптом `body` через `delay_ms`, считает запросы.
+#[cfg(windows)]
+fn load3a_server(delay_ms: u64, body: &'static str) -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let hits_srv = Arc::clone(&hits);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { return };
+            let hits = Arc::clone(&hits_srv);
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                while reader.read_line(&mut line).is_ok_and(|n| n > 0) && line.trim() != "" {
+                    line.clear();
+                }
+                hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            });
+        }
+    });
+    (port, hits)
+}
+
+fn load3a_page(port: u16) -> String {
+    format!(
+        "<html><head><title>t</title></head><body><p>x</p>\
+         <script async src=\"http://127.0.0.1:{port}/a.js\"></script></body></html>"
+    )
+}
+
+/// Живое окно: `async`-скрипт, который стенд отдаёт через 3 с, не задерживает возврат страницы;
+/// потом он скачивается фоном, исполняется на JS-хэндле страницы, и `pending()` падает до нуля.
+#[cfg(windows)]
+#[test]
+fn load3a_live_async_script_does_not_delay_the_page() {
+    let (port, hits) = load3a_server(3000, "document.title = 'async-ran:' + document.currentScript.src.length;");
+    let started = std::time::Instant::now();
+    let parsed = load1_parse_html(true, deterministic::DetConfig::default(), &load3a_page(port));
+    let returned_in = started.elapsed();
+    assert!(
+        returned_in < std::time::Duration::from_millis(2900),
+        "async script must not hold the page: returned after {returned_in:?}"
+    );
+    let feed = parsed.async_scripts.clone().expect("live page has an async feed");
+    assert_eq!(feed.pending(), 1);
+    assert!(feed.take_ready().is_empty(), "the stand answers only after 3 s");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let ready = loop {
+        let ready = feed.take_ready();
+        if !ready.is_empty() || std::time::Instant::now() > deadline {
+            break ready;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    assert_eq!(ready.len(), 1);
+    assert_eq!(ready[0].external_ok, Some(true));
+    assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1, "script is fetched once");
+    #[cfg(feature = "v8")]
+    {
+        let js = parsed.js_ctx.as_ref().expect("page runtime");
+        assert_eq!(js.eval_js_value("document.title").unwrap(), "\"t\"", "async body has not run yet");
+        js.run_async_script(&ready[0]);
+        let title = js.eval_js_value("document.title").unwrap();
+        assert!(title.starts_with("\"async-ran:"), "currentScript names the async element: {title}");
+    }
+    feed.mark_executed(1);
+    assert_eq!(feed.pending(), 0);
+}
+
+/// Headless и `--deterministic` не меняются: `async` идёт в порядке документа и ждётся до возврата.
+#[cfg(windows)]
+#[test]
+fn load3a_headless_async_script_keeps_document_order() {
+    let (port, _hits) = load3a_server(1000, "document.title = 'ran';");
+    let started = std::time::Instant::now();
+    let parsed = load1_parse_html(false, deterministic::DetConfig::default(), &load3a_page(port));
+    assert!(started.elapsed() >= std::time::Duration::from_millis(1000));
+    assert!(parsed.async_scripts.is_none());
+    #[cfg(feature = "v8")]
+    assert_eq!(parsed.js_ctx.as_ref().unwrap().eval_js_value("document.title").unwrap(), "\"ran\"");
+}
+
+/// `load` ждёт `async`-скрипт, `DOMContentLoaded` — нет (его уже доставил конвейер).
+#[test]
+fn load3a_window_load_waits_for_async_scripts() {
+    use crate::page_load::window_load_due;
+    assert!(!window_load_due(true, false, 0, false, true));
+    assert!(window_load_due(true, false, 0, false, false));
+}
+
+// -- LOAD-3B: финальный проход не разбирает HTML второй раз -------------------
+
+fn load3b_stream_builder(bytes: &[u8], chunk: usize) -> lumen_html_parser::IncrementalTreeBuilder {
+    let mut b = lumen_html_parser::IncrementalTreeBuilder::new();
+    for part in bytes.chunks(chunk) {
+        b.feed_bytes(part);
+    }
+    b
+}
+
+fn load3b_build(
+    bytes: &[u8],
+    builder: Option<lumen_html_parser::IncrementalTreeBuilder>,
+    xml: bool,
+    allow: bool,
+) -> (lumen_dom::Document, bool, String) {
+    let encoding = lumen_encoding::detect(bytes, Some("text/html"));
+    let source = lumen_encoding::decode(encoding, bytes);
+    let (doc, handed_off) = crate::page_pipeline::build_document(bytes, encoding, &source, xml, allow, builder);
+    let reference = format!("{:?}", lumen_html_parser::parse(&source));
+    (doc, handed_off, reference)
+}
+
+#[test]
+fn load3b_utf8_page_reuses_stream_builder_dom() {
+    let html = "<!doctype html><title>Привет</title><body><p>Мир 🌍 <b>жирный</b><table><tr><td>x</td></table><script>var a = 1 < 2;</script>";
+    // Чанк в 7 байт режет многобайтные символы посередине — как сетевые пакеты.
+    let builder = load3b_stream_builder(html.as_bytes(), 7);
+    let (doc, handed_off, reference) = load3b_build(html.as_bytes(), Some(builder), false, true);
+    assert!(handed_off, "UTF-8 страница должна забрать дерево стриминга");
+    assert_eq!(format!("{doc:?}"), reference, "DOM из builder-а отличается от повторного разбора");
+}
+
+#[test]
+fn load3b_cp1251_page_falls_back_to_reparse() {
+    let mut bytes = b"<meta charset=windows-1251><p>".to_vec();
+    bytes.extend_from_slice(&[0xCF, 0xF0, 0xE8, 0xE2, 0xE5, 0xF2]); // «Привет»
+    let builder = load3b_stream_builder(&bytes, 5);
+    let (doc, handed_off, reference) = load3b_build(&bytes, Some(builder), false, true);
+    assert!(!handed_off, "не-UTF-8 документ стриминг декодирует неверно — нужен повторный разбор");
+    assert_eq!(format!("{doc:?}"), reference);
+    assert!(format!("{doc:?}").contains("Привет"));
+}
+
+#[test]
+fn load3b_fallbacks_keep_previous_dom() {
+    let html = "<p>текст</p>".as_bytes();
+    // Builder разобрал не те байты.
+    let other = load3b_stream_builder("<p>другое</p>".as_bytes(), 4);
+    let (doc, handed_off, reference) = load3b_build(html, Some(other), false, true);
+    assert!(!handed_off);
+    assert_eq!(format!("{doc:?}"), reference);
+    // Недокормленный builder (последний кусок не дошёл).
+    let partial = load3b_stream_builder(&html[..html.len() - 3], 4);
+    assert!(!load3b_build(html, Some(partial), false, true).1);
+    // --deterministic / XML-вид / BOM / нет builder-а.
+    let full = || load3b_stream_builder(html, 4);
+    assert!(!load3b_build(html, Some(full()), false, false).1);
+    assert!(!load3b_build(html, Some(full()), true, true).1);
+    assert!(!load3b_build(html, None, false, true).1);
+    let mut bom = vec![0xEF, 0xBB, 0xBF];
+    bom.extend_from_slice(html);
+    let (doc, handed_off, reference) = load3b_build(&bom, Some(load3b_stream_builder(&bom, 4)), false, true);
+    assert!(!handed_off, "стриминг не срезает BOM, финальный декодер срезает");
+    assert_eq!(format!("{doc:?}"), reference);
+    // Невалидный UTF-8 (lossy-декодеры могут разойтись).
+    let mut bad = b"<p>a".to_vec();
+    bad.extend_from_slice(&[0xFF, 0xFE, 0x41]);
+    bad.extend_from_slice(b"</p>");
+    assert!(!load3b_build(&bad, Some(load3b_stream_builder(&bad, 3)), false, true).1);
+}
+
+#[test]
+fn load3b_fingerprint_is_chunking_independent() {
+    let data = "<div>Привет, мир</div>".as_bytes();
+    for chunk in [1, 3, data.len()] {
+        assert_eq!(
+            load3b_stream_builder(data, chunk).fed_fingerprint(),
+            lumen_html_parser::bytes_fingerprint(data),
+            "chunk={chunk}"
+        );
+    }
+}

@@ -340,10 +340,11 @@ fn fetch_stylesheet_text(
                     referrer_policy,
                 );
                 client
-                    .fetch_subresource_with_content_type(&sub_url, RequestDestination::Style)
-                    .map(|(body, content_type)| crate::prefetch::CachedResource {
-                        body,
-                        content_type,
+                    .fetch_subresource_with_links(&sub_url, RequestDestination::Style)
+                    .map(|(body, content_type, links)| {
+                        // BUG-906: `Link:` header of the stylesheet response.
+                        crate::page_source::emit_link_hints(&links, &sub_url, sink, cookie_jar.clone(), &[]);
+                        crate::prefetch::CachedResource { body, content_type }
                     })
                     .map_err(|e| e.to_string())
             });

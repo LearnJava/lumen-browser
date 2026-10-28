@@ -26,6 +26,8 @@ impl Lumen {
         // UX-DIALOGS: первым делом — JS-поток может стоять в `alert`, и тогда
         // остальные чтения движка вернутся пустыми (`js_blocked`).
         self.poll_page_dialog();
+        // COMPAT-HANG: сторож разбудил цикл — не завис ли скрипт активной страницы.
+        self.poll_script_hang();
         // FRAME-8: спавнит фоновые потоки для того, что скан прошлого тика
         // поставил в очередь — до какой-либо накачки JS в ЭТОМ тике, ровно
         // на дистанции в один полный проход event loop от места, где скан
@@ -267,6 +269,9 @@ impl Lumen {
         // (the engine thread + `lumen-js` thread are busy anyway). Off the flag
         // `raf_turn_inflight()` is always `false`, so the gate is byte-identical.
         if self.js_present && !self.raf_turn_inflight() {
+            // LOAD-3A: скачавшиеся `async`-скрипты страницы — до тика таймеров, чтобы правки DOM
+            // этого же прохода увидел `take_dom_dirty` ниже, а не следующий пробуждённый цикл.
+            self.drive_async_scripts();
             // BUG-839: subresource loads the network layer recorded since the
             // last step. Drained only when there is a runtime to hand them to —
             // most of a page's images finish before its JS context exists, and
@@ -523,6 +528,19 @@ impl Lumen {
         // queue up (there might not be one).
         #[cfg(feature = "v8")]
         self.drain_pending_lazy_image_reqs();
+        // LOAD-1: свёрнутое окно не получает `RedrawRequested`, а `load` страницы,
+        // отданной без ожидания картинок, не должен ждать показа окна.
+        if self.pending_window_load.is_some() {
+            // LOAD-1B: фреймы живой страницы загружаются после `RenderDone`; `load` ждёт их.
+            if let Some(at) = self.drive_deferred_frames() {
+                next_wakeup = Some(next_wakeup.map_or(at, |t| t.min(at)));
+            }
+            // LOAD-3A: без JS-хэндла блок выше не сработал — очередь всё равно надо опустошить,
+            // иначе `load` ждал бы скрипты, которым негде исполниться.
+            self.drive_async_scripts();
+            self.apply_stream_intrinsic_sizes();
+            self.maybe_fire_window_load();
+        }
         // ADR-016 M0.3 + M2.2: run the debounced transform-first-zoom relayout when
         // its deadline elapses; otherwise fold the deadline into the wakeup so the
         // parked loop wakes exactly then. When the engine thread is enabled, route
@@ -573,6 +591,10 @@ impl Lumen {
         }
         // COMPAT-FRUSTRATION: белый экран через 3 с, чип после паузы в наборе.
         if let Some(at) = self.frustration_tick() {
+            next_wakeup = Some(next_wakeup.map_or(at, |t| t.min(at)));
+        }
+        // LOAD-2: дедлайн ожидания стилей `<head>` — черновик без медленных таблиц.
+        if let Some(at) = self.stream_css_deadline_tick() {
             next_wakeup = Some(next_wakeup.map_or(at, |t| t.min(at)));
         }
         // BUG-1630: кадр живой анимации хрома — по таймеру, чтобы между кадрами

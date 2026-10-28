@@ -129,6 +129,9 @@ pub(crate) fn render_bytes(
             images: parsed.images,
             animated_gifs: parsed.animated_gifs,
             lazy_pairs: parsed.lazy_pairs,
+            images_deferred: parsed.images_deferred,
+            async_scripts: parsed.async_scripts,
+            fired_image_events: parsed.fired_image_events,
             layout_box,
             font_registry: parsed.font_registry,
             pending_web_fonts: parsed.pending_web_fonts,
@@ -341,6 +344,17 @@ pub(crate) struct LoadedPage {
     /// after page load via `_lumen_init_lazy_images` for proximity-based loading.
     #[allow(dead_code)] // read only inside #[cfg(feature = "v8")] blocks
     pub(crate) lazy_pairs: Vec<(u32, String)>,
+    /// LOAD-1: страница отдана без ожидания картинок (живое окно) — `images` содержит
+    /// только уже декодированные, остальные приедут `LoadEvent::ImageDecoded`, а `load`
+    /// и `readyState=complete` ждут последнюю из них (`Lumen::pending_window_load`).
+    /// LOAD-1B: то же для `<iframe>` — `frames` пуст, их загружает
+    /// `Lumen::drive_deferred_frames` после `RenderDone`, и `load` ждёт и их.
+    pub(crate) images_deferred: bool,
+    /// LOAD-3A: очередь внешних классических `async`-скриптов (живое окно) — их качает
+    /// `AsyncScriptFeed`, `load` ждёт последний (`Lumen::drive_async_scripts`).
+    pub(crate) async_scripts: Option<Arc<crate::async_scripts::AsyncScriptFeed>>,
+    /// LOAD-1: `(узел, url)`, чей `load` конвейер уже доставил новому JS-рантайму.
+    pub(crate) fired_image_events: Vec<(u32, String)>,
     /// Layout-дерево страницы — используется animation scheduler-ом.
     pub(crate) layout_box: lumen_layout::LayoutBox,
     /// Провайдер шрифтов с @font-face local()-источниками страницы.
@@ -404,6 +418,9 @@ impl LoadedPage {
             images: Vec::new(),
             animated_gifs: Vec::new(),
             lazy_pairs: Vec::new(),
+            images_deferred: false,
+            async_scripts: None,
+            fired_image_events: Vec::new(),
             layout_box: lumen_layout::LayoutBox {
                 anchor_scroll: None, cv_hidden: Vec::new(),
                 node: NodeId::from_index(0),
@@ -456,6 +473,12 @@ pub(crate) struct ParsedPage {
     /// `(node_id_u32, url)` pairs for `<img loading="lazy">` elements — skipped by
     /// the eager fetch pass; registered with JS `_lumen_init_lazy_images` after load.
     pub(crate) lazy_pairs: Vec<(u32, String)>,
+    /// См. [`LoadedPage::images_deferred`].
+    pub(crate) images_deferred: bool,
+    /// См. [`LoadedPage::async_scripts`].
+    pub(crate) async_scripts: Option<Arc<crate::async_scripts::AsyncScriptFeed>>,
+    /// См. [`LoadedPage::fired_image_events`].
+    pub(crate) fired_image_events: Vec<(u32, String)>,
     /// Subresource-хинты, найденные preload-сканером ДО DOM-парсинга.
     /// Source-order: первые хинты важнее (их fetch стартует первым).
     pub(crate) preload_hints: Vec<lumen_html_parser::PreloadHint>,
@@ -952,6 +975,44 @@ pub(crate) fn is_xml_flavoured_document(content_type: Option<&str>, base: &Resou
     path.ends_with(".xhtml") || path.ends_with(".xht") || path.ends_with(".svg")
 }
 
+/// LOAD-3B: дерево документа. Если живое окно отдало `IncrementalTreeBuilder`
+/// стримингового черновика и он разобрал ровно те байты, которые финальный
+/// проход декодировал бы как UTF-8, берём его результат (`finish()`) вместо
+/// повторного `parse` — второй разбор 850-КБ документа стоил десятки мс на
+/// критическом пути. Во всех остальных случаях (не UTF-8: стриминг декодирует
+/// только его; BOM — стриминг его не срезает; XML-вид; невалидный UTF-8 —
+/// lossy-декодеры могут разойтись; `--deterministic`; отпечаток байт не
+/// совпал) builder выбрасывается и документ разбирается заново, как раньше.
+/// Второй элемент — `true`, если использован builder.
+pub(crate) fn build_document(
+    bytes: &[u8],
+    encoding: lumen_encoding::Encoding,
+    source: &str,
+    xml_flavoured: bool,
+    allow_handoff: bool,
+    stream_builder: Option<lumen_html_parser::IncrementalTreeBuilder>,
+) -> (lumen_dom::Document, bool) {
+    if let Some(builder) = stream_builder
+        && allow_handoff
+        && !xml_flavoured
+        && !builder.is_xml_flavoured()
+        && encoding == lumen_encoding::Encoding::Utf8
+        && !bytes.starts_with(&[0xEF, 0xBB, 0xBF])
+        && std::str::from_utf8(bytes).is_ok()
+        && builder.fed_fingerprint() == lumen_html_parser::bytes_fingerprint(bytes)
+    {
+        let _s = lumen_core::trace::span("parse-html-finish", "parse");
+        return (builder.finish(), true);
+    }
+    let _s = lumen_core::trace::span("parse-html", "parse");
+    let doc = if xml_flavoured {
+        lumen_html_parser::parse_xml_flavoured(source)
+    } else {
+        lumen_html_parser::parse(source)
+    };
+    (doc, false)
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn parse_and_layout(
@@ -1003,8 +1064,12 @@ pub(crate) fn parse_and_layout(
     // result back to the shell's event loop. `None` for headless/test callers
     // with no live `Lumen` (`dump_mode.rs`, `page_source::load`) — the hook is
     // simply not built for them, same as before this feature existed.
-    dynamic_image_hook_ctx: Option<crate::dynamic_image_hook::DynamicImageHookCtx>,
+    mut dynamic_image_hook_ctx: Option<crate::dynamic_image_hook::DynamicImageHookCtx>,
 ) -> Result<ParsedPage, Box<dyn Error>> {
+    // LOAD-1: живое окно (есть `Lumen`, на который можно слать `ImageDecoded`) отдаёт
+    // страницу, не дожидаясь картинок; `--deterministic` (graphic_tests, gdigrab-снимки)
+    // и все headless-вызовы получают полностью загруженную страницу, как раньше.
+    let defer_images = dynamic_image_hook_ctx.is_some() && !deterministic.enabled;
     // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
     // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы.
     let encoding = lumen_encoding::detect(bytes, content_type);
@@ -1026,14 +1091,19 @@ pub(crate) fn parse_and_layout(
         .collect();
     warm_preload_cache(&preload_hints, base, sink, cookie_jar.clone(), &warm_csp);
 
-    let mut doc = {
-        let _s = lumen_core::trace::span("parse-html", "parse");
-        if is_xml_flavoured_document(content_type, base) {
-            lumen_html_parser::parse_xml_flavoured(&source)
-        } else {
-            lumen_html_parser::parse(&source)
-        }
-    };
+    // LOAD-3B: дерево стримингового черновика, если живое окно его отдало.
+    let stream_builder = dynamic_image_hook_ctx.as_mut().and_then(|c| c.stream_builder.take());
+    let (mut doc, handed_off) = build_document(
+        bytes,
+        encoding,
+        &source,
+        is_xml_flavoured_document(content_type, base),
+        !deterministic.enabled,
+        stream_builder,
+    );
+    if handed_off {
+        eprintln!("HTML: взято дерево стриминга, повторный разбор пропущен (LOAD-3B)");
+    }
     // BUG-358: stamp the document with what it was actually decoded as / served
     // as, so `document.characterSet`/`charset`/`inputEncoding`/`contentType`
     // read real per-load state instead of `undefined`.
@@ -1140,12 +1210,46 @@ pub(crate) fn parse_and_layout(
     // BUG-164: collect classic + module scripts in document order and fetch
     // external `<script src>` bodies via the subresource fetcher, so SPA
     // bundles execute (lenta.ru owlBundle.js etc.), not just inline scripts.
+    //
+    // LOAD-3A: в живом окне (`defer_images`) внешний классический `async` не входит в
+    // `fetch-scripts`: его качает `AsyncScriptFeed` параллельно конвейеру, а исполняет UI
+    // после `RenderDone`. Headless/детерминированные режимы остаются на порядке документа.
+    let mut async_scripts = None;
     let (classic_scripts, deferred_scripts) = {
         let _s = lumen_core::trace::span("fetch-scripts", "net");
         let mut classic_items = Vec::new();
         let mut deferred_items = Vec::new();
-        collect_scripts_ordered(&doc, doc.root(), &mut classic_items, &mut deferred_items);
+        let mut async_items = Vec::new();
+        if defer_images {
+            crate::scripts::collect_scripts_split_async(
+                &doc, doc.root(), &mut classic_items, &mut deferred_items, &mut async_items,
+            );
+        } else {
+            collect_scripts_ordered(&doc, doc.root(), &mut classic_items, &mut deferred_items);
+        }
         let eff_base = effective_base(&doc, base);
+        if !async_items.is_empty()
+            && let Some(proxy) = dynamic_image_hook_ctx.as_ref().map(|c| c.proxy.clone())
+        {
+            let env = crate::scripts::ScriptFetchEnv::of(&doc, &eff_base);
+            let items = async_items
+                .into_iter()
+                .map(|item| {
+                    let meta = crate::scripts::ScriptElementMeta::of(&doc, item.node());
+                    (item, meta)
+                })
+                .collect();
+            async_scripts = Some(crate::async_scripts::AsyncScriptFeed::spawn(
+                items,
+                env,
+                eff_base.clone(),
+                Arc::clone(sink),
+                cookie_jar.clone(),
+                move || {
+                    let _ = proxy.send_event(LoadEvent::AsyncScriptReady);
+                },
+            ));
+        }
         (
             resolve_script_sources(&classic_items, &eff_base, sink, cookie_jar.clone(), &doc),
             resolve_script_sources(&deferred_items, &eff_base, sink, cookie_jar.clone(), &doc),
@@ -1517,7 +1621,12 @@ pub(crate) fn parse_and_layout(
     // Срез 11: экранный media-гейт `<link>` и вьюпорт picker-а картинок —
     // те же, с какими страница грузит свои подресурсы (print-гейт
     // фреймам не нужен — печать PDF под-документов вне среза).
-    let mut frames = {
+    // LOAD-1B: живое окно не ждёт сеть ради `<iframe>` — страница уходит без них, а
+    // `Lumen::drive_deferred_frames` после `RenderDone` загружает их тем же путём, что
+    // и вставленные скриптом (FRAME-8); `load` окна ждёт последний из них.
+    let mut frames = if defer_images {
+        Vec::new()
+    } else {
         let _s = lumen_core::trace::span("fetch-iframes", "net");
         let eff_base = effective_base(&doc_arc.lock().unwrap(), base);
         load_frame_sub_documents(&doc_arc, 0, &eff_base, &doc_arc, &frame_env, js_ctx.as_ref())
@@ -1534,7 +1643,7 @@ pub(crate) fn parse_and_layout(
         let _s = lumen_core::trace::span("fetch-images", "net");
         let mut d = doc_arc.lock().unwrap();
         let eff_base = effective_base(&d, base);
-        fetch_and_decode_images(&mut d, &eff_base, sink, viewport, cookie_jar.clone(), target, &mut intrinsic_written)
+        fetch_and_decode_images(&mut d, &eff_base, sink, viewport, cookie_jar.clone(), target, &mut intrinsic_written, defer_images)
     };
     // BUG-935 срез 94: скрипты уже могли взять базис инкрементального каскада (флаш на
     // `getComputedStyle`/`offsetWidth`) — дописанные только что `width`/`height` в нём не видны.
@@ -1643,6 +1752,10 @@ pub(crate) fn parse_and_layout(
     #[cfg(not(feature = "v8"))]
     let _ = &blocked_by_media_src;
 
+    // LOAD-1: `(узел, url)`, которым конвейер уже отдал `load` — `Lumen` кладёт их в
+    // `stream_image_events_fired`, чтобы проход `apply_stream_intrinsic_sizes` не
+    // повторил событие для картинок, успевших декодироваться до `RenderDone`.
+    let mut fired_image_events: Vec<(u32, String)> = Vec::new();
     // Register decoded <img> bitmaps with the JS runtime so Canvas 2D
     // drawImage(imgElement, …) can read the pixels. Collect nid→url from DOM
     // (same traversal fetch_and_decode_images used), join with decoded images by
@@ -1693,7 +1806,16 @@ pub(crate) fn parse_and_layout(
             }
             let nid = req.node_id.index() as u32;
             match url_to_img.get(req.url.as_str()) {
-                Some(img) => js.fire_image_load(nid, img.width, img.height),
+                Some(img) => {
+                    js.fire_image_load(nid, img.width, img.height);
+                    if defer_images {
+                        fired_image_events.push((nid, req.url.clone()));
+                    }
+                }
+                // LOAD-1: «нет в `images`» в живом режиме чаще всего значит «ещё не
+                // пришла», а не «упала» — исход (в том числе `error` для упавших и
+                // заблокированных CSP) доставит `apply_stream_intrinsic_sizes`.
+                None if defer_images => {}
                 None => js.fire_image_error(nid),
             }
         }
@@ -1877,7 +1999,7 @@ pub(crate) fn parse_and_layout(
             .as_ref()
             .map(|(policy, _)| (policy.as_slice(), self_origin.as_ref()));
         let (decoded, blocked) = fetch_and_decode_background_images(
-            &layout, &eff_base, sink, cookie_jar.clone(), target, csp_gate, referrer_policy,
+            &layout, &eff_base, sink, cookie_jar.clone(), target, csp_gate, referrer_policy, defer_images,
         );
         for (src, image) in decoded {
             images.push((src, image));
@@ -1923,6 +2045,9 @@ pub(crate) fn parse_and_layout(
         images,
         animated_gifs,
         lazy_pairs,
+        images_deferred: defer_images,
+        async_scripts,
+        fired_image_events,
         preload_hints,
         html_source: source,
         font_registry: font_provider,

@@ -16364,11 +16364,52 @@ function _lumen_link_preload(nid, href) {
     if (_LUMEN_LINK_AS_DESTINATIONS[dest] !== 1) return;
     if (!_lumen_link_hint_media_matches(nid)) return;
     if (!_lumen_link_hint_type_supported(dest, _lumen_u2n(_lumen_get_attr(nid, 'type')))) return;
-    if (dest === 'fetch') {
-        _lumen_fetch_hint_register(_url_resolve(String(href), _lumen_document_base_url()),
-                                   _lumen_u2n(_lumen_get_attr(nid, 'crossorigin')));
-    }
+    if (dest === 'fetch') _lumen_link_fetch_hint_register(nid, href);
     _lumen_link_hint_fetch(nid, href, null, dest);
+}
+
+// nid → 1 once this `<link rel=preload as=fetch>` is in the `fetch()` hint
+// registry. The registry is filled from two places — here and from
+// `_lumen_link_fetch_hints_prescan` — and one element must not be entered twice.
+var _lumen_link_fetch_hint_nids = {};
+
+function _lumen_link_fetch_hint_register(nid, href) {
+    if (_lumen_link_fetch_hint_nids[nid] === 1) return;
+    _lumen_link_fetch_hint_nids[nid] = 1;
+    _lumen_fetch_hint_register(_url_resolve(String(href), _lumen_document_base_url()),
+                               _lumen_u2n(_lumen_get_attr(nid, 'crossorigin')));
+}
+
+// BUG-907: the hint pass above runs at `readyState='interactive'`, but a
+// `fetch()` from an inline script can run while the parser is still going — the
+// preload scanner (and `warm_preload_cache`) had already started the hint's
+// download, yet the registry was empty, so the page's own `fetch()` went to the
+// network a second time. Called by `_lumen_fetch_take_hint` until the
+// parser-document pass has run: registers the `as=fetch` preloads already in the
+// tree, with the same gating as `_lumen_link_preload`.
+var _lumen_link_hints_scanned = false;
+
+function _lumen_link_fetch_hints_prescan() {
+    var links;
+    try { links = document.getElementsByTagName('link'); } catch (e) { return; }
+    if (!links) return;
+    for (var i = 0; i < links.length; i++) {
+        var el = links[i];
+        if (!el || el.__nid__ === undefined) continue;
+        var nid = el.__nid__;
+        if (_lumen_link_fetch_hint_nids[nid] === 1) continue;
+        var rel = _lumen_u2n(_lumen_get_attr(nid, 'rel'));
+        if (rel === null) continue;
+        if (_lumen_link_hint_kind(String(rel).toLowerCase().split(/\s+/)) !== 'preload') continue;
+        var asAttr = _lumen_u2n(_lumen_get_attr(nid, 'as'));
+        if (asAttr === null || String(asAttr).trim().toLowerCase() !== 'fetch') continue;
+        var href = _lumen_u2n(_lumen_get_attr(nid, 'href'));
+        href = (href === null) ? '' : String(href).trim();
+        if (href === '') continue;
+        if (!_lumen_link_hint_media_matches(nid)) continue;
+        if (!_lumen_link_hint_type_supported('fetch', _lumen_u2n(_lumen_get_attr(nid, 'type')))) continue;
+        _lumen_link_fetch_hint_register(nid, href);
+    }
 }
 
 // `rel=modulepreload`, §4.6.7 «fetch a modulepreload module script graph».
@@ -16425,6 +16466,7 @@ function _lumen_link_hint_prepare(nid, toks) {
 // Walks the whole document rather than just `<head>` — a `<link>` in the body
 // is conforming markup and WPT uses it.
 function _lumen_link_hints_scan() {
+    _lumen_link_hints_scanned = true;
     var links;
     try { links = document.getElementsByTagName('link'); } catch (e) { return; }
     if (!links) return;
