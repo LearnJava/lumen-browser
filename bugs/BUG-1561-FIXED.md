@@ -1,6 +1,6 @@
 # BUG-1561 — CSSOM `scroll-behavior`: `getComputedStyle().scrollBehavior` — `""`, недопустимое `normal` принимается
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-28 (P3) — таблица ключевых слов `scroll-behavior` в шиме отвергает всё, кроме `auto|smooth`; тесты `v8_bug1561_scroll_behavior_cssom`, `computed_map_scroll_behavior`.
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 25, `css/css-typed-om` + `cssom-view` + `cssom` + `css-lists` + `css-counter-styles`)
 **Область:** css-parser/layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`, разбор `scroll-behavior`)
 

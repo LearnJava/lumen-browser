@@ -902,6 +902,15 @@ fn computed_map_transition_defaults_without_declaration() {
     assert_eq!(m.get("animation-play-state").map(String::as_str), Some("running"));
 }
 
+// BUG-1561: `scroll-behavior` присутствует в карте computed (initial `auto`, не наследуется).
+#[test]
+fn computed_map_scroll_behavior() {
+    let m = div_computed_map("<div>x</div>", "");
+    assert_eq!(m.get("scroll-behavior").map(String::as_str), Some("auto"));
+    let m = div_computed_map("<div>x</div>", "div { scroll-behavior: smooth; }");
+    assert_eq!(m.get("scroll-behavior").map(String::as_str), Some("smooth"));
+}
+
 #[test]
 fn computed_map_overscroll_behavior() {
     let m = div_computed_map(

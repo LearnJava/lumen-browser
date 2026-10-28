@@ -737,7 +737,7 @@ pub struct ComputedStyle {
     /// CSS Basic UI L4 §6 — `resize`. NOT inherited. Initial: `None`.
     /// Drag-resize UI (grip hit-test, apply): `crates/shell/src/main.rs` (CC-CSS-4).
     pub resize: Resize,
-    /// CSS Overflow L3 — `scroll-behavior`. Inherited.
+    /// CSSOM View §13 — `scroll-behavior`. NOT inherited. Initial: `Auto`.
     pub scroll_behavior: ScrollBehavior,
     /// CSS Scroll Snap L1 §3.1 — `scroll-snap-type`. Не наследуется.
     pub scroll_snap_type: ScrollSnapType,
