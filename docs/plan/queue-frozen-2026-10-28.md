@@ -8,10 +8,11 @@
 в конец очереди, когда отчёт триажа (`docs/perf/runs/*-compat-triage.md`) называет сайт,
 которому она нужна. Номера строк в колонке «был» — на момент заморозки и дальше протухают.
 
-## STATUS-P1 — 72
+## STATUS-P1 — 73
 
 | ID | был | суть |
 |---|---|---|
+| AUTOMATION-KEY-DEFAULT | `ROADMAP.md:1292` | Дефолтные действия клавиш в автоматизации (кластер I разведки WPT-SHADOW-SCOUT, docs/wpt-vendor-notes/shadow-dom.md: 72 id, потолок ≈ 70 бал |
 | SHADOW-ADOPTED-SS | `ROADMAP.md:1293` | Атрибут shadowrootadoptedstylesheets и IDL HTMLTemplateElement.shadowRootAdoptedStyleSheets (кластер B разведки WPT-SHADOW-SCOUT: 39 id в sh |
 | SHADOW-REFTARGET | `ROADMAP.md:1294` | Reference Target (tentative, shadowrootreferencetarget / ShadowRoot.referenceTarget): кластер L разведки WPT-SHADOW-SCOUT — shadow-dom/refer |
 | SHADOW-LAYOUT-2 | `ROADMAP.md:1295` | Хит-тест и раскладка через границы теневых деревьев (кластер M разведки WPT-SHADOW-SCOUT, 24 id, потолок ≈ 14 баллов): (1) DocumentOrShadowR |
@@ -96,10 +97,11 @@
 | WPT-DROP-1027-S8 | `ROADMAP.md:1326` | Срез 8 WPT-DROP-1027, бриф §S8. Регрессии остального css/ (filter-effects, css-text, css-anchor-position, css-cascade, selectors, css-shapes |
 | WPT-DROP-1027-S9 | `ROADMAP.md:1327` | Срез 9 WPT-DROP-1027, бриф §S9. Сводная таблица вердикт × группа в docs/wpt/drop-1027.md, абзац в docs/wpt/pass-rate.md §«Пятая полная цифра |
 
-## STATUS-P3 — 91
+## STATUS-P3 — 92
 
 | ID | был | суть |
 |---|---|---|
+| BUG-1563 | `BUGS.md:225` | Typed OM: new CSSMathSum(a, b), CSSMathProduct, CSSMathMin, CSSMathMax принимают массив вместо перечисления аргументов — 243 теста падают в  |
 | BUG-1564 | `BUGS.md:226` | Typed OM: нет CSSNumericValue.parse, CSSColorValue.parse, CSSMathClamp, CSSImageValue, CSSNumericArray, CSS.Q/Hz/kHz/cap/svw/lvh/dvh/cqw/cqi |
 | BUG-1565 | `BUGS.md:227` | Typed OM: StylePropertyMap.clear нет, get/has/delete/getAll("lemon") не бросают TypeError, set недопустимого значения не бросает, new CSSUni |
 | BUG-1566 | `BUGS.md:228` | @counter-style с system: cyclic: отрицательное значение выводится со знаком (-Y), у эталона знака нет. @counter-style system: cyclic: отрица |
