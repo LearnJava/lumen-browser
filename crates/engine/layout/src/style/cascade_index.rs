@@ -870,7 +870,7 @@ thread_local! {
     /// rules participate in the cascade only for the host (and its slotted light
     /// children) of the tree they belong to. Document-scope `:host`/`::slotted`
     /// rules are no-ops (CSS Scoping L1 §6.1-6.2).
-    pub(in crate::style) static SHADOW_SHEETS: RefCell<std::collections::HashMap<NodeId, Stylesheet>> =
+    pub(in crate::style) static SHADOW_SHEETS: RefCell<std::collections::HashMap<NodeId, std::sync::Arc<Stylesheet>>> =
         RefCell::new(std::collections::HashMap::new());
 
     /// Index of the shadow host whose own shadow-tree stylesheet is currently
@@ -886,7 +886,9 @@ thread_local! {
 /// Called once at the start of each layout entry point (after `build_flat_tree`),
 /// replacing any sheets from the previous pass. Keyed by shadow-host `NodeId`.
 pub fn set_shadow_sheets(map: std::collections::HashMap<NodeId, Stylesheet>) {
-    SHADOW_SHEETS.with(|cell| *cell.borrow_mut() = map);
+    SHADOW_SHEETS.with(|cell| {
+        *cell.borrow_mut() = map.into_iter().map(|(host, sheet)| (host, std::sync::Arc::new(sheet))).collect();
+    });
 }
 
 /// Drop all installed shadow-tree stylesheets (used by tests to avoid leaking
