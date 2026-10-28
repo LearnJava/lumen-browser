@@ -121,6 +121,9 @@ window.getComputedStyle = function(element, pseudoElt) {
         if (name === 'view-transition-scope' && typeof _lumen_vt_scope_active === 'function'
             && _lumen_vt_scope_active(nid)) return 'all';
         var base = _lumen_computed_property(nid, name);
+        // A registered custom property animates by its syntax (CSS Properties and Values §5):
+        // a running CSS animation shows through the read like any other property's.
+        if (name.charCodeAt(0) === 45 && name.charCodeAt(1) === 45) return _wa_custom_css_anim(nid, name, base);
         // CSS Gap Decorations L1 §4.7 + CSS Transitions L1: the snapshot holds the
         // settled value; a running transition of a rule property is applied here.
         if (_wa_gap_tr_name_re.test(name)) {
@@ -5414,7 +5417,9 @@ function _wa_gap_an_value(nid, kebab, base, value, pseudo) {
     var list = _css_an_update(nid, pseudo || null);
     if (!list.length) return value;
     var ms = _css_now();
-    var camel = kebab.replace(/-([a-z])/g, function(m, c) { return c.toUpperCase(); });
+    // A custom property keeps its `--name` and interpolates by its registered syntax.
+    var custom = kebab.charCodeAt(0) === 45 && kebab.charCodeAt(1) === 45;
+    var camel = custom ? kebab : kebab.replace(/-([a-z])/g, function(m, c) { return c.toUpperCase(); });
     var result = value, eff = null;
     for (var n = 0; n < list.length; n++) {
         var anim = list[n].anim, i = list[n].i;
@@ -5453,8 +5458,11 @@ function _wa_gap_an_value(nid, kebab, base, value, pseudo) {
         // declaration wins); snapped like the transitions' eased progress.
         var tfs = list.lists['timing-function'];
         local = Math.round(_wa_ease(local, from.easing || tfs[i % tfs.length]) * 1e5) / 1e5;
-        result = _wa_motion_interp(camel, _wa_motion_resolve(eff, camel, from.value),
-                                   _wa_motion_resolve(eff, camel, to.value), local);
+        result = custom
+            ? _wa_interp_prop(camel, _wa_custom_font_lengths(eff.target, String(from.value).trim()),
+                              _wa_custom_font_lengths(eff.target, String(to.value).trim()), local)
+            : _wa_motion_interp(camel, _wa_motion_resolve(eff, camel, from.value),
+                                _wa_motion_resolve(eff, camel, to.value), local);
     }
     return result;
 }
@@ -6061,6 +6069,16 @@ function _wa_custom_font_lengths(target, v) {
         var base = u.toLowerCase() === 'em' ? em : rem;
         return isNaN(base) ? _m : (+(parseFloat(n) * base).toFixed(6)) + 'px';
     });
+}
+
+// The value of the registered custom property `name` of `nid` with the element's running CSS
+// animations applied; unregistered properties (discrete, no syntax to interpolate by) and
+// elements without an animation keep the snapshot's `base`.
+function _wa_custom_css_anim(nid, name, base) {
+    if (base === '') return base;
+    var regs = __lumen_C._lumen_registered_properties;
+    if (!regs || !regs.has(name)) return base;
+    return _wa_gap_an_value(nid, name, base, base);
 }
 
 function _wa_custom_color_text(c) {
