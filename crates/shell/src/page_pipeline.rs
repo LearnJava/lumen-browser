@@ -129,6 +129,8 @@ pub(crate) fn render_bytes(
             images: parsed.images,
             animated_gifs: parsed.animated_gifs,
             lazy_pairs: parsed.lazy_pairs,
+            images_deferred: parsed.images_deferred,
+            fired_image_events: parsed.fired_image_events,
             layout_box,
             font_registry: parsed.font_registry,
             pending_web_fonts: parsed.pending_web_fonts,
@@ -341,6 +343,12 @@ pub(crate) struct LoadedPage {
     /// after page load via `_lumen_init_lazy_images` for proximity-based loading.
     #[allow(dead_code)] // read only inside #[cfg(feature = "v8")] blocks
     pub(crate) lazy_pairs: Vec<(u32, String)>,
+    /// LOAD-1: страница отдана без ожидания картинок (живое окно) — `images` содержит
+    /// только уже декодированные, остальные приедут `LoadEvent::ImageDecoded`, а `load`
+    /// и `readyState=complete` ждут последнюю из них (`Lumen::pending_window_load`).
+    pub(crate) images_deferred: bool,
+    /// LOAD-1: `(узел, url)`, чей `load` конвейер уже доставил новому JS-рантайму.
+    pub(crate) fired_image_events: Vec<(u32, String)>,
     /// Layout-дерево страницы — используется animation scheduler-ом.
     pub(crate) layout_box: lumen_layout::LayoutBox,
     /// Провайдер шрифтов с @font-face local()-источниками страницы.
@@ -404,6 +412,8 @@ impl LoadedPage {
             images: Vec::new(),
             animated_gifs: Vec::new(),
             lazy_pairs: Vec::new(),
+            images_deferred: false,
+            fired_image_events: Vec::new(),
             layout_box: lumen_layout::LayoutBox {
                 anchor_scroll: None, cv_hidden: Vec::new(),
                 node: NodeId::from_index(0),
@@ -456,6 +466,10 @@ pub(crate) struct ParsedPage {
     /// `(node_id_u32, url)` pairs for `<img loading="lazy">` elements — skipped by
     /// the eager fetch pass; registered with JS `_lumen_init_lazy_images` after load.
     pub(crate) lazy_pairs: Vec<(u32, String)>,
+    /// См. [`LoadedPage::images_deferred`].
+    pub(crate) images_deferred: bool,
+    /// См. [`LoadedPage::fired_image_events`].
+    pub(crate) fired_image_events: Vec<(u32, String)>,
     /// Subresource-хинты, найденные preload-сканером ДО DOM-парсинга.
     /// Source-order: первые хинты важнее (их fetch стартует первым).
     pub(crate) preload_hints: Vec<lumen_html_parser::PreloadHint>,
@@ -1005,6 +1019,10 @@ pub(crate) fn parse_and_layout(
     // simply not built for them, same as before this feature existed.
     dynamic_image_hook_ctx: Option<crate::dynamic_image_hook::DynamicImageHookCtx>,
 ) -> Result<ParsedPage, Box<dyn Error>> {
+    // LOAD-1: живое окно (есть `Lumen`, на который можно слать `ImageDecoded`) отдаёт
+    // страницу, не дожидаясь картинок; `--deterministic` (graphic_tests, gdigrab-снимки)
+    // и все headless-вызовы получают полностью загруженную страницу, как раньше.
+    let defer_images = dynamic_image_hook_ctx.is_some() && !deterministic.enabled;
     // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
     // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы.
     let encoding = lumen_encoding::detect(bytes, content_type);
@@ -1534,7 +1552,7 @@ pub(crate) fn parse_and_layout(
         let _s = lumen_core::trace::span("fetch-images", "net");
         let mut d = doc_arc.lock().unwrap();
         let eff_base = effective_base(&d, base);
-        fetch_and_decode_images(&mut d, &eff_base, sink, viewport, cookie_jar.clone(), target, &mut intrinsic_written)
+        fetch_and_decode_images(&mut d, &eff_base, sink, viewport, cookie_jar.clone(), target, &mut intrinsic_written, defer_images)
     };
     // BUG-935 срез 94: скрипты уже могли взять базис инкрементального каскада (флаш на
     // `getComputedStyle`/`offsetWidth`) — дописанные только что `width`/`height` в нём не видны.
@@ -1643,6 +1661,10 @@ pub(crate) fn parse_and_layout(
     #[cfg(not(feature = "v8"))]
     let _ = &blocked_by_media_src;
 
+    // LOAD-1: `(узел, url)`, которым конвейер уже отдал `load` — `Lumen` кладёт их в
+    // `stream_image_events_fired`, чтобы проход `apply_stream_intrinsic_sizes` не
+    // повторил событие для картинок, успевших декодироваться до `RenderDone`.
+    let mut fired_image_events: Vec<(u32, String)> = Vec::new();
     // Register decoded <img> bitmaps with the JS runtime so Canvas 2D
     // drawImage(imgElement, …) can read the pixels. Collect nid→url from DOM
     // (same traversal fetch_and_decode_images used), join with decoded images by
@@ -1693,7 +1715,16 @@ pub(crate) fn parse_and_layout(
             }
             let nid = req.node_id.index() as u32;
             match url_to_img.get(req.url.as_str()) {
-                Some(img) => js.fire_image_load(nid, img.width, img.height),
+                Some(img) => {
+                    js.fire_image_load(nid, img.width, img.height);
+                    if defer_images {
+                        fired_image_events.push((nid, req.url.clone()));
+                    }
+                }
+                // LOAD-1: «нет в `images`» в живом режиме чаще всего значит «ещё не
+                // пришла», а не «упала» — исход (в том числе `error` для упавших и
+                // заблокированных CSP) доставит `apply_stream_intrinsic_sizes`.
+                None if defer_images => {}
                 None => js.fire_image_error(nid),
             }
         }
@@ -1877,7 +1908,7 @@ pub(crate) fn parse_and_layout(
             .as_ref()
             .map(|(policy, _)| (policy.as_slice(), self_origin.as_ref()));
         let (decoded, blocked) = fetch_and_decode_background_images(
-            &layout, &eff_base, sink, cookie_jar.clone(), target, csp_gate, referrer_policy,
+            &layout, &eff_base, sink, cookie_jar.clone(), target, csp_gate, referrer_policy, defer_images,
         );
         for (src, image) in decoded {
             images.push((src, image));
@@ -1923,6 +1954,8 @@ pub(crate) fn parse_and_layout(
         images,
         animated_gifs,
         lazy_pairs,
+        images_deferred: defer_images,
+        fired_image_events,
         preload_hints,
         html_source: source,
         font_registry: font_provider,

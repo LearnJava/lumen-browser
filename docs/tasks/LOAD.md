@@ -79,6 +79,23 @@ BUG-1116, `docs/perf/journal.md:358`): HTML сразу, CSS +700 мс, карт�
 4. Релейауты от прихода картинок — пакетно, не чаще раза в кадр (уже так в
    `apply_stream_intrinsic_sizes`; проверить на странице с 200 картинками).
 
+**Сделано (2026-10-28).** Живой режим = `dynamic_image_hook_ctx.is_some() && !--deterministic`
+(`defer_images` в `parse_and_layout`); headless и `graphic_tests` не затронуты. В живом режиме
+`fetch_and_decode_images` берёт из `IMAGE_CACHE::peek_current` только уже декодированное, фоны
+(`defer_plain`) оставляют в конвейере лишь `shape-outside: url()` и CSP-проверку, `<img crossorigin>`
+на чужой origin остаётся на синхронном пути (CORS и taint canvas только там). Остальное уходит
+`spawn_dynamic_image_loads`/`spawn_dynamic_background_image_loads` из `apply_loaded_page`;
+`load`/`readyState=complete`/`pageshow` и запись Navigation Timing ждут в
+`Lumen::pending_window_load`, пока `maybe_fire_window_load` не увидит нуль незавершённых картинок
+(`unsettled_images`) и отработавший проход `apply_stream_intrinsic_sizes` (зовётся из
+`RedrawRequested` и `about_to_wait`). Картинки, декодированные до `RenderDone`, возвращаются рендереру
+после `clear_images` из `stream_image_pixels`; `fired_image_events` страницы засевает
+`stream_image_events_fired`, чтобы `load` не уходил картинке дважды. Стенд — `scripts/load_lab.py`
+(HTML сразу, CSS +700 мс, картинки/iframe +3 с; метки `raf`/`load` в журнале сервера).
+Замер на стенде без iframe (`--frame-ms 0`, dev-release, нагруженная машина): первый кадр после HTML
+8,9 с → 5,5 с (в `--deterministic`, т.е. по-старому, он приходит после картинок), `load` 8,5 с — после
+последней картинки; 12 картинок отрисованы. Остаток: iframe всё ещё держит `RenderDone` — LOAD-1B.
+
 **Done when:** unit-тест: живой режим отдаёт RenderDone до прихода картинок, `load` — после
 последней; headless-режим без изменений (`python graphic_tests/run.py --continue-on-fail`
 зелёный без новых эталонов, `dump_golden.py` 12/12); на стенде с картинками +3 с финальный

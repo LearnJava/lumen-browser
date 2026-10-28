@@ -1723,3 +1723,159 @@ fn bug1156_document_referrer_is_seeded_from_navigation_referer() {
     let without = parse_and_layout_for_test(html);
     assert_eq!(probe_attr(&without, "data-r"), "");
 }
+
+// ── LOAD-1: живое окно отдаёт страницу, не дожидаясь картинок ───────────
+
+/// 1×1 PNG: достаточно, чтобы `decode_image` дал реальную картинку без сети.
+const LOAD1_PNG: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+/// `IMAGE_CACHE` — процессный синглтон, а тесты идут параллельно: живой тест берёт адрес,
+/// которого не касается ни один другой, иначе чужой декод оказался бы «уже в кэше».
+const LOAD1_LIVE_ONLY: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+
+fn load1_page(src: &str) -> String {
+    format!("<html><body><img src=\"{src}\"><div style=\"background-image:url({src}?bg)\">x</div></body></html>")
+}
+
+/// `parse_and_layout` с настоящим `EventLoopProxy` (контекст хука живого окна) или без него.
+#[cfg(windows)]
+fn load1_parse(live: bool, det: deterministic::DetConfig, src: &str) -> crate::page_pipeline::ParsedPage {
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+    // Один цикл событий на процесс тестов: winit не даёт создать второй.
+    static PROXY: std::sync::OnceLock<Mutex<EventLoopProxy<LoadEvent>>> = std::sync::OnceLock::new();
+    let ctx = live.then(|| {
+        let proxy = PROXY
+            .get_or_init(|| {
+                let event_loop = EventLoop::<LoadEvent>::with_user_event()
+                    .with_any_thread(true)
+                    .build()
+                    .expect("event loop for the LOAD-1 test");
+                let proxy = event_loop.create_proxy();
+                // Цикл не запускаем, но и не роняем: прокси жив, пока жив он.
+                std::mem::forget(event_loop);
+                Mutex::new(proxy)
+            })
+            .lock()
+            .unwrap()
+            .clone();
+        crate::dynamic_image_hook::DynamicImageHookCtx {
+            generation: 0,
+            dedup: Arc::default(),
+            proxy,
+        }
+    });
+    let html = load1_page(src);
+    parse_and_layout(
+        html.as_bytes(),
+        Some("text/html"),
+        &ResourceBase::File(std::env::temp_dir().join("load1.html")),
+        &(Arc::new(StdoutEventSink) as Arc<dyn EventSink>),
+        Size::new(1024.0, 720.0),
+        &mut std::collections::HashSet::new(),
+        None, None, None, None,
+        &NullHyphenationProvider,
+        false,
+        det,
+        false,
+        None,
+        false,
+        None, None,
+        None,
+        lumen_core::ColorSpace::Srgb,
+        false,
+        &[],
+        &std::collections::HashMap::new(),
+        None,
+        None,
+        None,
+        None,
+        ctx,
+    )
+    .expect("pipeline must not fail on a well-formed page")
+}
+
+/// Headless (без `Lumen`) по-прежнему отдаёт страницу полностью загруженной.
+#[cfg(windows)]
+#[test]
+fn load1_headless_page_waits_for_images() {
+    let parsed = load1_parse(false, deterministic::DetConfig::default(), LOAD1_PNG);
+    assert!(!parsed.images_deferred);
+    assert!(
+        parsed.images.iter().any(|(src, _)| src == LOAD1_PNG),
+        "headless: <img> must be decoded before the page is returned"
+    );
+}
+
+/// Живое окно: страница уходит без картинок, остальное доедет `ImageDecoded`.
+#[cfg(windows)]
+#[test]
+fn load1_live_page_is_returned_before_images_arrive() {
+    let parsed = load1_parse(true, deterministic::DetConfig::default(), LOAD1_LIVE_ONLY);
+    assert!(parsed.images_deferred);
+    // Тот же адрес, который headless-проход декодирует сразу: тут его никто не ждал.
+    assert!(
+        parsed.images.is_empty(),
+        "live: nothing was decoded yet, the pipeline must not wait for the network: {:?}",
+        parsed.images.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>()
+    );
+}
+
+/// `--deterministic` (graphic_tests, gdigrab-снимки) остаётся полностью загруженным.
+#[cfg(windows)]
+#[test]
+fn load1_deterministic_live_page_still_waits_for_images() {
+    let det = deterministic::DetConfig { enabled: true, ..Default::default() };
+    let parsed = load1_parse(true, det, LOAD1_PNG);
+    assert!(!parsed.images_deferred);
+    assert!(parsed.images.iter().any(|(src, _)| src == LOAD1_PNG));
+}
+
+#[test]
+fn load1_window_load_waits_for_last_image_and_the_events_pass() {
+    use crate::page_load::{unsettled_images, window_load_due};
+    let requested: std::collections::HashSet<String> =
+        ["a.png", "b.png", "c.png"].iter().map(|s| (*s).to_owned()).collect();
+    let mut sizes: HashMap<String, (u32, u32)> = HashMap::new();
+    let mut errors: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // RenderDone уже был, картинки ещё в пути: `load` не приходит.
+    assert_eq!(unsettled_images(&requested, &sizes, &errors), 3);
+    assert!(!window_load_due(true, false, 3));
+    sizes.insert("a.png".into(), (1, 1));
+    errors.insert("b.png".into());
+    assert_eq!(unsettled_images(&requested, &sizes, &errors), 1);
+    assert!(!window_load_due(true, true, 1));
+    // Последняя осела, но проход, раздающий `load`/`error` картинкам, ещё не прошёл.
+    sizes.insert("c.png".into(), (2, 2));
+    assert_eq!(unsettled_images(&requested, &sizes, &errors), 0);
+    assert!(!window_load_due(true, true, 0));
+    // Проход прошёл: теперь окно получает `load`, и только раз.
+    assert!(window_load_due(true, false, 0));
+    assert!(!window_load_due(false, false, 0));
+}
+
+/// Cross-origin пиксели без CORS заражают canvas и на пути, который конвейер не ждал.
+#[test]
+fn load1_cross_origin_url_is_tainted_same_origin_is_not() {
+    let base = ResourceBase::Url("https://site.example/dir/page.html".to_owned());
+    assert!(crate::subresources::is_cross_origin_url(&base, "https://cdn.example/a.png"));
+    assert!(!crate::subresources::is_cross_origin_url(&base, "https://site.example/a.png"));
+    assert!(!crate::subresources::is_cross_origin_url(&base, "a.png"));
+    assert!(!crate::subresources::is_cross_origin_url(&base, "data:image/png;base64,AAAA"));
+}
+
+/// Парный к живому тесту выше: адрес декодируется (минуя `IMAGE_CACHE`, чтобы не подсадить живому
+/// тесту готовый слот), так что пустой `images` у живого — результат отложенной загрузки.
+#[cfg(windows)]
+#[test]
+fn load1_live_only_image_is_decodable() {
+    let sink = Arc::new(StdoutEventSink) as Arc<dyn EventSink>;
+    let decoded = crate::subresources::decode_image(
+        LOAD1_LIVE_ONLY,
+        &ResourceBase::File(std::env::temp_dir().join("load1.html")),
+        &sink,
+        None,
+        lumen_core::ColorSpace::Srgb,
+        lumen_network::ReferrerPolicy::default_policy(),
+    );
+    assert!(decoded.is_some());
+}

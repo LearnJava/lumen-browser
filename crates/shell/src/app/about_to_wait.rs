@@ -523,6 +523,12 @@ impl Lumen {
         // queue up (there might not be one).
         #[cfg(feature = "v8")]
         self.drain_pending_lazy_image_reqs();
+        // LOAD-1: свёрнутое окно не получает `RedrawRequested`, а `load` страницы,
+        // отданной без ожидания картинок, не должен ждать показа окна.
+        if self.pending_window_load.is_some() {
+            self.apply_stream_intrinsic_sizes();
+            self.maybe_fire_window_load();
+        }
         // ADR-016 M0.3 + M2.2: run the debounced transform-first-zoom relayout when
         // its deadline elapses; otherwise fold the deadline into the wakeup so the
         // parked loop wakes exactly then. When the engine thread is enabled, route

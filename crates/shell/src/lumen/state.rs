@@ -755,6 +755,10 @@ pub(crate) struct Lumen {
     /// than once (`apply_stream_intrinsic_sizes` reruns whenever a sibling
     /// image's size arrives) or the same `src` on several nodes.
     pub(crate) stream_image_events_fired: std::collections::HashSet<(u32, String)>,
+    /// LOAD-1: `load`/`readyState=complete`/`pageshow` страницы, отданной без ожидания
+    /// картинок (`LoadedPage::images_deferred`), ещё не доставлены — ждут, пока осядет
+    /// последняя картинка (см. `Lumen::maybe_fire_window_load`).
+    pub(crate) pending_window_load: Option<crate::page_load::PendingWindowLoad>,
     /// U-1: scroll offset to restore once the in-flight navigation completes.
     /// Set by back/forward navigation before kicking off an async (streaming)
     /// reload; consumed in `apply_loaded_page` (and the sync fallback in
