@@ -2298,6 +2298,8 @@ impl Lumen {
 
 mod css_pending;
 pub(crate) use css_pending::{stream_css_pending, stream_css_pending_add, stream_css_pending_done};
+#[cfg(test)]
+pub(crate) use css_pending::TEST_LOCK as STREAM_CSS_TEST_LOCK;
 
 /// Прогнать порцию HTML через preload-сканер, эмитнуть `EarlyPreloadHints` и
 /// параллельно загрузить найденные стили (PH1-2 / PH1-8). Общая логика для обоих
