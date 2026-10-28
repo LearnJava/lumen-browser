@@ -3243,6 +3243,9 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     'overscroll-behavior-x': ['auto', 'contain', 'none'],
     'overscroll-behavior-y': ['auto', 'contain', 'none'],
     'scroll-snap-stop': ['normal', 'always'],
+    // CSSOM View §13: `scroll-behavior: auto | smooth` — strict two-keyword
+    // `ScrollBehavior::parse` (BUG-1561).
+    'scroll-behavior': ['auto', 'smooth'],
     // CSS Scroll Snap L2 §4: `scroll-initial-target: none | nearest` — the
     // strict two-keyword `match` in `style/apply/motion.rs`.
     'scroll-initial-target': ['none', 'nearest'],
