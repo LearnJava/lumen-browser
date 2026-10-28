@@ -51,7 +51,7 @@ class TriageTest(unittest.TestCase):
 
     def test_cause(self):
         r = rec("x", "BROKEN_RENDER", exc=["typeerror: foo.bar is not a function"])
-        self.assertEqual(ct.cause(r, "BROKEN_RENDER"), "нет API: is not a function")
+        self.assertEqual(ct.cause(r, "BROKEN_RENDER"), "нет API: foo.bar is not a function")
         r = rec("x", "BROKEN_RENDER", exc=["syntaxerror: bad"])
         self.assertEqual(ct.cause(r, "BROKEN_RENDER"), "исключение: syntaxerror: bad")
         r = rec("x", "NET_FAIL", lumen={"net_failures": ["tls handshake https://h/"] * 2})

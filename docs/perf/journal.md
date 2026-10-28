@@ -1031,3 +1031,7 @@ BROKEN_RENDER 18, HUNG 14. Флапы 0 (повторов не было, `--no-r
 | sberbank-ru | NET_FAIL | — | — | — | — |
 | rambler-ru | OK | 20.36 | — | 10.23 | 10.23 |
 | market-yandex-ru | OK | 40.56 | — | 30.38 | 30.38 |
+
+## 2026-10-28 — SITES-TRIAGE-1 — кластеризация корпуса C и сайтов пользователя — Windows 10, маршрут машины как есть (без прокси)
+
+Скрипт `scripts/compat_triage.py` (тест `scripts/test_compat_triage.py`) группирует `results.jsonl` `compat_crawl` по первичному классу и причине, вес из `corpus-c.tsv` (сайт пользователя — 5). Сырьё прогона 2026-10-20 не сохранилось — перепрогон 500 главных страниц и 30 сайтов пользователя 2026-10-28. Отчёт — [runs/2026-10-20-compat-triage.md](runs/2026-10-20-compat-triage.md): 466 из 503 сайтов не прошли; TIMEOUT/HUNG 107, a11y 141, blank:near-empty 77, pixels 59, «не наш» 28, BROKEN_RENDER 22, прочее 19, NET_FAIL 13. Баги не заведены (срезы SITES-TRIAGE-2..4).

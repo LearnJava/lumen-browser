@@ -30,7 +30,7 @@ CLASS_ORDER = ["не наш", "TIMEOUT/HUNG", "NET_FAIL", "blank:near-empty", "B
                "pixels", "a11y", "прочее"]
 
 NO_API_RE = re.compile(
-    r"(is not a function|is not defined|is not a constructor|"
+    r"([\w.$]+ is not (?:a function|defined|a constructor)|"
     r"cannot read propert(?:y|ies) of (?:undefined|null) \(reading '[^']+'\))", re.IGNORECASE)
 NOISE_STDERR = ("→", "←")
 
@@ -140,7 +140,23 @@ def stderr_signature(lumen: dict) -> str | None:
     return items[0][0][:100]
 
 
+URL_RE = re.compile(r"(?:https?|wss?|chrome-extension)://\S+")
+HEX_RE = re.compile(r"[0-9a-f]{8,}")
+
+
+def norm_cause(text: str) -> str:
+    """Без URL, хешей и чисел, чтобы однотипные причины сливались в один кластер."""
+    text = URL_RE.sub("URL", text)
+    text = HEX_RE.sub("H", text)
+    text = re.sub(r"\d+", "N", text)
+    return re.sub(r"\s+", " ", text).strip()[:90]
+
+
 def cause(rec: dict, klass: str) -> str:
+    return norm_cause(raw_cause(rec, klass))
+
+
+def raw_cause(rec: dict, klass: str) -> str:
     """Причина внутри класса (ключ кластера)."""
     lumen = last_lumen(rec)
     new_sigs = check(rec, "exceptions").get("new_sigs") or []
@@ -207,9 +223,11 @@ def md_escape(s: str) -> str:
 
 
 def render(sites: list[dict], cls: list[dict], user_rows: list[dict] | None,
-           total: int, sources: list[str]) -> str:
+           total: int, sources: list[str], note: str = "") -> str:
     L = ["# Кластеризация прогона корпуса C (SITES-TRIAGE-1)", ""]
     L.append(f"Источники: {', '.join(f'`{s}`' for s in sources)}. Сайтов в прогоне: {total}, не прошли: {len(sites)}.")
+    if note:
+        L += ["", note]
     L.append("Первичный класс — по приоритету: не наш → TIMEOUT/HUNG → NET_FAIL → blank:near-empty → "
              "BROKEN_RENDER → pixels (differing) → a11y → прочее. Вес сайта 1–3 из `corpus-c.tsv`, "
              f"сайт пользователя — {USER_WEIGHT}.")
@@ -231,7 +249,12 @@ def render(sites: list[dict], cls: list[dict], user_rows: list[dict] | None,
     L.append(f"| **итого** | **{len(sites)}** | **{sum(s['weight'] for s in sites)}** |")
     L.append("")
     L += ["## Кластеры по убыванию веса", ""]
-    for i, c in enumerate(cls, 1):
+    multi = [c for c in cls if c["n"] >= 2]
+    single: dict[str, list[dict]] = defaultdict(list)
+    for c in cls:
+        if c["n"] < 2:
+            single[c["class"]].extend(c["sites"])
+    for i, c in enumerate(multi, 1):
         L.append(f"### {i}. [{c['class']}] {md_escape(c['cause'])}")
         L.append("")
         L.append(f"- сайтов: {c['n']}, вес: {c['weight']}")
@@ -239,6 +262,13 @@ def render(sites: list[dict], cls: list[dict], user_rows: list[dict] | None,
                        for m in c["sites"][:5])
         L.append(f"- примеры: {ex}")
         L.append("")
+    L += ["### Единичные причины (по одному сайту; в кластеры не сведены)", ""]
+    for k in CLASS_ORDER:
+        if k in single:
+            ms = sorted(single[k], key=lambda m: (-m["weight"], m["slug"]))
+            L.append(f"- **{k}**: {len(ms)} сайтов, вес {sum(m['weight'] for m in ms)} — "
+                     + ", ".join(m["slug"] for m in ms[:25]) + (" …" if len(ms) > 25 else ""))
+    L.append("")
     top = sorted((s for s in sites if s["base_weight"] == 3 and s["slug"] not in {u["slug"] for u in (user_rows or [])}),
                  key=lambda s: (s["class"], s["slug"]))[:30]
     L += ["## Топ-30 сайтов веса 3 и их класс", "", "| сайт | класс | причина | ready_s |", "|---|---|---|---|"]
@@ -263,6 +293,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--results", action="append", type=Path, required=True)
     ap.add_argument("--corpus", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--note", default="", help="абзац про происхождение данных для шапки отчёта")
     ap.add_argument("--user-results", type=Path, help="results.jsonl прогона сайтов пользователя")
     args = ap.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
@@ -275,7 +306,7 @@ def main(argv: list[str] | None = None) -> int:
     sites = build(records, weights, user_slugs)
     cls = clusters(sites)
     text = render(sites, cls, user_table(user_records) if args.user_results else None,
-                  len(records), [str(p).replace("\\", "/") for p in args.results])
+                  len(records), [str(p).replace("\\", "/") for p in args.results], args.note)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(text, encoding="utf-8", newline="\n")
     print(f"сайтов {len(records)}, не прошли {len(sites)}, кластеров {len(cls)} → {args.out}")
