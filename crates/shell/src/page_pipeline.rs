@@ -346,6 +346,8 @@ pub(crate) struct LoadedPage {
     /// LOAD-1: страница отдана без ожидания картинок (живое окно) — `images` содержит
     /// только уже декодированные, остальные приедут `LoadEvent::ImageDecoded`, а `load`
     /// и `readyState=complete` ждут последнюю из них (`Lumen::pending_window_load`).
+    /// LOAD-1B: то же для `<iframe>` — `frames` пуст, их загружает
+    /// `Lumen::drive_deferred_frames` после `RenderDone`, и `load` ждёт и их.
     pub(crate) images_deferred: bool,
     /// LOAD-1: `(узел, url)`, чей `load` конвейер уже доставил новому JS-рантайму.
     pub(crate) fired_image_events: Vec<(u32, String)>,
@@ -1535,7 +1537,12 @@ pub(crate) fn parse_and_layout(
     // Срез 11: экранный media-гейт `<link>` и вьюпорт picker-а картинок —
     // те же, с какими страница грузит свои подресурсы (print-гейт
     // фреймам не нужен — печать PDF под-документов вне среза).
-    let mut frames = {
+    // LOAD-1B: живое окно не ждёт сеть ради `<iframe>` — страница уходит без них, а
+    // `Lumen::drive_deferred_frames` после `RenderDone` загружает их тем же путём, что
+    // и вставленные скриптом (FRAME-8); `load` окна ждёт последний из них.
+    let mut frames = if defer_images {
+        Vec::new()
+    } else {
         let _s = lumen_core::trace::span("fetch-iframes", "net");
         let eff_base = effective_base(&doc_arc.lock().unwrap(), base);
         load_frame_sub_documents(&doc_arc, 0, &eff_base, &doc_arc, &frame_env, js_ctx.as_ref())

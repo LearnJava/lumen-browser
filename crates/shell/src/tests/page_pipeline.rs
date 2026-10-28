@@ -1740,6 +1740,11 @@ fn load1_page(src: &str) -> String {
 /// `parse_and_layout` с настоящим `EventLoopProxy` (контекст хука живого окна) или без него.
 #[cfg(windows)]
 fn load1_parse(live: bool, det: deterministic::DetConfig, src: &str) -> crate::page_pipeline::ParsedPage {
+    load1_parse_html(live, det, &load1_page(src))
+}
+
+#[cfg(windows)]
+fn load1_parse_html(live: bool, det: deterministic::DetConfig, html: &str) -> crate::page_pipeline::ParsedPage {
     use winit::platform::windows::EventLoopBuilderExtWindows;
     // Один цикл событий на процесс тестов: winit не даёт создать второй.
     static PROXY: std::sync::OnceLock<Mutex<EventLoopProxy<LoadEvent>>> = std::sync::OnceLock::new();
@@ -1764,7 +1769,6 @@ fn load1_parse(live: bool, det: deterministic::DetConfig, src: &str) -> crate::p
             proxy,
         }
     });
-    let html = load1_page(src);
     parse_and_layout(
         html.as_bytes(),
         Some("text/html"),
@@ -1839,18 +1843,36 @@ fn load1_window_load_waits_for_last_image_and_the_events_pass() {
     let mut errors: std::collections::HashSet<String> = std::collections::HashSet::new();
     // RenderDone уже был, картинки ещё в пути: `load` не приходит.
     assert_eq!(unsettled_images(&requested, &sizes, &errors), 3);
-    assert!(!window_load_due(true, false, 3));
+    assert!(!window_load_due(true, false, 3, false));
     sizes.insert("a.png".into(), (1, 1));
     errors.insert("b.png".into());
     assert_eq!(unsettled_images(&requested, &sizes, &errors), 1);
-    assert!(!window_load_due(true, true, 1));
+    assert!(!window_load_due(true, true, 1, false));
     // Последняя осела, но проход, раздающий `load`/`error` картинкам, ещё не прошёл.
     sizes.insert("c.png".into(), (2, 2));
     assert_eq!(unsettled_images(&requested, &sizes, &errors), 0);
-    assert!(!window_load_due(true, true, 0));
+    assert!(!window_load_due(true, true, 0, false));
     // Проход прошёл: теперь окно получает `load`, и только раз.
-    assert!(window_load_due(true, false, 0));
-    assert!(!window_load_due(false, false, 0));
+    assert!(window_load_due(true, false, 0, false));
+    assert!(!window_load_due(false, false, 0, false));
+    // LOAD-1B: все картинки осели, но `<iframe>` ещё грузится — `load` ждёт и его.
+    assert!(!window_load_due(true, false, 0, true));
+}
+
+/// LOAD-1B: живое окно отдаёт страницу без `<iframe>` (их грузит `Lumen::drive_deferred_frames`
+/// после `RenderDone`), headless и `--deterministic` — по-прежнему с готовыми под-документами.
+#[cfg(windows)]
+#[test]
+fn load1b_live_page_is_returned_before_iframes_load() {
+    let html = "<html><body><p>host</p><iframe srcdoc=\"<p>child</p>\"></iframe></body></html>";
+    let live = load1_parse_html(true, deterministic::DetConfig::default(), html);
+    assert!(live.images_deferred);
+    assert!(live.frames.is_empty(), "live: the pipeline must not wait for <iframe> documents");
+    let headless = load1_parse_html(false, deterministic::DetConfig::default(), html);
+    assert_eq!(headless.frames.len(), 1, "headless: sub-documents are loaded before the page is returned");
+    let det = deterministic::DetConfig { enabled: true, ..Default::default() };
+    let deterministic = load1_parse_html(true, det, html);
+    assert_eq!(deterministic.frames.len(), 1, "--deterministic keeps the fully loaded page");
 }
 
 /// Cross-origin пиксели без CORS заражают canvas и на пути, который конвейер не ждал.

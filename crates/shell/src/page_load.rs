@@ -1490,11 +1490,11 @@ impl Lumen {
             let ledger = self.stream_images_requested.lock().unwrap_or_else(|e| e.into_inner());
             unsettled_images(&ledger.urls, &self.stream_image_sizes, &self.stream_image_errors)
         };
-        if !window_load_due(true, self.stream_image_sizes_dirty, unsettled) {
+        if !window_load_due(true, self.stream_image_sizes_dirty, unsettled, self.deferred_frames_busy()) {
             return;
         }
         let Some(pending) = self.pending_window_load.take() else { return };
-        let PendingWindowLoad { pageshow_persisted, nav_timing } = pending;
+        let PendingWindowLoad { pageshow_persisted, nav_timing, .. } = pending;
         #[cfg(feature = "v8")]
         {
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
@@ -2262,7 +2262,11 @@ impl Lumen {
             // intrinsic-размеры уже декодированных, поэтому взводим его сразу.
             self.stream_image_events_fired = page.fired_image_events.drain(..).collect();
             self.stream_image_sizes_dirty = true;
-            self.pending_window_load = Some(PendingWindowLoad { pageshow_persisted, nav_timing: None });
+            self.pending_window_load = Some(PendingWindowLoad {
+                pageshow_persisted,
+                nav_timing: None,
+                frames_scan_pending: true,
+            });
             // Всё, что конвейер не ждал и что ещё не в полёте, уходит в сеть сейчас.
             let viewport = self.relayout_viewport().unwrap_or_else(|| Size::new(1024.0, 720.0));
             self.spawn_dynamic_image_loads(viewport);
@@ -2614,6 +2618,9 @@ pub(crate) struct PendingWindowLoad {
     pub(crate) pageshow_persisted: bool,
     /// Запись Navigation Timing, которую `RenderDone` не мог отправить до меток `load`.
     pub(crate) nav_timing: Option<NavTimingDelivery>,
+    /// LOAD-1B: первый скан `<iframe>` страницы ещё не прошёл (`Lumen::drive_deferred_frames`):
+    /// фреймов, о которых окно не знает, быть не может только после него.
+    pub(crate) frames_scan_pending: bool,
 }
 
 /// Всё, что нужно, чтобы отправить `PerformanceNavigationTiming` в JS-рантайм страницы.
@@ -2649,7 +2656,8 @@ pub(crate) fn unsettled_images(
 }
 
 /// LOAD-1: пора ли доставлять отложенный `load` — ждёт и проход, раздающий картинкам их
-/// `load`/`error` (`dirty`), и последнюю незавершённую картинку.
-pub(crate) fn window_load_due(pending: bool, dirty: bool, unsettled: usize) -> bool {
-    pending && !dirty && unsettled == 0
+/// `load`/`error` (`dirty`), и последнюю незавершённую картинку. LOAD-1B: и последний
+/// `<iframe>` (`frames_busy`) — HTML LS §8.2.3 держит `load` до `load` вложенных документов.
+pub(crate) fn window_load_due(pending: bool, dirty: bool, unsettled: usize, frames_busy: bool) -> bool {
+    pending && !dirty && unsettled == 0 && !frames_busy
 }
