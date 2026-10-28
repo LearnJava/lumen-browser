@@ -276,7 +276,7 @@ impl Lumen {
         let popover_nodes: Vec<_> =
             SALVAGED_POPOVER_IDS.iter().filter_map(|&id| doc.find_by_id(id).map(|n| (n, id))).collect();
         let mut floating_detached = Vec::new();
-        for id in [lumen_chrome::ids::DEMO_BAR, lumen_chrome::ids::INFO_PANEL, lumen_chrome::ids::UPDATE_BAR, lumen_chrome::ids::LOGIN_BAR, lumen_chrome::ids::MEDIA_BAR, lumen_chrome::ids::DIALOG_BOX, lumen_chrome::ids::SECURITY_BOX, lumen_chrome::ids::PROFILE_FRAME] {
+        for id in [lumen_chrome::ids::DEMO_BAR, lumen_chrome::ids::INFO_PANEL, lumen_chrome::ids::UPDATE_BAR, lumen_chrome::ids::LOGIN_BAR, lumen_chrome::ids::MEDIA_BAR, lumen_chrome::ids::HANG_BAR, lumen_chrome::ids::DIALOG_BOX, lumen_chrome::ids::SECURITY_BOX, lumen_chrome::ids::PROFILE_FRAME] {
             if let Some(node) = doc.find_by_id(id)
                 && let Some((_rect, detached)) = take_floating_panel(&mut layout, node, id)
             {
@@ -969,6 +969,7 @@ impl Lumen {
             update: self.update_ui.chrome_model(),
             login_offer: self.login_offer_model(),
             media_bar: self.media_bar.model(),
+            hang_bar: self.script_hang.model(),
             dialog: self.page_dialog_model(),
             security: self.security_model(),
         }

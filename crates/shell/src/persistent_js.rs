@@ -194,6 +194,11 @@ pub(crate) trait PersistentJs: Send + Sync {
     fn navigate_listeners_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
         None
     }
+    /// COMPAT-HANG: учёт долгих задач рантайма (плашка «страница не отвечает»).
+    /// `None` — не поддерживается (по умолчанию).
+    fn stall_handle(&self) -> Option<lumen_core::script_stall::StallHandle> {
+        None
+    }
     /// BUG-935 S80: сброс набора затронутых узлов ([`Self::take_dom_touched`]),
     /// который UI-поток может звать сам, не ставя запрос в очередь движкового
     /// потока. `None` — не поддерживается (по умолчанию).
@@ -1169,6 +1174,9 @@ impl PersistentJs for V8PersistentJs {
     fn note_shell_attr_writes(&self, nids: &[u32]) {
         let nodes: Vec<lumen_dom::NodeId> = nids.iter().map(|&n| lumen_dom::NodeId::from_raw(n)).collect();
         self.rt.note_shell_attr_writes(&nodes, &["width", "height"]);
+    }
+    fn stall_handle(&self) -> Option<lumen_core::script_stall::StallHandle> {
+        Some(self.rt.stall_handle())
     }
     fn dom_touched_drain(&self) -> Option<DomTouchedDrain> {
         let read = self.rt.dom_changes_reader();

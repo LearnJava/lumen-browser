@@ -1356,6 +1356,11 @@ pub(crate) struct Lumen {
     /// COMPAT-MEDIA-OSDEC-WIN-BAR: подсказка «для видео нужен компонент ОС»
     /// (`#mediaBar`, `media_bar.rs`).
     pub(crate) media_bar: crate::media_bar::MediaBar,
+    /// COMPAT-HANG: плашка «страница не отвечает» (`#hangBar`, `script_hang.rs`).
+    pub(crate) script_hang: crate::script_hang::ScriptHang,
+    /// COMPAT-HANG: ручка учёта долгих задач рантайма активной вкладки; идёт в
+    /// связке с хэндлом ([`Self::set_js_ctx`]), а не с тем, какая сторона держит `Arc`.
+    pub(crate) js_stall: Option<lumen_core::script_stall::StallHandle>,
     /// UX-DIALOGS: открытый модальный диалог страницы (`#dialogBox`); пока он
     /// есть, страница и остальной хром не получают ввода.
     pub(crate) page_dialog: Option<super::dialogs::PageDialog>,

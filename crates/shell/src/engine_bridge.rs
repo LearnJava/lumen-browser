@@ -181,6 +181,11 @@ pub(crate) fn route_query_js<R: Send + 'static>(
     if lumen_js::dialog::js_blocked() {
         return None;
     }
+    // COMPAT-HANG: то же для зависшего скрипта — движковый поток стоит за ним,
+    // и каждое чтение ждало бы `QUERY_TIMEOUT`, замораживая UI вместе со страницей.
+    if lumen_core::script_stall::any_hung() {
+        return None;
+    }
     match engine {
         // `query` вернёт `Some(inner)`, где `inner` — результат `read`, либо `None`
         // если хэндл ещё не зеркалирован в состояние; двойной `Option` схлопываем

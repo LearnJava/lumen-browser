@@ -196,6 +196,7 @@ pub mod surface;
 mod text_fragment;
 mod runtime;
 mod scripts;
+mod script_hang;
 mod site_memory;
 mod csp_enforce;
 mod scroll;

@@ -1184,6 +1184,12 @@ impl Lumen {
     /// BUG-935 S19: same outer timer as [`Self::relayout_raf_dirty`], wrapping
     /// the same call site here — see that function's doc comment for why.
     pub(crate) fn relayout_raf_dirty_readback(&mut self) {
+        // COMPAT-HANG: движковый поток стоит за зависшим скриптом, а `readback`
+        // ждёт его без срока — UI-поток замёрз бы вместе со страницей. DOM, пока
+        // скрипт не вернулся, всё равно не меняется; флаг останется до конца задачи.
+        if lumen_core::script_stall::any_hung() {
+            return;
+        }
         if self.readback_relayout_job() {
             return;
         }
@@ -1294,6 +1300,11 @@ impl Lumen {
         self.custom_props_needed_flag = handle.as_ref().and_then(|h| h.custom_props_needed_flag());
         self.computed_styles_needed_flag = handle.as_ref().and_then(|h| h.computed_styles_needed_flag());
         self.cascade_feed = handle.as_ref().and_then(|h| h.cascade_feed());
+        // COMPAT-HANG: рантайм теперь принадлежит вкладке, а не «ничей» загрузке.
+        self.js_stall = handle.as_ref().and_then(|h| h.stall_handle());
+        if let Some(stall) = &self.js_stall {
+            stall.claim();
+        }
         match self.engine_thread.as_ref() {
             // Flag on: the handle lives engine-side; deposit it into
             // `EngineJsState.js` and leave the UI field empty.

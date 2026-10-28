@@ -33,6 +33,8 @@ pub struct V8JsRuntime {
     pub(super) cmd_tx: SyncSender<V8Command>,
     /// Join handle taken in `Drop` after sending `Shutdown`.
     pub(super) js_thread: Option<JoinHandle<()>>,
+    /// COMPAT-HANG: учёт долгих задач этого рантайма (читает оболочка).
+    pub(super) stall: lumen_core::script_stall::StallHandle,
     /// Navigation request written by JS via `location.href=`, `location.assign()` etc.
     /// Captured inside `install_dom`; read by [`Self::take_navigate_request`].
     pub(super) nav_out: Arc<Mutex<Option<crate::dom::NavigateRequest>>>,
@@ -466,6 +468,8 @@ impl V8JsRuntime {
     pub fn new() -> Result<Self, JsError> {
         let (cmd_tx, cmd_rx) = sync_channel::<V8Command>(V8_CMD_QUEUE_BOUND);
         let (init_tx, init_rx) = std::sync::mpsc::channel::<Result<(), JsError>>();
+        let stall = lumen_core::script_stall::StallHandle::new();
+        let thread_stall = stall.clone();
         let js_thread = std::thread::Builder::new()
             .name("lumen-v8".to_string())
             // BUG-1027: на этом потоке живут обходы, рекурсивные по глубине
@@ -474,7 +478,7 @@ impl V8JsRuntime {
             // На штатных 2 МиБ поток умирал вместе со всем процессом, снаружи
             // это выглядело как обрыв BiDi-сокета посреди прогона WPT.
             .stack_size(lumen_core::DEEP_TREE_STACK_BYTES)
-            .spawn(move || v8_thread_main(cmd_rx, init_tx))
+            .spawn(move || v8_thread_main(cmd_rx, init_tx, thread_stall))
             .map_err(|e| JsError::Runtime(format!("spawn V8 thread: {e}")))?;
         match init_rx.recv() {
             Ok(Ok(())) => {}
@@ -484,6 +488,7 @@ impl V8JsRuntime {
         Ok(Self {
             cmd_tx,
             js_thread: Some(js_thread),
+            stall,
             nav_out: Arc::new(Mutex::new(None)),
             timer_wakeup: Arc::new(Mutex::new(None)),
             dom_dirty: Arc::new(AtomicBool::new(false)),
@@ -945,6 +950,13 @@ impl V8JsRuntime {
     /// Mirrors [`crate::QuickJsRuntime::has_raf_pending`].
     pub fn has_raf_pending(&self) -> bool {
         self.raf_pending.load(Ordering::Relaxed)
+    }
+
+    /// COMPAT-HANG: ручка учёта долгих задач — оболочка по ней узнаёт о
+    /// зависшем скрипте и останавливает его (`TerminateExecution`).
+    #[must_use]
+    pub fn stall_handle(&self) -> lumen_core::script_stall::StallHandle {
+        self.stall.clone()
     }
 
     /// ADR-016 M2.3: shared, lock-free handle to the rAF-pending flag.
@@ -1980,6 +1992,10 @@ impl Drop for V8JsRuntime {
         // port this page ever opened, so a worker left with no other client
         // notices and terminates itself instead of outliving the page.
         crate::shared_worker::close_all_client_ports_v8(&self.shared_worker_client_ports);
+        // COMPAT-HANG: закрытие вкладки или навигация роняют последний `Arc`
+        // рантайма, а `join` ниже ждал бы зависший скрипт вечно, замораживая
+        // тот поток, где случился drop. Рантайму всё равно конец — прерываем.
+        self.stall.terminate();
         let _ = self.cmd_tx.send(V8Command::Shutdown);
         if let Some(handle) = self.js_thread.take() {
             let _ = handle.join();
