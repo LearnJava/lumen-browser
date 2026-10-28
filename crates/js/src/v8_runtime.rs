@@ -234,6 +234,7 @@ impl V8JsRuntime {
                 .unwrap_or_else(|e| e.into_inner());
             reg.self_key = Some(Arc::as_ptr(&doc) as usize);
             reg.self_doc = Some(Arc::clone(&doc));
+            crate::frame_bridge::register_frame_registry(Arc::as_ptr(&doc) as usize, &self.frame_docs);
             reg.self_origin = page_origin.clone();
             self.self_doc_key
                 .store(Arc::as_ptr(&doc) as usize, Ordering::Relaxed);

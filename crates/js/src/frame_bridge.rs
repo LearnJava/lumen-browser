@@ -211,6 +211,19 @@ pub(crate) const PARENT_BID: u32 = u32::MAX;
 #[cfg(feature = "v8-backend")]
 pub(crate) const TOP_BID: u32 = u32::MAX - 1;
 
+/// Псевдо-bid «это окно самого читающего контекста»: `_lumen_f_sibling_binding`
+/// отдаёт его, когда iframe предка, прочитанный через фасад предка, и есть
+/// хост текущего фрейма (`frameElement.contentWindow === window`, BUG-1643).
+/// Реестр такого слота не имеет — шим подставляет настоящий `window`.
+#[cfg(feature = "v8-backend")]
+pub(crate) const SELF_BID: u32 = u32::MAX - 2;
+
+/// Начало диапазона bid-ов [`FrameDocSlots::siblings`]: `SIBLING_BASE + i` —
+/// i-й биндинг соседнего фрейма (BUG-1643). Обычные индексы `frames` сюда не
+/// доходят (нужны 2^31 фреймов).
+#[cfg(feature = "v8-backend")]
+pub(crate) const SIBLING_BASE: u32 = 0x8000_0000;
+
 /// Один зарегистрированный под-документ `<iframe>` в реестре рантайма.
 ///
 /// Живёт в [`FrameDocSlots`] не дольше контекста страницы. Навигация фрейма
@@ -218,6 +231,7 @@ pub(crate) const TOP_BID: u32 = u32::MAX - 1;
 /// становится надгробием ([`DETACHED_HOST`]) при следующей регистрации, — см.
 /// [`upsert_binding`].
 #[cfg(feature = "v8-backend")]
+#[derive(Clone)]
 pub(crate) struct FrameDocBinding {
     /// `NodeId` элемента-хоста `<iframe>` в документе родителя.
     ///
@@ -276,6 +290,11 @@ pub(crate) struct FrameDocSlots {
     pub(crate) frames: Vec<FrameDocBinding>,
     pub(crate) parent: Option<FrameDocBinding>,
     pub(crate) top: Option<FrameDocBinding>,
+    /// BUG-1643: соседние фреймы (дети того же предка), на которые ребёнок
+    /// вышел через фасад предка — `parent.document.getElementById(id)
+    /// .contentWindow`. Копии биндингов из реестра предка, заводятся лениво
+    /// ([`sibling_slot`]); bid = [`SIBLING_BASE`] + индекс.
+    pub(crate) siblings: Vec<SiblingSlot>,
     /// Срез 4: указатель `Arc` собственного документа этого контекста —
     /// ключ получателя в [`FRAME_OUTBOX`]. Заполняется `install_dom`
     /// (`Arc::as_ptr(&doc)`); у минимальных тестовых изолятов без
@@ -291,6 +310,101 @@ pub(crate) struct FrameDocSlots {
     /// origin `about:`-биндинга при вычислении `event.origin` (наследование
     /// origin у srcdoc/about:blank детей).
     pub(crate) self_origin: String,
+}
+
+/// Копия биндинга соседнего фрейма в реестре ребёнка (BUG-1643).
+#[cfg(feature = "v8-backend")]
+pub(crate) struct SiblingSlot {
+    /// Слот предка, в чьём `frames` лежит хост соседа ([`PARENT_BID`] /
+    /// [`TOP_BID`]): документ-владелец хоста нужен `frameElement` и навигации.
+    pub(crate) owner: u32,
+    pub(crate) binding: FrameDocBinding,
+}
+
+/// Реестры всех рантаймов по ключу `Arc::as_ptr(&doc)` собственного документа
+/// (тот же ключ, что `self_key`/[`frame_outbox`]). Ребёнок по документу
+/// предка из своего слота `parent`/`top` находит реестр предка и читает из его
+/// `frames` соседей (BUG-1643). `Weak` — запись умершего рантайма не держит
+/// реестр; `register_frame_registry` вычищает мёртвые при вставке.
+#[cfg(feature = "v8-backend")]
+fn frame_registries() -> &'static Mutex<HashMap<usize, Weak<Mutex<FrameDocSlots>>>> {
+    static R: OnceLock<Mutex<HashMap<usize, Weak<Mutex<FrameDocSlots>>>>> = OnceLock::new();
+    R.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Записать реестр рантайма под ключом его собственного документа.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn register_frame_registry(key: usize, registry: &FrameDocRegistry) {
+    let mut map = frame_registries().lock().unwrap_or_else(|e| e.into_inner());
+    map.retain(|_, w| w.strong_count() > 0);
+    map.insert(key, Arc::downgrade(registry));
+}
+
+#[cfg(feature = "v8-backend")]
+fn registry_of_doc(key: usize) -> Option<FrameDocRegistry> {
+    frame_registries().lock().unwrap_or_else(|e| e.into_inner()).get(&key)?.upgrade()
+}
+
+/// Положить копию соседнего биндинга в `siblings` и вернуть его bid: запись
+/// того же хоста того же владельца ЗАМЕЩАЕТСЯ на месте (навигация соседа
+/// сохраняет bid, на который уже ссылаются кэшированные фасады).
+#[cfg(feature = "v8-backend")]
+fn sibling_slot(slots: &mut FrameDocSlots, owner: u32, binding: FrameDocBinding) -> u32 {
+    let i = match slots
+        .siblings
+        .iter()
+        .position(|s| s.owner == owner && s.binding.host_nid == binding.host_nid)
+    {
+        Some(i) => {
+            slots.siblings[i].binding = binding;
+            i
+        }
+        None => {
+            slots.siblings.push(SiblingSlot { owner, binding });
+            slots.siblings.len() - 1
+        }
+    };
+    SIBLING_BASE + i as u32
+}
+
+/// Найти среди детей предка `owner` (по `host_nid` или по ключу документа) и
+/// вернуть bid в реестре `slots`: сам читающий — [`SELF_BID`], его родитель —
+/// [`PARENT_BID`], иначе сосед ([`sibling_slot`]). Замок реестра предка
+/// берётся только после замка своего и всегда «вверх» по цепочке предков,
+/// поэтому циклов ожидания нет (реестр предка замков потомков не берёт).
+#[cfg(feature = "v8-backend")]
+fn resolve_owner_child(
+    slots: &mut FrameDocSlots,
+    owner: u32,
+    host_nid: Option<u32>,
+    doc_key: Option<usize>,
+) -> Option<u32> {
+    let (owner_key, owner_accessible) = {
+        let o = resolve_slot(slots, owner)?;
+        (Arc::as_ptr(&o.doc) as usize, o.accessible)
+    };
+    let owner_reg = registry_of_doc(owner_key)?;
+    let mut found = {
+        let o = owner_reg.lock().unwrap_or_else(|e| e.into_inner());
+        o.frames
+            .iter()
+            .find(|b| {
+                b.host_nid != DETACHED_HOST
+                    && host_nid.is_none_or(|h| b.host_nid == h)
+                    && doc_key.is_none_or(|k| Arc::as_ptr(&b.doc) as usize == k)
+            })
+            .cloned()?
+    };
+    let key = Arc::as_ptr(&found.doc) as usize;
+    if Some(key) == slots.self_key {
+        return Some(SELF_BID);
+    }
+    if slots.parent.as_ref().is_some_and(|p| Arc::as_ptr(&p.doc) as usize == key) {
+        return Some(PARENT_BID);
+    }
+    // Достижимость пары: ребёнок и сосед оба same-origin с владельцем.
+    found.accessible &= owner_accessible;
+    Some(sibling_slot(slots, owner, found))
 }
 
 /// Положить биндинг под-документа в реестр и вернуть его `bid`: ЗАМЕСТИТЬ
@@ -394,6 +508,9 @@ pub(crate) enum SourceKind {
     /// Отправитель — потомок; ключ — указатель `Arc` документа отправителя,
     /// по которому получатель ищет свой слот `frames[j]`.
     ChildDoc(usize),
+    /// BUG-1643: отправитель — соседний фрейм (ребёнок того же предка);
+    /// получатель находит его через реестр предка ([`resolve_owner_child`]).
+    Sibling(usize),
 }
 
 /// Одно сообщение в [`FRAME_OUTBOX`] до разбора получателем.
@@ -605,6 +722,7 @@ pub(crate) fn resolve_slot(slots: &FrameDocSlots, bid: u32) -> Option<&FrameDocB
     match bid {
         PARENT_BID => slots.parent.as_ref(),
         TOP_BID => slots.top.as_ref(),
+        i if i >= SIBLING_BASE => slots.siblings.get((i - SIBLING_BASE) as usize).map(|s| &s.binding),
         i => slots.frames.get(i as usize),
     }
 }
@@ -959,6 +1077,39 @@ pub(crate) fn install_frame_bridge_v8(
             }),
         )?;
     }
+    // BUG-1643: iframe предка, прочитанный через фасад предка
+    // (`parent.document.getElementById(id)`), — bid его окна в реестре
+    // читающего ребёнка. Хост лежит в `frames` реестра предка, которого у
+    // ребёнка нет, поэтому биндинг копируется оттуда лениво
+    // ([`resolve_owner_child`]); сам ребёнок даёт [`SELF_BID`].
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_f_sibling_binding",
+            into_v8_fn2(move |owner: u32, host_nid: u32| -> Option<u32> {
+                if owner != PARENT_BID && owner != TOP_BID {
+                    return None;
+                }
+                let mut reg = reg.lock().unwrap_or_else(|e| e.into_inner());
+                resolve_owner_child(&mut reg, owner, Some(host_nid), None)
+            }),
+        )?;
+    }
+    // BUG-1643: слот предка-владельца хоста для bid соседа (frameElement и
+    // навигация соседа идут через документ владельца); для остальных bid —
+    // null.
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_f_owner_bid",
+            into_v8_fn1(move |bid: u32| -> Option<u32> {
+                let reg = reg.lock().unwrap_or_else(|e| e.into_inner());
+                (SIBLING_BASE..SELF_BID).contains(&bid)
+                    .then(|| reg.siblings.get((bid - SIBLING_BASE) as usize).map(|s| s.owner))
+                    .flatten()
+            }),
+        )?;
+    }
     // Срез 3: bid слотов предков текущего контекста (или null, если контекст
     // сам верхний). Геттеры window.parent/top/frameElement читают их лениво.
     {
@@ -1116,6 +1267,7 @@ pub(crate) fn install_frame_bridge_v8(
                 // в момент постановки реестр получателя недоступен.
                 let source = match bid {
                     PARENT_BID | TOP_BID => SourceKind::ChildDoc(reg.self_key.unwrap_or(0)),
+                    b if b >= SIBLING_BASE => SourceKind::Sibling(reg.self_key.unwrap_or(0)),
                     _ => SourceKind::Parent,
                 };
                 let target_doc = Arc::clone(&binding.doc);
@@ -1138,7 +1290,7 @@ pub(crate) fn install_frame_bridge_v8(
         rt.register_native(
             "_lumen_frame_take_messages",
             into_v8_fn0(move || -> String {
-                let reg = reg.lock().unwrap_or_else(|e| e.into_inner());
+                let mut reg = reg.lock().unwrap_or_else(|e| e.into_inner());
                 let key = match reg.self_key {
                     Some(k) => k,
                     None => return String::new(),
@@ -1166,13 +1318,25 @@ pub(crate) fn install_frame_bridge_v8(
                 // BUG-1198: отправитель с непрозрачным происхождением даёт
                 // `origin === "null"` и идентичность этого происхождения
                 // (`opaque`) — по ней шим строит `Origin.from(event)`.
+                // BUG-1643: сосед-отправитель ищется в реестре предка, а это
+                // мутация слотов — до того, как `sender_origin` займёт `reg`.
+                let sibling_bids: Vec<Option<u32>> = taken
+                    .iter()
+                    .map(|m| match m.source {
+                        SourceKind::Sibling(k) => [PARENT_BID, TOP_BID]
+                            .into_iter()
+                            .find_map(|owner| resolve_owner_child(&mut reg, owner, None, Some(k))),
+                        _ => None,
+                    })
+                    .collect();
                 let sender_origin = |b: &FrameDocBinding| match b.opaque_id {
                     Some(id) => ("null".to_owned(), Some(id)),
                     None => (binding_origin(&b.url, &reg.self_origin), None),
                 };
                 let items: Vec<serde_json::Value> = taken
                     .into_iter()
-                    .map(|m| {
+                    .zip(sibling_bids)
+                    .map(|(m, sibling_bid)| {
                         let (source_bid, (origin, opaque)) = match m.source {
                             SourceKind::Parent => (
                                 reg.parent.as_ref().map(|_| PARENT_BID),
@@ -1193,6 +1357,16 @@ pub(crate) fn install_frame_bridge_v8(
                                     None => (None, (String::new(), None)),
                                 }
                             }
+                            // BUG-1643: сосед; SELF_BID (сообщение себе через
+                            // чужой фасад) разрешает шим в настоящий window.
+                            SourceKind::Sibling(_) => match sibling_bid {
+                                Some(SELF_BID) => (Some(SELF_BID), (reg.self_origin.clone(), None)),
+                                Some(b) => (
+                                    Some(b),
+                                    resolve_slot(&reg, b).map(sender_origin).unwrap_or_default(),
+                                ),
+                                None => (None, (String::new(), None)),
+                            },
                         };
                         serde_json::json!({
                             "bid": source_bid,
@@ -1800,6 +1974,10 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
   // Псевдо-bid слотов предков (зеркало frame_bridge::PARENT_BID/TOP_BID).
   var PARENT_BID = 0xFFFFFFFF;
   var TOP_BID = 0xFFFFFFFE;
+  // BUG-1643: окно самого читающего контекста / диапазон bid-ов соседей
+  // (зеркало frame_bridge::SELF_BID/SIBLING_BASE).
+  var SELF_BID = 0xFFFFFFFD;
+  var SIBLING_BASE = 0x80000000;
 
   // Интерны фасадов, ключ — bid (стабильный индекс биндинга). Живут столько
   // же, сколько контекст страницы: identity фасадов обязана быть постоянной.
@@ -1834,6 +2012,40 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
   }
 
   function isAncestorBid(bid) { return bid === PARENT_BID || bid === TOP_BID; }
+  function isSiblingBid(bid) { return bid >= SIBLING_BASE && bid < SELF_BID; }
+
+  // Слот, чьим документом владеет хост этого окна, если хост лежит не в
+  // документе текущего контекста: предок для фасада предка, предок-владелец
+  // для фасада соседа (BUG-1643); null — хост в собственном документе.
+  function hostBid(bid) {
+    if (isAncestorBid(bid)) return bid;
+    if (isSiblingBid(bid)) {
+      var o = _lumen_f_owner_bid(bid);
+      return (o === null || o === undefined) ? null : o;
+    }
+    return null;
+  }
+
+  // BUG-1643: окно/документ iframe, прочитанного через фасад предка
+  // (`parent.document.getElementById(id)`). Хоста этого iframe в реестре
+  // ребёнка нет — натив достаёт биндинг из реестра предка (frame_bridge.rs,
+  // resolve_owner_child). Не iframe, фасад не предка и нет биндинга — null.
+  function foreignFrameBid(bid, nid) {
+    if (!isAncestorBid(bid) || _lumen_f_tag(bid, nid) !== 'iframe') return null;
+    var r = _lumen_f_sibling_binding(bid, nid);
+    return (r === null || r === undefined) ? null : r;
+  }
+  function foreignFrameWindow(bid, nid) {
+    var r = foreignFrameBid(bid, nid);
+    if (r === null) return null;
+    return r === SELF_BID ? window : winFacade(r);
+  }
+  function foreignFrameDocument(bid, nid) {
+    var r = foreignFrameBid(bid, nid);
+    if (r === null) return null;
+    if (r === SELF_BID) return window.document;
+    return _lumen_f_accessible(r) ? docFacade(r) : null;
+  }
 
   // GAP-NAVCTX срез 8: `fr.contentWindow.location.href = url` (и .assign/
   // .replace) — навигация ЧЕРЕЗ фасад, не через `iframe.src=` родителя. Пишем
@@ -1861,8 +2073,9 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
       var r = _url_resolve(resolved, _lumen_document_base_url());
       if (r) resolved = r;
     }
-    if (isAncestorBid(bid)) {
-      _lumen_f_set_attr(bid, hostNid, 'src', resolved);
+    var hb = hostBid(bid);
+    if (hb !== null) {
+      _lumen_f_set_attr(hb, hostNid, 'src', resolved);
     } else if (typeof _lumen_make_element === 'function') {
       var el = _lumen_make_element(hostNid);
       if (el) el.setAttribute('src', resolved);
@@ -2121,6 +2334,14 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
         return c;
       },
       remove: function() { _lumen_f_remove_node(bid, nid); },
+      // BUG-1643: `<iframe>` предка, прочитанный через его фасад; у остальных
+      // элементов и фасадов свойства нет, как и раньше.
+      get contentWindow() {
+        return _lumen_f_tag(bid, nid) === 'iframe' ? foreignFrameWindow(bid, nid) : undefined;
+      },
+      get contentDocument() {
+        return _lumen_f_tag(bid, nid) === 'iframe' ? foreignFrameDocument(bid, nid) : undefined;
+      },
       get textContent() { return _lumen_f_text(bid, nid); },
       set textContent(v) { _lumen_f_set_text(bid, nid, String(v)); },
       // BUG-480 срезы 6–7: действия над элементом под-документа. Все они
@@ -2303,6 +2524,7 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     Object.defineProperty(w, 'parent', {
       get: function() {
         if (isAncestorBid(bid)) return topOfContext();
+        if (isSiblingBid(bid)) return winFacade(_lumen_f_owner_bid(bid));
         return typeof window !== 'undefined' ? window : null;
       },
       configurable: true,
@@ -2322,7 +2544,8 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
         // (читается из изолята ребёнка) элемент строится нативами бриджа
         // над документом родителя, для обычного фасада — обычным враппером
         // текущего документа (хост и читающий код живут в одном дереве).
-        if (isAncestorBid(bid)) return frameElem(bid, _lumen_f_host(bid));
+        var hb = hostBid(bid);
+        if (hb !== null) return frameElem(hb, _lumen_f_host(bid));
         return (hostNid !== null && typeof _lumen_make_element === 'function')
           ? _lumen_make_element(hostNid)
           : null;
@@ -2336,8 +2559,9 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
         // Для дочернего фрейма — имя, запомненное при регистрации: правка
         // атрибута хоста после создания контекста его не переименовывает
         // (HTML LS §7.2.3; та же семантика, что у window.name ребёнка, BUG-921).
-        var a = isAncestorBid(bid)
-          ? _lumen_f_attr(bid, hostNid, 'name')
+        var hb = hostBid(bid);
+        var a = hb !== null
+          ? _lumen_f_attr(hb, hostNid, 'name')
           : _lumen_f_name(bid);
         return (a === null || a === undefined) ? '' : a;
       },
