@@ -5,7 +5,7 @@
 //! (`super`) как есть; параметр `_event_loop` в теле не использовался
 //! и в переходнике не передаётся.
 
-use crate::page_load::{stream_css_pending, stream_css_pending_done};
+use crate::page_load::{stream_css_outstanding, stream_css_pending, stream_css_pending_done};
 use crate::page_pipeline::is_xml_flavoured_document;
 use crate::*;
 
@@ -298,6 +298,13 @@ impl Lumen {
                     generation,
                     dedup: Arc::clone(&self.stream_images_requested),
                     proxy: proxy.clone(),
+                    // LOAD-3B: builder уезжает в финальный проход, если ему больше
+                    // не рисовать черновик; пока ждут таблицы стилей — остаётся тут.
+                    stream_builder: if stream_css_outstanding(generation) {
+                        None
+                    } else {
+                        self.stream_builder.take()
+                    },
                 });
                 // BUG-1027: поток гоняет весь финальный pipeline, включая
                 // сборку дерева боксов — рекурсию по глубине DOM ценой ~10.4 КБ

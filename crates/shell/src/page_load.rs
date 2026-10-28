@@ -2339,7 +2339,7 @@ impl Lumen {
 }
 
 mod css_pending;
-pub(crate) use css_pending::{stream_css_pending, stream_css_pending_add, stream_css_pending_done};
+pub(crate) use css_pending::{stream_css_outstanding, stream_css_pending, stream_css_pending_add, stream_css_pending_done};
 #[cfg(test)]
 pub(crate) use css_pending::TEST_LOCK as STREAM_CSS_TEST_LOCK;
 

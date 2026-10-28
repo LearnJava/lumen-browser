@@ -1767,6 +1767,7 @@ fn load1_parse_html(live: bool, det: deterministic::DetConfig, html: &str) -> cr
             generation: 0,
             dedup: Arc::default(),
             proxy,
+            stream_builder: None,
         }
     });
     parse_and_layout(
@@ -1999,4 +2000,88 @@ fn load3a_window_load_waits_for_async_scripts() {
     use crate::page_load::window_load_due;
     assert!(!window_load_due(true, false, 0, false, true));
     assert!(window_load_due(true, false, 0, false, false));
+}
+
+// -- LOAD-3B: финальный проход не разбирает HTML второй раз -------------------
+
+fn load3b_stream_builder(bytes: &[u8], chunk: usize) -> lumen_html_parser::IncrementalTreeBuilder {
+    let mut b = lumen_html_parser::IncrementalTreeBuilder::new();
+    for part in bytes.chunks(chunk) {
+        b.feed_bytes(part);
+    }
+    b
+}
+
+fn load3b_build(
+    bytes: &[u8],
+    builder: Option<lumen_html_parser::IncrementalTreeBuilder>,
+    xml: bool,
+    allow: bool,
+) -> (lumen_dom::Document, bool, String) {
+    let encoding = lumen_encoding::detect(bytes, Some("text/html"));
+    let source = lumen_encoding::decode(encoding, bytes);
+    let (doc, handed_off) = crate::page_pipeline::build_document(bytes, encoding, &source, xml, allow, builder);
+    let reference = format!("{:?}", lumen_html_parser::parse(&source));
+    (doc, handed_off, reference)
+}
+
+#[test]
+fn load3b_utf8_page_reuses_stream_builder_dom() {
+    let html = "<!doctype html><title>Привет</title><body><p>Мир 🌍 <b>жирный</b><table><tr><td>x</td></table><script>var a = 1 < 2;</script>";
+    // Чанк в 7 байт режет многобайтные символы посередине — как сетевые пакеты.
+    let builder = load3b_stream_builder(html.as_bytes(), 7);
+    let (doc, handed_off, reference) = load3b_build(html.as_bytes(), Some(builder), false, true);
+    assert!(handed_off, "UTF-8 страница должна забрать дерево стриминга");
+    assert_eq!(format!("{doc:?}"), reference, "DOM из builder-а отличается от повторного разбора");
+}
+
+#[test]
+fn load3b_cp1251_page_falls_back_to_reparse() {
+    let mut bytes = b"<meta charset=windows-1251><p>".to_vec();
+    bytes.extend_from_slice(&[0xCF, 0xF0, 0xE8, 0xE2, 0xE5, 0xF2]); // «Привет»
+    let builder = load3b_stream_builder(&bytes, 5);
+    let (doc, handed_off, reference) = load3b_build(&bytes, Some(builder), false, true);
+    assert!(!handed_off, "не-UTF-8 документ стриминг декодирует неверно — нужен повторный разбор");
+    assert_eq!(format!("{doc:?}"), reference);
+    assert!(format!("{doc:?}").contains("Привет"));
+}
+
+#[test]
+fn load3b_fallbacks_keep_previous_dom() {
+    let html = "<p>текст</p>".as_bytes();
+    // Builder разобрал не те байты.
+    let other = load3b_stream_builder("<p>другое</p>".as_bytes(), 4);
+    let (doc, handed_off, reference) = load3b_build(html, Some(other), false, true);
+    assert!(!handed_off);
+    assert_eq!(format!("{doc:?}"), reference);
+    // Недокормленный builder (последний кусок не дошёл).
+    let partial = load3b_stream_builder(&html[..html.len() - 3], 4);
+    assert!(!load3b_build(html, Some(partial), false, true).1);
+    // --deterministic / XML-вид / BOM / нет builder-а.
+    let full = || load3b_stream_builder(html, 4);
+    assert!(!load3b_build(html, Some(full()), false, false).1);
+    assert!(!load3b_build(html, Some(full()), true, true).1);
+    assert!(!load3b_build(html, None, false, true).1);
+    let mut bom = vec![0xEF, 0xBB, 0xBF];
+    bom.extend_from_slice(html);
+    let (doc, handed_off, reference) = load3b_build(&bom, Some(load3b_stream_builder(&bom, 4)), false, true);
+    assert!(!handed_off, "стриминг не срезает BOM, финальный декодер срезает");
+    assert_eq!(format!("{doc:?}"), reference);
+    // Невалидный UTF-8 (lossy-декодеры могут разойтись).
+    let mut bad = b"<p>a".to_vec();
+    bad.extend_from_slice(&[0xFF, 0xFE, 0x41]);
+    bad.extend_from_slice(b"</p>");
+    assert!(!load3b_build(&bad, Some(load3b_stream_builder(&bad, 3)), false, true).1);
+}
+
+#[test]
+fn load3b_fingerprint_is_chunking_independent() {
+    let data = "<div>Привет, мир</div>".as_bytes();
+    for chunk in [1, 3, data.len()] {
+        assert_eq!(
+            load3b_stream_builder(data, chunk).fed_fingerprint(),
+            lumen_html_parser::bytes_fingerprint(data),
+            "chunk={chunk}"
+        );
+    }
 }

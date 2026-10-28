@@ -64,6 +64,14 @@ pub(crate) fn stream_css_pending_at(generation: u64, now: Instant) -> bool {
     g.generation == generation && g.count > 0 && !deadline_passed(&g, now)
 }
 
+/// LOAD-2/LOAD-3B: для навигации `generation` ещё есть таблицы, чей `CssLoaded`
+/// не обработан (независимо от дедлайна) — по приходу такой таблицы рисуется
+/// черновик, и ему нужен живой streaming-builder.
+pub(crate) fn stream_css_outstanding(generation: u64) -> bool {
+    let g = lock();
+    g.generation == generation && g.count > 0
+}
+
 fn deadline_passed(g: &CssPending, now: Instant) -> bool {
     g.first_add.is_some_and(|t| now >= t + STREAM_CSS_DEADLINE)
 }
