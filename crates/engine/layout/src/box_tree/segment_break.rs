@@ -234,6 +234,10 @@ pub(crate) fn collapse_segment_breaks(segs: &mut [InlineSegment]) {
     // Runs split by a segment boundary: trailing run of `prev` + leading run of `cur`.
     let mut prev: Option<usize> = None;
     for j in 0..segs.len() {
+        // An empty inline element between two texts does not separate them.
+        if segs[j].is_empty_inline_marker() {
+            continue;
+        }
         if !collapses_segment_breaks(&segs[j]) {
             prev = None;
             continue;

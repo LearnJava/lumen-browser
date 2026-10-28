@@ -446,6 +446,21 @@ pub struct InlineSegment {
     pub effect_scopes: Vec<InlineEffectScope>,
 }
 
+impl InlineSegment {
+    /// `source_char_offset` of the segment that stands for an empty inline element (see
+    /// [`Self::is_empty_inline_marker`]). No text node has an offset this large.
+    pub const EMPTY_INLINE_OFFSET: u32 = u32::MAX;
+
+    /// A zero-width, zero-edge segment `collect_inline_segments` leaves for an inline element with
+    /// no content (`<span></span>`, BUG-1558). It lays out nothing: `wrap_inline_run` skips it like
+    /// any empty text, and a run made of nothing else is not built at all. It only records, in the
+    /// run's `segments`, where `source_node` sits among the text around it, so that
+    /// `getBoundingClientRect`/`getClientRects`/`offsetLeft` can answer for the element.
+    pub fn is_empty_inline_marker(&self) -> bool {
+        self.source_char_offset == Self::EMPTY_INLINE_OFFSET && self.text.is_empty()
+    }
+}
+
 /// One inline element that needs an offscreen layer (see [`InlineSegment::effect_scopes`]).
 #[derive(Debug, Clone)]
 pub struct InlineEffectScope {

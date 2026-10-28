@@ -594,6 +594,13 @@ DOMQuad.fromQuad = function(other) {
     return new DOMQuad(other.p1, other.p2, other.p3, other.p4);
 };
 
+// WebIDL §3.7 @@toStringTag: `Object.prototype.toString.call(rects)` is `[object DOMRectList]`
+// (BUG-1558). Own per interface, never inherited — DOMRect would otherwise print DOMRectReadOnly.
+[DOMPointReadOnly, DOMPoint, DOMRectReadOnly, DOMRect, DOMRectList, DOMMatrixReadOnly, DOMMatrix, DOMQuad]
+    .forEach(function(C) {
+        Object.defineProperty(C.prototype, Symbol.toStringTag, { value: C.name, configurable: true });
+    });
+
 // ── globals ───────────────────────────────────────────────────────────────────
 window.DOMPointReadOnly  = DOMPointReadOnly;
 window.DOMPoint          = DOMPoint;

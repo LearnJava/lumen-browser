@@ -110,7 +110,7 @@ thread_local! {
 /// Identity of an inline run across the two passes: the DOM text node of its first segment.
 /// Generated content has no node (`NodeId(0)`) — such runs are never limited.
 pub(super) fn run_key(segments: &[InlineSegment]) -> Option<NodeId> {
-    segments.first().map(|g| g.source_node).filter(|&n| n != NodeId::from_index(0))
+    segments.iter().find(|s| !s.is_empty_inline_marker()).map(|g| g.source_node).filter(|&n| n != NodeId::from_index(0))
 }
 
 fn budget_of(key: NodeId) -> Option<usize> {

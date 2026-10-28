@@ -292,6 +292,7 @@ mod v8_bug493_sync_flush;
 
 #[cfg(feature = "v8-backend")]
 mod v8_gap_hlhittest;
+mod v8_range_client_rects;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug493_sheet_registry;

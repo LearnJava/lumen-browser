@@ -1742,6 +1742,10 @@ fn collect_layout_rects_box(
             })
             .or_insert([fx1, fy1, fx2 - fx1, fy2 - fy1]);
     });
+    // BUG-1558: an inline element with no content has no fragment above; it keeps its place anyway.
+    for_each_empty_inline_element(doc, b, |anc, rect| {
+        out.entry(anc.index() as u32).or_insert(rect);
+    });
 }
 
 /// For an `InlineRun` box: calls `f(element, [x1, y1, x2, y2])` for every plain inline element
@@ -1768,6 +1772,78 @@ pub(crate) fn for_each_inline_frag_ancestor(
             for anc in inline_element_ancestors(doc, span.source_node, b.node) {
                 f(anc, rect);
             }
+        }
+    }
+}
+
+/// For an `InlineRun` box: calls `f(element, [x, y, width, height])` for every inline element with
+/// no content (`<span></span>`; [`InlineSegment::is_empty_inline_marker`]) and, with the same rect,
+/// for each of its inline ancestors — the caller keeps only the answer of an element that no
+/// fragment reached, so an ancestor with text of its own is not widened (BUG-1558).
+///
+/// The rect is zero-wide at the point the element sits in the line: after the text before it
+/// (past that text's trailing space when the space is collapsed into the gap before what follows),
+/// else at the start of the text after it, one line high. An element in a run with no text around it
+/// (a phantom line, CSS Inline 3 §3.4) reports `[b.x, b.y, 0, 0]`.
+pub(crate) fn for_each_empty_inline_element(
+    doc: &lumen_dom::Document,
+    b: &LayoutBox,
+    mut f: impl FnMut(lumen_dom::NodeId, [f32; 4]),
+) {
+    let BoxKind::InlineRun { segments, lines, .. } = &b.kind else { return };
+    if !segments.iter().any(InlineSegment::is_empty_inline_marker) {
+        return;
+    }
+    let line_h = b.used_line_height;
+    // (line, left, right) of every text span in line order, with the segment range it came from.
+    let spans: Vec<(usize, lumen_dom::NodeId, u32, f32, f32)> = lines
+        .iter()
+        .enumerate()
+        .flat_map(|(li, line)| {
+            line.iter().flat_map(move |fr| {
+                text_geometry::frag_source_spans(fr).into_iter().map(move |s| {
+                    let left = b.rect.x + fr.x + s.x;
+                    (li, s.source_node, s.source_char_offset, left, left + s.width)
+                })
+            })
+        })
+        .collect();
+    // The spans laid out for text segment `i`: its node, from its offset up to the next segment of the node.
+    let spans_of = |i: usize| {
+        let seg = &segments[i];
+        let upper = segments[i + 1..]
+            .iter()
+            .find(|s| s.source_node == seg.source_node && !s.text.is_empty())
+            .map_or(u32::MAX, |s| s.source_char_offset);
+        spans
+            .iter()
+            .filter(move |sp| sp.1 == seg.source_node && sp.2 >= seg.source_char_offset && sp.2 < upper)
+    };
+    let is_text = |s: &InlineSegment| !s.text.is_empty() && s.img_src.is_none();
+    for (m, marker) in segments.iter().enumerate() {
+        if !marker.is_empty_inline_marker() {
+            continue;
+        }
+        // The nearest text on each side, not looking past a forced line break.
+        let prev = segments[..m].iter().rposition(|s| s.forced_break || is_text(s)).filter(|&i| !segments[i].forced_break);
+        let next = segments[m + 1..].iter().position(|s| s.forced_break || is_text(s)).map(|i| m + 1 + i).filter(|&i| !segments[i].forced_break);
+        let next_start = next.and_then(|i| spans_of(i).next());
+        let rect = match (prev.and_then(|i| spans_of(i).next_back().map(|sp| (i, sp))), next_start) {
+            (Some((i, end)), next_sp) => {
+                // The gap after the previous text is spent before the marker when it is collapsed
+                // text space: the element sits where the following text starts, on the same line.
+                let ends_in_space = segments[i].text.ends_with([' ', '\t', '\n']);
+                let x = match next_sp {
+                    Some(n) if ends_in_space && n.0 == end.0 => n.3,
+                    _ => end.4,
+                };
+                [x, b.rect.y + end.0 as f32 * line_h, 0.0, line_h]
+            }
+            (None, Some(n)) => [n.3, b.rect.y + n.0 as f32 * line_h, 0.0, line_h],
+            (None, None) => [b.rect.x, b.rect.y, 0.0, 0.0],
+        };
+        for anc in inline_element_ancestors(doc, marker.source_node, b.node) {
+            f(anc, rect);
         }
     }
 }
@@ -1893,6 +1969,11 @@ fn collect_client_rects_box(
                 }
             }
         }
+        for_each_empty_inline_element(doc, b, |anc, rect| {
+            if !boxed.contains(&(anc.index() as u32)) {
+                out.entry(anc.index() as u32).or_insert_with(|| vec![rect]);
+            }
+        });
     }
 }
 

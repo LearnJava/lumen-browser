@@ -221,7 +221,7 @@ fn build_ruby_group_box(
                 counters, registry, &mut need_first_letter, dark_mode,
             );
         } else {
-            if !pending.is_empty() {
+            if !pending.iter().all(InlineSegment::is_empty_inline_marker) {
                 super::segment_break::collapse_segment_breaks(&mut pending);
                 children.push(anon_inline_run(
                     owner_id, parent_style, std::mem::take(&mut pending), BoxRole::AnonymousInlineRun,
@@ -233,7 +233,7 @@ fn build_ruby_group_box(
             ));
         }
     }
-    if !pending.is_empty() {
+    if !pending.iter().all(InlineSegment::is_empty_inline_marker) {
         super::segment_break::collapse_segment_breaks(&mut pending);
         children.push(anon_inline_run(owner_id, parent_style, pending, BoxRole::AnonymousInlineRun));
     }

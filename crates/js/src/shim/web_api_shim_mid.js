@@ -9143,15 +9143,45 @@ function _lumen_is_body(nid) {
     return !!body && nid === body.__nid__;
 }
 
+// Any HTML `<body>` element, not only `document.body` — the offsetParent algorithm stops at, and
+// reports null for, every one (offsetParent-body-and-html.html).
+function _lumen_is_body_tag(nid) {
+    return (_lumen_get_tag_name(nid) || '').toUpperCase() === 'BODY';
+}
+
+// The nearest ancestor that is the containing block of a `position: fixed` descendant: it
+// establishes one by `transform`/`perspective`/`filter`/`backdrop-filter`, `transform-style:
+// preserve-3d`, `contain: paint|layout` or a matching `will-change` (CSS Position L3 §3.2 / Transforms L1 §2). null: the viewport is.
+function _lumen_fixed_cb_ancestor_nid(nid) {
+    var pid = _lumen_u2n(_lumen_get_parent(nid));
+    var none = function(v) { return !v || v === 'none'; };
+    while (pid !== null && pid !== undefined) {
+        var wc = _lumen_get_computed_style(pid, 'will-change');
+        var ct = _lumen_get_computed_style(pid, 'contain');
+        if (!none(_lumen_get_computed_style(pid, 'transform')) ||
+            !none(_lumen_get_computed_style(pid, 'perspective')) ||
+            !none(_lumen_get_computed_style(pid, 'filter')) ||
+            !none(_lumen_get_computed_style(pid, 'backdrop-filter')) ||
+            _lumen_get_computed_style(pid, 'transform-style') === 'preserve-3d' ||
+            /\b(paint|layout|strict|content)\b/.test(ct || '') ||
+            /\b(transform|perspective|filter)\b/.test(wc || '')) return pid;
+        pid = _lumen_u2n(_lumen_get_parent(pid));
+    }
+    return null;
+}
+
 // CSSOM View §5 `offsetParent` algorithm: nearest ancestor that is either
 // positioned (computed `position` != `static`), the `<body>`, or a
-// `<td>`/`<th>`/`<table>`. `null` for the root element, `<body>` itself, or a
-// `position: fixed` element (which cannot have an offsetParent up the tree).
+// `<td>`/`<th>`/`<table>`. `null` for the root element, a `<body>`, an element without a box
+// (`display: none`), or a `position: fixed` element whose containing block is the viewport — a
+// fixed one inside a transformed/filtered/contained ancestor reports that ancestor (BUG-1558).
 function _lumen_offset_parent_nid(nid) {
     var docEl = document.documentElement;
     if (docEl && nid === docEl.__nid__) return null;
-    if (_lumen_is_body(nid)) return null;
-    if (_lumen_get_computed_style(nid, 'position') === 'fixed') return null;
+    if (_lumen_is_body_tag(nid)) return null;
+    if (_lumen_get_computed_style(nid, 'display') === 'none' ||
+        (_lumen_get_computed_style(nid, 'computed:-lumen-boxless') === '1' && !_lumen_get_bounding_rect(nid))) return null;
+    if (_lumen_get_computed_style(nid, 'position') === 'fixed') return _lumen_fixed_cb_ancestor_nid(nid);
     var pid = _lumen_u2n(_lumen_get_parent(nid));
     while (pid !== null && pid !== undefined) {
         // An empty string (no computed-style entry for this node) means
@@ -9159,7 +9189,7 @@ function _lumen_offset_parent_nid(nid) {
         // offsetParent candidate.
         var pos = _lumen_get_computed_style(pid, 'position');
         if (pos && pos !== 'static') return pid;
-        if (_lumen_is_body(pid)) return pid;
+        if (_lumen_is_body_tag(pid)) return pid;
         var tag = (_lumen_get_tag_name(pid) || '').toUpperCase();
         if (tag === 'TD' || tag === 'TH' || tag === 'TABLE') return pid;
         pid = _lumen_u2n(_lumen_get_parent(pid));
@@ -12540,6 +12570,93 @@ function _lumen_range_common_nid(a, b) {
     return a;
 }
 
+// CSSOM View §«Extensions to the Range interface», getClientRects (BUG-1558). Walks the range's
+// subtree in tree order: an element the range contains answers with its own `getClientRects()`
+// (a box-less one, e.g. `display: contents`, with its children's instead); a Text node answers
+// with the selected slice of each laid-out line, split in proportion to length, soft hyphens
+// counting for nothing (the layout table keeps no per-glyph advances, as
+// `lumen_layout::text_geometry` documents).
+function _lumen_range_text_rects(nid, a, b, out) {
+    var d = _lumen_make_node(nid).data;
+    var len = d.length;
+    // A boundary inside a surrogate pair belongs to the whole character.
+    var low = function(i) { var c = d.charCodeAt(i); return c >= 0xDC00 && c <= 0xDFFF; };
+    var high = function(i) { var c = d.charCodeAt(i); return c >= 0xD800 && c <= 0xDBFF; };
+    if (a > 0 && a < len && low(a) && high(a - 1)) a--;
+    if (b > 0 && b < len && low(b) && high(b - 1)) b++;
+    var fr = _lumen_text_frag_rects(nid);
+    if (!fr.length) return;
+    var par = _lumen_u2n(_lumen_get_parent(nid));
+    var sh = par === null ? [0, 0] : _lumen_get_scroll_shift(par);
+    // Units of a fragment's UTF-16 span that take up width: a soft hyphen is laid out as nothing
+    // unless the line breaks at it.
+    var inkBefore = function(fs, u) {
+        var n = 0;
+        for (var k = fs; k < u; k++) if (d.charCodeAt(k) !== 0xAD) n++;
+        return n;
+    };
+    var first = true;
+    for (var i = 0; i + 5 < fr.length; i += 6) {
+        var fs = fr[i + 4], fe = fr[i + 5];
+        var s = Math.max(a, fs), e = Math.min(b, fe);
+        var total = inkBefore(fs, fe);
+        var x, w;
+        if (total === 0) {
+            if (!(s < e) && !(a === b && first && fs <= a && a <= fe)) continue;
+            x = fr[i]; w = s < e ? fr[i + 2] : 0;
+        } else if (s < e) {
+            x = fr[i] + fr[i + 2] * inkBefore(fs, s) / total;
+            w = fr[i + 2] * (inkBefore(fs, e) - inkBefore(fs, s)) / total;
+        } else if (a === b && first && fs <= a && a <= fe) {
+            x = fr[i] + fr[i + 2] * inkBefore(fs, a) / total;
+            w = 0;
+        } else continue;
+        first = false;
+        out.push(new DOMRect(x - sh[0], fr[i + 1] - sh[1], w, fr[i + 3]));
+    }
+}
+
+function _lumen_range_client_rects(r) {
+    var sn = r.__start_nid__, so = r.__start_off__, en = r.__end_nid__, eo = r.__end_off__;
+    var out = [];
+    var ca = _lumen_range_common_nid(sn, en);
+    // Nodes that hold a boundary point: partially selected, so not answered as a whole.
+    var boundary = _lumen_ancestor_nids(sn).concat(_lumen_ancestor_nids(en));
+    // [nid, inside a contained element, an ancestor already answered with its own rects]; children
+    // are pushed in reverse to visit in tree order.
+    var stack = [[ca, false, false]];
+    while (stack.length) {
+        var it = stack.pop(), nid = it[0], full = it[1], covered = it[2];
+        var node = _lumen_make_node(nid);
+        if (node.nodeType === 3) {
+            var a = 0, b = node.data.length;
+            if (!full) {
+                if (nid === sn) a = so; else if (_lumen_range_cmp(nid, 0, sn, so) < 0) continue;
+                if (nid === en) b = eo; else if (_lumen_range_cmp(nid, b, en, eo) > 0) continue;
+            }
+            _lumen_range_text_rects(nid, a, b, out);
+            continue;
+        }
+        if (node.nodeType === 1 && !full && nid !== ca) {
+            if (_lumen_range_cmp(nid, 0, sn, so) > 0 && _lumen_range_cmp(nid, _lumen_node_length(nid), en, eo) < 0) {
+                full = true;
+            } else if (boundary.indexOf(nid) < 0) {
+                continue;
+            }
+        }
+        if (full && node.nodeType === 1 && !covered) {
+            var rs = node.getClientRects();
+            for (var i = 0; i < rs.length; i++) out.push(rs[i]);
+            // A box-less element (display: contents) has no rects of its own: its children stand in.
+            covered = rs.length !== 0;
+        }
+        // Text inside a contained element still counts; elements inside one do not (their parent is selected).
+        var kids = _lumen_get_children(nid);
+        for (var k = kids.length - 1; k >= 0; k--) stack.push([kids[k], full, covered]);
+    }
+    return out;
+}
+
 function _lumen_range_is_cdata(node) {
     var t = node.nodeType;
     return t === 3 || t === 4 || t === 7 || t === 8;
@@ -12793,13 +12910,25 @@ function _lumen_make_range(sNid, sOff, eNid, eOff) {
                      [this.__start_nid__, this.__start_off__, other.__end_nid__,   other.__end_off__  ]][how];
             return _lumen_range_cmp(p[0], p[1], p[2], p[3]);
         },
+        // CSSOM View §«Extensions to the Range interface» (BUG-1558): the union of `getClientRects()`.
         getBoundingClientRect: function() {
-            var el = _lumen_make_element(this.__start_nid__);
-            return (el && el.getBoundingClientRect) ? el.getBoundingClientRect() : new DOMRect(0, 0, 0, 0);
+            var list = this.getClientRects();
+            if (list.length === 0) return new DOMRect(0, 0, 0, 0);
+            var l = Infinity, t = Infinity, rr = -Infinity, b = -Infinity, any = false;
+            for (var i = 0; i < list.length; i++) {
+                var q = list[i];
+                if (q.width === 0 || q.height === 0) continue;
+                any = true;
+                l = Math.min(l, q.left); t = Math.min(t, q.top);
+                rr = Math.max(rr, q.right); b = Math.max(b, q.bottom);
+            }
+            // Every rect empty: the first one stands for the range.
+            if (!any) return new DOMRect(list[0].x, list[0].y, list[0].width, list[0].height);
+            return new DOMRect(l, t, rr - l, b - t);
         },
-        // BUG-478/BUG-522: a real DOMRectList, not a plain Array — matches
-        // Element.prototype.getClientRects()'s return type just below.
-        getClientRects:   function() { return new DOMRectList([this.getBoundingClientRect()]); },
+        // BUG-478/BUG-522/BUG-1558: a real DOMRectList — border boxes of the elements the range
+        // selects plus one rect per laid-out line for the selected part of each Text node.
+        getClientRects:   function() { return new DOMRectList(_lumen_range_client_rects(this)); },
         detach:           function() {},
         isPointInRange: function(node, offset) {
             if (arguments.length >= 2 && _lumen_tree_nid(node) !== null &&

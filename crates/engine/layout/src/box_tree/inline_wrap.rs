@@ -648,7 +648,7 @@ pub(crate) fn pretty_wrap(
     let penult_end = penult.last().map(|f| f.x + f.width).unwrap_or(0.0);
     // BUG-128: ширина пробела берётся семейством первого сегмента, а не
     // bundled Inter-ом — иначе строка едет относительно нарисованного текста.
-    let space_w = segments.first().map_or_else(
+    let space_w = segments.iter().find(|s| !s.is_empty_inline_marker()).map_or_else(
         || m.char_width(' ', container_font_size),
         |s| m.char_width_with_families(' ', container_font_size, &s.style.font_family),
     );
@@ -843,7 +843,7 @@ pub(crate) fn wrap_inline_run_indented(
     let _prof = lumen_core::profile::scope_detail("lo_wrap");
     // BUG-128: ширина пробела берётся семейством первого сегмента, а не
     // bundled Inter-ом — иначе строка едет относительно нарисованного текста.
-    let space_w = segments.first().map_or_else(
+    let space_w = segments.iter().find(|s| !s.is_empty_inline_marker()).map_or_else(
         || m.char_width(' ', container_font_size),
         |s| m.char_width_with_families(' ', container_font_size, &s.style.font_family),
     );

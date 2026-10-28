@@ -550,6 +550,7 @@ mod flex_vwm6;
 mod fixed_cb;
 mod anchor_scroll;
 mod anchor_inline;
+mod empty_inline_rects;
 mod anchor_transform;
 mod anchor_order;
 mod abs_auto_margins;

@@ -954,7 +954,7 @@ fn same_line_float_top(children: &[LayoutBox], i: usize, child_y: f32) -> Option
     }
     match &prev.kind {
         BoxKind::InlineRun { lines, segments, .. } => {
-            if lines.is_empty() || segments.last().is_none_or(|s| s.forced_break) {
+            if lines.is_empty() || segments.iter().rev().find(|s| !s.is_empty_inline_marker()).is_none_or(|s| s.forced_break) {
                 return None;
             }
             Some(prev.rect.y + prev.rect.height * (lines.len() - 1) as f32 / lines.len() as f32)
