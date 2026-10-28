@@ -69,6 +69,13 @@ thread_local! {
     static TRANSFERRED: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
 }
 
+/// A copy of the live `Path2D` registered under `id` (the OffscreenCanvas context draws the
+/// same objects the element contexts do).
+#[cfg(feature = "v8-backend")]
+pub(crate) fn path2d_snapshot(id: u32) -> Option<Path2dData> {
+    PATHS.with(|p| p.borrow().get(&id).cloned())
+}
+
 /// The canvas-noise seed of a document of `origin`: «profile secret + eTLD+1»
 /// (see [`crate::noise_key`]), `None` for a site exempt from noise. Stable
 /// across restarts of one profile, different between sites and between
@@ -567,6 +574,13 @@ pub(crate) fn install_canvas2d_bindings_v8(
         "_lumen_canvas2d_fill_rect",
         into_v8_fn5(|nid: u32, x: f64, y: f64, w: f64, h: f64| {
             with_canvas(nid, |c| c.fill_rect(x as f32, y as f32, w as f32, h as f32));
+            mark_dirty(nid);
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_set_opaque",
+        into_v8_fn1(|nid: u32| {
+            with_canvas(nid, |c| c.set_opaque());
             mark_dirty(nid);
         }),
     )?;

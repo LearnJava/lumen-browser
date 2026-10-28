@@ -613,6 +613,10 @@ pub struct Context2D {
     ///
     /// [`taint`]: Context2D::taint
     origin_clean: bool,
+    /// `getContext('2d', { alpha: false })`: the bitmap has no alpha channel, so it starts
+    /// opaque black and `clearRect` paints opaque black rather than transparent black
+    /// (HTML LS §4.12.5.1.1, "opaque" canvases).
+    opaque: bool,
 }
 
 impl Context2D {
@@ -647,6 +651,16 @@ impl Context2D {
             noise_generator: None,
             color_space: ColorSpace::Srgb,
             origin_clean: true,
+            opaque: false,
+        }
+    }
+
+    /// Make the canvas opaque (`alpha: false`): the bitmap turns opaque black and stays
+    /// without transparency across `clearRect`.
+    pub fn set_opaque(&mut self) {
+        self.opaque = true;
+        for px in self.pixels.chunks_exact_mut(4) {
+            px.copy_from_slice(&[0, 0, 0, 255]);
         }
     }
 
@@ -871,7 +885,11 @@ impl Context2D {
         for row in y0..y1 {
             for col in x0..x1 {
                 let idx = ((row * self.width + col) * 4) as usize;
-                self.pixels[idx..idx + 4].fill(0);
+                if self.opaque {
+                    self.pixels[idx..idx + 4].copy_from_slice(&[0, 0, 0, 255]);
+                } else {
+                    self.pixels[idx..idx + 4].fill(0);
+                }
             }
         }
     }
@@ -1644,6 +1662,19 @@ mod tests {
         ctx.fill_rect(0.0, 0.0, 4.0, 4.0);
         ctx.clear_rect(0.0, 0.0, 4.0, 4.0);
         assert!(ctx.pixels().iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn opaque_canvas_starts_black_and_clear_rect_keeps_it_opaque() {
+        let mut ctx = Context2D::new(2, 2);
+        ctx.set_opaque();
+        assert!(ctx.pixels().chunks_exact(4).all(|p| p == [0, 0, 0, 255]));
+        ctx.fill_style = CanvasColor::rgba(255, 0, 0, 255).into();
+        ctx.fill_rect(0.0, 0.0, 2.0, 2.0);
+        ctx.clear_rect(0.0, 0.0, 1.0, 2.0);
+        let p = ctx.pixels();
+        assert_eq!(&p[0..4], &[0, 0, 0, 255], "cleared pixel is opaque black");
+        assert_eq!(&p[4..8], &[255, 0, 0, 255], "untouched pixel keeps its paint");
     }
 
     #[test]

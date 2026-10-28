@@ -6597,6 +6597,8 @@ var _validity_msg = {};
 var _input_values = {};
 // nid → cached CanvasRenderingContext2D object (persists across _lumen_make_element).
 var _canvas2d_ctxs = {};
+// nid → true when getContext('2d', { alpha: false }) made the bitmap opaque.
+var _canvas2d_opaque = {};
 // nid → cached GPUCanvasContext object (getContext('webgpu'), persists across _lumen_make_element).
 var _canvas_webgpu_ctxs = {};
 // nid → cached ImageBitmapRenderingContext object (getContext('bitmaprenderer')).
@@ -7675,7 +7677,7 @@ _lumen_c2d_method('isContextLost', function() {
 });
 _lumen_c2d_method('getContextAttributes', function() {
     _lumen_c2d(this, 'getContextAttributes');
-    return { alpha: true, colorSpace: 'srgb', desynchronized: false, willReadFrequently: false };
+    return { alpha: !_canvas2d_opaque[_lumen_c2d(this, 'getContextAttributes').nid], colorSpace: 'srgb', desynchronized: false, willReadFrequently: false };
 });
 
 // §4.12.5.1.2 reset: the bitmap goes transparent black, the state stack is
@@ -10712,7 +10714,7 @@ function _lumen_canvas_nid(self) {
 // 'webgl'/'webgl2' fall through to null here (the functional WebGL path is the
 // separate `webgl_canvas` shim, which wraps this method per element). Returns
 // null once control has been transferred via transferControlToOffscreen.
-HTMLCanvasElement.prototype.getContext = function(contextType) {
+HTMLCanvasElement.prototype.getContext = function(contextType, contextAttributes) {
     var nid = _lumen_canvas_nid(this);
     if (arguments.length === 0) {
         throw new TypeError("Failed to execute 'getContext' on 'HTMLCanvasElement': "
@@ -10725,6 +10727,11 @@ HTMLCanvasElement.prototype.getContext = function(contextType) {
         var d = _lumen_canvas_dims(nid);
         _lumen_canvas2d_create(nid, d[0], d[1]);
         var c2d = _lumen_make_canvas2d_ctx(this, nid);
+        // `{ alpha: false }`: an opaque bitmap (starts black, `clearRect` leaves it opaque).
+        if (contextAttributes !== null && typeof contextAttributes === 'object' && contextAttributes.alpha === false) {
+            _lumen_canvas2d_set_opaque(nid);
+            _canvas2d_opaque[nid] = true;
+        }
         _canvas2d_ctxs[nid] = c2d;
         return c2d;
     }

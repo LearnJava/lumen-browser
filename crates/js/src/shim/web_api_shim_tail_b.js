@@ -121,6 +121,9 @@ window.getComputedStyle = function(element, pseudoElt) {
         if (name === 'view-transition-scope' && typeof _lumen_vt_scope_active === 'function'
             && _lumen_vt_scope_active(nid)) return 'all';
         var base = _lumen_computed_property(nid, name);
+        // A registered custom property animates by its syntax (CSS Properties and Values §5):
+        // a running CSS animation shows through the read like any other property's.
+        if (name.charCodeAt(0) === 45 && name.charCodeAt(1) === 45) return _wa_custom_css_anim(nid, name, base);
         // CSS Gap Decorations L1 §4.7 + CSS Transitions L1: the snapshot holds the
         // settled value; a running transition of a rule property is applied here.
         if (_wa_gap_tr_name_re.test(name)) {
@@ -5414,7 +5417,9 @@ function _wa_gap_an_value(nid, kebab, base, value, pseudo) {
     var list = _css_an_update(nid, pseudo || null);
     if (!list.length) return value;
     var ms = _css_now();
-    var camel = kebab.replace(/-([a-z])/g, function(m, c) { return c.toUpperCase(); });
+    // A custom property keeps its `--name` and interpolates by its registered syntax.
+    var custom = kebab.charCodeAt(0) === 45 && kebab.charCodeAt(1) === 45;
+    var camel = custom ? kebab : kebab.replace(/-([a-z])/g, function(m, c) { return c.toUpperCase(); });
     var result = value, eff = null;
     for (var n = 0; n < list.length; n++) {
         var anim = list[n].anim, i = list[n].i;
@@ -5453,8 +5458,11 @@ function _wa_gap_an_value(nid, kebab, base, value, pseudo) {
         // declaration wins); snapped like the transitions' eased progress.
         var tfs = list.lists['timing-function'];
         local = Math.round(_wa_ease(local, from.easing || tfs[i % tfs.length]) * 1e5) / 1e5;
-        result = _wa_motion_interp(camel, _wa_motion_resolve(eff, camel, from.value),
-                                   _wa_motion_resolve(eff, camel, to.value), local);
+        result = custom
+            ? _wa_interp_prop(camel, _wa_custom_font_lengths(eff.target, String(from.value).trim()),
+                              _wa_custom_font_lengths(eff.target, String(to.value).trim()), local)
+            : _wa_motion_interp(camel, _wa_motion_resolve(eff, camel, from.value),
+                                _wa_motion_resolve(eff, camel, to.value), local);
     }
     return result;
 }
@@ -6004,12 +6012,7 @@ var _wa_custom_scalar_types = {
     time: 1, resolution: 1, flex: 1
 };
 
-function _wa_custom_kind(name) {
-    var def = null;
-    try { def = CSS._getRegisteredProperties()[name]; } catch (e) { return null; }
-    var s = def && typeof def.syntax === 'string' ? def.syntax.trim() : '';
-    var m = /^<([a-z-]+)>([+#]?)$/.exec(s);
-    if (!m) return null;
+function _wa_custom_kind_of(m) {
     var leaf = _wa_custom_scalar_types[m[1]] ? 'scalar'
         : m[1] === 'color' ? 'color'
         : (m[1] === 'transform-function' || m[1] === 'transform-list') ? m[1] : null;
@@ -6017,6 +6020,65 @@ function _wa_custom_kind(name) {
     // A transform-list is already space separated by itself; it takes no list multiplier.
     if (leaf !== 'scalar' && leaf !== 'color' && m[2]) return null;
     return { leaf: leaf, integer: m[1] === 'integer', sep: m[2] === '+' ? ' ' : m[2] === '#' ? ',' : '' };
+}
+
+// Does `text` look like a value of `kind` (every list item a dimension / colour / function)?
+function _wa_custom_fits(kind, text) {
+    var items = kind.sep ? _wa_split_top(String(text).trim(), kind.sep) : [String(text).trim()];
+    if (!items.length) return false;
+    for (var i = 0; i < items.length; i++) {
+        var it = items[i];
+        if (kind.leaf === 'scalar' ? !/^(?:[+-]?(?:\d|\.\d)|calc\()/i.test(it)
+            : kind.leaf === 'color' ? !_wa_color_rgba(it)
+            : !/^(?:none$|[a-z0-9-]+\()/i.test(it)) return false;
+    }
+    return true;
+}
+
+// `samples` (the values about to be interpolated) pick the alternative of a `<a> | <b>`
+// syntax that both of them belong to; without a common one the pair is discrete.
+function _wa_custom_kind(name, samples) {
+    var def = null;
+    try { def = CSS._getRegisteredProperties()[name]; } catch (e) { return null; }
+    var s = def && typeof def.syntax === 'string' ? def.syntax.trim() : '';
+    var m = /^<([a-z-]+)>([+#]?)$/.exec(s);
+    if (m) return _wa_custom_kind_of(m);
+    if (!samples || s.indexOf('|') < 0) return null;
+    var alts = s.split('|');
+    for (var a = 0; a < alts.length; a++) {
+        var am = /^<([a-z-]+)>([+#]?)$/.exec(alts[a].trim());
+        var kind = am && _wa_custom_kind_of(am);
+        if (!kind) continue;
+        var all = true;
+        for (var i = 0; i < samples.length; i++) { if (!_wa_custom_fits(kind, samples[i])) { all = false; break; } }
+        if (all) return kind;
+    }
+    return null;
+}
+
+// `em` / `rem` in a custom-property keyframe are font-relative: the interpolation works on the
+// target's computed lengths (CSS Properties and Values §5, computed value of `<length>`).
+function _wa_custom_font_lengths(target, v) {
+    if (typeof v !== 'string' || !/\d(?:r?em)\b/i.test(v) || !target) return v;
+    var em, rem;
+    try {
+        em = parseFloat(getComputedStyle(target).fontSize);
+        rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    } catch (e) { return v; }
+    return v.replace(/([+-]?(?:\d+\.?\d*|\.\d+))(rem|em)\b/gi, function (_m, n, u) {
+        var base = u.toLowerCase() === 'em' ? em : rem;
+        return isNaN(base) ? _m : (+(parseFloat(n) * base).toFixed(6)) + 'px';
+    });
+}
+
+// The value of the registered custom property `name` of `nid` with the element's running CSS
+// animations applied; unregistered properties (discrete, no syntax to interpolate by) and
+// elements without an animation keep the snapshot's `base`.
+function _wa_custom_css_anim(nid, name, base) {
+    if (base === '') return base;
+    var regs = __lumen_C._lumen_registered_properties;
+    if (!regs || !regs.has(name)) return base;
+    return _wa_gap_an_value(nid, name, base, base);
 }
 
 function _wa_custom_color_text(c) {
@@ -6029,11 +6091,15 @@ function _wa_custom_leaf_interp(kind, a, b, t) {
     if (kind.leaf === 'color') {
         var ca = _wa_color_rgba(a), cb = _wa_color_rgba(b);
         if (!ca || !cb) return t < 0.5 ? a : b;
-        var o = [];
-        for (var i = 0; i < 4; i++) o.push(Math.max(0, Math.min(255, Math.round(ca[i] + (cb[i] - ca[i]) * t))));
-        return _wa_custom_color_text(o);
+        // CSS Color 4 §12.3: premultiplied, so a translucent end weighs by its alpha.
+        return _wa_mix_rgba(ca, cb, t);
     }
     if (kind.leaf === 'scalar') {
+        // `10px` against `20%` (or a `calc()` of both): a sum of a percentage and a length.
+        var pa = /[%]|calc\(/i.test(a + b) ? _wa_lp_parse(a) : null, pb = pa ? _wa_lp_parse(b) : null;
+        if (pa && pb && (pa.pct !== 0 || pb.pct !== 0)) {
+            return _wa_lp_fmt({ pct: pa.pct + (pb.pct - pa.pct) * t, px: pa.px + (pb.px - pa.px) * t });
+        }
         var r = _wa_lerp_scalar(a, b, t);
         if (kind.integer && !isNaN(parseFloat(r))) return String(Math.round(parseFloat(r)));
         return r;
@@ -6044,11 +6110,12 @@ function _wa_custom_leaf_interp(kind, a, b, t) {
 // Interpolate two values of the registered custom property `name`; undefined = not handled
 // here (the generic path takes it).
 function _wa_custom_interp(name, from, to, t) {
-    var kind = _wa_custom_kind(name);
-    if (!kind) return undefined;
     from = String(from).trim(); to = String(to).trim();
+    var kind = _wa_custom_kind(name, [from, to]);
+    if (!kind) return undefined;
     if (!kind.sep) {
-        if (kind.leaf === 'scalar') return undefined;
+        // A plain scalar pair is the generic path's; one mixing `%` and lengths needs the sum form.
+        if (kind.leaf === 'scalar' && !/%|calc\(/i.test(from + to)) return undefined;
         return _wa_custom_leaf_interp(kind, from, to, t);
     }
     var la = _wa_split_top(from, kind.sep), lb = _wa_split_top(to, kind.sep);
@@ -6073,9 +6140,9 @@ function _wa_custom_leaf_composite(kind, under, v, mode) {
 // `add` / `accumulate` of `v` onto `under` for a registered custom property; undefined = not
 // handled here.
 function _wa_custom_composite(name, under, v, mode) {
-    var kind = _wa_custom_kind(name);
-    if (!kind) return undefined;
     under = String(under).trim(); v = String(v).trim();
+    var kind = _wa_custom_kind(name, [under, v]);
+    if (!kind) return undefined;
     if (!kind.sep) return _wa_custom_leaf_composite(kind, under, v, mode);
     var ua = _wa_split_top(under, kind.sep), va = _wa_split_top(v, kind.sep);
     if (ua.length !== va.length) return v;
@@ -6258,6 +6325,7 @@ function _wa_compute_at_p(effect, p) {
     function val(kf, prop) {
         var mode = (kf.composite && kf.composite !== 'auto') ? kf.composite : (effect.composite || 'replace');
         var raw = _wa_gap_prop_re.test(prop) ? kf[prop] : _wa_wide_resolve(effect.target, prop, kf[prop]);
+        if (prop.charAt(0) === '-' && prop.charAt(1) === '-') raw = _wa_custom_font_lengths(effect.target, raw);
         var v = _wa_composite_value(prop, under[prop], _wa_canon_prop(prop, raw), mode);
         return _wa_gap_prop_re.test(prop) ? _wa_gap_resolve(effect, prop, v) : _wa_canon_prop(prop, v);
     }

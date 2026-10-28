@@ -319,6 +319,13 @@ pub(crate) fn install_offscreen_canvas_bindings_v8(
         }),
     )?;
     rt.register_native(
+        "_lumen_offscreen_canvas2d_set_opaque",
+        into_v8_fn1(|canvas_id: u32| {
+            with_offscreen_canvas(canvas_id, |c| c.set_opaque());
+            mark_offscreen_dirty(canvas_id);
+        }),
+    )?;
+    rt.register_native(
         "_lumen_offscreen_canvas2d_clear_rect",
         into_v8_fn5(|canvas_id: u32, x: f64, y: f64, w: f64, h: f64| {
             with_offscreen_canvas(canvas_id, |c| {
@@ -515,6 +522,34 @@ pub(crate) fn install_offscreen_canvas_bindings_v8(
         "_lumen_offscreen_canvas2d_clip",
         into_v8_fn1(|canvas_id: u32| {
             with_offscreen_canvas(canvas_id, |c| c.clip());
+        }),
+    )?;
+    // `fill(path)` / `stroke(path)` / `clip(path)` with a `Path2D` argument: the path
+    // object lives in `canvas2d`'s registry, keyed by the id the page-side class carries.
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_fill_path",
+        into_v8_fn2(|canvas_id: u32, path_id: u32| {
+            if let Some(pd) = crate::canvas2d::path2d_snapshot(path_id) {
+                with_offscreen_canvas(canvas_id, |c| c.fill_with_path2d(&pd));
+                mark_offscreen_dirty(canvas_id);
+            }
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_stroke_path",
+        into_v8_fn2(|canvas_id: u32, path_id: u32| {
+            if let Some(pd) = crate::canvas2d::path2d_snapshot(path_id) {
+                with_offscreen_canvas(canvas_id, |c| c.stroke_with_path2d(&pd));
+                mark_offscreen_dirty(canvas_id);
+            }
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_clip_path",
+        into_v8_fn2(|canvas_id: u32, path_id: u32| {
+            if let Some(pd) = crate::canvas2d::path2d_snapshot(path_id) {
+                with_offscreen_canvas(canvas_id, |c| c.clip_with_path2d(&pd));
+            }
         }),
     )?;
 
@@ -1377,6 +1412,10 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
       // Create and cache a 2D context proxy
       const canvasId = this.__canvas_id__;
       const canvasRef = this;
+      // `{ alpha: false }`: an opaque bitmap (starts black, `clearRect` leaves it opaque).
+      if (options !== null && typeof options === 'object' && options.alpha === false) {
+        _lumen_offscreen_canvas2d_set_opaque(canvasId);
+      }
       // Хранилище четырёх атрибутов с парой get/set (BUG-456 симптом 2): как
       // поля литерала они жить не могут (аксессор с тем же ключом их
       // перекрывает — `lineWidth: 1` ниже был мёртвым кодом, затёртым
@@ -1406,6 +1445,15 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
       // как у элементного контекста (`web_api_shim_mid.js`): та же ловушка
       // BUG-455, если копии разойдутся.
       const stack = [];
+      // JS shadow of the native CTM, kept so getTransform() has something to read back.
+      let _ctm = [1, 0, 0, 1, 0, 0];
+      const _finite = (...v) => v.every(Number.isFinite);
+      const _ctmMul = (m) => {
+        const c = _ctm;
+        _ctm = [c[0] * m[0] + c[2] * m[1], c[1] * m[0] + c[3] * m[1],
+                c[0] * m[2] + c[2] * m[3], c[1] * m[2] + c[3] * m[3],
+                c[0] * m[4] + c[2] * m[5] + c[4], c[1] * m[4] + c[3] * m[5] + c[5]];
+      };
       // BUG-932: built as a plain literal (`impl`), then re-homed onto
       // `OffscreenCanvasRenderingContext2D.prototype` below — none of these
       // members read `this`, so the re-home is behaviorally transparent, and
@@ -1448,15 +1496,35 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
         roundRect: function(x, y, w, h, radii) {
           _offscreen_round_rect(canvasId, x, y, w, h, radii);
         },
-        fill: () => _lumen_offscreen_canvas2d_fill(canvasId),
-        stroke: () => _lumen_offscreen_canvas2d_stroke(canvasId),
-        clip: () => _lumen_offscreen_canvas2d_clip(canvasId),
+        // `fill(path?)`, `stroke(path?)`, `clip(path?)`: a `Path2D` argument replaces the current path.
+        fill: function(ruleOrPath) {
+          if (typeof Path2D === 'function' && ruleOrPath instanceof Path2D) {
+            _lumen_offscreen_canvas2d_fill_path(canvasId, ruleOrPath.__pid__);
+          } else {
+            _lumen_offscreen_canvas2d_fill(canvasId);
+          }
+        },
+        stroke: function(path) {
+          if (typeof Path2D === 'function' && path instanceof Path2D) {
+            _lumen_offscreen_canvas2d_stroke_path(canvasId, path.__pid__);
+          } else {
+            _lumen_offscreen_canvas2d_stroke(canvasId);
+          }
+        },
+        clip: function(ruleOrPath) {
+          if (typeof Path2D === 'function' && ruleOrPath instanceof Path2D) {
+            _lumen_offscreen_canvas2d_clip_path(canvasId, ruleOrPath.__pid__);
+          } else {
+            _lumen_offscreen_canvas2d_clip(canvasId);
+          }
+        },
 
         // State stack. Pushes/pops the native CTM/path-clip state and the
         // four JS-mirrored attributes together — the BUG-455 lesson.
         save: function() {
           _lumen_offscreen_canvas2d_save(canvasId);
           stack.push({
+            ctm: _ctm,
             fillStyle: _fillStyle, strokeStyle: _strokeStyle,
             lineWidth: _lineWidth, globalAlpha: _globalAlpha,
             globalCompositeOperation: _globalCompositeOperation,
@@ -1470,6 +1538,7 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
           _lumen_offscreen_canvas2d_restore(canvasId);
           var snap = stack.pop();
           if (snap) {
+            _ctm = snap.ctm;
             _fillStyle = snap.fillStyle; _strokeStyle = snap.strokeStyle;
             _lineWidth = snap.lineWidth; _globalAlpha = snap.globalAlpha;
             _globalCompositeOperation = snap.globalCompositeOperation;
@@ -1481,16 +1550,36 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
           }
         },
 
-        // Transforms
-        translate: (tx, ty) => _lumen_offscreen_canvas2d_translate(canvasId, tx, ty),
-        rotate: (angle) => _lumen_offscreen_canvas2d_rotate(canvasId, angle),
-        scale: (sx, sy) => _lumen_offscreen_canvas2d_scale(canvasId, sx, sy),
-        transform: (a, b, c, d, e, f) =>
-          _lumen_offscreen_canvas2d_transform(canvasId, a, b, c, d, e, f),
+        // Transforms. A non-finite argument makes the call a no-op (§4.12.5.1.6).
+        translate: function(tx, ty) {
+          tx = +tx; ty = +ty;
+          if (!_finite(tx, ty)) { return; }
+          _ctmMul([1, 0, 0, 1, tx, ty]);
+          _lumen_offscreen_canvas2d_translate(canvasId, tx, ty);
+        },
+        rotate: function(angle) {
+          angle = +angle;
+          if (!_finite(angle)) { return; }
+          _ctmMul([Math.cos(angle), Math.sin(angle), -Math.sin(angle), Math.cos(angle), 0, 0]);
+          _lumen_offscreen_canvas2d_rotate(canvasId, angle);
+        },
+        scale: function(sx, sy) {
+          sx = +sx; sy = +sy;
+          if (!_finite(sx, sy)) { return; }
+          _ctmMul([sx, 0, 0, sy, 0, 0]);
+          _lumen_offscreen_canvas2d_scale(canvasId, sx, sy);
+        },
+        transform: function(a, b, c, d, e, f) {
+          a = +a; b = +b; c = +c; d = +d; e = +e; f = +f;
+          if (!_finite(a, b, c, d, e, f)) { return; }
+          _ctmMul([a, b, c, d, e, f]);
+          _lumen_offscreen_canvas2d_transform(canvasId, a, b, c, d, e, f);
+        },
         setTransform: function(a, b, c, d, e, f) {
           // setTransform() with no arguments resets to identity (§4.12.5.1.6)
           // — the same NaN trap BUG-449 fixed on the element context.
           if (arguments.length === 0) {
+            _ctm = [1, 0, 0, 1, 0, 0];
             _lumen_offscreen_canvas2d_set_transform(canvasId, 1, 0, 0, 1, 0, 0);
             return;
           }
@@ -1499,21 +1588,32 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
             if (m === null || typeof m !== 'object') {
               throw new TypeError('setTransform: argument is not a DOMMatrix2DInit');
             }
-            _lumen_offscreen_canvas2d_set_transform(canvasId,
-              m.a === undefined ? 1 : +m.a, m.b === undefined ? 0 : +m.b,
-              m.c === undefined ? 0 : +m.c, m.d === undefined ? 1 : +m.d,
-              m.e === undefined ? 0 : +m.e, m.f === undefined ? 0 : +m.f);
-            return;
+            // DOMMatrix2DInit: `a`..`f` with `m11`..`m42` as their aliases.
+            const pick = (x, y, dflt) => x !== undefined ? +x : y !== undefined ? +y : dflt;
+            a = pick(m.a, m.m11, 1); b = pick(m.b, m.m12, 0);
+            c = pick(m.c, m.m21, 0); d = pick(m.d, m.m22, 1);
+            e = pick(m.e, m.m41, 0); f = pick(m.f, m.m42, 0);
+          } else {
+            a = +a; b = +b; c = +c; d = +d; e = +e; f = +f;
           }
+          if (!_finite(a, b, c, d, e, f)) { return; }
+          _ctm = [a, b, c, d, e, f];
           _lumen_offscreen_canvas2d_set_transform(canvasId, a, b, c, d, e, f);
         },
-        resetTransform: () => _lumen_offscreen_canvas2d_reset_transform(canvasId),
+        getTransform: function() {
+          return new DOMMatrix(_ctm.slice());
+        },
+        resetTransform: function() {
+          _ctm = [1, 0, 0, 1, 0, 0];
+          _lumen_offscreen_canvas2d_reset_transform(canvasId);
+        },
 
         // §4.12.5.1.2 reset: bitmap goes transparent black, path/transform/
         // clip/state-stack clear, and the four tracked attributes return to
         // their initial values.
         reset: function() {
           stack.length = 0;
+          _ctm = [1, 0, 0, 1, 0, 0];
           _lumen_offscreen_canvas2d_reset_transform(canvasId);
           _lumen_offscreen_canvas2d_clear_rect(canvasId, 0, 0, canvasRef.width, canvasRef.height);
           _lumen_offscreen_canvas2d_begin_path(canvasId);

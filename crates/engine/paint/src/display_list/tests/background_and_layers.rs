@@ -465,6 +465,32 @@ use super::text_and_images::build;
     }
 
     #[test]
+    fn border_image_paint_covers_the_border_image_area_and_agrees_with_the_collector() {
+        // `border-image-source: paint()`: the worklet draws the image at the border-image area
+        // (border box + outset), the nine cells are cut from it like a gradient's, and the
+        // collector asks for the same key the cells refer to.
+        let css = "div { width: 100px; height: 60px; border: solid 10px; border-image: paint(frame) 30 fill;                    border-image-outset: 4px; }";
+        let dl = build("<div></div>", css);
+        let keys: Vec<&String> = dl
+            .iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawBackgroundImage { src, .. } if src.starts_with("paint:") => Some(src),
+                _ => None,
+            })
+            .collect();
+        assert!(keys.len() >= 5, "the cells of the nine-slice are drawn, got {}", keys.len());
+        assert!(keys.iter().all(|k| *k == keys[0]), "every cell comes from one worklet image");
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(&format!("{}{css}", super::text_and_images::BODY_RESET));
+        let layout = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let reqs = crate::collect_paint_requests(&layout, 2.0);
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].key, *keys[0]);
+        // 100 + 2×10 border + 2×4 outset by 60 + 2×10 + 2×4.
+        assert_eq!((reqs[0].width, reqs[0].height, reqs[0].dpr), (128.0, 88.0, 2.0));
+    }
+
+    #[test]
     fn background_image_respects_background_clip_padding_box() {
         // background-clip: padding-box ужимает rect под border на каждой стороне.
         // box-sizing по умолчанию content-box: width=100 — это контент,

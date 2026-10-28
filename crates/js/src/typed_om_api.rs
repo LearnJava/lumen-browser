@@ -947,7 +947,11 @@ const TYPED_OM_SHIM: &str = r#"(function(global) {
     if (!this.__computed__) return _lumen_get_style_property(this.__nid__, name) || '';
     // Custom properties live in their own inherited snapshot (BUG-732), so the
     // computed map has to ask the same two bindings `getComputedStyle` does.
-    if (name.slice(0, 2) === '--') return _lumen_get_custom_property(this.__nid__, name) || '';
+    // `getComputedStyle()` is the read that sees a running CSS animation of the property.
+    if (name.slice(0, 2) === '--') {
+      var owner = _lumen_make_element(this.__nid__);
+      return (owner ? getComputedStyle(owner).getPropertyValue(name) : _lumen_get_custom_property(this.__nid__, name)) || '';
+    }
     // CSSOM-9: computed, not resolved — `width: auto` stays `auto` here even
     // though `getComputedStyle` answers the used px value.
     return _lumen_get_computed_value(this.__nid__, name) || '';
