@@ -40,6 +40,7 @@
 use crate::display_list::clip_path_contains;
 use lumen_core::geom::{Point, Rect};
 use lumen_dom::NodeId;
+use lumen_layout::style::WritingMode;
 use lumen_layout::{
     forward_box_transform, owns_paint_layer, paint_child_order, BoxKind, Cursor, Display, LayoutBox,
     Mat4, PointerEvents, UserSelect,
@@ -57,6 +58,13 @@ pub struct HitTestResult {
     /// обходе вверх: `text_node → <a href="…"> → найдено`.
     /// Для не-InlineRun боксов равен `node`.
     pub source_node: NodeId,
+    /// Узел-источник `InlineFrag`, в чей горизонтальный/вертикальный интервал
+    /// точка попала **строго** (без fallback «последний фрагмент строки»):
+    /// текстовый узел под `<a>`/`<span>`/`<b>`. Для `source_node` fallback
+    /// нужен клику по ссылке, для `document.elementFromPoint` (CSSOM View §3) —
+    /// нет: пустое место справа от текста принадлежит блоку, не inline-элементу.
+    /// `None` — точка не над фрагментом (или бокс не `InlineRun`).
+    pub inline_source: Option<NodeId>,
     /// Координаты попадания в системе hit-узла после всех transform-инверсий
     /// по цепочке предков (та же система, в которой `b.rect` валиден).
     pub local_point: Point,
@@ -185,13 +193,14 @@ fn hit_test_box(point: Point, b: &LayoutBox) -> Option<HitTestResult> {
     if !rect_contains(b.rect, child_point) {
         return None;
     }
-    let (source_node, frag_pe) = find_inline_source(b, child_point);
+    let (source_node, frag_pe, inline_source) = find_inline_source(b, child_point);
     if matches!(frag_pe.unwrap_or_else(|| b.style.effective_pointer_events()), PointerEvents::None) {
         return None;
     }
     Some(HitTestResult {
         node: b.node,
         source_node,
+        inline_source,
         local_point: child_point,
         path: vec![b.node],
         cursor: b.style.cursor,
@@ -262,13 +271,14 @@ fn hit_test_all_box(point: Point, b: &LayoutBox, out: &mut Vec<HitTestResult>) {
     if !rect_contains(b.rect, child_point) {
         return;
     }
-    let (source_node, frag_pe) = find_inline_source(b, child_point);
+    let (source_node, frag_pe, inline_source) = find_inline_source(b, child_point);
     if matches!(frag_pe.unwrap_or_else(|| b.style.effective_pointer_events()), PointerEvents::None) {
         return;
     }
     out.push(HitTestResult {
         node: b.node,
         source_node,
+        inline_source,
         local_point: child_point,
         path: vec![b.node],
         cursor: b.style.cursor,
@@ -281,6 +291,9 @@ fn hit_test_all_box(point: Point, b: &LayoutBox, out: &mut Vec<HitTestResult>) {
 /// обход DOM с текстового узла (child of `<a>`), а не с блочного контейнера
 /// (`<p>`), и правильно найти ссылку.
 ///
+/// Третьим элементом — `source_node` фрагмента только при строгом попадании
+/// (см. [`HitTestResult::inline_source`]).
+///
 /// Возвращает `b.node` если бокс не `InlineRun`, строки пустые, или ни один
 /// фрагмент не попал под точку. `source_node == NodeId(0)` используется в
 /// layout как маркер анонимного/сгенерированного контента — такие узлы не
@@ -289,19 +302,27 @@ fn hit_test_all_box(point: Point, b: &LayoutBox, out: &mut Vec<HitTestResult>) {
 /// Вторым элементом — `pointer-events` фрагмента под точкой (`None`, если
 /// бокс не `InlineRun` или фрагмента нет): стиль самого инлайнового элемента,
 /// а не блок-контейнера.
-fn find_inline_source(b: &LayoutBox, point: Point) -> (NodeId, Option<PointerEvents>) {
+fn find_inline_source(b: &LayoutBox, point: Point) -> (NodeId, Option<PointerEvents>, Option<NodeId>) {
     let BoxKind::InlineRun { lines, .. } = &b.kind else {
-        return (b.node, None);
+        return (b.node, None, None);
     };
     let line_h = b.used_line_height;
     if line_h <= 0.0 || lines.is_empty() {
-        return (b.node, None);
+        return (b.node, None, None);
     }
-    let rel_y = point.y - b.rect.y;
-    let line_idx = (rel_y / line_h).floor().max(0.0) as usize;
+    // Вертикальные writing-mode: строки идут по x (`vertical-rl` — справа налево), фрагменты
+    // раскладываются по y; `frag.x` — смещение вдоль строки (по inline-оси).
+    let (rel_line, rel_x) = match b.style.writing_mode {
+        WritingMode::HorizontalTb => (point.y - b.rect.y, point.x - b.rect.x),
+        WritingMode::VerticalRl | WritingMode::SidewaysRl => {
+            (b.rect.x + b.rect.width - point.x, point.y - b.rect.y)
+        }
+        WritingMode::VerticalLr | WritingMode::SidewaysLr => (point.x - b.rect.x, point.y - b.rect.y),
+    };
+    let line_idx = (rel_line / line_h).floor().max(0.0) as usize;
+    let exact_line = lines.get(line_idx).is_some() && rel_line >= 0.0;
     let line = lines.get(line_idx).or_else(|| lines.last());
-    let Some(line) = line else { return (b.node, None); };
-    let rel_x = point.x - b.rect.x;
+    let Some(line) = line else { return (b.node, None, None); };
     // `InlineRun` несёт стиль блок-контейнера, а `pointer-events` инлайнового
     // элемента может отличаться (`<span style="pointer-events:auto">` внутри
     // блока с `none`), поэтому значение берётся с попавшего под точку фрагмента.
@@ -311,17 +332,17 @@ fn find_inline_source(b: &LayoutBox, point: Point) -> (NodeId, Option<PointerEve
         if rel_x >= start && rel_x < end {
             let src = frag.source_node;
             if src.index() != 0 {
-                return (src, Some(frag.style.effective_pointer_events()));
+                return (src, Some(frag.style.effective_pointer_events()), exact_line.then_some(src));
             }
-            return (b.node, Some(frag.style.effective_pointer_events()));
+            return (b.node, Some(frag.style.effective_pointer_events()), None);
         }
     }
     // Fallback: return source_node of the last frag on the line (closest to right edge).
     if let Some(last) = line.last() {
         let src = if last.source_node.index() != 0 { last.source_node } else { b.node };
-        return (src, Some(last.style.effective_pointer_events()));
+        return (src, Some(last.style.effective_pointer_events()), None);
     }
-    (b.node, None)
+    (b.node, None, None)
 }
 
 /// `Rect::contains(Point)`. Включаем левую/верхнюю границы, исключаем

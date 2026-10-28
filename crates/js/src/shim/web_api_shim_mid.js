@@ -11396,14 +11396,41 @@ ShadowRoot.prototype.getAnimations = function() {
         return !!t && t.__nid__ !== undefined && _lumen_shadow_including_ancestor(srNid, t.__nid__);
     });
 };
+// CSSOM View §3 / BUG-1557: element node ids under the viewport point, topmost first. `argc` is
+// the caller's `arguments.length` (both coordinates are mandatory `double`s: a missing or
+// non-finite one is a TypeError). The native reports inline fragments as a flagged text/inline
+// source id followed by its block's id; the chain between them (`<a>`, `<span>`, ...) is expanded
+// here. A point inside the viewport but over no box hits the root element (§3 step 4).
+function _lumen_hit_nids(x, y, all, argc) {
+    if (argc < 2) throw new TypeError("2 arguments required, but only " + argc + " present.");
+    x = Number(x); y = Number(y);
+    if (!isFinite(x) || !isFinite(y)) throw new TypeError("The provided double value is non-finite.");
+    var vp = _lumen_get_viewport_size();
+    if (x < 0 || y < 0 || x >= vp[0] || y >= vp[1]) return [];
+    var px = x + _lumen_get_page_scroll_x(), py = y + _lumen_get_page_scroll_y();
+    var raw = all ? _lumen_elements_from_point(px, py) : _lumen_element_from_point(px, py);
+    var FLAG = 2147483648, out = [], seen = {};
+    function add(nid) { if (!seen[nid]) { seen[nid] = true; out.push(nid); } }
+    for (var i = 0; i < raw.length; i++) {
+        var id = raw[i];
+        if (id < FLAG) { var w = _lumen_make_element(id); if (w && w.nodeType === 1) add(id); continue; }
+        var src = _lumen_make_element(id - FLAG), owner = raw[i + 1], chain = [];
+        var el = src && (src.nodeType === 1 ? src : src.parentNode);
+        while (el && el.nodeType === 1 && el.__nid__ !== owner) { chain.push(el.__nid__); el = el.parentNode; }
+        if (el && el.__nid__ === owner) chain.forEach(add);
+    }
+    var root = document.documentElement;
+    if (root) { var rn = root.__nid__; if (out.indexOf(rn) < 0) out.push(rn); }
+    return all ? out : out.slice(0, 1);
+}
 // CSSOM View §6.1: the document hit test, retargeted against this root.
 ShadowRoot.prototype.elementFromPoint = function(x, y) {
-    var n = _lumen_u2n(_lumen_element_from_point(Number(x), Number(y)));
-    return n !== null ? _lumen_make_element(_lumen_retarget_nid(n, this.__nid__)) : null;
+    var n = _lumen_hit_nids(x, y, false, arguments.length)[0];
+    return n !== undefined ? _lumen_make_element(_lumen_retarget_nid(n, this.__nid__)) : null;
 };
 ShadowRoot.prototype.elementsFromPoint = function(x, y) {
     var srNid = this.__nid__, seen = {}, out = [];
-    _lumen_elements_from_point(Number(x), Number(y)).forEach(function(n) {
+    _lumen_hit_nids(x, y, true, arguments.length).forEach(function(n) {
         var t = _lumen_retarget_nid(n, srNid);
         if (!seen[t]) { seen[t] = true; out.push(_lumen_make_element(t)); }
     });
@@ -14981,12 +15008,12 @@ var document = {
     // or null if nothing is hit (e.g. outside the viewport). Backed by the same
     // stacking-aware hit test the shell uses for click/cursor dispatch.
     elementFromPoint: function(x, y) {
-        return _lumen_make_element(_lumen_u2n(_lumen_element_from_point(Number(x), Number(y))));
+        return _lumen_make_element(_lumen_u2n(_lumen_hit_nids(x, y, false, arguments.length)[0]));
     },
     // CSSOM View §3: elementsFromPoint(x, y) — every element hit by the point,
     // topmost first, deduplicated. Empty array if nothing is hit.
     elementsFromPoint: function(x, y) {
-        return _lumen_elements_from_point(Number(x), Number(y)).map(_lumen_make_element)
+        return _lumen_hit_nids(x, y, true, arguments.length).map(_lumen_make_element)
             .filter(function(e) { return e && e.nodeType === 1 && e.localName; });  // BUG-1202: drop the document node (no localName)
     },
     // HTML LS §8.1.7.2.2 (DocumentAndElementEventHandlers) is already covered by
