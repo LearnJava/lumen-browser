@@ -149,6 +149,11 @@ def _span_dur(events: list[dict], name: str) -> float | None:
     return sum(e.get("dur", 0.0) for e in spans)
 
 
+def _sum_durs(*durs: float | None) -> float | None:
+    present = [d for d in durs if d is not None]
+    return sum(present) if present else None
+
+
 def metrics_from_trace(trace: dict) -> dict:
     """Разложить Chrome-trace одной навигации в user-centric метрики (мс).
 
@@ -208,7 +213,9 @@ def metrics_from_trace(trace: dict) -> dict:
 
     return {
         "ttfb_ms": ttfb,
-        "html_parse_ms": dur_ms(_span_dur(events, "parse-html")),
+        # LOAD-3B: живое окно разбирает HTML стримингом, финальный проход лишь
+        # заканчивает дерево (`parse-html-finish`) — это и есть его цена разбора.
+        "html_parse_ms": dur_ms(_sum_durs(_span_dur(events, "parse-html"), _span_dur(events, "parse-html-finish"))),
         "script_ms": dur_ms(_span_dur(events, "run-scripts")),
         "layout_ms": dur_ms(_span_dur(events, "layout")),
         "paint_ms": dur_ms(_span_dur(events, "paint")),

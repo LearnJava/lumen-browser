@@ -36,6 +36,6 @@ pub use srcset::{
 };
 pub use tokenizer::{Token, Tokenizer};
 pub use tree_builder::{
-    FragmentContext, IncrementalTreeBuilder, parse, parse_fragment, parse_fragment_with_context,
+    FragmentContext, IncrementalTreeBuilder, bytes_fingerprint, parse, parse_fragment, parse_fragment_with_context,
     parse_xml_flavoured,
 };

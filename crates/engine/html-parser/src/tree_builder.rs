@@ -363,6 +363,28 @@ pub struct IncrementalTreeBuilder {
     /// corpus file combines a namespace-prefixed tag with table foster
     /// parenting.
     pending_prefix: Option<String>,
+    /// LOAD-3B: сколько байт и какой FNV-1a-отпечаток прошли через
+    /// [`feed_bytes`][Self::feed_bytes] — по ним владелец проверяет, что
+    /// builder разобрал именно те байты, которые потом декодирует финальный
+    /// проход, и может забрать готовое дерево вместо повторного разбора.
+    fed_len: usize,
+    fed_hash: u64,
+}
+
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+
+fn fnv1a_extend(mut hash: u64, bytes: &[u8]) -> u64 {
+    for &b in bytes {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+/// LOAD-3B: отпечаток `(длина, FNV-1a)` байт в том же формате, что и
+/// [`IncrementalTreeBuilder::fed_fingerprint`].
+pub fn bytes_fingerprint(bytes: &[u8]) -> (usize, u64) {
+    (bytes.len(), fnv1a_extend(FNV_OFFSET, bytes))
 }
 
 impl IncrementalTreeBuilder {
@@ -389,6 +411,8 @@ impl IncrementalTreeBuilder {
             saw_own_xmlns: false,
             saw_prefix_xmlns: false,
             pending_prefix: None,
+            fed_len: 0,
+            fed_hash: FNV_OFFSET,
         }
     }
 
@@ -482,6 +506,8 @@ impl IncrementalTreeBuilder {
 
     /// Вариант [`feed`][Self::feed] для сырых байт.
     pub fn feed_bytes(&mut self, chunk: &[u8]) {
+        self.fed_len += chunk.len();
+        self.fed_hash = fnv1a_extend(self.fed_hash, chunk);
         let mut tokenizer = std::mem::take(&mut self.tokenizer);
         tokenizer.feed_bytes_with_context(chunk, |token| self.apply_token_for_stream(token));
         self.tokenizer = tokenizer;
@@ -505,6 +531,18 @@ impl IncrementalTreeBuilder {
     fn apply_token_for_stream(&mut self, token: Token) -> (bool, bool) {
         self.apply_token(token);
         (self.current_context_forbids_text_only(), self.cdata_sections_allowed())
+    }
+
+    /// LOAD-3B: `(длина, FNV-1a)` всех байт, поданных через
+    /// [`feed_bytes`][Self::feed_bytes]; совпадает с [`bytes_fingerprint`]
+    /// от тех же байт, поданных целиком или кусками.
+    pub fn fed_fingerprint(&self) -> (usize, u64) {
+        (self.fed_len, self.fed_hash)
+    }
+
+    /// LOAD-3B: builder создан через [`new_xml_flavoured`][Self::new_xml_flavoured].
+    pub fn is_xml_flavoured(&self) -> bool {
+        self.xml_mode
     }
 
     /// Возвращает ссылку на текущее состояние DOM.

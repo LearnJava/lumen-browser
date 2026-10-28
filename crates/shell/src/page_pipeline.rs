@@ -975,6 +975,44 @@ pub(crate) fn is_xml_flavoured_document(content_type: Option<&str>, base: &Resou
     path.ends_with(".xhtml") || path.ends_with(".xht") || path.ends_with(".svg")
 }
 
+/// LOAD-3B: дерево документа. Если живое окно отдало `IncrementalTreeBuilder`
+/// стримингового черновика и он разобрал ровно те байты, которые финальный
+/// проход декодировал бы как UTF-8, берём его результат (`finish()`) вместо
+/// повторного `parse` — второй разбор 850-КБ документа стоил десятки мс на
+/// критическом пути. Во всех остальных случаях (не UTF-8: стриминг декодирует
+/// только его; BOM — стриминг его не срезает; XML-вид; невалидный UTF-8 —
+/// lossy-декодеры могут разойтись; `--deterministic`; отпечаток байт не
+/// совпал) builder выбрасывается и документ разбирается заново, как раньше.
+/// Второй элемент — `true`, если использован builder.
+pub(crate) fn build_document(
+    bytes: &[u8],
+    encoding: lumen_encoding::Encoding,
+    source: &str,
+    xml_flavoured: bool,
+    allow_handoff: bool,
+    stream_builder: Option<lumen_html_parser::IncrementalTreeBuilder>,
+) -> (lumen_dom::Document, bool) {
+    if let Some(builder) = stream_builder
+        && allow_handoff
+        && !xml_flavoured
+        && !builder.is_xml_flavoured()
+        && encoding == lumen_encoding::Encoding::Utf8
+        && !bytes.starts_with(&[0xEF, 0xBB, 0xBF])
+        && std::str::from_utf8(bytes).is_ok()
+        && builder.fed_fingerprint() == lumen_html_parser::bytes_fingerprint(bytes)
+    {
+        let _s = lumen_core::trace::span("parse-html-finish", "parse");
+        return (builder.finish(), true);
+    }
+    let _s = lumen_core::trace::span("parse-html", "parse");
+    let doc = if xml_flavoured {
+        lumen_html_parser::parse_xml_flavoured(source)
+    } else {
+        lumen_html_parser::parse(source)
+    };
+    (doc, false)
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn parse_and_layout(
@@ -1026,7 +1064,7 @@ pub(crate) fn parse_and_layout(
     // result back to the shell's event loop. `None` for headless/test callers
     // with no live `Lumen` (`dump_mode.rs`, `page_source::load`) — the hook is
     // simply not built for them, same as before this feature existed.
-    dynamic_image_hook_ctx: Option<crate::dynamic_image_hook::DynamicImageHookCtx>,
+    mut dynamic_image_hook_ctx: Option<crate::dynamic_image_hook::DynamicImageHookCtx>,
 ) -> Result<ParsedPage, Box<dyn Error>> {
     // LOAD-1: живое окно (есть `Lumen`, на который можно слать `ImageDecoded`) отдаёт
     // страницу, не дожидаясь картинок; `--deterministic` (graphic_tests, gdigrab-снимки)
@@ -1053,14 +1091,19 @@ pub(crate) fn parse_and_layout(
         .collect();
     warm_preload_cache(&preload_hints, base, sink, cookie_jar.clone(), &warm_csp);
 
-    let mut doc = {
-        let _s = lumen_core::trace::span("parse-html", "parse");
-        if is_xml_flavoured_document(content_type, base) {
-            lumen_html_parser::parse_xml_flavoured(&source)
-        } else {
-            lumen_html_parser::parse(&source)
-        }
-    };
+    // LOAD-3B: дерево стримингового черновика, если живое окно его отдало.
+    let stream_builder = dynamic_image_hook_ctx.as_mut().and_then(|c| c.stream_builder.take());
+    let (mut doc, handed_off) = build_document(
+        bytes,
+        encoding,
+        &source,
+        is_xml_flavoured_document(content_type, base),
+        !deterministic.enabled,
+        stream_builder,
+    );
+    if handed_off {
+        eprintln!("HTML: взято дерево стриминга, повторный разбор пропущен (LOAD-3B)");
+    }
     // BUG-358: stamp the document with what it was actually decoded as / served
     // as, so `document.characterSet`/`charset`/`inputEncoding`/`contentType`
     // read real per-load state instead of `undefined`.
