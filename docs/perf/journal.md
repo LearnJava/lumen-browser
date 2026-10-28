@@ -784,7 +784,7 @@ wgpu-дефолт окна (CPU-путь скриншотов не измени�
   akamai-nike (1); первый кадр там 29–74 с против единиц секунд на остальных. Это главная причина «завис» у anubis/zillow/leboncoin.
 - `anubis-gnome-gitlab`, `ddosguard-site`, `cf-managed-challenge` — «завис» без PING-разрывов (gitlab: `rs=complete`, текст 0 симв.;
   ddosguard: `rs=interactive`) — причины не разобраны, отдельные срезы.
-**Заведённые баги:** [BUG-1646](../../bugs/BUG-1646-OPEN.md) (H2 PING), [BUG-1647](../../bugs/BUG-1647-OPEN.md) (reCAPTCHA v3).
+**Заведённые баги:** [BUG-1646](../../bugs/BUG-1646-WONTFIX.md) (H2 PING), [BUG-1647](../../bugs/BUG-1647-OPEN.md) (reCAPTCHA v3).
 Ночной прогон с `--baseline` и блокировкой релиза — на машине владельца (COMPAT-BIZ): `python scripts/captcha_stand.py --arm lumen
 --route home-direct --baseline docs/perf/runs/2026-10-19-captcha-lumen.json`.
 
@@ -895,7 +895,7 @@ BROKEN_RENDER 18, HUNG 14. Флапы 0 (повторов не было, `--no-r
 - **NET_FAIL 22 из 112: 14 — TLS-рукопожатие, `os error 10060` (≈40–45 с):** youtube, whatsapp, canva, quora, bbc, webmd, coursera, udemy, medium, soundcloud, snapchat, facebook, linkedin, discord.
   Это маршрут, не стек Lumen: сырой `ssl.wrap_socket` из Python к facebook/discord/bbc/linkedin/medium даёт `TimeoutError` 3 из 3, к example.com — `ok 0,4 с` (то же, что в записи 2026-10-06
   о режущем ClientHello прямом пути). Chrome те же сайты открывает; почему — не выяснено (гипотеза: системный прокси/QUIC/ECH). Для этих 14 сайтов CPR на home-direct не измерим — нужен прогон
-  на маршруте с VPN. Остальные NET_FAIL — H2 PING ([BUG-1646](../../bugs/BUG-1646-OPEN.md), uol, cricbuzz) и прочее.
+  на маршруте с VPN. Остальные NET_FAIL — H2 PING ([BUG-1646](../../bugs/BUG-1646-WONTFIX.md), uol, cricbuzz) и прочее.
 - Ответ на «обработку `http_status=None` при повторной навигации»: `None` (22 сайта) не роняет прибор, класс `none` ≠ `2xx` даёт честное расхождение status; повторный проход открывает `new_tab`,
   а не навигацию в той же вкладке; при `HUNG` окно перезапускается между проходами.
 **Заведённые баги:** нет новых — наблюдения или маршрутные (TLS 10060), или уже заведённые (BUG-1646).
