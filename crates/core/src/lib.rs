@@ -35,6 +35,7 @@ pub mod pcs;
 pub mod profile;
 pub mod punycode;
 pub mod sandbox;
+pub mod script_stall;
 pub mod spell;
 pub mod sri;
 pub mod trace;

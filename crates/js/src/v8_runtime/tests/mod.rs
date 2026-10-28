@@ -1715,6 +1715,7 @@ fn dom_touched_drives_incremental_restyle_matching_full_cascade() {
 }
 
 mod bug1159_range_spec;
+mod compat_hang;
 mod bug935_child_edits;
 mod bug1198_opaque_frame;
 mod bug1231_frame_referrer;
