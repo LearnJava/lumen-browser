@@ -393,6 +393,7 @@ impl Lumen {
                         // `nav` is the only field this handler still needs afterward.
                         let nav_meta = page.nav;
                         self.apply_loaded_page(page, Some(new_layout_source), new_js_ctx);
+                        self.load_marks.mark_final_applied(std::time::Instant::now());
                         // Deliver W3C Navigation Timing L2 entry after streaming load completes.
                         // ADR-016 M2.2c-2d (20): same conversion as the reload path above —
                         // `self.js_present` gate + `route_task_js`, `nav_start` still taken

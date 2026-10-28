@@ -261,8 +261,17 @@ impl Lumen {
     ///
     /// Triggers a full re-layout so that `:target`-based CSS rules take effect
     /// before the scroll position is calculated.
-    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn navigate_fragment(&mut self, fragment: String) {
+        self.navigate_fragment_inner(fragment, true, false);
+    }
+
+    /// [`Self::navigate_fragment`] с управлением диспатчем `navigate`.
+    /// `dispatch_navigate = false` — вызывающий уже отдал странице событие
+    /// `navigate` (`navigation.navigate("#frag")` в [`Self::navigate_to`]), и
+    /// второй раз его слушатели видеть не должны. `replace = true` — запись
+    /// истории заменяется, а не добавляется (`history: "replace"`). BUG-1700.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    pub(crate) fn navigate_fragment_inner(&mut self, fragment: String, dispatch_navigate: bool, replace: bool) {
         // Same-document fragment navigation must keep the JS side in sync: update
         // `location`, push a same-document history entry, and fire `hashchange`
         // (HTML LS §7.4.2 fragment-navigation). Route through the existing JS
@@ -280,15 +289,17 @@ impl Lumen {
         // строится до маршрутизации; борроу `engine_thread`/`js_ctx` — раздельный.
         if self.js_present {
             let escaped = new_url.replace('\\', "\\\\").replace('\'', "\\'");
+            if dispatch_navigate {
+                route_eval_js(
+                    self.engine_thread.as_ref(),
+                    self.js_ctx.as_ref(),
+                    format!("_lumen_dispatch_navigate('fragment', '{escaped}', true, true)"),
+                );
+            }
             route_eval_js(
                 self.engine_thread.as_ref(),
                 self.js_ctx.as_ref(),
-                format!("_lumen_dispatch_navigate('fragment', '{escaped}', true, true)"),
-            );
-            route_eval_js(
-                self.engine_thread.as_ref(),
-                self.js_ctx.as_ref(),
-                format!("_lumen_navigate_or_fragment('{escaped}', false)"),
+                format!("_lumen_navigate_or_fragment('{escaped}', {replace})"),
             );
         }
         // STTF-1: strip a `:~:text=...` scroll-to-text directive before it
@@ -506,6 +517,7 @@ impl Lumen {
         }
         // Record navigation start for PerformanceNavigationTiming (Navigation Timing L2 §4.2).
         self.nav_start = Some(std::time::Instant::now());
+        self.load_marks.reset(std::time::Instant::now());
         // BUG-640: a DOM-milestone mark from the outgoing document must never
         // leak into the incoming one's entry — same reasoning as
         // `resource_timing::clear()` below.
@@ -789,6 +801,7 @@ impl Lumen {
                         });
                     }
                 }
+                self.load_marks.mark_final_applied(std::time::Instant::now());
                 click_log::log_load_ok(&self.source.describe(), title);
                 click_log::log_page_ready(&self.source.describe(), self.scroll_y);
                 self.record_render_health();
@@ -1163,7 +1176,11 @@ impl Lumen {
         let dl = crate::display_list_metrics::paint_ordered_in(&layout, viewport);
 
         (self.content_height, self.content_width) = crate::display_list_metrics::page_content_extent(&dl, &layout, self.viewport_width_css());
+        let has_content = !dl.is_empty();
         self.set_display_list(dl);
+        if has_content {
+            self.load_marks.mark_first_content(std::time::Instant::now());
+        }
         // BUG-341 S7: streaming layout is a separate incremental mechanism
         // (`layout_streaming_incremental`, no `CounterMap`) — invalidate the
         // restyle cache so it isn't diffed against this tree by mistake.

@@ -39,6 +39,39 @@ impl Lumen {
         self.navigate_to_inner(source, false);
     }
 
+    /// `Some((fragment, replaces))` when `source` is a same-document fragment
+    /// target of the current document ([`links::same_document_fragment_target`]).
+    fn same_document_fragment_of(&self, source: &PageSource) -> Option<(String, bool)> {
+        links::same_document_fragment_target(self.current_display_url(), source.url_str()?)
+    }
+
+    /// A same-document push (`pushState`, a fragment navigation, an intercepted
+    /// `navigation.navigate()`): the current entry goes to `nav_back`, the new
+    /// one — `url` with `state_json` — becomes current under a fresh key.
+    ///
+    /// BUG-829: before the first push `display_url` is `None` — the document URL
+    /// lives in `source` — so the entry used to be stored with no URL at all and
+    /// `fire_popstate` handed JS an empty string, which `_lumen_deliver_popstate`
+    /// reads as "keep the current URL". Traversing back therefore restored the
+    /// state and left `location` on the pushed URL. Fall back to the document's
+    /// own URL, the same way `current_display_url` does.
+    pub(crate) fn push_same_document_entry(&mut self, url: String, state_json: String) {
+        let old_display = self.display_url.take().or_else(|| self.source.url_str().map(str::to_owned));
+        let old_state = std::mem::replace(&mut self.current_history_state_json, state_json);
+        self.nav_back.push(NavEntry {
+            source: self.source.clone(),
+            scroll_x: self.scroll_x,
+            scroll_y: self.scroll_y,
+            display_url: old_display,
+            same_doc_state_json: Some(old_state),
+            nav_key: self.current_nav_key.clone(),
+            frame_target: None,
+        });
+        self.nav_key_counter += 1;
+        self.current_nav_key = format!("nav-{}", self.nav_key_counter);
+        self.display_url = Some(url);
+    }
+
     fn navigate_to_inner(&mut self, source: PageSource, can_intercept: bool) {
         // UX-SECURITY-UI: уход с экрана ошибки сертификата закрывает его.
         self.cert_interstitial.close();
@@ -48,10 +81,16 @@ impl Lumen {
         // блокирующий `query` встаёт в очередь **после** него — read-after-eval
         // порядок сохранён; без флага — прежние синхронные вызовы, байт-идентично.
         let listen = self.navigate_listeners_present() && !self.leave_confirmed;
+        // BUG-1700: a URL that differs from the current document's only in the
+        // fragment is a same-document navigation (HTML LS §7.4.2) — `hashChange`
+        // for the event, no reload below.
+        let same_doc_fragment = self.same_document_fragment_of(&source);
         if listen {
             let url = source.url_str().unwrap_or("").to_string();
+            let hash_change = same_doc_fragment.is_some();
+            let nav_type = if matches!(same_doc_fragment, Some((_, true))) { "replace" } else { "push" };
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-                j.eval_js(&format!("_lumen_dispatch_navigate('push', '{url}', {can_intercept}, false)"));
+                j.eval_js(&format!("_lumen_dispatch_navigate('{nav_type}', '{url}', {can_intercept}, {hash_change})"));
             });
         }
         if can_intercept
@@ -81,6 +120,14 @@ impl Lumen {
                 self.fire_navigate_error();
                 return;
             }
+        }
+        // BUG-1700: fragment-only target — scroll, `:target`, `hashchange` and a
+        // same-document history entry, in the same realm. A full load here sent
+        // a page that calls `navigation.navigate("#x")` on every run into an
+        // endless reload loop. The `navigate` event already fired above.
+        if can_intercept && let Some((fragment, replaces)) = same_doc_fragment {
+            self.navigate_fragment_inner(fragment, false, replaces);
+            return;
         }
         // UX-DIALOGS: «prompt to unload» — the page may ask the user to confirm
         // leaving. Browser-initiated (forced) navigations skip the question.
@@ -212,10 +259,12 @@ impl Lumen {
         // ADR-016 M2.2c-2d: см. `navigate_to` — dispatch через `route_task_js`,
         // intercept-чтение через `route_query_js` (read-after-eval порядок под флагом).
         let listen = self.navigate_listeners_present();
+        let same_doc_fragment = self.same_document_fragment_of(&source);
         if listen {
             let url = source.url_str().unwrap_or("").to_string();
+            let hash_change = same_doc_fragment.is_some();
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-                j.eval_js(&format!("_lumen_dispatch_navigate('replace', '{url}', true, false)"));
+                j.eval_js(&format!("_lumen_dispatch_navigate('replace', '{url}', true, {hash_change})"));
             });
         }
         if listen && let Some(intercept) = route_query_js(
@@ -242,6 +291,11 @@ impl Lumen {
                 self.fire_navigate_error();
                 return;
             }
+        }
+        // BUG-1700: see `navigate_to_inner` — fragment-only target stays in the document.
+        if let Some((fragment, _)) = same_doc_fragment {
+            self.navigate_fragment_inner(fragment, false, true);
+            return;
         }
         // New navigation invalidates forward history but does NOT push to back stack.
         self.nav_fwd.clear();

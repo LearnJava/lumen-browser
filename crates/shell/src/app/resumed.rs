@@ -93,6 +93,7 @@ impl Lumen {
         self.stream_layout_seeded = false;
         // Record navigation start for the initial streaming load.
         self.nav_start = Some(std::time::Instant::now());
+        self.load_marks.reset(std::time::Instant::now());
         // A fresh navigation supersedes any prior settled error (BUG-308).
         self.load_failed = false;
         self.load_error_message = None;

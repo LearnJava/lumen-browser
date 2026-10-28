@@ -514,6 +514,29 @@ fn location_replace_fragment_enqueues_replace() {
     assert!(matches!(&u[0], HistoryUrlUpdate::Replace { url, .. } if url == "https://example.com/page#b"));
 }
 
+/// BUG-1700: the very same URL with a fragment is a same-document navigation
+/// that replaces the entry (HTML LS §7.4.2) — a reload loop for a page that
+/// calls `navigation.navigate("#x")` on every run otherwise.
+#[test]
+fn location_href_same_url_with_fragment_replaces_without_reload() {
+    let rt = v8_runtime_with_url("https://example.com/page#x");
+    rt.eval("var n=0; window.addEventListener('hashchange', function(){ n++; }); location.href='#x';")
+        .unwrap();
+    assert!(rt.take_navigate_request().is_none());
+    let u = rt.take_history_url_updates();
+    assert_eq!(u.len(), 1);
+    assert!(matches!(&u[0], HistoryUrlUpdate::Replace { url, .. } if url == "https://example.com/page#x"));
+    rt.eval("_lumen_tick_timers()").unwrap();
+    assert_eq!(rt.eval("n").unwrap(), lumen_core::JsValue::Number(0.0));
+}
+
+#[test]
+fn location_href_same_url_without_fragment_reloads() {
+    let rt = v8_runtime_with_url("https://example.com/page");
+    rt.eval("location.href='https://example.com/page';").unwrap();
+    assert!(rt.take_navigate_request().is_some());
+}
+
 #[test]
 fn location_href_cross_document_still_navigates() {
     let rt = v8_runtime_with_url("https://example.com/page");

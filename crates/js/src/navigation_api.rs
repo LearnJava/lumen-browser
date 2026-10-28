@@ -545,9 +545,30 @@ const NAVIGATION_API_SHIM: &str = r#"(function() {
       if (this._ongoing) this._ongoing.fail();
       const before = this._current ? this._current._key : null;
       const self = this;
+      // BUG-1700: a push/replace to the same document with another fragment is
+      // committed by the shell on its next turn (`navigatesuccess` follows), so
+      // it must not be settled by the two-timer fallback below — that one fires
+      // before the shell has looked at the request and resolves with the old
+      // entry.
+      let sameDocFragment = false;
+      if (action === 0 || action === 1) {
+        try {
+          const cur = String(window.location.href);
+          sameDocFragment = url.split('#')[0] === cur.split('#')[0] &&
+            (url !== cur || url.indexOf('#') >= 0);
+        } catch (e) {}
+      }
       const ongoing = {
         done: false,
-        awaitEvents: false,
+        awaitEvents: sameDocFragment,
+        // `committed` settles when the entry changes, `finished` only once the
+        // navigation ends (`navigatesuccess`) — §7.2.9.4.
+        commit(entry) {
+          if (this.done || this.committedDone) return;
+          if (expectKey !== null && entry && entry.key !== expectKey) return;
+          this.committedDone = true;
+          resolveC(entry);
+        },
         ok(entry) {
           if (this.done) return;
           this.done = true;
@@ -759,7 +780,7 @@ const NAVIGATION_API_SHIM: &str = r#"(function() {
       'currententrychange', { navigationType: type, from: from })));
     if (navigation._ongoing && !__lumen_C._lumen_pending_intercept_handler
         && navigation.currentEntry !== from) {
-      navigation._ongoing.ok(navigation.currentEntry);
+      navigation._ongoing.commit(navigation.currentEntry);
     }
   };
 
