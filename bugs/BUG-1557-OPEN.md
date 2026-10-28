@@ -29,3 +29,11 @@ Hit-test по inline-боксам (`InlineRun`-фрагментам и атом�
 ## Как проверить
 
 `css/cssom-view/elementsFromPoint-inline-htb-ltr.html`, `elementsFromPoint-invalid-cases.html`.
+
+## Срез 1 (2026-10-28, P3) — влит
+
+Сделано: `HitTestResult::inline_source` (строгое попадание в `InlineFrag`, в т. ч. вертикальные writing-mode), цепочка inline-элементов в `_lumen_hit_nids` (`web_api_shim_mid.js`), корень для пустой точки вьюпорта, `[]`/`null` вне вьюпорта, учёт прокрутки страницы, `TypeError` на недостающие/нефинитные аргументы. Подробности — `subsystems/js.md`.
+
+WPT (31 файл `elementFromPoint*`/`elementsFromPoint*`/`elementFromPosition`/`negativeMargins`): 57 из 103 сабтестов (было около 39 из 96); `elementsFromPoint-inline-{htb-ltr,htb-rtl,vlr-ltr,vrl-ltr,nested}`, `elementsFromPoint-invalid-cases`, `elementFromPoint-parameters` — PASS.
+
+Остаток: `iframe.contentDocument.elementFromPoint` (BUG-480), SVG-цели (`text`/`tspan`/`rect`/`foreignObject`), псевдоэлементы и ячейки таблицы в `elementsFromPoint` (лишние TR/TBODY), `rtl` в вертикальных режимах (layout ставит ран в начало), порядок `negativeMargins`, `elementFromPoint-visibility-hidden-resizer`, shadow-деревья в `document.elementsFromPoint`.

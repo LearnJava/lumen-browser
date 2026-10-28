@@ -472,17 +472,18 @@ pub(crate) fn install_point_hit_test(
     {
         let tree = Arc::clone(&hit_test_tree);
         let flush = flush.clone();
-        reg!(scope, ctx, store, "_lumen_element_from_point", move |x: f64, y: f64| -> Option<u32> {
+        reg!(scope, ctx, store, "_lumen_element_from_point", move |x: f64, y: f64| -> Vec<u32> {
             flush.maybe_flush();
             let p = lumen_core::geom::Point::new(x as f32, y as f32);
-            if flush.hit_tree_stale.load(Ordering::Relaxed) {
-                let basis = flush.incr_basis.lock().unwrap();
-                if let Some(b) = basis.as_ref() {
-                    return lumen_paint::hit_test(p, &b.layout).map(|r| r.node.raw());
-                }
-            }
-            let root = tree.lock().unwrap().clone()?;
-            lumen_paint::hit_test(p, &root).map(|r| r.node.raw())
+            let hit = if flush.hit_tree_stale.load(Ordering::Relaxed)
+                && let Some(b) = flush.incr_basis.lock().unwrap().as_ref()
+            {
+                lumen_paint::hit_test(p, &b.layout)
+            } else {
+                let Some(root) = tree.lock().unwrap().clone() else { return Vec::new(); };
+                lumen_paint::hit_test(p, &root)
+            };
+            hit.iter().flat_map(hit_ids).collect()
         });
     }
     {
@@ -499,15 +500,22 @@ pub(crate) fn install_point_hit_test(
                 lumen_paint::hit_test_all(p, &root)
             };
             let mut seen = std::collections::HashSet::new();
-            hits.into_iter()
-                .filter_map(|r| {
-                    let idx = r.node.raw();
-                    seen.insert(idx).then_some(idx)
-                })
-                .collect()
+            hits.iter().flat_map(hit_ids).filter(|idx| seen.insert(*idx)).collect()
         });
     }
     Ok(())
+}
+
+/// Marks a source id in the `_lumen_element(s)_from_point` result as an inline fragment's
+/// source (to be expanded by the shim) rather than a box's own node.
+const INLINE_SRC_FLAG: u32 = 1 << 31;
+
+/// Node ids one hit contributes to `elementFromPoint`/`elementsFromPoint`: the inline fragment's
+/// source node (text node or inline element under the point) first, then the box's own node. The
+/// shim expands the first into the inline-element chain up to the second (CSSOM View §3 — `<a>`,
+/// `<span>` are hit, not just their block container; BUG-1557).
+fn hit_ids(r: &lumen_paint::HitTestResult) -> impl Iterator<Item = u32> {
+    r.inline_source.filter(|s| *s != r.node).map(|s| s.raw() | INLINE_SRC_FLAG).into_iter().chain([r.node.raw()])
 }
 
 /// `window.matchMedia` evaluation (CSS Media Queries L4 §4.2).
