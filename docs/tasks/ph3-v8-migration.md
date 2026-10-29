@@ -1,10 +1,15 @@
 # Ph3 — Migrate JS engine to V8 (rusty_v8)
 
+> **Historical record — completed 2026-08-04.** The V8 cutover finished in S12b
+> (`rquickjs`/`QuickJsRuntime` deleted); `lumen-shell` ships V8 by default. The
+> "Status" section below is the 2026-07-14 planning snapshot, kept for the decision
+> trail — current state is in `CAPABILITIES.md`.
+
 **Developer:** P1
 **Branch:** one branch per slice: `p1-v8-s<N>` (see Slice plan). Branch existence = slice reservation.
 **Size:** XL — **12–13 mergeable slices**, each ≤1 session. NOT a single long-lived branch.
 **Crates:** `lumen-js`, `lumen-shell` (adapter only), `lumen-core` (read-only boundary)
-**Phase:** 3 (v1.0). Unlocked (v0.5.0 shipped 2026-06-23), not started.
+**Phase:** planned for 3 (v1.0); executed early during Phase 2 (S12b, 2026-08-04) and completed.
 
 ---
 
@@ -22,7 +27,7 @@
 
 ## Status
 
-**S0–S12a done (2026-07-14).** V8 is now `lumen-shell`'s default JS engine (ADR-018). Remaining:
+**S0–S12a done (2026-07-14); S12b done (2026-08-04).** V8 is `lumen-shell`'s default JS engine (ADR-018); `rquickjs`/`QuickJsRuntime` are deleted (S12b-F1..F4). The planning snapshot below is kept for the decision trail. Remaining at that time:
 **S12b** — remove `rquickjs` entirely (tracked as its own XL slice, see the table below; true scope is
 117/130 files under `crates/js/src`, not a single session). **Re-scoped 2026-07-14 (branch
 p1-v8-s12b, scoping-only session, no code deleted)** — measured, not a single session even by S12a's
