@@ -8,7 +8,7 @@
 
 **Единственный источник версии — `[workspace.package] version` в `Cargo.toml`.** Все машиночитаемые строки версии (User-Agent, Sec-CH-UA, CDP `Browser.getVersion`, заголовок окна, стартовый баннер) выводятся из `CARGO_PKG_VERSION` — **номер версии в коде не хардкодить**. Ручных мест бампа версии Lumen не осталось: UA по умолчанию — грамматика Chrome без токена Lumen (ADR-034 п.1), мажор Chrome — единственный макрос `chrome_major!` в `crates/core/src/identity.rs`, из `lumen_core::Identity` выводятся и HTTP-заголовки, и `navigator.*` (BUG-1614).
 
-Соответствие версия↔фаза: фаза 1 → v0.1, **фаза 2 → v0.5** (цель на момент завершения фазы), фаза 3 → v1.0. Внутри фазы версия растёт к целевой; выход на фазу 3 → 1.0.0. Метку фазы держать синхронной в `README.md`, этом файле, `CLAUDE.md` и стартовом баннере шелла.
+Соответствие версия↔фаза: фаза 1 → v0.1, **фаза 2 → v0.5** (цель на момент завершения фазы), фаза 3 → v1.0. Внутри фазы версия растёт к целевой; выход на фазу 3 → 1.0.0. Метку фазы держать синхронной в `README.md`, этом файле и стартовом баннере шелла (`CLAUDE.md` намеренно только ссылается на этот файл).
 
 ## 16. Фазы разработки (реалистично)
 
@@ -29,7 +29,7 @@
   - **Миграция `graphic_tests/`**: каждый из 22 текущих HTML-тестов получает (а) Rust-тест в `crates/lumen-driver/tests/` со структурными ассертами по `COVERAGE.md`, (б) PNG-эталон в `graphic_tests/snapshots/`.
 - ⬜ **Tab lifecycle архитектурные инварианты** (§11.4, [ADR-008](../decisions/ADR-008-tab-lifecycle-memory-tiers.md)) — **обязательно до Phase 1 finalize**, иначе ретрофит 5-10×:
   - **Invariant 1: DOM arena** — `lumen-dom` audit: убедиться что node graph на `NodeId(u32)` без `Rc<RefCell>`; добавить `bincode::serialize` для DOM snapshot; clippy lint запрещает `Rc<RefCell>` в node-модулях (трек 10B).
-  - **Invariant 2: JsRuntime suspend/resume API** — расширить trait в `lumen-core::ext::JsRuntime` методами `pause()` / `unpause()` / `suspend()` / `resume()`; имплементация для `rquickjs` через `JS_WriteObject`/`JS_ReadObject` (трек 10C).
+  - **Invariant 2: JsRuntime suspend/resume API** — расширить trait в `lumen-core::ext::JsRuntime` методами `pause()` / `unpause()` / `suspend()` / `resume()`; имплементация для активного движка (V8; `rquickjs` удалён в S12b), детали сериализации — трек 10C.
   - **Invariant 3: pure layout + paint** — audit `lumen-layout` и `lumen-paint::display_list` на отсутствие `static MUT` / `lazy_static` / `OnceCell` внутри hot path; cross-tab кэши (glyph atlas, image decode) — отдельные крейты с explicit eviction (трек 10D).
 - **Цель:** открыть простую текстовую статью без стилей. Доказательство концепции, **проверяемое из Rust без запуска отдельного процесса**, с зафиксированными tier-инвариантами для будущей лёгкости вкладки.
 
@@ -76,7 +76,7 @@
 - **Цель:** ежедневный браузер для чтения статей; AI-агенты могут управлять Lumen через MCP без обёрток; **простая вкладка занимает ≤ 100 MB peak RSS**.
 
 ### Фаза 2 — v0.5 «Interactive» (18–24 месяца) ✅ завершена (app v0.5.0)
-- QuickJS интеграция.
+- Интеграция JS-движка (QuickJS → V8 в S12b, 2026-08-04).
 - Tier 1 Web APIs.
 - Формы, базовая интерактивность.
 - HTTP/2.
@@ -117,7 +117,7 @@
 - **Цель:** публичная альфа, форумы и простые SPA, в Lumen начинают **жить** долго; Playwright/Selenium/Cypress тесты сторонних команд работают на Lumen; **50 открытых вкладок ≤ 600 MB total RAM**.
 
 ### Фаза 3 — v1.0 (36–48 месяцев)
-- Переход на V8 (`rusty_v8`).
+- ✅ Переход на V8 (`rusty_v8`) — выполнен в S12b (2026-08-04), см. Фазу 2.
 - Tier 2 Web APIs.
 - IndexedDB, Canvas 2D.
 - HTTP/3.
