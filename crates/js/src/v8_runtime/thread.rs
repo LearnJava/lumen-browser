@@ -7,6 +7,13 @@ use super::named_access::window_named_properties_template;
 use super::promise_reject::{drain_promise_rejections, install_promise_reject_hook};
 use super::*;
 
+unsafe extern "C" fn allow_wasm_code_generation(
+    _context: v8::Local<v8::Context>,
+    _source: v8::Local<v8::String>,
+) -> bool {
+    true
+}
+
 // ── Thread entry point ────────────────────────────────────────────────────────
 
 /// Entry point of the dedicated V8 thread.
@@ -78,6 +85,10 @@ pub(super) fn v8_thread_main(
     // callback itself (`_lumen_tt_get_compliant_script_for_codegen`), same
     // division as every other sink this task closed.
     codegen_hook::install(&mut inner.isolate, &inner.context);
+    // Trusted Types gates string code generation, not WebAssembly compilation.
+    inner
+        .isolate
+        .set_allow_wasm_code_generation_callback(allow_wasm_code_generation);
     // BUG-935 срез 53: `LUMEN_JS_STALL_SAMPLE_MS` — стек долгой JS-задачи в stderr.
     let stall_sampler = super::stall_sampler::StallSampler::start(&mut inner.isolate, &inner.context);
     // COMPAT-HANG: `TerminateExecution` зовёт оболочка с UI-потока (кнопка

@@ -140,6 +140,9 @@ fn make_doc() -> Arc<Mutex<Document>> {
 mod v8_trusted_types;
 
 #[cfg(feature = "v8-backend")]
+mod v8_wasm_native;
+
+#[cfg(feature = "v8-backend")]
 mod v8_worker1_exposed;
 
 #[cfg(feature = "v8-backend")]

@@ -103,7 +103,8 @@ pub mod webxr;
 pub mod form_validation;
 pub mod element_internals;
 pub mod presentation_api;
-pub mod webassembly;
+// WASM-V8-NATIVE-S3 removes the interpreter, now unused after the V8 native switch.
+#[allow(dead_code)]
 pub mod wasm;
 pub mod generic_sensor;
 pub mod video_pip;

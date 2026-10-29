@@ -1251,9 +1251,6 @@ impl V8JsRuntime {
         // `DOMException` already exist.
         install_v8!(xpath::install_xpath_v8);
         install_v8!(web_codecs::install_webcodecs_bindings_v8);
-        // Ph3 V8 migration S9: wasm + webgpu (hand-port, same best-effort
-        // orchestration as S8's canvas2d/webgl_canvas above).
-        install_v8!(webassembly::install_webassembly_bindings_v8);
         install_v8!(webgpu::install_webgpu_bindings_v8);
         // Ph3 V8 migration S10: worker + shared_worker (hand-port — extra
         // per-runtime state beyond `&ctx`, same shape as S5-S7 batch 3's

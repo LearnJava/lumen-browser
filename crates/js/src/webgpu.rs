@@ -1296,8 +1296,7 @@ fn webgpu_submit_impl(ops_json: &str) -> bool {
 
 /// V8-backend tests for [`install_webgpu_bindings_v8`] (Ph3 V8 migration S9;
 /// ported from the removed rquickjs `mod tests` in S12b-B29). WebGPU carries no GC roots
-/// (see that function's doc comment), so these are plain shim-installation / JSON-bridge
-/// tests — the harder S9 risk (GC roots) is covered by `webassembly::tests_v8` instead.
+/// (see that function's doc comment), so these are plain shim-installation / JSON-bridge tests.
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests_v8 {
     // Хелперы тестового модуля: исключение из clippy.toml покрывает
