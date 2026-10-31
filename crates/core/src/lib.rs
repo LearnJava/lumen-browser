@@ -47,8 +47,9 @@ pub use auth::{generate_token, tokens_match};
 pub use capability::{Capability, CapabilityToken};
 pub use color::{ColorSpace, detect_color_space_from_icc};
 pub use identity::{
-    chrome_user_agent, identity_variant, set_identity_variant, Identity, IdentityVariant, UaData,
-    UaFamily, CHROME_LUMEN_USER_AGENT, CHROME_MAJOR, CHROME_USER_AGENT, EDGE_USER_AGENT,
+    chrome_user_agent, identity_variant, set_identity_variant, Identity, IdentityProfile,
+    IdentityVariant, UaData, UaFamily, CHROME_LUMEN_USER_AGENT, CHROME_MAJOR, CHROME_USER_AGENT,
+    EDGE_USER_AGENT, FIREFOX_WIN_USER_AGENT,
 };
 pub use icc::{DataColorSpace, IccProfile, ProfileClass, ToneCurve, XyzNumber};
 pub use pcs::{Lab, Xyz};

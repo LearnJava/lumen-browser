@@ -1735,6 +1735,7 @@ fn fetch_single(
     resolver: &dyn DnsResolver,
     tls_profile: tls::TlsProfile,
     http_profile: HttpProfile,
+    identity: &lumen_core::Identity,
     host: &str,
     port: u16,
     is_tls: bool,
@@ -1778,7 +1779,7 @@ fn fetch_single(
         && socks5_proxy.is_none()
     {
         // Fingerprint + extra header block for H3 (same set as H2, RFC 9114 §4.2).
-        let h3_headers = build_h2_headers(http_profile, accept_encoding, extra_headers);
+        let h3_headers = build_h2_headers_with_identity(http_profile, identity, accept_encoding, extra_headers);
         let mut header_refs: Vec<(&[u8], &[u8])> = h3_headers
             .iter()
             .map(|(k, v)| (k.as_slice(), v.as_slice()))
@@ -1853,7 +1854,7 @@ fn fetch_single(
     let h2_pool = if effective_proxy.is_none() || is_tls { h2_pool } else { None };
     let scheme = if is_tls { "https" } else { "http" };
     let send = |mux: &h2::mux::H2Mux| {
-        h2_mux_request(mux, scheme, request_host_header, request_path, extra_headers, http_profile, accept_encoding, method, body)
+        h2_mux_request(mux, scheme, request_host_header, request_path, extra_headers, http_profile, identity, accept_encoding, method, body)
     };
     // BUG-1177: a request the peer certainly did not process (queued behind a
     // dying connection, refused by GOAWAY, lost before any response) is sent
@@ -1871,7 +1872,7 @@ fn fetch_single(
                 // where the body streams into the socket buffer.
                 h2::pool::Sent::Done(Err(e)) if is_h2_body_window_error(&e.error) => {
                     return fetch_single_h1_only(
-                        pool, resolver, tls_profile, http_profile, host, port, is_tls, method,
+                        pool, resolver, tls_profile, http_profile, identity, host, port, is_tls, method,
                         request_host_header, request_path, range, if_range, authorization,
                         accept_encoding, extra_headers, socks5_proxy, stream_sink, body,
                     );
@@ -1898,6 +1899,7 @@ fn fetch_single(
                 accept_encoding,
                 extra_headers,
                 http_profile,
+                identity,
                 stream_sink.as_mut().map(|f| &mut **f as ChunkSink<'_>),
                 body,
             ) {
@@ -2032,6 +2034,7 @@ fn fetch_single(
         accept_encoding,
         extra_headers,
         http_profile,
+        identity,
         stream_sink.as_mut().map(|f| &mut **f as ChunkSink<'_>),
         body,
     )?;
@@ -2054,6 +2057,7 @@ fn fetch_single_h1_only(
     resolver: &dyn DnsResolver,
     tls_profile: tls::TlsProfile,
     http_profile: HttpProfile,
+    identity: &lumen_core::Identity,
     host: &str,
     port: u16,
     is_tls: bool,
@@ -2082,6 +2086,7 @@ fn fetch_single_h1_only(
         accept_encoding,
         extra_headers,
         http_profile,
+        identity,
         stream_sink.as_mut().map(|f| &mut **f as ChunkSink<'_>),
         body,
     )?;
@@ -2107,6 +2112,7 @@ fn h2_mux_request(
     path: &str,
     extra_headers: &str,
     http_profile: HttpProfile,
+    identity: &lumen_core::Identity,
     accept_encoding: Option<&str>,
     method: &str,
     body: Option<&RequestBody<'_>>,
@@ -2114,7 +2120,7 @@ fn h2_mux_request(
     // RP-7: the H2 path must carry the same browser-fingerprint headers
     // (User-Agent/Accept/Sec-Fetch/…) the H1 path builds in `write_request`;
     // without them Cloudflare-class anti-bot layers answer 403.
-    let mut headers = build_h2_headers(http_profile, accept_encoding, extra_headers);
+    let mut headers = build_h2_headers_with_identity(http_profile, identity, accept_encoding, extra_headers);
     if let Some(b) = body {
         let len = b.bytes.len().to_string();
         let mut refs: Vec<(&[u8], &[u8])> = Vec::new();
@@ -2159,8 +2165,9 @@ fn push_h2_body_headers<'a>(
 /// The fingerprint headers ([`http::h2_fingerprint_headers`]) come first; a
 /// caller-supplied header with the same lowercase name suppresses the
 /// fingerprint default so author/CORS/cache headers always win (RP-7).
-fn build_h2_headers(
+fn build_h2_headers_with_identity(
     http_profile: HttpProfile,
+    identity: &lumen_core::Identity,
     accept_encoding: Option<&str>,
     extra_headers: &str,
 ) -> Vec<(Vec<u8>, Vec<u8>)> {
@@ -2175,7 +2182,7 @@ fn build_h2_headers(
     let extra_names: std::collections::HashSet<&[u8]> =
         parsed_extra.iter().map(|(k, _)| k.as_slice()).collect();
     let mut out: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
-    for (name, value) in http::h2_fingerprint_headers(http_profile, accept_encoding.unwrap_or("")) {
+    for (name, value) in http::h2_fingerprint_headers_with_identity(http_profile, accept_encoding.unwrap_or(""), identity) {
         let name_bytes = name.into_bytes();
         if !extra_names.contains(name_bytes.as_slice()) && !dropped.contains(&name_bytes) {
             out.push((name_bytes, value.into_bytes()));
@@ -2215,6 +2222,7 @@ fn do_request(
     accept_encoding: Option<&str>,
     extra_headers: &str,
     http_profile: HttpProfile,
+    identity: &lumen_core::Identity,
     // PH1-2a: when present, the 2xx response body is streamed off the socket and
     // each decoded chunk is handed to this sink (progressive HTML rendering).
     stream_sink: Option<ChunkSink<'_>>,
@@ -2230,6 +2238,7 @@ fn do_request(
         accept_encoding,
         extra_headers,
         http_profile,
+        identity,
         body,
     )?;
     // In-flight abort (Phase A): if a cancellable fetch installed an abort token
@@ -2545,6 +2554,7 @@ fn fetch_with_redirect(
     resolver: &dyn DnsResolver,
     tls_profile: tls::TlsProfile,
     http_profile: HttpProfile,
+    identity: &lumen_core::Identity,
     sink: Option<&dyn EventSink>,
     filter: Option<&dyn RequestFilter>,
     hsts_store: Option<&dyn HstsEnforcement>,
@@ -2812,6 +2822,7 @@ fn fetch_with_redirect(
                 resolver,
                 tls_profile,
                 http_profile,
+                identity,
                 &host_ascii,
                 port,
                 is_tls,
@@ -2953,6 +2964,7 @@ fn fetch_with_redirect(
             resolver,
             tls_profile,
             http_profile,
+            identity,
             &host_ascii,
             port,
             is_tls,
@@ -2988,6 +3000,7 @@ fn fetch_with_redirect(
                     resolver,
                     tls_profile,
                     http_profile,
+                    identity,
                     &host_ascii,
                     port,
                     is_tls,
@@ -3131,6 +3144,7 @@ fn fetch_with_redirect(
                     resolver,
                     tls_profile,
                     http_profile,
+                    identity,
                     sink,
                     filter,
                     hsts_store,
@@ -3329,6 +3343,8 @@ pub struct HttpClient {
     /// HTTP fingerprinting profile (Standard/Strict/Tor) — determines header order and casing
     /// matching Chrome to avoid detection (ADR-007 Layer 3). Default is Standard.
     fingerprint_profile: HttpProfile,
+    /// Exact identity serialized into User-Agent and Client Hints on this client.
+    identity: lumen_core::Identity,
     /// TLS fingerprinting profile — cipher suite order, kx_groups, ALPN, protocol versions.
     /// Derived from `fingerprint_profile` by default; can be overridden with `with_tls_profile`.
     tls_profile: tls::TlsProfile,
@@ -3482,6 +3498,7 @@ impl HttpClient {
             cookie_jar: None,
             top_level_site: None,
             fingerprint_profile: HttpProfile::Chrome,
+            identity: lumen_core::IdentityProfile::from_variant(lumen_core::identity_variant()).identity(),
             tls_profile: tls::TlsProfile::Standard,
             proxy: None,
             socks5_proxy: None,
@@ -4046,6 +4063,19 @@ impl HttpClient {
         self.fingerprint_profile
     }
 
+    /// Use one explicit identity for User-Agent and Client Hints on every request.
+    #[must_use]
+    pub fn with_identity(mut self, identity: lumen_core::Identity) -> Self {
+        self.identity = identity;
+        self
+    }
+
+    /// The identity this client serializes into HTTP request headers.
+    #[must_use]
+    pub fn identity(&self) -> &lumen_core::Identity {
+        &self.identity
+    }
+
     /// Override the TLS fingerprint profile independently of the HTTP profile.
     ///
     /// Normally `TlsProfile` is derived from `HttpProfile`
@@ -4126,6 +4156,7 @@ impl HttpClient {
             self.resolver.as_ref(),
             self.tls_profile,
             self.fingerprint_profile,
+            self.identity(),
             self.sink.as_deref(),
             self.filter.as_deref(),
             self.hsts.as_deref(),
@@ -4172,6 +4203,7 @@ impl HttpClient {
             self.resolver.as_ref(),
             self.tls_profile,
             self.fingerprint_profile,
+            self.identity(),
             self.sink.as_deref(),
             self.filter.as_deref(),
             self.hsts.as_deref(),
@@ -4252,6 +4284,7 @@ impl HttpClient {
             self.resolver.as_ref(),
             self.tls_profile,
             self.fingerprint_profile,
+            self.identity(),
             self.sink.as_deref(),
             self.filter.as_deref(),
             self.hsts.as_deref(),
@@ -4464,6 +4497,7 @@ impl HttpClient {
                     self.resolver.as_ref(),
                     self.tls_profile,
                     self.fingerprint_profile,
+                    self.identity(),
                     self.sink.as_deref(),
                     self.filter.as_deref(),
                     self.hsts.as_deref(),
@@ -4533,6 +4567,7 @@ impl HttpClient {
             self.resolver.as_ref(),
             self.tls_profile,
             self.fingerprint_profile,
+            self.identity(),
             self.sink.as_deref(),
             self.filter.as_deref(),
             self.hsts.as_deref(),
@@ -4658,6 +4693,7 @@ impl HttpClient {
             self.resolver.as_ref(),
             self.tls_profile,
             self.fingerprint_profile,
+            self.identity(),
             self.sink.as_deref(),
             self.filter.as_deref(),
             self.hsts.as_deref(),
@@ -4782,7 +4818,7 @@ impl HttpClient {
                 let combined_extra_headers = format!("{uir_header}{}", snap.conditional_headers);
                 let (resp, final_url) = fetch_with_redirect(
                     url, 5, &self.pool, self.h2_pool.as_deref(), self.resolver.as_ref(),
-                    self.tls_profile, self.fingerprint_profile, self.sink.as_deref(),
+                    self.tls_profile, self.fingerprint_profile, self.identity(), self.sink.as_deref(),
                     self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
                     &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
                     self.mixed_content.as_ref(), destination, None, &combined_extra_headers,
@@ -4821,7 +4857,7 @@ impl HttpClient {
         }
         let (resp, final_url) = fetch_with_redirect(
             url, 5, &self.pool, self.h2_pool.as_deref(), self.resolver.as_ref(),
-            self.tls_profile, self.fingerprint_profile, self.sink.as_deref(),
+            self.tls_profile, self.fingerprint_profile, self.identity(), self.sink.as_deref(),
             self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
             &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
             self.mixed_content.as_ref(), destination, None, &uir_header,
@@ -4908,7 +4944,7 @@ impl HttpClient {
                 let combined_extra_headers = format!("{uir_header}{}", snap.conditional_headers);
                 let (resp, final_url) = fetch_with_redirect(
                     url, 5, &self.pool, self.h2_pool.as_deref(), self.resolver.as_ref(),
-                    self.tls_profile, self.fingerprint_profile, self.sink.as_deref(),
+                    self.tls_profile, self.fingerprint_profile, self.identity(), self.sink.as_deref(),
                     self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
                     &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
                     self.mixed_content.as_ref(), destination, None, &combined_extra_headers,
@@ -4950,7 +4986,7 @@ impl HttpClient {
         }
         let (resp, final_url) = fetch_with_redirect(
             url, 5, &self.pool, self.h2_pool.as_deref(), self.resolver.as_ref(),
-            self.tls_profile, self.fingerprint_profile, self.sink.as_deref(),
+            self.tls_profile, self.fingerprint_profile, self.identity(), self.sink.as_deref(),
             self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
             &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
             self.mixed_content.as_ref(), destination, None, &uir_header,
@@ -5009,6 +5045,7 @@ impl NetworkTransport for HttpClient {
                     self.resolver.as_ref(),
                     self.tls_profile,
                     self.fingerprint_profile,
+                    self.identity(),
                     self.sink.as_deref(),
                     self.filter.as_deref(),
                     self.hsts.as_deref(),
@@ -5052,6 +5089,7 @@ impl NetworkTransport for HttpClient {
             self.resolver.as_ref(),
             self.tls_profile,
             self.fingerprint_profile,
+            self.identity(),
             self.sink.as_deref(),
             self.filter.as_deref(),
             self.hsts.as_deref(),
