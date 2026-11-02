@@ -33,9 +33,6 @@ use lumen_core::ext::JsRuntime as _;
 #[cfg(feature = "v8-backend")]
 use crate::worker::run_worker_tasks;
 
-#[cfg(feature = "v8-backend")]
-use crate::worker_shims::WORKER_TIMERS_SHIM;
-
 /// Timeout for a SW to call `event.respondWith()`.
 const FETCH_TIMEOUT: Duration = Duration::from_millis(5_000);
 
@@ -594,7 +591,7 @@ fn run_sw_thread_v8(
 
     // SW-MSG-S1: timer‑task loop modelled on the dedicated worker's (BUG‑815).
     loop {
-        let mut wait = run_worker_tasks(&rt);
+        let wait = run_worker_tasks(&rt);
         let msg = match wait {
             Some(d) => match rx.recv_timeout(d) {
                 Ok(m) => m,
@@ -633,28 +630,29 @@ fn dispatch_fetch_v8(rt: &V8JsRuntime, url: &str, method: &str) -> Option<Vec<u8
         "if(typeof _sw_fire_fetch==='function'){_sw_fire_fetch(_sw_req_url__,_sw_req_method__);}",
     );
 
-    // SW-MSG-S1: wait for `respondWith` promise with timeout.
+    // SW-MSG-S1: `respondWith` may hand over a promise that only settles after
+    // its handler's own `setTimeout` fires. V8's `kAuto` microtask policy drains
+    // everything that settles inside an `eval` (see the module comment above), so
+    // an already-built body is there on the first read; otherwise the timer task
+    // loop is what advances the clock until the body lands or `FETCH_TIMEOUT`
+    // expires.
     let start = std::time::Instant::now();
-    while start.elapsed() < FETCH_TIMEOUT {
-        if let Some(wait) = run_worker_tasks(rt) {
-            // Check if response is ready.
-            match rt.eval("_sw_resp_body__") {
-                Ok(lumen_core::JsValue::String(s)) if !s.is_empty() => {
-                    return Some(s.into_bytes());
-                }
-                Ok(lumen_core::JsValue::Null) => {
-                    // Not ready yet, wait for next task or timeout.
-                    if wait > std::time::Duration::from_millis(10) {
-                        std::thread::sleep(std::time::Duration::from_millis(10));
-                    }
-                    continue;
-                }
-                _ => break,
-            }
-        } else {
-            // No pending tasks, short sleep to avoid busy loop.
-            std::thread::sleep(std::time::Duration::from_millis(10));
+    loop {
+        match rt.eval("_sw_resp_body__") {
+            Ok(lumen_core::JsValue::String(s)) => return Some(s.into_bytes()),
+            Ok(lumen_core::JsValue::Null) => {}
+            // A non-string, non-null body cannot become a string later.
+            _ => return None,
         }
+        let Some(wait) = run_worker_tasks(rt) else {
+            // No timer can settle the promise any more.
+            break;
+        };
+        let left = FETCH_TIMEOUT.saturating_sub(start.elapsed());
+        if left.is_zero() {
+            break;
+        }
+        std::thread::sleep(wait.min(left));
     }
 
     match rt.eval("_sw_resp_body__") {
