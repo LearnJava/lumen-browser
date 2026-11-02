@@ -119,6 +119,8 @@ What this replaces: `cmd & ... sleep 540; check-log` — the anti-pattern that a
 - Two exceptions that must stay in the foreground: the final gates (above) and the **full graphic pipeline** — gdigrab captures the desktop, so a backgrounded run has no focused window and TEST-00 fails with "magenta marker not found", cascading to every test (verified 2026-07-27).
 - Don't hand-run the expensive crate tests before the gate: `scripts/scoped-test.sh` runs them again. A manual `cargo test -p lumen-shell` cost 17 minutes that the gate then repeated. Targeted tests (`-- <module>`) on the crate you touched are fine.
 
+**Docs-only changes don't pay for a worktree.** A full `git worktree add` here copies the whole code tree — 126 983 files, 42 minutes on Windows (measured 2026-11-02); a plan, a `STATUS-*` pointer or a `ROADMAP.md` row needs only `docs/`, `scripts/` and the root files. Recipe — [`git-workflow.md`](git-workflow.md) §Worktree isolation, "Docs-only changes".
+
 **Precise task descriptions upfront.** Before describing a bug or task, grep/read to find the exact location first. Include file:line so the next session doesn't re-search:
 
 ```

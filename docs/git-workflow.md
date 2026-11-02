@@ -83,7 +83,7 @@ Multiple Claude Code sessions may work simultaneously. Full workflow for task li
 cd "$(bash scripts/worktree-pool.sh p<N>-work p<N>-task-name | tail -1)"
 ```
 
-One slot per developer — `.claude/worktrees/p1-work` … `p6-work` (plus `perf-base` for A/B baselines). The slot is created once (~3 min, ~62 000 files) and then reused: only the branch changes, `target/` stays warm. A fresh worktree per task costs the `add` **plus** a cold build of 9–15 min, because `git worktree remove` deletes the warm `target/` with the directory (`docs/build-speed.md` §7, scenario S3). Measured on the session of 2026-07-27: 15.5 min for the first `cargo test -p lumen-shell --no-run` in a fresh worktree, and another 22 min for a second fresh worktree built only to get a baseline binary of `main`.
+One slot per developer — `.claude/worktrees/p1-work` … `p6-work` (plus `perf-base` for A/B baselines). The slot is created once (~3 min at the 62 000-file checkout of 2026-07; a fresh `add` of the 126 983-file tree of 2026-11-02 took 42 min — see "Docs-only changes" below) and then reused: only the branch changes, `target/` stays warm. A fresh worktree per task costs the `add` **plus** a cold build of 9–15 min, because `git worktree remove` deletes the warm `target/` with the directory (`docs/build-speed.md` §7, scenario S3). Measured on the session of 2026-07-27: 15.5 min for the first `cargo test -p lumen-shell --no-run` in a fresh worktree, and another 22 min for a second fresh worktree built only to get a baseline binary of `main`.
 
 This is **not** a shared `CARGO_TARGET_DIR` (rejected — `docs/build-speed.md` §6): each slot keeps its own `target/`, so the target lock never serializes parallel sessions.
 
@@ -96,6 +96,24 @@ Slot discipline:
 - A slot cannot sit on `main` — the main working tree holds it. `release` therefore parks the slot on a detached HEAD at `main`.
 
 Ad-hoc worktrees are still allowed for one-off needs (merge helpers, experiments); path must be inside the browser folder — `../lumen-<task>/` and `/tmp/...` are forbidden — and they must be removed with `git worktree remove` right after use. **Then check that the directory is really gone** (`ls .claude/worktrees`): on Windows `worktree remove` can drop the files and leave an empty directory that git no longer knows, so neither `worktree list`, `prune` nor `remove` will ever find it. Work that is not merged into `main` is never left behind in an ad-hoc worktree — merge it, or tell the user.
+
+### Docs-only changes — sparse clone, not a full worktree
+
+A documentation-only change — a plan, a `STATUS-*` pointer, a `ROADMAP.md` row, the generated `docs/roadmap-*.html` — does not need the code tree, and a full `git worktree add` on this repository is expensive: **126 983 tracked files, and one `add` took 42 minutes** on Windows on 2026-11-02 (16:57→17:39, Defender scanning every file). A sparse local clone of the same commit is ready in seconds, about 750 files:
+
+```bash
+git clone --local --no-checkout -b main . .tmp/docs-clone
+cd .tmp/docs-clone
+git sparse-checkout init --cone
+git sparse-checkout set docs scripts        # cone mode always keeps the root files
+git checkout main && git checkout -b p<N>-docs
+# edit; run `python scripts/gen_roadmap.py` if ROADMAP.md, BUGS.md or CSS-SPECS.md changed
+git add <explicit paths> && git commit -F <message-file>
+git checkout main && git merge --no-ff p<N>-docs -m "Влить ветку p<N>-docs: ..."
+git push origin main                        # the clone's origin is this repository: fast-forward its main
+```
+
+Then push `main` to the real remote from the full checkout. The usual rules still hold: a branch and `--no-ff`, explicit `git add` paths, generated viewers in the same commit, `git status --short` before the first `git add`. `scripts/check_doc_links.py` cannot run inside the sparse clone (it resolves links against the working tree, and `crates/` is absent) — run it in a full checkout, or verify that every new link target is committed. `.tmp/` is gitignored, so the clone never appears in `git status`; delete it once the merge is in.
 
 **End of every session that created a worktree:** `bash scripts/worktree-pool.sh gc` — reports empty directories git does not know, ad-hoc worktrees (merged/dirty/unmerged) and pool slots still holding a merged branch. `gc --fix` removes only the safe part (`git worktree prune` + empty unregistered directories); anything with content or unmerged commits is listed, never deleted. Exit code 1 means findings remain.
 
