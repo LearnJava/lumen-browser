@@ -7,6 +7,9 @@
 //! response body; `lumen-js::push_api` sends `Push`/`PushSubscriptionChange`
 //! (Ph3 push-api срез 5). The rquickjs-backed `spawn_sw_worker` was removed
 //! in S12b-B17.
+//!
+//! SW-MSG-S1: timer-task loop with `run_worker_tasks` + `recv_timeout` (modeled
+//! on `worker.rs`), async `setTimeout`/`setInterval`, and fetch timeout.
 
 use std::time::Duration;
 
@@ -26,6 +29,9 @@ use crate::v8_runtime::V8JsRuntime;
 use lumen_core::JsResult;
 #[cfg(feature = "v8-backend")]
 use lumen_core::ext::JsRuntime as _;
+
+#[cfg(feature = "v8-backend")]
+use crate::worker::run_worker_tasks;
 
 /// Timeout for a SW to call `event.respondWith()`.
 const FETCH_TIMEOUT: Duration = Duration::from_millis(5_000);
@@ -430,11 +436,10 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
   // queueMicrotask stub.
   globalThis.queueMicrotask = function(fn) {{ Promise.resolve().then(fn); }};
 
-  // setTimeout / clearTimeout stubs (fire synchronously for Phase 1).
-  globalThis.setTimeout = function(fn, _delay) {{ fn(); return 0; }};
-  globalThis.clearTimeout = function() {{}};
-  globalThis.setInterval = function() {{ return 0; }};
-  globalThis.clearInterval = function() {{}};
+  // Timers come from the shim shared with the dedicated-worker scope
+  // (`crate::worker_shims::WORKER_TIMERS_SHIM`, evaluated as its own IIFE right
+  // after this one) — deadline-ordered and driven by this thread's own wait
+  // rather than only by an incoming message (SW-MSG-S1).
 
 }})({scope_str}, {origin_str});
 "#
@@ -498,10 +503,6 @@ pub(crate) fn base64_decode(encoded: &str) -> Option<Vec<u8>> {
     }
     Some(out)
 }
-
-// Suppress unused-import warning for FETCH_TIMEOUT (currently not used at runtime
-// since recv() is blocking; kept as documentation for the intended timeout).
-const _: Duration = FETCH_TIMEOUT;
 
 // ─── V8 backend port (Ph3 V8 migration S10) ──────────────────────────────────
 //
@@ -588,7 +589,22 @@ fn run_sw_thread_v8(
     let _ = rt.eval("if(typeof _sw_fire_event==='function'){_sw_fire_event('install');}");
     let _ = rt.eval("if(typeof _sw_fire_event==='function'){_sw_fire_event('activate');}");
 
-    while let Ok(msg) = rx.recv() {
+    // SW-MSG-S1: timer‑task loop modelled on the dedicated worker's (BUG‑815).
+    loop {
+        let wait = run_worker_tasks(&rt);
+        let msg = match wait {
+            Some(d) => match rx.recv_timeout(d) {
+                Ok(m) => m,
+                // Deadline reached with nothing incoming — go round and let
+                // `run_worker_tasks` fire the timer that woke us.
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            },
+            None => match rx.recv() {
+                Ok(m) => m,
+                Err(_) => break,
+            },
+        };
         match msg {
             SwWorkerMessage::Fetch(req) => {
                 let body = dispatch_fetch_v8(&rt, &req.url, &req.method);
@@ -599,11 +615,12 @@ fn run_sw_thread_v8(
                 dispatch_push_subscription_change_v8(&rt, &change)
             }
         }
+        // SW-MSG-S1: flush any timers that the dispatched message may have armed.
+        let _ = rt.eval("if(typeof _lumen_flush_timers==='function')_lumen_flush_timers();");
     }
 }
 
-/// V8 twin of [`dispatch_fetch`]. No separate flush step — see module doc
-/// comment on why V8 doesn't need one.
+/// V8 twin of [`dispatch_fetch`]. SW-MSG-S1: waits for async `respondWith`.
 #[cfg(feature = "v8-backend")]
 fn dispatch_fetch_v8(rt: &V8JsRuntime, url: &str, method: &str) -> Option<Vec<u8>> {
     let _ = rt.set_global("_sw_resp_body__", lumen_core::JsValue::Null);
@@ -612,6 +629,31 @@ fn dispatch_fetch_v8(rt: &V8JsRuntime, url: &str, method: &str) -> Option<Vec<u8
     let _ = rt.eval(
         "if(typeof _sw_fire_fetch==='function'){_sw_fire_fetch(_sw_req_url__,_sw_req_method__);}",
     );
+
+    // SW-MSG-S1: `respondWith` may hand over a promise that only settles after
+    // its handler's own `setTimeout` fires. V8's `kAuto` microtask policy drains
+    // everything that settles inside an `eval` (see the module comment above), so
+    // an already-built body is there on the first read; otherwise the timer task
+    // loop is what advances the clock until the body lands or `FETCH_TIMEOUT`
+    // expires.
+    let start = std::time::Instant::now();
+    loop {
+        match rt.eval("_sw_resp_body__") {
+            Ok(lumen_core::JsValue::String(s)) => return Some(s.into_bytes()),
+            Ok(lumen_core::JsValue::Null) => {}
+            // A non-string, non-null body cannot become a string later.
+            _ => return None,
+        }
+        let Some(wait) = run_worker_tasks(rt) else {
+            // No timer can settle the promise any more.
+            break;
+        };
+        let left = FETCH_TIMEOUT.saturating_sub(start.elapsed());
+        if left.is_zero() {
+            break;
+        }
+        std::thread::sleep(wait.min(left));
+    }
 
     match rt.eval("_sw_resp_body__") {
         Ok(lumen_core::JsValue::String(s)) => Some(s.into_bytes()),
@@ -849,6 +891,10 @@ fn install_sw_globals_v8(
             }),
         )?;
     }
+
+    // Timers (`setTimeout`/`setInterval`/`queueMicrotask`) come from the shim
+    // shared with the dedicated-worker scope (SW-MSG-S1).
+    rt.eval(crate::worker_shims::WORKER_TIMERS_SHIM)?;
 
     let scope_js = scope.replace('\'', "\\'");
     let scope_str = format!("'{scope_js}'");
@@ -1541,5 +1587,129 @@ self.addEventListener('fetch', function(event) {
 
         let result = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
         assert_eq!(result, None);
+    }
+
+    // SW-MSG-S1 tests ========================================================
+
+    #[test]
+    fn sw_timers_fire_asynchronously() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None, None)
+            .unwrap();
+
+        // Set a timer that sets a flag after 20ms
+        rt.eval(r#"
+            globalThis.__timerFired = false;
+            setTimeout(() => {
+                globalThis.__timerFired = true;
+            }, 20);
+        "#).unwrap();
+
+        // Timer should not fire immediately
+        assert_eq!(
+            rt.eval("globalThis.__timerFired").unwrap(),
+            lumen_core::JsValue::Bool(false)
+        );
+
+        // Run worker tasks to process timers
+        let start = std::time::Instant::now();
+        while start.elapsed() < std::time::Duration::from_millis(200) {
+            if let Some(wait) = run_worker_tasks(&rt) {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                if wait > std::time::Duration::from_millis(10) {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            // Check if timer fired
+            match rt.eval("globalThis.__timerFired") {
+                Ok(lumen_core::JsValue::Bool(true)) => break,
+                _ => continue,
+            }
+        }
+
+        // Timer should have fired within 200ms
+        assert_eq!(
+            rt.eval("globalThis.__timerFired").unwrap(),
+            lumen_core::JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn sw_fetch_waits_for_async_respond_with() {
+        let cache = MockCache::new();
+        
+        let handle = spawn_sw_worker_v8(
+            "https://example.com".to_string(),
+            "/".to_string(),
+            r#"
+self.addEventListener('fetch', function(event) {
+    // Respond with a promise that resolves after 30ms
+    event.respondWith(new Promise(resolve => {
+        setTimeout(() => {
+            resolve(new Response('late response'));
+        }, 30);
+    }));
+});
+"#.to_string(),
+            Arc::clone(&cache) as Arc<dyn CacheBackend>,
+            None,
+            None,
+            None,
+        );
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        handle
+            .tx
+            .send(lumen_core::ext::SwWorkerMessage::Fetch(lumen_core::ext::SwFetchRequest {
+                url: "https://example.com/api".to_string(),
+                method: "GET".to_string(),
+                response_tx: tx,
+            }))
+            .unwrap();
+
+        let result = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        assert_eq!(result, Some(b"late response".to_vec()));
+    }
+
+    #[test]
+    fn sw_setinterval_fires_multiple_times() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None, None)
+            .unwrap();
+
+        // Set an interval that increments a counter every 10ms
+        rt.eval(r#"
+            globalThis.__intervalCount = 0;
+            globalThis.__intervalId = setInterval(() => {
+                globalThis.__intervalCount++;
+                if (globalThis.__intervalCount >= 3) {
+                    clearInterval(globalThis.__intervalId);
+                }
+            }, 10);
+        "#).unwrap();
+
+        // Run worker tasks to process timers
+        let start = std::time::Instant::now();
+        while start.elapsed() < std::time::Duration::from_millis(200) {
+            if let Some(wait) = run_worker_tasks(&rt) {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                if wait > std::time::Duration::from_millis(10) {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            // Check if interval fired at least 3 times
+            match rt.eval("globalThis.__intervalCount") {
+                Ok(lumen_core::JsValue::Number(n)) if n >= 3.0 => break,
+                _ => continue,
+            }
+        }
+
+        // Interval should have fired at least 3 times
+        let count = rt.eval("globalThis.__intervalCount").unwrap();
+        assert!(matches!(count, lumen_core::JsValue::Number(n) if n >= 3.0));
     }
 }
