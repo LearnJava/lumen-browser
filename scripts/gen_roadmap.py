@@ -481,6 +481,12 @@ def main():
         "unlinked": dict(sorted(unlinked.items())),
     }
     payload = json.dumps(data, ensure_ascii=False, indent=1)
+    # Литерал "</" внутри JSON закрывает <script> раньше времени: regex ниже
+    # обрывает блок на первом "</script>", и в файле остаётся новый payload плюс
+    # хвост старого — у зрителя JSON перестаёт парситься целиком (так 2026-11-02
+    # сломался блок из-за заметки COMPAT-HANG). `\/` — допустимый escape JSON,
+    # данные не меняются, блок остаётся целым.
+    payload = payload.replace("</", "<\\/")
 
     block = re.compile(
         r'(<script id="roadmap-data" type="application/json">)(.*?)(</script>)',
@@ -495,7 +501,10 @@ def main():
             print(f"пропуск (нет блока roadmap-data): {html.name}")
             continue
         new = block.sub(lambda mm: mm.group(1) + "\n" + payload + "\n" + mm.group(3), src)
-        html.write_text(new, encoding="utf-8")
+        # newline="\n": Path.write_text на Windows переводит \n в \r\n, а в репозитории
+        # eol=lf — иначе каждый прогон даёт полнодиф на весь JSON-блок.
+        with html.open("w", encoding="utf-8", newline="\n") as f:
+            f.write(new)
         print(f"обновлён: {html.name}")
 
     css_module_total = sum(sum(t["counts"].values()) for t in css_tiers.values())
