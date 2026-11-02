@@ -12,6 +12,7 @@ must not restate it — a restated rule drifts, and the two copies then contradi
 |---|---|
 | What can the browser do right now | `CAPABILITIES.md` — **only** this, not `docs/plan/*` or `STATUS-PN.md` |
 | What should I work on | `STATUS-PN.md` — bare `<source>:NN` pointer lines, schema in [`dev-roles.md`](dev-roles.md) §Task tracking schema |
+| What to do next: horizons, budgets, queue decisions | [`plan/development-plan-2026-11.md`](plan/development-plan-2026-11.md) |
 | Open defects · fixed · per defect | `BUGS.md` · `BUGS-FIXED.md` · `bugs/BUG-NNN-*.md` |
 | Task/phase tree | `ROADMAP.md` (one task = exactly one line) · viewers `docs/roadmap-*.html` ([`roadmap-trees.md`](roadmap-trees.md)) |
 | CSS property / spec status | `CSS-SPECS.md` |

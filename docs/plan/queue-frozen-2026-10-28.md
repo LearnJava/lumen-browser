@@ -234,3 +234,20 @@
 | Media Queries L4/L5 | `CSS-SPECS.md:93` | prefers-reduced-motion ✅; hover/any-hover/pointer/any-pointer ✅ 2026-06-14 (p4-media-hover-pointer: desktop defaults hover/fine); prefers-co |
 | ::cue, ::cue(<selector>), ::cue-region, ::cue-region(<selector>) | `CSS-SPECS.md:796` | Не реализовано (WPT-VTT-SCOUT 2026-10-27, docs/wpt-vendor-notes/webvtt.md, кластеры R5/R6): в crates/engine/css-parser/src/parser/selectors. |
 | flood-color / flood-opacity / lighting-color / color-interpolation-filters | `CSS-SPECS.md:470` | SVG-FILTER срез 1 (+ lighting-color в SVG-FILTER-2 срез 1): flood-color/flood-opacity/lighting-color/color-interpolation-filters читаются <f |
+
+---
+
+## Ревизия 2026-11-02
+
+Разбор очередей по [development-plan-2026-11.md](development-plan-2026-11.md) §5. Замороженный список ниже не меняется, меняется состояние двух его строк.
+
+1. **VTT-RENDER-S1…S6** возвращены в `STATUS-P1.md` 2026-10-31 (коммит `dd5222ee2`) без ссылки
+   на отчёт триажа, который называл бы сайт или сценарий с субтитрами. Решение 2026-10-28 требует
+   такого триггера. Пока триггер не записан, строки считаются размороженными условно: следующая
+   проверка очереди либо называет сценарий корпуса S, которому нужны субтитры, либо возвращает
+   строки сюда.
+2. **BUG-935** закреплён за P1 ([dev-roles.md](../dev-roles.md) §Developer roles), но P1 читает
+   только `ROADMAP.md`, а строки у бага нет — задача не стоит ни в одной очереди. Нужно решение:
+   строка `ROADMAP.md` на путь инкрементального relayout как на фичу (тогда BUG-935 остаётся
+   симптомом в `BUGS.md`), либо перенос задачи в P6 как срочной.
+3. Остальные строки ниже остаются замороженными; разморозка — только по правилу из шапки файла.
