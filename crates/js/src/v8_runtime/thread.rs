@@ -22,6 +22,12 @@ const PLATFORM_POLL_MIN: Duration = Duration::from_millis(1);
 /// core.
 const PLATFORM_POLL_MAX: Duration = Duration::from_millis(32);
 
+/// How long after the last platform task the loop keeps the short step before
+/// it starts backing off. Covers the gap between two tasks of one asynchronous
+/// operation (a wasm spec file awaits hundreds of `compile` round trips), while
+/// an isolate that has really gone quiet backs off after half a second.
+const PLATFORM_HOT_WINDOW: Duration = Duration::from_millis(500);
+
 /// Runs every foreground task V8 has queued for `inner`'s isolate and the
 /// microtask checkpoint that follows each one (BUG-1752).
 ///
@@ -171,13 +177,21 @@ pub(super) fn v8_thread_main(
     // off to `PLATFORM_POLL_MAX` while the isolate is idle; a command resets it.
     let platform = v8::V8::get_current_platform();
     let mut poll_step = PLATFORM_POLL_MIN;
+    // Пока платформа недавно выдавала работу, шаг не растёт: между двумя
+    // задачами асинхронной компиляции пауза в единицы миллисекунд, и удвоение
+    // съедало её целиком — 300 модулей в огромном spec-файле превращали это в
+    // секунды ожидания.
+    let mut last_task_at = std::time::Instant::now();
     loop {
         let cmd = match cmd_rx.recv_timeout(poll_step) {
             Ok(cmd) => cmd,
             Err(RecvTimeoutError::Timeout) => {
                 let pumped =
                     run_platform_tasks(&mut inner, &platform, &stall, stall_sampler.as_ref());
-                poll_step = if pumped {
+                if pumped {
+                    last_task_at = std::time::Instant::now();
+                }
+                poll_step = if last_task_at.elapsed() < PLATFORM_HOT_WINDOW {
                     PLATFORM_POLL_MIN
                 } else {
                     poll_step.saturating_mul(2).min(PLATFORM_POLL_MAX)

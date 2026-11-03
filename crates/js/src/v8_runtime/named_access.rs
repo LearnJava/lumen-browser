@@ -19,6 +19,7 @@ static V8_INIT: Once = Once::new();
 /// call this first so there is exactly one `initialize_platform` call.
 pub fn ensure_v8_platform() {
     V8_INIT.call_once(|| {
+        raise_timer_resolution();
         let platform = v8::new_default_platform(0, false).make_shared();
         v8::V8::initialize_platform(platform);
         apply_v8_profile_flag();
@@ -26,6 +27,45 @@ pub fn ensure_v8_platform() {
         v8::V8::initialize();
     });
 }
+
+/// Asks the OS for a 1 ms timer tick (Windows only), because the JS thread's
+/// platform-queue wake-up is a timed wait and Windows rounds every sub-tick
+/// timeout up to the system tick.
+///
+/// BUG-1752 gave the JS thread a `recv_timeout(1 ms)` to drain V8's foreground
+/// task queue ([`super::thread::v8_thread_main`]). On Windows that wait is not
+/// 1 ms: with the default 15.6 ms tick it parks the thread for ~15 ms, so every
+/// `await WebAssembly.compile(...)` round trip cost 15 ms instead of 1 ms. A
+/// generated wasm spec file makes a few hundred of them, which is what pushed
+/// the ten biggest `wasm/core` tests past wptrunner's 10 s ceiling with 6500 of
+/// their 6501 subtests already passing (WASM-V8-NATIVE-S1).
+///
+/// Browsers raise the tick for exactly this reason. Since Windows 10 2004 the
+/// request is per-process, so it does not slow the rest of the system down, and
+/// it is deliberately never released: the runtime lives as long as the browser
+/// and the JS thread keeps waiting on this timer for the whole session. The
+/// proper long-term replacement is a custom `v8::Platform` that hands tasks to
+/// this thread and wakes it through a channel instead of a timed poll — then
+/// the resolution request can go away.
+#[cfg(target_os = "windows")]
+fn raise_timer_resolution() {
+    #[link(name = "winmm")]
+    unsafe extern "system" {
+        /// `MMRESULT timeBeginPeriod(UINT uPeriod)` — winmm, no pointer
+        /// arguments and no failure mode this code has to act on.
+        fn timeBeginPeriod(period: u32) -> u32;
+    }
+    // SAFETY: the call takes an integer, has no lifetime or aliasing
+    // requirements, is process-wide and idempotent; `1` is a documented valid
+    // period. Called once from the platform `Once`.
+    unsafe {
+        timeBeginPeriod(1);
+    }
+}
+
+/// No-op outside Windows: the platform wait there is already sub-millisecond.
+#[cfg(not(target_os = "windows"))]
+fn raise_timer_resolution() {}
 
 /// Turns on V8's own `--prof` sampler when `LUMEN_V8_PROFILE` is set (THREAD-3
 /// срез 4, BUG-1034). `rusty_v8` binds no `CpuProfiler::Start/StopProfiling` —
