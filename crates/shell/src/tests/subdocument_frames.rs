@@ -1345,7 +1345,7 @@ fn frame_content_height_is_max_scroll_plus_viewport() {
 #[test]
 fn frame_scrollbar_overlay_draws_track_and_thumb_at_frame_box() {
     let h = scrollable_handle(600.0); // host_rect (40, 120, 300, 200)
-    let out = crate::frames::frame_scrollbar_overlay(&[h], 0.0, 0.0);
+    let out = crate::frames::frame_scrollbar_overlay(&[h], 0.0, 0.0, (0.0, 0.0));
     assert_eq!(out.len(), 6, "клип + transform + track + thumb + pop + pop");
     match &out[0] {
         lumen_paint::DisplayCommand::PushClipRect { rect } => {
@@ -1379,7 +1379,7 @@ fn frame_scrollbar_overlay_draws_track_and_thumb_at_frame_box() {
 fn frame_scrollbar_overlay_shifts_by_page_scroll_not_own_scroll() {
     let mut h = scrollable_handle(600.0);
     h.scroll_y = 100.0;
-    let out = crate::frames::frame_scrollbar_overlay(&[h], 5.0, 20.0);
+    let out = crate::frames::frame_scrollbar_overlay(&[h], 5.0, 20.0, (0.0, 0.0));
     match &out[1] {
         lumen_paint::DisplayCommand::PushTransform { matrix } => {
             let expected = lumen_layout::Mat4::translation_2d(40.0 - 5.0, 120.0 - 20.0);
@@ -1392,11 +1392,31 @@ fn frame_scrollbar_overlay_shifts_by_page_scroll_not_own_scroll() {
     }
 }
 
+/// BUG-1683: overlay рисуется в координатах окна, страница начинается под тулбаром —
+/// полоса фрейма сдвигается на `page_offset`, и точка клика по ней переводится обратно
+/// той же функцией (рисуем — попадаем).
+#[test]
+fn frame_scrollbar_overlay_and_hit_origin_share_page_offset() {
+    let h = scrollable_handle(600.0); // host_rect (40, 120, 300, 200)
+    let frames = vec![h];
+    let offset = (0.0, 72.0);
+    let out = crate::frames::frame_scrollbar_overlay(&frames, 5.0, 20.0, offset);
+    let expected = lumen_layout::Mat4::translation_2d(40.0 - 5.0, 120.0 - 20.0 + 72.0);
+    match &out[1] {
+        lumen_paint::DisplayCommand::PushTransform { matrix } => {
+            assert_eq!(matrix.0, expected.0, "полоса фрейма должна лежать на его боксе в окне");
+        }
+        other => panic!("ожидался PushTransform, получено {other:?}"),
+    }
+    let (wx, wy) = crate::frames::frame_window_origin(&frames, 0, 5.0, 20.0, offset).unwrap();
+    assert_eq!((wx, wy), (35.0, 172.0));
+}
+
 /// Контент короче вьюпорта — скроллить нечего, полоса не рисуется (то же
 /// правило, что у страничного scrollbar-а).
 #[test]
 fn frame_scrollbar_overlay_empty_when_content_fits() {
-    assert!(crate::frames::frame_scrollbar_overlay(&[scrollable_handle(50.0)], 0.0, 0.0).is_empty());
+    assert!(crate::frames::frame_scrollbar_overlay(&[scrollable_handle(50.0)], 0.0, 0.0, (0.0, 0.0)).is_empty());
 }
 
 /// Фрейм без посчитанного layout (`host_rect: None`) не даёт вклада, но не
@@ -1407,7 +1427,7 @@ fn frame_scrollbar_overlay_skips_invisible_frames_but_draws_others() {
     let mut hidden = scrollable_handle(600.0);
     hidden.host_rect = None;
     let visible = scrollable_handle(600.0);
-    let out = crate::frames::frame_scrollbar_overlay(&[hidden, visible], 0.0, 0.0);
+    let out = crate::frames::frame_scrollbar_overlay(&[hidden, visible], 0.0, 0.0, (0.0, 0.0));
     assert_eq!(
         out.len(),
         6,

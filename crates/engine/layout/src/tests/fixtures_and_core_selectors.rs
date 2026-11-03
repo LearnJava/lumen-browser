@@ -150,6 +150,28 @@ use super::*;
         );
     }
 
+    /// BUG-1644: the text of a `display:flex` link sits in an anonymous item whose run is keyed by
+    /// the text node, so the union walk over its frags used to climb to the root and stretch
+    /// `html`/`body` (and the flex box itself) to the off-screen frag at `x = -390`.
+    #[test]
+    fn anonymous_flex_text_item_does_not_widen_ancestors() {
+        let (doc, root) = lay_full_measured_with_doc(
+            "<html><body><div id=m style=\"position:absolute;left:-390px;top:0;width:390px\">\
+             <a id=a style=\"display:flex;height:48px\">Hello world link</a></div><p>text</p></body></html>",
+            "body{margin:0}",
+        );
+        let rects = collect_layout_rects(&root, &doc);
+        let nid = |sel: &str| find_first_dom_node_by_selector(&doc, sel).unwrap().index() as u32;
+        for sel in ["html", "body", "#m", "#a"] {
+            let r = rects[&nid(sel)];
+            assert!(r[0] >= -390.0 && r[0] + r[2] <= 800.0, "{sel} must keep its own box: {r:?}");
+        }
+        let html = rects[&nid("html")];
+        assert_eq!(html[0], 0.0, "html must not start at the off-screen frag: {html:?}");
+        let a = rects[&nid("#a")];
+        assert_eq!(a[2], 390.0, "the flex link keeps its own width: {a:?}");
+    }
+
     /// BUG-488: a plain inline-level element (`<span>`, `<em>`, …) owns no
     /// `LayoutBox` of its own — its content is flattened into the enclosing
     /// `InlineRun`'s segments, so neither collector's key set ever contained

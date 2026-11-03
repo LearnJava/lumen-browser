@@ -41,6 +41,10 @@ pub const CHROME_LUMEN_USER_AGENT: &str = concat!(
     env!("CARGO_PKG_VERSION")
 );
 
+/// Firefox User-Agent on Windows — the `firefox_win` compatibility identity.
+pub const FIREFOX_WIN_USER_AGENT: &str =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:130.0) Gecko/20100101 Firefox/130.0";
+
 /// Edge User-Agent — the Chromium UA of the same major plus the `Edg/` token.
 pub const EDGE_USER_AGENT: &str = concat!(
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/",
@@ -84,6 +88,51 @@ impl IdentityVariant {
             Self::ChromeUnbranded => CHROME_USER_AGENT,
             Self::ChromeLumen => CHROME_LUMEN_USER_AGENT,
         }
+    }
+}
+
+/// Complete per-site identity selected by a compat-pack `identity` action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentityProfile {
+    /// Chrome grammar plus the Lumen token and brand.
+    ChromeLumen,
+    /// Chrome grammar with Chromium Client Hints brands.
+    ChromeUnbranded,
+    /// The same Chrome UA with Google Chrome Client Hints brands.
+    ChromeBrandGoogle,
+    /// Firefox on Windows, without Chromium Client Hints.
+    FirefoxWin,
+}
+
+impl IdentityProfile {
+    /// The process-wide A/B variant as a complete profile.
+    #[must_use]
+    pub const fn from_variant(variant: IdentityVariant) -> Self {
+        match variant {
+            IdentityVariant::ChromeUnbranded => Self::ChromeUnbranded,
+            IdentityVariant::ChromeLumen => Self::ChromeLumen,
+        }
+    }
+
+    /// Build every JS- and HTTP-visible value from this one profile.
+    #[must_use]
+    pub fn identity(self) -> Identity {
+        let ua = match self {
+            Self::ChromeLumen => CHROME_LUMEN_USER_AGENT,
+            Self::ChromeUnbranded | Self::ChromeBrandGoogle => CHROME_USER_AGENT,
+            Self::FirefoxWin => FIREFOX_WIN_USER_AGENT,
+        };
+        let mut identity = Identity::from_user_agent(ua);
+        if self == Self::ChromeBrandGoogle
+            && let Some(data) = identity.ua_data.as_mut()
+        {
+            for (brand, _) in data.brands.iter_mut().chain(data.full_version_list.iter_mut()) {
+                if brand == "Chromium" {
+                    *brand = "Google Chrome".to_owned();
+                }
+            }
+        }
+        identity
     }
 }
 

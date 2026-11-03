@@ -144,6 +144,68 @@ use super::*;
     }
 
     #[test]
+    fn background_size_negative_value_is_invalid() {
+        // CSS Backgrounds L3 §3.9: `<bg-size>` принимает только
+        // `<length-percentage [0,∞]>`. Отрицательное значение делает декларацию
+        // невалидной — размер остаётся initial (`auto auto`), а не превращается
+        // в 1px-плитку (WPT `background-size-with-negative-value.html`).
+        for v in ["-1px -1px", "-10%", "10px -5px", "auto -1px", "-1px auto"] {
+            let css = format!(
+                "div {{ background-image: url(a.png); background-repeat: no-repeat; \
+                 background-size: {v}; }}"
+            );
+            let s = cascade_at("<div></div>", &css, &[0]);
+            assert_eq!(s.background_layers[0].size, BackgroundSize::Auto, "{v}");
+        }
+    }
+
+    #[test]
+    fn background_size_grammar_rejects_extra_or_unknown_axes() {
+        // `<bg-size>` = `cover | contain | <length-percentage>{1,2} | auto{1,2}` —
+        // второй токен после `cover`/`contain`, третья ось и нераспознанный
+        // токен невалидны целиком.
+        for v in [
+            "cover contain",
+            "contain cover",
+            "10px 20px 30px",
+            "10px nonsense",
+            "auto auto auto",
+        ] {
+            let css = format!("div {{ background-image: url(a.png); background-size: {v}; }}");
+            let s = cascade_at("<div></div>", &css, &[0]);
+            assert_eq!(s.background_layers[0].size, BackgroundSize::Auto, "{v}");
+        }
+    }
+
+    #[test]
+    fn background_size_valid_values_are_kept() {
+        for (v, want) in [
+            ("10px 20px", BackgroundSize::Length(BgSizeAxis::Px(10.0), BgSizeAxis::Px(20.0))),
+            ("10px", BackgroundSize::Length(BgSizeAxis::Px(10.0), BgSizeAxis::Auto)),
+            ("10% 20%", BackgroundSize::Length(BgSizeAxis::Percent(0.1), BgSizeAxis::Percent(0.2))),
+            ("0px 0px", BackgroundSize::Length(BgSizeAxis::Px(0.0), BgSizeAxis::Px(0.0))),
+            ("cover", BackgroundSize::Cover),
+            ("contain", BackgroundSize::Contain),
+        ] {
+            let css = format!("div {{ background-image: url(a.png); background-size: {v}; }}");
+            let s = cascade_at("<div></div>", &css, &[0]);
+            assert_eq!(s.background_layers[0].size, want, "{v}");
+        }
+    }
+
+    #[test]
+    fn mask_size_negative_value_is_invalid() {
+        // `mask-size` — тот же `<bg-size>` (CSS Masking L1 §4.2): отрицательная
+        // длина невалидна, размер слоя остаётся initial (`auto`).
+        let s = cascade_at(
+            "<div></div>",
+            "div { mask-image: url(a.png); mask-size: -1px -1px; }",
+            &[0],
+        );
+        assert_eq!(s.mask_layers[0].size, BackgroundSize::Auto);
+    }
+
+    #[test]
     fn background_size_css_wide_keeps_image_layer() {
         // BUG-1301: `initial`/`inherit`/`unset`/`revert` на одном longhand'е не стирают слой
         // с картинкой — меняется только его поле.

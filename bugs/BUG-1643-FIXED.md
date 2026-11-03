@@ -1,6 +1,6 @@
 # BUG-1643 — `contentWindow` соседнего iframe из дочернего фрейма через `parent.document` — `undefined`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-28 (P3)
 **Заведён:** 2026-10-19 (живой прогон https://otpravka.pochta.ru/specification)
 **Область:** js (фреймы: `crates/js/src/frame_bridge.rs`, доступ к DOM родителя из дочернего realm-а)
 
@@ -30,3 +30,24 @@ iframe.contentWindow.postMessage(message, targetOP);
 Связано с [BUG-957](BUG-957-OPEN.md) (голый фасад окна фрейма) и [BUG-480](BUG-480-OPEN.md), но
 дефект другой: здесь свойства нет вовсе. Тест: два same-origin iframe, второй читает
 `parent.document.getElementById('a').contentWindow` и делает `postMessage`.
+
+## Причина и исправление
+
+Фасад элемента под-документа (`frameElem`, `frame_bridge.rs`) не имел `contentWindow`/
+`contentDocument` вовсе, а реестр ребёнка знает только своих детей, `parent` и `top` — iframe-брат
+в нём не зарегистрирован. Теперь для `<iframe>`, прочитанного через фасад предка
+(`PARENT_BID`/`TOP_BID`), натив `_lumen_f_sibling_binding` лениво копирует биндинг брата из реестра
+предка (реестры рантаймов лежат в глобальной карте по ключу `Arc::as_ptr(&doc)`, `register_frame_registry`)
+в `FrameDocSlots::siblings`; bid брата = `SIBLING_BASE + i`, а сам ребёнок даёт `SELF_BID` — шим
+подставляет настоящий `window`. Доступность пары = доступность и ребёнка, и брата к предку; у
+cross-origin брата (как `passport.pochta.ru` в репро) `contentWindow.postMessage` работает,
+`contentDocument`/`.document` — `null`. `postMessage` брату идёт через `SourceKind::Sibling`:
+получатель находит отправителя в реестре общего предка, `event.source` — фасад брата.
+Замки: реестр предка берётся только после своего и только «вверх» по цепочке, циклов ожидания нет.
+
+Тесты `child_reaches_sibling_content_window_through_parent_document`,
+`cross_origin_sibling_window_exists_but_hides_document`,
+`post_message_between_siblings_reaches_the_sibling_with_a_source`.
+
+Остаток: `contentWindow` iframe, вложенного в чужой дочерний документ (дед читает внука через
+`child.document`), по-прежнему `undefined` — реестр внука лежит у среднего фрейма.

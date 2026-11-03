@@ -6,6 +6,68 @@ use super::codegen_hook;
 use super::named_access::window_named_properties_template;
 use super::promise_reject::{drain_promise_rejections, install_promise_reject_hook};
 use super::*;
+use std::sync::mpsc::RecvTimeoutError;
+use std::time::Duration;
+
+// ── Foreground platform queue (BUG-1752) ─────────────────────────────────────
+
+/// Shortest wait between two dives into V8's platform queue: one millisecond
+/// while something in the isolate is still making progress, so an `await` round
+/// trip in a spec harness costs a millisecond, not the idle step.
+const PLATFORM_POLL_MIN: Duration = Duration::from_millis(1);
+
+/// Longest wait between two dives into V8's platform queue. Reached only after
+/// several empty polls — an idle tab then wakes ~30 times a second instead of
+/// spinning, which is the difference between a parked event loop and a busy
+/// core.
+const PLATFORM_POLL_MAX: Duration = Duration::from_millis(32);
+
+/// Runs every foreground task V8 has queued for `inner`'s isolate and the
+/// microtask checkpoint that follows each one (BUG-1752).
+///
+/// V8 delivers part of its work not as a microtask but as a task on the
+/// isolate's foreground task runner: settling `Atomics.waitAsync` (notify and
+/// timeout alike), `FinalizationRegistry` cleanup callbacks, completion of an
+/// asynchronous `WebAssembly.compile`/`instantiate`. Only
+/// `v8::Platform::pump_message_loop` drains that queue, and this loop used to
+/// block in `recv()` instead — so the task sat there until the shell happened
+/// to send a command or a GC pass ran.
+///
+/// Bracketed by [`lumen_core::script_stall::StallHandle`] and the stall sampler
+/// exactly like a [`V8Command::Run`] job: a callback this drain runs is script
+/// execution on this thread, and the watchdog, the «страница не отвечает» bar
+/// and `any_hung()` must see it (`subsystems/js.md` §Invariants).
+///
+/// Returns whether any task ran — the caller uses that to decide between the
+/// short and the long poll step.
+fn run_platform_tasks(
+    inner: &mut V8Inner,
+    platform: &v8::SharedRef<v8::Platform>,
+    stall: &lumen_core::script_stall::StallHandle,
+    sampler: Option<&super::stall_sampler::StallSampler>,
+) -> bool {
+    if let Some(s) = sampler {
+        s.job_started();
+    }
+    stall.job_started();
+    let mut ran = false;
+    while v8::Platform::pump_message_loop(platform, &inner.isolate, false) {
+        ran = true;
+        // End of a task = end of its microtask checkpoint (HTML LS §8.1.7.3);
+        // a `.then` chained onto the settled promise runs here, not later.
+        inner.isolate.perform_microtask_checkpoint();
+    }
+    stall.job_finished();
+    if let Some(s) = sampler {
+        s.job_finished();
+    }
+    if ran {
+        // Rejected promises queued by those tasks get the same report a
+        // `V8Command::Run` job's do (BUG-918).
+        drain_promise_rejections(inner);
+    }
+    ran
+}
 
 unsafe extern "C" fn allow_wasm_code_generation(
     _context: v8::Local<v8::Context>,
@@ -103,7 +165,27 @@ pub(super) fn v8_thread_main(
     });
     let _ = init_tx.send(Ok(()));
 
-    while let Ok(cmd) = cmd_rx.recv() {
+    // BUG-1752: wait with a step instead of `recv()`, and drain V8's foreground
+    // task queue on every wake-up — including the ones nobody asked for. The
+    // step stays at `PLATFORM_POLL_MIN` while work keeps showing up and backs
+    // off to `PLATFORM_POLL_MAX` while the isolate is idle; a command resets it.
+    let platform = v8::V8::get_current_platform();
+    let mut poll_step = PLATFORM_POLL_MIN;
+    loop {
+        let cmd = match cmd_rx.recv_timeout(poll_step) {
+            Ok(cmd) => cmd,
+            Err(RecvTimeoutError::Timeout) => {
+                let pumped =
+                    run_platform_tasks(&mut inner, &platform, &stall, stall_sampler.as_ref());
+                poll_step = if pumped {
+                    PLATFORM_POLL_MIN
+                } else {
+                    poll_step.saturating_mul(2).min(PLATFORM_POLL_MAX)
+                };
+                continue;
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
+        };
         match cmd {
             V8Command::Run(job) => {
                 if let Some(s) = &stall_sampler {
@@ -129,6 +211,12 @@ pub(super) fn v8_thread_main(
                 // no event loop behind them (`--dump-*`, SVG rasterization,
                 // unit tests), so the report stays visible there too.
                 drain_promise_rejections(&mut inner);
+                // BUG-1752: the job may have *queued* a platform task — an
+                // async wasm compilation started by the script finishes on a
+                // V8 thread and lands here — so drain before going back to the
+                // wait, not after the next poll step.
+                run_platform_tasks(&mut inner, &platform, &stall, stall_sampler.as_ref());
+                poll_step = PLATFORM_POLL_MIN;
             }
             V8Command::Shutdown => break,
         }

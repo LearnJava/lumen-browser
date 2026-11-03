@@ -386,13 +386,14 @@ impl Lumen {
         true
     }
 
-    /// Перевести (x_css, y_css) — сырые оконные CSS px курсора — в
+    /// Перевести (x_css, y_css) — оконные CSS px курсора — в
     /// СОБСТВЕННЫЕ viewport-локальные координаты фрейма `idx` (FRAME-3
     /// remainder: собственный scrollbar фрейма). Та же "raw overlay"
     /// конвенция, что уже использует page-level scrollbar-хиттест
     /// (`scrollbar::classify_track_click` в `mouse_input.rs`) и
     /// [`frames::frame_scrollbar_overlay`] для рисования — курсор минус
-    /// page-scroll минус origin бокса фрейма на странице.
+    /// сдвиг страницы под тулбаром (`page_offset`, BUG-1683) минус page-scroll
+    /// минус origin бокса фрейма на странице.
     ///
     /// `None` — фрейм не виден (нет `host_rect`/`content_dl`, вырожденный
     /// бокс) либо геометрия какого-то предка ещё не посчитана.
@@ -402,8 +403,14 @@ impl Lumen {
         if h.content_dl.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 {
             return None;
         }
-        let (ox, oy) = frames::frame_box_page_origin(&self.frames, idx)?;
-        Some((x_css - (ox - self.scroll_x), y_css - (oy - self.scroll_y)))
+        let (ox, oy) = frames::frame_window_origin(
+            &self.frames,
+            idx,
+            self.scroll_x,
+            self.scroll_y,
+            self.page_offset(),
+        )?;
+        Some((x_css - ox, y_css - oy))
     }
 
     /// Классифицировать клик по СОБСТВЕННОМУ scrollbar-у фрейма (FRAME-3

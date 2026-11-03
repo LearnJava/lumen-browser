@@ -1,6 +1,6 @@
 # BUG-1683 — Полосы прокрутки под-документов (`<iframe>`) смещены на высоту тулбара
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-28
 **Заведён:** 2026-10-22 (найден при BUG-1642)
 **Область:** shell (`crates/shell/src/frames.rs::frame_scrollbar_overlay`, `crates/shell/src/lumen/scrolling.rs::frame_local_point`)
 

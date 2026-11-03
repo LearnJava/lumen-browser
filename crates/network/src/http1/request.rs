@@ -33,6 +33,7 @@ impl Connection {
         accept_encoding: Option<&str>,
         extra_headers: &str,
         http_profile: HttpProfile,
+        identity: &lumen_core::Identity,
         body: Option<&RequestBody<'_>>,
     ) -> Result<()> {
         let range_value = range.and_then(|r| r.header_value());
@@ -70,7 +71,7 @@ impl Connection {
         let combined_extra =
             format!("{range_header}{if_range_header}{auth_header}{body_headers}{extra_headers}");
         let accept_enc = accept_encoding.unwrap_or("");
-        let header_block = http::build_request_headers(host, accept_enc, &combined_extra, http_profile);
+        let header_block = http::build_request_headers_with_identity(host, accept_enc, &combined_extra, http_profile, identity);
         let header_block = apply_ua_override(header_block);
         let req = format!("{method} {path} HTTP/1.1\r\n{header_block}");
         let stream = self.reader.get_mut();

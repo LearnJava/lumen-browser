@@ -1980,6 +1980,21 @@ pub(crate) fn frame_content_height(h: &FrameHandle) -> f32 {
     frame_max_scroll(h) + h.viewport.height
 }
 
+/// Левый верхний угол бокса фрейма `idx` в координатах ОКНА: origin на странице
+/// ([`frame_box_page_origin`]) минус `page_scroll_{x,y}` плюс `page_offset`
+/// (`Lumen::page_offset`) — страница начинается под тулбаром (BUG-1683, как
+/// BUG-1642 для страничных полос). Одна точка для рисования полосы и хит-теста.
+pub(crate) fn frame_window_origin(
+    frames: &[FrameHandle],
+    idx: usize,
+    page_scroll_x: f32,
+    page_scroll_y: f32,
+    page_offset: (f32, f32),
+) -> Option<(f32, f32)> {
+    let (ox, oy) = frame_box_page_origin(frames, idx)?;
+    Some((ox - page_scroll_x + page_offset.0, oy - page_scroll_y + page_offset.1))
+}
+
 /// Оверлей СОБСТВЕННОГО scrollbar-а каждого видимого фрейма (FRAME-3
 /// remainder: "собственный скроллбар фрейма" — визуал).
 ///
@@ -1991,16 +2006,13 @@ pub(crate) fn frame_content_height(h: &FrameHandle) -> f32 {
 ///
 /// Origin — [`frame_box_page_origin`] (бокс ХОСТА, не его содержимого: свой
 /// скролл фрейма не должен двигать полосу, только скролл ПРЕДКОВ), минус
-/// `page_scroll_{x,y}` — та же "raw overlay" конвенция, что уже использует
-/// страничный scrollbar и `build_validation_tooltip`
-/// (`frame_form_submit.rs::show_frame_validation_tooltip` — тот же приём для
-/// фреймовой tooltip-валидации): overlay viewport-locked, страничный
-/// page-offset (панель вкладок) его не подхватывает — ни у страничного
-/// scrollbar-а, ни у этого.
+/// `page_scroll_{x,y}`, плюс `page_offset` — см. [`frame_window_origin`]: overlay
+/// рисуется в координатах ОКНА.
 pub(crate) fn frame_scrollbar_overlay(
     frames: &[FrameHandle],
     page_scroll_x: f32,
     page_scroll_y: f32,
+    page_offset: (f32, f32),
 ) -> DisplayList {
     let mut out: DisplayList = Vec::new();
     for (idx, h) in frames.iter().enumerate() {
@@ -2008,7 +2020,11 @@ pub(crate) fn frame_scrollbar_overlay(
         if h.content_dl.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 {
             continue;
         }
-        let Some((ox, oy)) = frame_box_page_origin(frames, idx) else { continue };
+        let Some((sx, sy)) =
+            frame_window_origin(frames, idx, page_scroll_x, page_scroll_y, page_offset)
+        else {
+            continue;
+        };
         let bar = crate::scrollbar::build_scrollbar_overlay(
             h.scroll_y,
             frame_content_height(h),
@@ -2018,8 +2034,6 @@ pub(crate) fn frame_scrollbar_overlay(
         if bar.is_empty() {
             continue;
         }
-        let sx = ox - page_scroll_x;
-        let sy = oy - page_scroll_y;
         out.push(DisplayCommand::PushClipRect {
             rect: Rect::new(sx, sy, h.viewport.width, h.viewport.height),
         });

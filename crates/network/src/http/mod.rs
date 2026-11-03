@@ -26,7 +26,8 @@ pub use accept_language::{
 };
 pub use headers::{
     HttpProfile, HeaderOrder, build_request_headers, build_request_headers_for,
-    h2_fingerprint_headers, sends_global_privacy_control,
+    build_request_headers_with_identity, h2_fingerprint_headers,
+    h2_fingerprint_headers_with_identity, sends_global_privacy_control,
 };
 pub use h2_settings::{H2Settings, H2StreamPriority};
 pub use client_hints::{

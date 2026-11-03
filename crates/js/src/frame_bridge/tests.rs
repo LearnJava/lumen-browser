@@ -1702,3 +1702,139 @@
             },
         );
     }
+
+    /// BUG-1643: контекст ребёнка рядом с братом. Родитель `<iframe id=a>` (сам
+    /// ребёнок) и `<iframe id=b>` (брат с `sib_html`); реестр родителя
+    /// зарегистрирован под ключом документа родителя, как это делает
+    /// `install_dom` прода. Возвращает рантаймы ребёнка и брата и сам
+    /// документ брата.
+    fn with_sibling_frames(
+        sib_html: &str,
+        sib_accessible: bool,
+        f: impl FnOnce(&V8JsRuntime, &V8JsRuntime, &Arc<Mutex<lumen_dom::Document>>),
+    ) {
+        let parent_doc = Arc::new(Mutex::new(lumen_html_parser::parse(
+            "<body><iframe id=a></iframe><iframe id=b></iframe></body>",
+        )));
+        let hosts: Vec<u32> = lumen_dom::collect_iframes(&parent_doc.lock().unwrap())
+            .iter()
+            .map(|i| i.node.index() as u32)
+            .collect();
+        assert_eq!(hosts.len(), 2);
+        let child_doc = Arc::new(Mutex::new(lumen_html_parser::parse("<p>child")));
+        let sib_doc = Arc::new(Mutex::new(lumen_html_parser::parse(sib_html)));
+
+        let parent_reg: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
+        let binding = |host_nid: u32, doc: &Arc<Mutex<lumen_dom::Document>>, url: &str, accessible: bool| {
+            FrameDocBinding {
+                host_nid,
+                doc: Arc::clone(doc),
+                url: url.to_owned(),
+                name: None,
+                accessible,
+                opaque_id: None,
+                peer: None,
+            }
+        };
+        {
+            let mut reg = parent_reg.lock().unwrap();
+            reg.frames.push(binding(hosts[0], &child_doc, "https://a.test/child", true));
+            reg.frames.push(binding(hosts[1], &sib_doc, "https://b.test/sib", sib_accessible));
+        }
+        register_frame_registry(Arc::as_ptr(&parent_doc) as usize, &parent_reg);
+
+        let make_context = |own: &Arc<Mutex<lumen_dom::Document>>, host_nid: u32| {
+            let rt = V8JsRuntime::new().unwrap();
+            let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
+            rt.eval("var window = globalThis;").unwrap();
+            install_frame_bridge_v8(&rt, Arc::clone(&registry)).unwrap();
+            {
+                let mut reg = registry.lock().unwrap();
+                reg.self_key = Some(Arc::as_ptr(own) as usize);
+                reg.self_origin = "https://a.test".to_owned();
+                reg.parent = Some(binding(host_nid, &parent_doc, "https://a.test/", true));
+            }
+            rt.eval(
+                "typeof _lumen_frame_install_hierarchy === 'function' && _lumen_frame_install_hierarchy()",
+            )
+            .unwrap();
+            rt
+        };
+        let child = make_context(&child_doc, hosts[0]);
+        let sibling = make_context(&sib_doc, hosts[1]);
+        f(&child, &sibling, &sib_doc);
+    }
+
+    /// BUG-1643: `parent.document.getElementById(id).contentWindow` из дочернего
+    /// фрейма — окно соседа; чтение документа соседа и собственный iframe.
+    #[test]
+    fn child_reaches_sibling_content_window_through_parent_document() {
+        with_sibling_frames("<body><p id=x>sib</p></body>", true, |child, _sibling, _| {
+            assert!(eval_bool(
+                child,
+                "var pd = window.parent.document; \
+                 var w = pd.getElementById('b').contentWindow; \
+                 w !== null && w !== undefined && typeof w.postMessage === 'function' \
+                   && w === pd.getElementById('b').contentWindow \
+                   && w.document.getElementById('x').textContent === 'sib' \
+                   && pd.getElementById('b').contentDocument === w.document"
+            ));
+            // Собственный iframe ребёнка — настоящее окно этого контекста.
+            assert!(eval_bool(
+                child,
+                "var me = window.parent.document.getElementById('a'); \
+                 me.contentWindow === window && me.contentDocument === window.document"
+            ));
+            // Не iframe и тег без свойства: как и раньше, undefined.
+            assert!(eval_bool(
+                child,
+                "window.parent.document.querySelector('body').contentWindow === undefined"
+            ));
+            // parent брата — окно родителя.
+            assert!(eval_bool(
+                child,
+                "var sw = window.parent.document.getElementById('b').contentWindow; \
+                 sw.parent === window.parent && sw.frameElement.id === 'b'"
+            ));
+        });
+    }
+
+    /// BUG-1643: сосед из другого origin — `contentWindow` есть (postMessage
+    /// доступен), `contentDocument` и `.document` — null.
+    #[test]
+    fn cross_origin_sibling_window_exists_but_hides_document() {
+        with_sibling_frames("<body><p id=x>sib</p></body>", false, |child, _sibling, _| {
+            assert!(eval_bool(
+                child,
+                "var pd = window.parent.document; var el = pd.getElementById('b'); \
+                 el.contentWindow !== null && typeof el.contentWindow.postMessage === 'function' \
+                   && el.contentDocument === null && el.contentWindow.document === null"
+            ));
+        });
+    }
+
+    /// BUG-1643: сообщение ребёнка в окно соседа попадает в ящик соседа, и тот
+    /// разбирает его с `source` — фасадом ребёнка в своём реестре.
+    #[test]
+    fn post_message_between_siblings_reaches_the_sibling_with_a_source() {
+        with_sibling_frames("<body></body>", true, |child, sibling, _| {
+            assert!(eval_bool(
+                child,
+                "window.parent.document.getElementById('b').contentWindow.postMessage('hi', '*'); true"
+            ));
+            let JsValue::String(raw) = sibling.eval("_lumen_frame_take_messages()").unwrap() else {
+                panic!("take_messages must return a string");
+            };
+            let msgs: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(|e| panic!("{e}: {raw}"));
+            assert_eq!(msgs.as_array().unwrap().len(), 1, "{raw}");
+            assert_eq!(msgs[0]["data"], "hi");
+            assert_eq!(msgs[0]["origin"], "https://a.test");
+            let bid = msgs[0]["bid"].as_u64().unwrap_or_else(|| panic!("source bid missing: {raw}"));
+            assert!(bid >= u64::from(SIBLING_BASE), "{raw}");
+            // Принятый source — рабочее окно: постинг обратно доходит до ребёнка.
+            assert!(eval_bool(
+                sibling,
+                &format!("_lumen_f_post_message({bid}, '\"back\"', '*')"),
+            ));
+        });
+    }

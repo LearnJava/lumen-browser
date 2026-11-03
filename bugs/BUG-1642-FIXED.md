@@ -62,5 +62,5 @@ thumb до 28 %.
 Тесты: `tests/cli.rs` (`content_width_*`, `page_width_*`), `scrollbar.rs`
 (`page_bars_shifted_into_window_coords`).
 
-Остаток: полосы прокрутки фреймов — [BUG-1683](BUG-1683-OPEN.md). Прокрутка вбок скриптом
+Остаток: полосы прокрутки фреймов — [BUG-1683](BUG-1683-FIXED.md). Прокрутка вбок скриптом
 (`scrollTo`) при `overflow-x:hidden` на viewport-е ограничена `content_width = viewport`.

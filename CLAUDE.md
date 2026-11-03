@@ -51,7 +51,7 @@ Protocol — [`docs/git-workflow.md`](docs/git-workflow.md). Closing a task — 
 
 ## Known gotchas — only traps that bite whatever the task is
 
-- **Never round-trip a repo markdown file through Python text mode.** `BUGS.md` holds raw CR bytes in table cells; universal-newline reading splits rows and shifts every `STATUS-PN.md` pointer below. Use `newline=''` on read *and* write, or `Edit`/`sed`.
+- **Never round-trip a repo markdown file through Python text mode.** Line-ending normalization can rewrite table rows and shift every `STATUS-PN.md` pointer below. Use `newline=''` on read *and* write, or `Edit`/`sed`.
 - **A fresh or interrupted worktree can have the whole repo staged as deleted** — `git status --short` before the first `git add`, `git diff --cached --stat` before every commit there ([`docs/git-workflow.md`](docs/git-workflow.md) §Worktree isolation).
 - **sccache must be ≥ 0.17.0** — `.cargo/config.toml` wraps every compiler call in it, and an older one kills each `rustc`/`clippy-driver` with `0xc0000409`.
 

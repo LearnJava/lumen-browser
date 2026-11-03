@@ -20,15 +20,14 @@ path = "src/main.rs"
 # (supersedes the older ADR-010 RB-9 femtovg-primary ordering — that ADR's
 # *compile-time* "both backends in default" wiring still holds, only the
 # *runtime* preference flipped).
-# Ph3 S12 cutover (ADR-018): V8 replaces QuickJS as the default JS engine.
+# S12 cutover (ADR-018): V8 replaces QuickJS as the default JS engine.
 # A plain `cargo build -p lumen-shell` (no extra --features) already ships the
 # fastest default combination: wgpu (probed) + V8.
 default = ["backend-femtovg", "backend-wgpu", "v8"]
 
-# Enable the V8 JavaScript engine (rusty_v8), Ph3 V8 migration (docs/tasks/ph3-v8-migration.md).
-# The only JS engine since the S12b-F1 slice removed the `quickjs` rollback
-# feature (rquickjs itself is deleted engine-flag-by-flag in the following
-# S12b-F2..F4 slices). Without `v8` the shell falls back to `NullJsRuntime`,
+# Enable the V8 JavaScript engine (rusty_v8), S12 migration (docs/tasks/ph3-v8-migration.md).
+# The only JS engine; the `quickjs` rollback feature and `rquickjs` itself are
+# gone (S12b-F1..F4). Without `v8` the shell falls back to `NullJsRuntime`,
 # which silently ignores all inline scripts.
 v8 = ["dep:lumen-js", "lumen-js/v8-backend"]
 

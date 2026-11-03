@@ -240,7 +240,8 @@ fn drop_marker_strips_the_profile_cache_control_on_both_wire_formats() {
     let with_default = http::headers::build_request_headers("e.test", "", "foo: bar\r\n", HttpProfile::Chrome);
     assert!(with_default.contains("Cache-Control: max-age=0"), "control: the default is there");
 
-    let h2 = build_h2_headers(HttpProfile::Chrome, None, extra);
+    let identity = lumen_core::IdentityProfile::from_variant(lumen_core::identity_variant()).identity();
+    let h2 = build_h2_headers_with_identity(HttpProfile::Chrome, &identity, None, extra);
     assert!(h2.iter().all(|(k, _)| k != b"cache-control" && k != b"x-lumen-drop"));
     assert!(h2.iter().any(|(k, v)| k == b"foo" && v == b"bar"));
 }

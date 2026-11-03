@@ -142,8 +142,13 @@ pub fn sends_global_privacy_control(profile: HttpProfile) -> bool {
 /// Append the low-entropy Client Hints (`Sec-CH-UA`, `-Mobile`, `-Platform`)
 /// that Chromium sends on every request. Their absence next to a Chrome UA is
 /// an Akamai signal (BUG-1113 bisect, BUG-1614).
-fn add_low_entropy_hints(headers: &mut HeaderOrder, profile: HttpProfile, variant: IdentityVariant) {
-    for (name, value) in super::client_hints::low_entropy_client_hints_for(profile, variant) {
+fn add_low_entropy_hints(headers: &mut HeaderOrder, profile: HttpProfile, identity: &lumen_core::Identity) {
+    if super::client_hints::ClientHintsProfile::for_http_profile(profile)
+        == super::client_hints::ClientHintsProfile::Disabled
+    {
+        return;
+    }
+    for (name, value) in identity.low_entropy_client_hints() {
         headers.add(name, value);
     }
 }
@@ -184,6 +189,23 @@ pub fn build_request_headers_for(
     profile: HttpProfile,
     variant: IdentityVariant,
 ) -> String {
+    let identity = match profile {
+        HttpProfile::Chrome | HttpProfile::Strict => lumen_core::IdentityProfile::from_variant(variant).identity(),
+        _ => lumen_core::Identity::from_user_agent(super::profile_user_agent(profile)),
+    };
+    build_request_headers_with_identity(host, accept_encoding, extra_headers, profile, &identity)
+}
+
+/// Build request headers from the exact identity also installed into the
+/// document's JS runtime. This is the per-site path; the variant-based wrappers
+/// above remain for process-wide configuration and A/B tooling.
+pub fn build_request_headers_with_identity(
+    host: &str,
+    accept_encoding: &str,
+    extra_headers: &str,
+    profile: HttpProfile,
+    identity: &lumen_core::Identity,
+) -> String {
     let mut headers = HeaderOrder::new(profile);
     // One value for every profile: the shell-provided locale (or the built-in
     // default); Tor Browser stays pinned (see `accept_language`).
@@ -195,8 +217,8 @@ pub fn build_request_headers_for(
             headers.add("Host", host);
             headers.add("Connection", "keep-alive");
             headers.add("Cache-Control", "max-age=0");
-            add_low_entropy_hints(&mut headers, profile, variant);
-            headers.add("User-Agent", variant.user_agent());
+            add_low_entropy_hints(&mut headers, profile, identity);
+            headers.add("User-Agent", &identity.user_agent);
             // Real Chrome sends the full document `Accept` on a navigation,
             // not `*/*` (RP-7: `*/*` is a cheap anti-bot tell).
             headers.add("Accept", super::CHROME_NAVIGATE_ACCEPT);
@@ -230,7 +252,7 @@ pub fn build_request_headers_for(
         HttpProfile::Firefox => {
             // Firefox 130+ HTTP/1.1 header order (minimal, no Sec-Fetch-*, no DNT)
             headers.add("Host", host);
-            headers.add("User-Agent", super::FIREFOX_USER_AGENT);
+            headers.add("User-Agent", &identity.user_agent);
             headers.add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8");
 
             if !accept_encoding.is_empty() {
@@ -259,7 +281,7 @@ pub fn build_request_headers_for(
             headers.add("Host", host);
             headers.add("Connection", "keep-alive");
             headers.add("Cache-Control", "max-age=0");
-            add_low_entropy_hints(&mut headers, profile, variant);
+            add_low_entropy_hints(&mut headers, profile, identity);
             headers.add("User-Agent", super::EDGE_USER_AGENT);
             // Edge (Chromium) sends the same document `Accept` as Chrome (RP-7).
             headers.add("Accept", super::CHROME_NAVIGATE_ACCEPT);
@@ -435,9 +457,24 @@ const H2_FORBIDDEN_HEADERS: &[&str] = &[
 /// `accept_encoding` is advertised the same way as on HTTP/1.1; the shared
 /// response path decodes any resulting `Content-Encoding`.
 pub fn h2_fingerprint_headers(profile: HttpProfile, accept_encoding: &str) -> Vec<(String, String)> {
+    let identity = match profile {
+        HttpProfile::Chrome | HttpProfile::Strict => {
+            lumen_core::IdentityProfile::from_variant(lumen_core::identity_variant()).identity()
+        }
+        _ => lumen_core::Identity::from_user_agent(super::profile_user_agent(profile)),
+    };
+    h2_fingerprint_headers_with_identity(profile, accept_encoding, &identity)
+}
+
+/// HTTP/2 fingerprint headers for an explicit per-site identity.
+pub fn h2_fingerprint_headers_with_identity(
+    profile: HttpProfile,
+    accept_encoding: &str,
+    identity: &lumen_core::Identity,
+) -> Vec<(String, String)> {
     // Reuse the HTTP/1.1 builder with an empty host/extra so we get exactly the
     // profile's fingerprint block, then filter + lowercase for H2.
-    let block = build_request_headers("", accept_encoding, "", profile);
+    let block = build_request_headers_with_identity("", accept_encoding, "", profile, identity);
     let mut out = Vec::new();
     for line in block.split("\r\n") {
         let line = line.trim();

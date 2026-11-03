@@ -1166,6 +1166,7 @@ impl HttpClient {
             self.resolver.as_ref(),
             self.tls_profile,
             self.fingerprint_profile,
+            self.identity(),
             self.sink.as_deref(),
             self.filter.as_deref(),
             self.hsts.as_deref(),

@@ -1720,6 +1720,7 @@ mod bug935_child_edits;
 mod bug1198_opaque_frame;
 mod bug1231_frame_referrer;
 mod dom_suspend_focus;
+mod bug1752_platform_queue;
 
 // ── LONGTASK-1 срез 4-5: culprit source-location attribution ──────────────
 
