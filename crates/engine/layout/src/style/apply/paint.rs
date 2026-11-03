@@ -431,9 +431,12 @@ pub(in crate::style) fn apply_decl_paint(
         "background-size" => {
             // CSS Backgrounds L3 §3.5 — comma-separated list (cycling).
             let pieces = split_top_level_commas(val.trim());
-            let sizes: Vec<BackgroundSize> = pieces.iter()
+            // §3.9: один невалидный элемент списка (в т.ч. отрицательная длина)
+            // делает невалидной всю декларацию, а не только этот слой.
+            let Some(sizes) = pieces.iter()
                 .map(|s| parse_background_size_value(s, em_basis, viewport, is_quirks))
-                .collect();
+                .collect::<Option<Vec<BackgroundSize>>>()
+            else { return true; };
             if sizes.is_empty() { return true; }
             background_spec(style).size = sizes.clone();
             if style.background_layers.is_empty() {
@@ -761,10 +764,11 @@ pub(in crate::style) fn apply_decl_paint(
         }
         "mask-size" => {
             // CSS Masking L1 §4.2 — `<bg-size>#`.
-            let values: Vec<BackgroundSize> = split_top_level_commas(val.trim())
+            let Some(values) = split_top_level_commas(val.trim())
                 .iter()
                 .map(|s| parse_background_size_value(s, em_basis, viewport, is_quirks))
-                .collect();
+                .collect::<Option<Vec<BackgroundSize>>>()
+            else { return true; };
             apply_mask_longhand(style, &values, |layer, v| layer.size = v);
         }
         "scrollbar-width" => {
