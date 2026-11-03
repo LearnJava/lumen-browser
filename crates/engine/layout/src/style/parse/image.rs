@@ -499,50 +499,77 @@ fn parse_bg_size_axis(s: &str, em_basis: f32, viewport: Size, is_quirks: bool) -
         return Some(BgSizeAxis::Auto);
     }
     if let Some(pct) = s.strip_suffix('%') {
-        return pct.trim().parse::<f32>().ok().map(|v| BgSizeAxis::Percent(v / 100.0));
+        // CSS Backgrounds L3 §3.9: ось `<bg-size>` — `<length-percentage [0,∞]>`.
+        // Отрицательный процент делает декларацию невалидной; без этой проверки
+        // он превращался в отрицательную ось и рисовался 1px-плиткой.
+        return pct
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .filter(|v| *v >= 0.0)
+            .map(|v| BgSizeAxis::Percent(v / 100.0));
     }
-    resolve_box_length(s, em_basis, viewport, is_quirks).map(BgSizeAxis::Px)
+    resolve_box_length(s, em_basis, viewport, is_quirks)
+        .filter(|v| *v >= 0.0)
+        .map(BgSizeAxis::Px)
 }
 
 /// CSS Backgrounds L3 §3.5 — parse background-size от одного токена
 /// (`auto` / `cover` / `contain` / длина / процент). Height axis = `Auto`;
 /// the caller may combine a following token for the second axis.
-fn parse_background_size_single(s: &str, em_basis: f32, viewport: Size, is_quirks: bool) -> BackgroundSize {
+/// `None` — токен не входит в грамматику `<bg-size>` (в том числе
+/// отрицательная длина/процент, §3.9): в шортхенде `background` это делает
+/// невалидным весь слой.
+fn parse_background_size_single(
+    s: &str,
+    em_basis: f32,
+    viewport: Size,
+    is_quirks: bool,
+) -> Option<BackgroundSize> {
     let t = s.trim();
     if t.eq_ignore_ascii_case("cover") {
-        return BackgroundSize::Cover;
+        return Some(BackgroundSize::Cover);
     }
     if t.eq_ignore_ascii_case("contain") {
-        return BackgroundSize::Contain;
+        return Some(BackgroundSize::Contain);
     }
-    match parse_bg_size_axis(t, em_basis, viewport, is_quirks) {
-        Some(BgSizeAxis::Auto) | None => BackgroundSize::Auto,
-        Some(w) => BackgroundSize::Length(w, BgSizeAxis::Auto),
-    }
+    parse_bg_size_axis(t, em_basis, viewport, is_quirks).map(|w| match w {
+        BgSizeAxis::Auto => BackgroundSize::Auto,
+        w => BackgroundSize::Length(w, BgSizeAxis::Auto),
+    })
 }
 
 /// CSS Backgrounds L3 §3.5 — parse a single-layer `background-size` / `mask-size`
 /// value: `cover` / `contain` / one or two `<length-percentage> | auto` axes.
-pub(in crate::style) fn parse_background_size_value(s: &str, em_basis: f32, viewport: Size, is_quirks: bool) -> BackgroundSize {
+pub(in crate::style) fn parse_background_size_value(
+    s: &str,
+    em_basis: f32,
+    viewport: Size,
+    is_quirks: bool,
+) -> Option<BackgroundSize> {
     let t = s.trim();
     if t.eq_ignore_ascii_case("cover") {
-        return BackgroundSize::Cover;
+        return Some(BackgroundSize::Cover);
     }
     if t.eq_ignore_ascii_case("contain") {
-        return BackgroundSize::Contain;
+        return Some(BackgroundSize::Contain);
     }
     let parts: Vec<&str> = t.split_whitespace().collect();
-    let Some(w) = parts.first().and_then(|p| parse_bg_size_axis(p, em_basis, viewport, is_quirks))
-    else {
-        return BackgroundSize::Auto;
+    // §3.9: `cover | contain | <length-percentage [0,∞]>{1,2} | auto{1,2}` —
+    // больше двух осей нет, `cover`/`contain` не принимают второй токен,
+    // нераспознанный или отрицательный токен — невалидная декларация.
+    if parts.is_empty() || parts.len() > 2 {
+        return None;
+    }
+    let w = parse_bg_size_axis(parts[0], em_basis, viewport, is_quirks)?;
+    let h = match parts.get(1) {
+        Some(p) => parse_bg_size_axis(p, em_basis, viewport, is_quirks)?,
+        None => BgSizeAxis::Auto,
     };
-    let h = parts.get(1)
-        .and_then(|p| parse_bg_size_axis(p, em_basis, viewport, is_quirks))
-        .unwrap_or(BgSizeAxis::Auto);
     if w == BgSizeAxis::Auto && h == BgSizeAxis::Auto {
-        BackgroundSize::Auto
+        Some(BackgroundSize::Auto)
     } else {
-        BackgroundSize::Length(w, h)
+        Some(BackgroundSize::Length(w, h))
     }
 }
 
@@ -684,7 +711,12 @@ pub(in crate::style) fn parse_single_bg_layer(
                 idx += 1; // пропустить /
                 if idx < n {
                     let s1 = tokens[idx];
-                    let mut size = parse_background_size_single(s1, em_basis, viewport, is_quirks);
+                    let Some(mut size) =
+                        parse_background_size_single(s1, em_basis, viewport, is_quirks)
+                    else {
+                        // Невалидный `<bg-size>` → невалиден весь слой, а с ним и шортхенд.
+                        return None;
+                    };
                     idx += 1;
                     // Второй токен для size (width height)?
                     if idx < n && tokens[idx] != "/" && !is_gradient_function(tokens[idx])
@@ -882,8 +914,14 @@ pub(in crate::style) fn parse_single_mask_layer(
             if idx < n && tokens[idx] == "/" {
                 idx += 1; // пропустить `/`
                 if idx < n {
-                    let mut size =
-                        parse_background_size_single(tokens[idx], em_basis, viewport, is_quirks);
+                    // Невалидный `<bg-size>` в шортхенде `mask` — size остаётся
+                    // initial (`auto`), как и для любого нераспознанного токена ниже.
+                    let Some(mut size) =
+                        parse_background_size_single(tokens[idx], em_basis, viewport, is_quirks)
+                    else {
+                        idx += 1;
+                        continue;
+                    };
                     idx += 1;
                     // Второй токен size (`<width> <height>`) — только если он не
                     // начало следующей компоненты слоя.
