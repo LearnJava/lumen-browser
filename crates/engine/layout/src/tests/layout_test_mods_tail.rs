@@ -20,3 +20,6 @@ mod deep_traversal_stress;
 
 #[path = "heading_level_pseudo.rs"]
 mod heading_level_pseudo;
+
+#[path = "vtt_cue_layout.rs"]
+mod vtt_cue_layout;

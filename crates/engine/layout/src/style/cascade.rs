@@ -34,6 +34,7 @@ use crate::style::{
     apply_table_cell_width_hint, apply_text_color_presentational_hint, apply_ua_body_margin,
     apply_ua_dialog_display, apply_ua_fieldset_style, read_ua_fieldset_fields, redo_ua_fieldset_for_writing_mode, parse_writing_mode, apply_ua_form_controls, apply_ua_form_controls_field_sizing_clear,
     apply_ua_block_margins, snapshot_ua_block_box, swap_ua_block_box_for_vertical, apply_ua_heading_style, apply_ua_hidden, apply_ua_hr_style, apply_ua_inert_important, apply_ua_interactivity, apply_ua_list, apply_ua_slot, apply_ua_table_cell_padding,
+    apply_ua_vtt,
     apply_ua_text_decoration, apply_webkit_scrollbar_pseudos, coerce_overflow_axes,
     complex_has_host, default_display, ensure_cascade_index, expand_attr_val,
     expand_custom_functions_scoped, expand_mixin_apply, expand_vars, forced_colors_active, matches_complex,
@@ -396,6 +397,10 @@ pub(crate) fn compute_style_shareable(
     // UA stylesheet (HTML LS §15.5.4): `<details>`' content slot is a block,
     // `content-visibility: hidden` while closed (GAP-UASHADOWSLOT).
     apply_ua_slot(doc, node, &mut style);
+    // UA stylesheet (WebVTT §7.4, VTT-RENDER-S4): стили поддерева cue в
+    // закрытой UA-тени `<video>`. UA-фаза до авторских правил — авторский
+    // CSS и inline-геометрия cue из `cue_box_css` побеждают.
+    apply_ua_vtt(doc, node, &mut style, inherited);
 
     // CSS Quirks Mode — Quirks-only UA-rule для `<table>`: сбрасывает
     // font / color / text-align / white-space к initial-values, чтобы

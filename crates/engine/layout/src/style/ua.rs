@@ -920,6 +920,75 @@ pub(in crate::style) fn apply_ua_slot(doc: &Document, node: NodeId, style: &mut 
         style.content_visibility = ContentVisibility::Hidden;
     }
 }
+/// UA stylesheet (WebVTT §7.4 «Applying CSS properties to WebVTT Node
+/// Objects», срез VTT-RENDER-S4): стили узлов поддерева cue в закрытой
+/// UA-тени `<video>` — роль ставит [`lumen_dom::Document::ua_vtt_role`]
+/// (срез S3), дерево строит `Document::set_vtt_cues`. Фаза — до
+/// author-каскада (рядом с [`apply_ua_slot`]), поэтому авторские правила и
+/// inline-геометрия cue из `cue_box_css` побеждают. Для узла вне UA-тени
+/// `<video>` — no-op: роль `None`, светлое дерево функция не трогает.
+///
+/// `inherited` — вычисленный стиль родителя в композитном дереве: для
+/// контейнера cue это боксы `<video>`, у которых `build.rs` к этому моменту
+/// уже заполнил высоту (явная или UA-дефолт 150). Оттуда берётся
+/// `font-size` = 5 % высоты видео (§7.4 задаёт его через `vh` от области
+/// видео; по брифу среза — от высоты бокса Video).
+pub(in crate::style) fn apply_ua_vtt(
+    doc: &Document,
+    node: NodeId,
+    style: &mut ComputedStyle,
+    inherited: &ComputedStyle,
+) {
+    use crate::style::{Overflow, OverflowWrap, Position, UnicodeBidi};
+    let Some((role, _)) = doc.ua_vtt_role(node) else { return };
+    match role {
+        lumen_dom::UaVttRole::Container => {
+            // §7.4: контейнер cue — блок размером с область видео, обрезающий
+            // вылезшие cue-боксы.
+            style.display = Display::Block;
+            style.position = Position::Relative;
+            style.width = Some(Length::Percent(100.0));
+            style.height = Some(Length::Percent(100.0));
+            style.overflow_x = Overflow::Hidden;
+            style.overflow_y = Overflow::Hidden;
+            let video_height = match inherited.height {
+                Some(Length::Px(h)) if h > 0.0 => h,
+                _ => 150.0,
+            };
+            style.font_size = video_height * 0.05;
+            style.font_family = vec!["sans-serif".to_string()];
+            style.color = Color::WHITE;
+        }
+        lumen_dom::UaVttRole::CueBox => {
+            // `position: absolute` и геометрия (`left`/`width`/`top|bottom`,
+            // `writing-mode`, `text-align`) лежат в inline `style` узла из
+            // `cue_box_css` (author-происхождение, применится позже). Здесь —
+            // только типографика §7.4.
+            style.display = Display::Block;
+            style.unicode_bidi = UnicodeBidi::Plaintext;
+            style.overflow_wrap = OverflowWrap::BreakWord;
+            style.white_space = WhiteSpace::PreLine;
+        }
+        lumen_dom::UaVttRole::Background => {
+            // §7.4: фон cue — полупрозрачный чёрный под всем текстом cue.
+            style.display = Display::Inline;
+            style.background_color = Some(CssColor::Rgba(Color { r: 0, g: 0, b: 0, a: 204 }));
+        }
+        lumen_dom::UaVttRole::Node => {
+            // §7.4: узлы cue text — `b` жирным, `i` курсивом, `u` с
+            // подчёркиванием. `ruby`/`rt` по §7.4 — `display: ruby`/
+            // `ruby-text`, но таких значений в `Display` нет — fallback
+            // `inline` (дефолт и так inline, отдельной записи не нужно).
+            let NodeData::Element { name, .. } = &doc.get(node).data else { return };
+            match name.local.as_str() {
+                "b" => style.font_weight = FontWeight::BOLD,
+                "i" => style.font_style = FontStyle::Italic,
+                "u" => style.text_decoration_line.underline = true,
+                _ => {}
+            }
+        }
+    }
+}
 /// UA stylesheet (HTML Rendering §15.4.2 / CSS UI L4 §6.4), нормальная часть:
 /// `dialog:modal { interactivity: auto }` и `:fullscreen { interactivity: auto }`.
 ///

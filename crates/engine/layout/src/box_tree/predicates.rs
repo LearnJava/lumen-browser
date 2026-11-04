@@ -209,6 +209,19 @@ pub(crate) fn is_video_element(doc: &Document, id: NodeId) -> bool {
     )
 }
 
+/// WebVTT §7.2 (VTT-RENDER-S4): в UA-тени `<video>` лежит контейнер cue —
+/// `div[data-lumen-vtt=container]`, который ставит `Document::set_vtt_cues`
+/// (срез S3); роль — [`lumen_dom::UaVttRole::Container`] по
+/// [`Document::ua_vtt_role`]. Только с ним `<video>` строит детей
+/// (поддерево cue); без него — прежнее поведение, детей нет. Для не-video —
+/// `false` (дешёвый отказ по имени до обхода детей).
+pub(crate) fn video_has_vtt_cue_tree(doc: &Document, flat: &FlatTree, id: NodeId) -> bool {
+    is_video_element(doc, id)
+        && flat.children_of(doc, id).iter().any(|&c| {
+            matches!(doc.ua_vtt_role(c), Some((lumen_dom::UaVttRole::Container, _)))
+        })
+}
+
 /// HTML-имя `<canvas>` для распознавания replaced-боксов рисовалки в layout.
 pub(crate) fn is_canvas_element(doc: &Document, id: NodeId) -> bool {
     matches!(

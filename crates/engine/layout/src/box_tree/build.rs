@@ -1017,7 +1017,9 @@ fn build_box_inner(
             BoxRole::AnonymousInlineRun,
         ));
     }
-    if matches!(kind, BoxKind::Block | BoxKind::FlowRoot | BoxKind::Contents | BoxKind::FormControl { .. } | BoxKind::TableRow | BoxKind::Table | BoxKind::TableRowGroup) {
+    if matches!(kind, BoxKind::Block | BoxKind::FlowRoot | BoxKind::Contents | BoxKind::FormControl { .. } | BoxKind::TableRow | BoxKind::Table | BoxKind::TableRowGroup)
+        || video_has_vtt_cue_tree(doc, flat, id)
+    {
         // BUG-935 срез 71: `BoxKind::SvgRoot` is deliberately not in this list — its
         // children are replaced below by `build_svg_children` (the SVG shape tree, not
         // HTML boxes), so building them here only to drop them cost a full pass over
@@ -1031,6 +1033,20 @@ fn build_box_inner(
         let dom_children: Vec<NodeId> = if textarea_runtime_value.is_some() {
             // The default value's text nodes are replaced by the run above.
             Vec::new()
+        } else if matches!(kind, BoxKind::Video { .. }) {
+            // WebVTT §7.2/§7.4 (VTT-RENDER-S4): единственные дети `<video>` —
+            // поддерево cue в его UA-тени, которое `Document::set_vtt_cues`
+            // кладёт под корень тени как `div[data-lumen-vtt=container]`
+            // (роль — `Document::ua_vtt_role`, срез S3). Без контейнера у
+            // video детей нет — поведение прежнее. Проверка стоит за `||`
+            // выше, поэтому для обычных элементов она не выполняется вовсе.
+            if flat.children_of(doc, id).iter().any(|&c| {
+                matches!(doc.ua_vtt_role(c), Some((lumen_dom::UaVttRole::Container, _)))
+            }) {
+                flat.children_of(doc, id).to_vec()
+            } else {
+                Vec::new()
+            }
         } else if is_details_element(doc, id)
             && doc.get(id).get_attr("open").is_none()
             && doc.shadow_root_of(id).is_none()
