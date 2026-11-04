@@ -35,6 +35,9 @@ pub mod vtt_text;
 pub mod vtt_geometry;
 pub use vtt_geometry::{CueSettings, cue_box_css};
 
+pub mod vtt_tree;
+pub use vtt_tree::{CueRender, UaVttRole};
+
 pub mod page_translate;
 
 mod journal;
