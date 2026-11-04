@@ -15,6 +15,9 @@ pub struct VttCueSettings {
     pub position: Option<String>,
     pub size: Option<String>,
     pub align: Option<String>,
+    /// Идентификатор региона (`region:`); привязка к объявленному региону —
+    /// работа срезов VTT-RENDER-S3+ (VTTRegion — вне срезов).
+    pub region: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -130,6 +133,7 @@ pub fn parse_vtt(input: &str) -> Result<Vec<VttCue>, VttError> {
                         "position" => settings.position = Some(value.to_owned()),
                         "size" => settings.size = Some(value.to_owned()),
                         "align" => settings.align = Some(value.to_owned()),
+                        "region" => settings.region = Some(value.to_owned()),
                         _ => {}
                     }
                 }
@@ -517,6 +521,16 @@ mod tests {
         assert_eq!(cues[0].settings.position, Some("50%".to_string()));
         assert_eq!(cues[0].settings.vertical, None);
         assert_eq!(cues[0].settings.size, None);
+        assert_eq!(cues[0].settings.region, None);
+    }
+
+    #[test]
+    fn parse_vtt_settings_region() {
+        let input = "WEBVTT\n\n00:00.000 --> 00:01.000 region:fred align:start\nA";
+        let cues = parse_vtt(input).unwrap();
+        assert_eq!(cues.len(), 1);
+        assert_eq!(cues[0].settings.region, Some("fred".to_string()));
+        assert_eq!(cues[0].settings.align, Some("start".to_string()));
     }
 
     #[test]

@@ -32,6 +32,9 @@ pub use vtt::{TrackInfo, VideoTracks, VttCue, VttCueSettings, collect_video_trac
 
 pub mod vtt_text;
 
+pub mod vtt_geometry;
+pub use vtt_geometry::{CueSettings, cue_box_css};
+
 pub mod page_translate;
 
 mod journal;
