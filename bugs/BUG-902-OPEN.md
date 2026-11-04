@@ -28,6 +28,15 @@
    (JS-путь) отдают одинаковые пять полей `{id,start,end,text}` + `track`, и
    `appendCues` больше ничего и не может положить. **Дешевле всего чинится
    из всего этого файла.**
+   — *Исправлено 2026-11-04, срез VTT-RENDER-S2: оба фида отдают объект
+   `settings` с IDL-значениями (`line`/`position` — число или `"auto"`,
+   `size` — число, `snapToLines` — флаг, строки для `align`/`lineAlign`/
+   `positionAlign`/`vertical`, `region` — строка или `null`;
+   `cue_settings_json` в `text_track_store.rs`), `appendCues` копирует их в
+   свойства cue; `parse_vtt` дополнительно собирает `region:` (сырое
+   значение). IDL-регион (`cue.region` как `VTTRegion`) по-прежнему `null` —
+   это п. 3. Остаток — WPT `settings-*`, где значения проверяются после
+   манипуляций `track.mode`/`region`.*
 3. **`VTTRegion` отсутствует целиком** — ни конструктора, ни `cue.region`, ни
    `TextTrack.regions`/`addRegion`/`removeRegion`. `REGION`-блоки заголовка
    `parse_vtt` молча пропускает.

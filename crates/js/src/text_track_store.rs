@@ -15,6 +15,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
+use lumen_dom::vtt::VttCueSettings;
+use lumen_dom::vtt_geometry::{CueAlign, CueLine, CueSettings, LineAlign, PositionAlign, Vertical};
+
 // ── Data model ─────────────────────────────────────────────────────────────────
 
 /// One WebVTT cue exposed to JS as a `TextTrackCue` / `VTTCue`.
@@ -28,6 +31,63 @@ pub struct CueData {
     pub end: f64,
     /// Raw cue payload (`VTTCue.text`), tags preserved per spec.
     pub text: String,
+    /// Raw cue settings (`VttCueSettings`); serialized to IDL-shaped JSON by
+    /// [`cue_settings_json`] so the shim can populate `cue.line` & co (BUG-902
+    /// п.2, VTT-RENDER-S2).
+    pub settings: VttCueSettings,
+}
+
+/// Настраиваемый JSON-объект `settings` одного cue с IDL-значениями
+/// (WebVTT §3.1): `line` — число или `"auto"`, `position` — число или
+/// `"auto"`, `size` — число, `align`/`lineAlign`/`positionAlign`/`vertical` —
+/// строки, `snapToLines` — флаг, `region` — строка или `null`. Сырые строки
+/// разбирает [`CueSettings::parse`]; невалидные значения дают значения
+/// по умолчанию (BUG-902 п.2).
+pub(crate) fn cue_settings_json(raw: &VttCueSettings) -> serde_json::Value {
+    let s = CueSettings::parse(raw);
+    let vertical = match s.vertical {
+        Vertical::Horizontal => "",
+        Vertical::Rl => "rl",
+        Vertical::Lr => "lr",
+    };
+    let line = match s.line {
+        CueLine::Auto => serde_json::Value::from("auto"),
+        CueLine::Number(n) => serde_json::Value::from(n),
+        CueLine::Percent(p) => serde_json::Value::from(p),
+    };
+    let position = match s.position {
+        Some(p) => serde_json::Value::from(p),
+        None => serde_json::Value::from("auto"),
+    };
+    let line_align = match s.line_align {
+        LineAlign::Start => "start",
+        LineAlign::Center => "center",
+        LineAlign::End => "end",
+    };
+    let position_align = match s.position_align {
+        PositionAlign::Auto => "auto",
+        PositionAlign::LineLeft => "line-left",
+        PositionAlign::Center => "center",
+        PositionAlign::LineRight => "line-right",
+    };
+    let align = match s.align {
+        CueAlign::Start => "start",
+        CueAlign::Center => "center",
+        CueAlign::End => "end",
+        CueAlign::Left => "left",
+        CueAlign::Right => "right",
+    };
+    serde_json::json!({
+        "vertical": vertical,
+        "snapToLines": s.snap_to_lines,
+        "line": line,
+        "lineAlign": line_align,
+        "position": position,
+        "positionAlign": position_align,
+        "size": s.size,
+        "align": align,
+        "region": s.region,
+    })
 }
 
 /// One `<track>` element exposed to JS as a `TextTrack`.
@@ -61,7 +121,9 @@ pub struct TextTrackStore {
 impl TextTrackStore {
     /// Serialize the tracks of one `<video>` to a JSON array string.
     ///
-    /// Shape: `[{kind,label,language,mode,cues:[{id,start,end,text}]}]`.
+    /// Shape: `[{kind,label,language,mode,cues:[{id,start,end,text,settings}]}]`
+    /// — `settings` carries the cue's IDL-shaped positioning settings
+    /// ([`cue_settings_json`], BUG-902 п.2).
     /// Returns `"[]"` when the video has no tracks.
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn tracks_json(&self, nid: u32) -> String {
@@ -81,6 +143,7 @@ impl TextTrackStore {
                             "start": c.start,
                             "end": c.end,
                             "text": c.text,
+                            "settings": cue_settings_json(&c.settings),
                         })
                     })
                     .collect();
@@ -144,6 +207,7 @@ mod tests {
                     start: 0.0,
                     end: 5.0,
                     text: "Hello".to_string(),
+                    settings: VttCueSettings::default(),
                 }],
             }],
         );
@@ -171,6 +235,7 @@ mod tests {
                     start: 1.0,
                     end: 2.0,
                     text: "line\"with\"quotes\nand newline".to_string(),
+                    settings: VttCueSettings::default(),
                 }],
             }],
         );
@@ -178,5 +243,58 @@ mod tests {
         // Round-trips through a real JSON parser without corruption.
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v[0]["cues"][0]["text"], "line\"with\"quotes\nand newline");
+    }
+
+    /// VTT-RENDER-S2 / BUG-902 п.2: настройки cue доезжают до JSON-среза
+    /// в IDL-форме — `line` процентом даёт число и `snapToLines: false`.
+    #[test]
+    fn tracks_json_cue_settings_are_idl_shaped() {
+        let store = TextTrackStore::default();
+        let cues = lumen_dom::vtt::parse_vtt(
+            "WEBVTT\n\n00:00.000 --> 00:01.000 line:50% size:50% align:end region:fred\nX",
+        )
+        .unwrap();
+        assert_eq!(cues.len(), 1);
+        store.tracks.lock().unwrap().insert(
+            3,
+            vec![TextTrackData {
+                kind: "subtitles".to_string(),
+                label: String::new(),
+                language: String::new(),
+                mode: "showing".to_string(),
+                cues: vec![CueData {
+                    id: String::new(),
+                    start: 0.0,
+                    end: 1.0,
+                    text: "X".to_string(),
+                    settings: cues[0].settings.clone(),
+                }],
+            }],
+        );
+        let v: serde_json::Value = serde_json::from_str(&store.tracks_json(3)).unwrap();
+        let st = &v[0]["cues"][0]["settings"];
+        assert_eq!(st["line"], 50.0);
+        assert_eq!(st["snapToLines"], false);
+        assert_eq!(st["size"], 50.0);
+        assert_eq!(st["align"], "end");
+        assert_eq!(st["region"], "fred");
+        assert_eq!(st["position"], "auto");
+        assert_eq!(st["vertical"], "");
+    }
+
+    /// Без настроек (и при невалидных строках) JSON-объект `settings`
+    /// несёт значения по умолчанию WebVTT §3.1.
+    #[test]
+    fn cue_settings_json_defaults() {
+        let v = cue_settings_json(&VttCueSettings::default());
+        assert_eq!(v["line"], "auto");
+        assert_eq!(v["position"], "auto");
+        assert_eq!(v["size"], 100.0);
+        assert_eq!(v["align"], "center");
+        assert_eq!(v["snapToLines"], true);
+        assert_eq!(v["lineAlign"], "start");
+        assert_eq!(v["positionAlign"], "auto");
+        assert_eq!(v["vertical"], "");
+        assert_eq!(v["region"], serde_json::Value::Null);
     }
 }

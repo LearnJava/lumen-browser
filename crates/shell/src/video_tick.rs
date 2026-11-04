@@ -57,6 +57,9 @@ impl Lumen {
                             start: c.start_s,
                             end: c.end_s,
                             text: c.text.clone(),
+                            // VTT-RENDER-S2 (BUG-902 п.2): сырые настройки едут
+                            // в store, IDL-JSON строит lumen_js.
+                            settings: c.settings.clone(),
                         })
                         .collect(),
                 })

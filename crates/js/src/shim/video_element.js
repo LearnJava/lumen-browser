@@ -188,14 +188,18 @@
     return list;
   }
 
-  // Append parsed `{id,start,end,text}` records to a TextTrack's cue array.
-  // Mutates `track._cues` in place rather than rebuilding it: the `cues` and
-  // `activeCues` getters close over that exact array, and a <track> loaded by
-  // the shim (BUG-775) gets its TextTrack at insertion time and its cues only
-  // when the file arrives.
+  // Append parsed `{id,start,end,text,settings}` records to a TextTrack's cue
+  // array. Mutates `track._cues` in place rather than rebuilding it: the `cues`
+  // and `activeCues` getters close over that exact array, and a <track> loaded
+  // by the shim (BUG-775) gets its TextTrack at insertion time and its cues
+  // only when the file arrives.
+  // `settings` (VTT-RENDER-S2, BUG-902 п.2) carries the cue's positioning
+  // settings in IDL shape from both feeds (`tracks_json` and
+  // `__lumen_vtt_parse`); a cue without one keeps the WebVTT §3.1 defaults.
   function appendCues(track, rawCues) {
     for (var j = 0; j < rawCues.length; j++) {
       var rc = rawCues[j] || {};
+      var st = rc.settings || {};
       track._cues.push({
         id: rc.id || '',
         startTime: +rc.start || 0,
@@ -203,6 +207,15 @@
         text: rc.text || '',
         track: track,
         pauseOnExit: false,
+        vertical: st.vertical !== undefined ? st.vertical : '',
+        snapToLines: st.snapToLines !== undefined ? st.snapToLines : true,
+        line: st.line !== undefined ? st.line : 'auto',
+        lineAlign: st.lineAlign !== undefined ? st.lineAlign : 'start',
+        position: st.position !== undefined ? st.position : 'auto',
+        positionAlign: st.positionAlign !== undefined ? st.positionAlign : 'auto',
+        size: st.size !== undefined ? st.size : 100,
+        align: st.align !== undefined ? st.align : 'center',
+        region: st.region !== undefined ? st.region : null,
       });
     }
   }
@@ -276,10 +289,10 @@
 
   // VTTCue (WebVTT §3.1) — the only constructible cue type. Layout-affecting
   // members (`region`/`vertical`/`snapToLines`/`line`/`lineAlign`/`position`/
-  // `positionAlign`/`size`/`align`) are stored and echoed back at their spec
-  // defaults; nothing downstream reads them yet, since rendering still goes
-  // through the plain `{startTime,endTime,text}` triple `appendCues` builds —
-  // data-correct but visually inert until BUG-570's sibling rendering gaps
+  // `positionAlign`/`size`/`align`) live at their spec defaults here; cues fed
+  // from a parsed file get the file's settings copied over by `appendCues`
+  // (VTT-RENDER-S2, BUG-902 п.2). Rendering still goes through those plain
+  // cue records — visually inert until the UA-shadow rendering slices (S3-S5)
   // close. `track` starts null; wiring it to a real `addCue`/`removeCue` pair
   // is the separate, already-documented `CAPABILITIES.md` method-layer gap,
   // not this bug.

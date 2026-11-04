@@ -404,6 +404,7 @@ pub(crate) fn install_video_bindings_v8(
                                 "start": c.start_s,
                                 "end": c.end_s,
                                 "text": c.text,
+                                "settings": crate::text_track_store::cue_settings_json(&c.settings),
                             })
                         })
                         .collect();
@@ -670,6 +671,7 @@ var document = {
                     start: 0.0,
                     end: 5.0,
                     text: "Hi".to_string(),
+                    settings: lumen_dom::vtt::VttCueSettings::default(),
                 }],
             }],
         );
@@ -1865,6 +1867,140 @@ tt.length === 1
                        && video.textTracks[1] === added.track"
                 ),
                 "the list must hold both tracks, in tree order"
+            );
+        }
+    }
+
+    // ── VTT-RENDER-S2 / BUG-902 п.2: настройки cue доезжают до JS-cue ─────────
+    //
+    // Оба пути подачи cue — Rust-сторона (`tracks_json` через store) и шимов
+    // `__lumen_vtt_parse` — обязаны отдавать объект `settings` с IDL-значениями,
+    // а `appendCues` — копировать их в свойства cue. Store-путь здесь
+    // прогоняется через настоящий шим (`el.textTracks`), cue-объекты в нём
+    // строит ровно тот `appendCues`, что работает в браузере.
+    mod vtt_settings {
+        use std::sync::Arc;
+
+        use lumen_core::ext::JsRuntime as _;
+
+        use crate::text_track_store::{CueData, TextTrackData, TextTrackStore, set_text_track_store};
+        use crate::v8_runtime::V8JsRuntime;
+
+        fn truthy(rt: &V8JsRuntime, expr: &str) -> bool {
+            matches!(rt.eval(expr).unwrap(), lumen_core::JsValue::Bool(true))
+        }
+
+        /// One cue parsed from a real VTT body, wrapped in a one-track store
+        /// entry for `<video>` nid 42.
+        fn store_with_vtt(vtt: &str) -> Arc<TextTrackStore> {
+            let cues = lumen_dom::vtt::parse_vtt(vtt).unwrap();
+            let store = Arc::new(TextTrackStore::default());
+            store.tracks.lock().unwrap().insert(
+                42,
+                vec![TextTrackData {
+                    kind: "subtitles".to_string(),
+                    label: String::new(),
+                    language: String::new(),
+                    mode: "showing".to_string(),
+                    cues: cues
+                        .iter()
+                        .map(|c| CueData {
+                            id: c.id.clone().unwrap_or_default(),
+                            start: c.start_s,
+                            end: c.end_s,
+                            text: c.text.clone(),
+                            settings: c.settings.clone(),
+                        })
+                        .collect(),
+                }],
+            );
+            store
+        }
+
+        #[test]
+        fn size_from_file_reaches_the_cue_object() {
+            let _guard = super::STORE_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+            set_text_track_store(store_with_vtt(
+                "WEBVTT\n\n00:00.000 --> 00:01.000 size:50%\nX",
+            ));
+            let rt = super::with_video();
+            assert!(
+                truthy(&rt, "document.createElement('video').textTracks[0].cues[0].size === 50"),
+                "cue.size must carry the file's size:50%"
+            );
+        }
+
+        #[test]
+        fn line_percent_is_a_number_and_disables_snap_to_lines() {
+            let _guard = super::STORE_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+            set_text_track_store(store_with_vtt(
+                "WEBVTT\n\n00:00.000 --> 00:01.000 line:50%\nX",
+            ));
+            let rt = super::with_video();
+            assert!(
+                truthy(
+                    &rt,
+                    "var cue = document.createElement('video').textTracks[0].cues[0];
+                     cue.line === 50 && cue.snapToLines === false"
+                ),
+                "line:50% must read back as the number 50 with snapToLines false"
+            );
+        }
+
+        #[test]
+        fn settings_without_file_settings_are_spec_defaults() {
+            let _guard = super::STORE_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+            set_text_track_store(store_with_vtt(
+                "WEBVTT\n\n00:00.000 --> 00:01.000\njust text",
+            ));
+            let rt = super::with_video();
+            assert!(
+                truthy(
+                    &rt,
+                    "var cue = document.createElement('video').textTracks[0].cues[0];
+                     cue.snapToLines === true && cue.line === 'auto' && cue.lineAlign === 'start'
+                       && cue.position === 'auto' && cue.positionAlign === 'auto'
+                       && cue.size === 100 && cue.align === 'center'
+                       && cue.vertical === '' && cue.region === null"
+                ),
+                "a cue without settings must expose the WebVTT §3.1 defaults"
+            );
+        }
+
+        #[test]
+        fn settings_carry_all_idl_fields_from_the_file() {
+            let _guard = super::STORE_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+            set_text_track_store(store_with_vtt(
+                "WEBVTT\n\n00:00.000 --> 00:01.000 vertical:rl line:-2 align:left position:10%,line-left region:fred\nX",
+            ));
+            let rt = super::with_video();
+            assert!(
+                truthy(
+                    &rt,
+                    "var cue = document.createElement('video').textTracks[0].cues[0];
+                     cue.vertical === 'rl' && cue.line === -2 && cue.align === 'left'
+                       && cue.position === 10 && cue.positionAlign === 'line-left'
+                       && cue.region === 'fred'"
+                ),
+                "every valid setting from the file must reach its IDL property"
+            );
+        }
+
+        /// Второй путь подачи: `__lumen_vtt_parse` отдаёт `settings` прямо в
+        /// JSON-срезе, в той же IDL-форме, что и store-путь.
+        #[test]
+        fn vtt_parse_native_includes_settings() {
+            let rt = super::with_video();
+            assert!(
+                truthy(
+                    &rt,
+                    "var parsed = JSON.parse(__lumen_vtt_parse('WEBVTT\\n\\n00:00.000 --> 00:01.000 line:50% size:50%\\nA'));
+                     parsed.ok === true && parsed.cues.length === 1
+                       && parsed.cues[0].settings.size === 50
+                       && parsed.cues[0].settings.line === 50
+                       && parsed.cues[0].settings.snapToLines === false"
+                ),
+                "__lumen_vtt_parse must attach IDL-shaped settings to each cue"
             );
         }
     }
