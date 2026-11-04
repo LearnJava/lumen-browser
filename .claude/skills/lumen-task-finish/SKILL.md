@@ -10,6 +10,7 @@ when_to_use: >
   проходят и реализация завершена.
 model: claude-sonnet-4-6
 allowed-tools: Bash(git *) Bash(cargo *) Bash(bash scripts/*) Bash(python scripts/*) Bash(export PATH*) Read Edit
+disable-model-invocation: true
 ---
 
 # Завершение задачи — протокол merge в Lumen

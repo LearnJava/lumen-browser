@@ -16,11 +16,13 @@
 #   bash scripts/worktree-pool.sh <slot> <branch> [base]   # занять слот веткой
 #   bash scripts/worktree-pool.sh release <slot> [base]    # освободить слот
 #   bash scripts/worktree-pool.sh list                     # что сейчас в слотах
-#   bash scripts/worktree-pool.sh gc [--fix]               # мусор в .claude/worktrees/
+#   bash scripts/worktree-pool.sh gc [--fix]               # мусор в обоих пулах
 #
-#   slot   — каталог в .claude/worktrees/: p1-work … p6-work, perf-base
-#   branch — ветка задачи (p<N>-<task>); существующая — переключаемся на неё,
-#            новая — создаётся от base
+#   slot   — p1-work … p6-work, perf-base в .claude/worktrees/ (протокол
+#            Lumen); zs1-work, zs2-work, … в .zshift/worktrees/ (воркеры
+#            zshift; каталог .zshift/ в git не входит)
+#   branch — ветка задачи (p<N>-<task> | zs<N>-<task>); существующая —
+#            переключаемся на неё, новая — создаётся от base
 #   base   — база для новой ветки, по умолчанию main
 #
 # `release` переводит слот на detached HEAD базы: пока слот держит ветку,
@@ -50,7 +52,12 @@ common=$(git rev-parse --git-common-dir 2>/dev/null) || die 'Не git-репоз
 # как «чисто». Вне Windows — обычный `pwd`.
 common=$(cd "$common" && { pwd -W 2>/dev/null || pwd; }) || die "Не читается git-dir: $common"
 ROOT=$(dirname "$common")
-POOL="$ROOT/.claude/worktrees"
+# Два пула слотов: протокол Lumen (p<N>-work, perf-base) в .claude/worktrees/,
+# воркеры zshift (zs<N>-…) в .zshift/worktrees/ — каталог .zshift/ в git не
+# входит. Пул выбирается по префиксу слота; gc/list обходят оба пула.
+CLAUDE_POOL="$ROOT/.claude/worktrees"
+ZSHIFT_POOL="$ROOT/.zshift/worktrees"
+pool_of() { case "$1" in zs*) printf '%s\n' "$ZSHIFT_POOL" ;; *) printf '%s\n' "$CLAUDE_POOL" ;; esac; }
 
 # gitdir зарегистрированного worktree (или пусто, если каталог им не является)
 slot_gitdir() {
@@ -60,17 +67,14 @@ slot_gitdir() {
   [ -n "$gd" ] && [ -d "$gd" ] && printf '%s\n' "$gd"
 }
 
-# gc: сверка .claude/worktrees/ с реестром git. По умолчанию только отчёт;
+# gc: сверка каталогов обоих пулов с реестром git. По умолчанию только отчёт;
 # `--fix` убирает лишь безопасное: `git worktree prune` и пустые каталоги без
 # регистрации в git (их не видят ни `worktree list`, ни `prune`, ни `remove`).
 # Всё, где есть содержимое или невлитые коммиты, только перечисляется.
 # Код возврата: 0 — чисто, 1 — есть находки (после --fix считаются оставшиеся).
-if [ "${1:-}" = "gc" ]; then
-  fix=0
-  [ "${2:-}" = "--fix" ] && fix=1
-  [ "$fix" = 1 ] && git worktree prune
-  findings=0
-  for d in "$POOL"/*/; do
+gc_scan_pool() {
+  local d name b ahead dirty pool=$1
+  for d in "$pool"/*/; do
     d=${d%/}
     [ -d "$d" ] || continue
     name=$(basename "$d")
@@ -107,11 +111,19 @@ if [ "${1:-}" = "gc" ]; then
         elif [ "$dirty" != 0 ]; then
           echo "ad-hoc $name (${b:-detached}): $dirty незакоммиченных записей"
         else
-          echo "ad-hoc $name (${b:-detached}): влит и чист — git worktree remove .claude/worktrees/$name"
+          echo "ad-hoc $name (${b:-detached}): влит и чист — git worktree remove $pool/$name"
         fi
         findings=$((findings + 1)) ;;
     esac
   done
+}
+if [ "${1:-}" = "gc" ]; then
+  fix=0
+  [ "${2:-}" = "--fix" ] && fix=1
+  [ "$fix" = 1 ] && git worktree prune
+  findings=0
+  gc_scan_pool "$CLAUDE_POOL"
+  gc_scan_pool "$ZSHIFT_POOL"
   [ "$findings" = 0 ] && echo 'worktree-пул чист.'
   [ "$findings" = 0 ]
   exit $?
@@ -120,7 +132,7 @@ fi
 if [ "${1:-}" = "list" ]; then
   printf '%-12s %-30s %-7s %s\n' SLOT BRANCH DIRTY TARGET
   found=0
-  for d in "$POOL"/*-work "$POOL"/perf-base; do
+  for d in "$CLAUDE_POOL"/*-work "$CLAUDE_POOL"/perf-base "$ZSHIFT_POOL"/*-work; do
     [ -d "$d" ] || continue
     found=1
     b=$(git -C "$d" branch --show-current 2>/dev/null)
@@ -152,7 +164,7 @@ case "$slot" in
   *[!a-z0-9-]* | '' ) die "Недопустимое имя слота: '$slot' (только a-z, 0-9, дефис)" ;;
 esac
 
-path="$POOL/$slot"
+path="$(pool_of "$slot")/$slot"
 # base — любой committish: ветка для обычных задач, SHA для perf-base
 # (scripts/perf-baseline.sh паркует слот на конкретном коммите).
 git rev-parse --verify --quiet "$base^{commit}" >/dev/null \

@@ -125,3 +125,11 @@ last_session.db-wal
 # сейчас, для другой сессии на той же машине.
 /tests/wpt/.heavy.lock
 /tests/wpt/.heavy.lock.owner
+
+# .agents/skills — junction на .claude/skills, чтобы DSH (сканирует <root>/.agents/skills)
+# видел скиллы Lumen. Ссылка машинно-локальная, в дерево репозитория не входит.
+/.agents/skills
+
+# Пул worktree-слотов zshift (zs<N>-work): состояние задач живёт в ветках,
+# пул слотов никогда не коммитится.
+/.zshift/

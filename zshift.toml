@@ -1,0 +1,10 @@
+# Проверки, которые zs-task-finish прогоняет перед слиянием (вывод — .tmp/gate.log).
+# Форма повторяет финальный гейт Lumen (.claude/skills/lumen-task-finish/SKILL.md).
+# Задачи, двигающие пиксели, дополнительно требуют полный
+# python graphic_tests/run.py --continue-on-fail и регенерацию goldens в том же
+# коммите (docs/graphic-tests.md) — это в checks не выражается.
+base_branch = "main"   # базовая ветка проекта; нет поля — origin/HEAD
+checks = [
+  "cargo clippy --workspace --all-targets -- -D warnings",
+  "bash scripts/scoped-test.sh",
+]
