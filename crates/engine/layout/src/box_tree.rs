@@ -126,7 +126,7 @@ pub(crate) use predicates::{
     is_iframe_element, is_image_element,
     blockified_legend_display, is_fieldset_element, is_fieldset_legend, is_inline_replaced_media_element, is_picture_element, is_ruby_element,
     is_ruby_base_element, is_ruby_parenthesis_element, is_ruby_text_container_element, is_ruby_text_element,
-    is_video_element, rendered_legend_index, scrollbar_gutter_block,
+    is_video_element, rendered_legend_index, scrollbar_gutter_block, video_has_vtt_cue_tree,
     scrollbar_gutter_block_start, scrollbar_gutter_inline, scrollbar_gutter_inline_start,
 };
 
