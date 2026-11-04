@@ -10,7 +10,7 @@
 | VTT-RENDER-S1 | Разбор cue text (WebVTT §6.4) в дерево узлов — новый crates/engine/dom/src/vtt_text.rs; бриф docs/tasks/VTT-RENDER-slices.md §S1 | ✓ DONE (2026-11-04) |
 | VTT-RENDER-S2 | Настройки cue в VttCueSettings + геометрия cue-бокса (crates/engine/dom/src/vtt_geometry.rs), доезд настроек до JS cue; бриф §S2 | ✓ DONE (2026-11-04) |
 | VTT-RENDER-S3 | Поддерево боксов cue в UA-тени `<video>` (crates/engine/dom/src/vtt_tree.rs, ua_vtt_role); бриф §S3 | ✓ DONE (2026-11-04) |
-| VTT-RENDER-S4 | Раскладка cue: дети UA-тени в box_tree, стили §7.4 через apply_ua_vtt; бриф §S4 | ● IN PROGRESS |
+| VTT-RENDER-S4 | Раскладка cue: дети UA-тени в box_tree, стили §7.4 через apply_ua_vtt; бриф §S4 | ✓ DONE (2026-11-04) |
 | VTT-RENDER-S5 | Мост JS→DOM (__lumen_video_render_cues), удалить самодельный оверлей; закрывает BUG-1748; бриф §S5 | ○ TODO |
 | VTT-RENDER-S6 | Обход перекрытий §7.2, BoxRole::VttCueContainer, обновление CAPABILITIES.md и docs/wpt-vendor-notes/webvtt.md; бриф §S6 | ○ TODO |
 | WASM-V8-NATIVE-S1 | Убрать шим WebAssembly (родной глобал V8), set_allow_wasm_code_generation_callback; ветка p1-wasm-v8-native-s1 | ● IN PROGRESS |
