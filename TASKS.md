@@ -7,7 +7,7 @@
 
 | id | задача | статус |
 |---|---|---|
-| VTT-RENDER-S1 | Разбор cue text (WebVTT §6.4) в дерево узлов — новый crates/engine/dom/src/vtt_text.rs; бриф docs/tasks/VTT-RENDER-slices.md §S1 | ○ TODO |
+| VTT-RENDER-S1 | Разбор cue text (WebVTT §6.4) в дерево узлов — новый crates/engine/dom/src/vtt_text.rs; бриф docs/tasks/VTT-RENDER-slices.md §S1 | ● IN PROGRESS |
 | VTT-RENDER-S2 | Настройки cue в VttCueSettings + геометрия cue-бокса (crates/engine/dom/src/vtt_geometry.rs), доезд настроек до JS cue; бриф §S2 | ○ TODO |
 | VTT-RENDER-S3 | Поддерево боксов cue в UA-тени `<video>` (crates/engine/dom/src/vtt_tree.rs, ua_vtt_role); бриф §S3 | ○ TODO |
 | VTT-RENDER-S4 | Раскладка cue: дети UA-тени в box_tree, стили §7.4 через apply_ua_vtt; бриф §S4 | ○ TODO |
