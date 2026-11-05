@@ -7,6 +7,7 @@ use super::named_access::window_named_properties_template;
 use super::promise_reject::{drain_promise_rejections, install_promise_reject_hook};
 use super::*;
 use std::sync::mpsc::RecvTimeoutError;
+use std::sync::mpsc::TryRecvError;
 use std::time::Duration;
 
 // ── Foreground platform queue (BUG-1752) ─────────────────────────────────────
@@ -28,6 +29,23 @@ const PLATFORM_POLL_MAX: Duration = Duration::from_millis(32);
 /// an isolate that has really gone quiet backs off after half a second.
 const PLATFORM_HOT_WINDOW: Duration = Duration::from_millis(500);
 
+/// How long after the last platform task the loop spins on [`std::thread::yield_now`]
+/// instead of parking on the command channel.
+///
+/// A park costs a whole system timer tick — a millisecond, even with the 1 ms
+/// resolution asked for in `named_access::raise_timer_resolution` — and one
+/// `await WebAssembly.compile(…)` round trip is exactly one park: the compile
+/// finishes on a V8 worker thread and its completion lands on the foreground
+/// task queue while this thread sleeps out the rest of the tick. Measured on
+/// the `wasm/core` harness: 1.44 ms per round trip, 10.4 s for the biggest
+/// spec file, which is over wptrunner's 15 s deadline as soon as another
+/// browser shares the CPU. Yielding hands the core straight back to the
+/// compile workers, so the wait collapses to their turnaround time; the window
+/// is short on purpose, so an isolate that has gone quiet burns at most this
+/// much CPU after its last task. The spin never holds the stall bracket (see
+/// `run_platform_tasks`): polling an empty queue is not a job.
+const PLATFORM_SPIN: Duration = Duration::from_micros(500);
+
 /// Runs every foreground task V8 has queued for `inner`'s isolate and the
 /// microtask checkpoint that follows each one (BUG-1752).
 ///
@@ -42,30 +60,54 @@ const PLATFORM_HOT_WINDOW: Duration = Duration::from_millis(500);
 /// Bracketed by [`lumen_core::script_stall::StallHandle`] and the stall sampler
 /// exactly like a [`V8Command::Run`] job: a callback this drain runs is script
 /// execution on this thread, and the watchdog, the «страница не отвечает» bar
-/// and `any_hung()` must see it (`subsystems/js.md` §Invariants).
+/// and `any_hung()` must see it (`subsystems/js.md` §Invariants). The bracket
+/// covers each pump attempt, not the waits between them: waiting for work is
+/// not a job, and a busy mark held through [`PLATFORM_SPIN`] would make
+/// `terminate()` report a free runtime as busy (`compat_hang.rs`).
 ///
 /// Returns whether any task ran — the caller uses that to decide between the
 /// short and the long poll step.
+///
+/// While `spin_until` is still in the future and the queue is empty, this spins
+/// on `yield_now()` instead of returning to the caller's park: the completion
+/// of an asynchronous `WebAssembly.compile` arrives within the compile
+/// workers' turnaround, which is shorter than the timer tick a `recv_timeout`
+/// costs (see [`PLATFORM_SPIN`]). One burst per call — after a task ran, the
+/// caller gets the command channel back immediately.
 fn run_platform_tasks(
     inner: &mut V8Inner,
     platform: &v8::SharedRef<v8::Platform>,
     stall: &lumen_core::script_stall::StallHandle,
     sampler: Option<&super::stall_sampler::StallSampler>,
+    spin_until: std::time::Instant,
 ) -> bool {
-    if let Some(s) = sampler {
-        s.job_started();
-    }
-    stall.job_started();
     let mut ran = false;
-    while v8::Platform::pump_message_loop(platform, &inner.isolate, false) {
-        ran = true;
-        // End of a task = end of its microtask checkpoint (HTML LS §8.1.7.3);
-        // a `.then` chained onto the settled promise runs here, not later.
-        inner.isolate.perform_microtask_checkpoint();
-    }
-    stall.job_finished();
-    if let Some(s) = sampler {
-        s.job_finished();
+    loop {
+        // A pump can execute script (the reaction of a settled promise runs as
+        // a foreground task), so every attempt takes the bracket; the yielding
+        // between attempts stays outside it.
+        if let Some(s) = sampler {
+            s.job_started();
+        }
+        stall.job_started();
+        let pumped = v8::Platform::pump_message_loop(platform, &inner.isolate, false);
+        if pumped {
+            // End of a task = end of its microtask checkpoint (HTML LS §8.1.7.3);
+            // a `.then` chained onto the settled promise runs here, not later.
+            inner.isolate.perform_microtask_checkpoint();
+            ran = true;
+        }
+        stall.job_finished();
+        if let Some(s) = sampler {
+            s.job_finished();
+        }
+        if pumped {
+            continue; // drain fully while work keeps coming
+        }
+        if std::time::Instant::now() >= spin_until {
+            break;
+        }
+        std::thread::yield_now();
     }
     if ran {
         // Rejected promises queued by those tasks get the same report a
@@ -175,30 +217,58 @@ pub(super) fn v8_thread_main(
     // task queue on every wake-up — including the ones nobody asked for. The
     // step stays at `PLATFORM_POLL_MIN` while work keeps showing up and backs
     // off to `PLATFORM_POLL_MAX` while the isolate is idle; a command resets it.
+    // BUG-1784: the park is not free — a timed wait costs a whole timer tick —
+    // so while tasks are still arriving the loop spins on `yield_now()` first
+    // and only parks once the platform has gone quiet for [`PLATFORM_SPIN`].
     let platform = v8::V8::get_current_platform();
     let mut poll_step = PLATFORM_POLL_MIN;
     // Пока платформа недавно выдавала работу, шаг не растёт: между двумя
     // задачами асинхронной компиляции пауза в единицы миллисекунд, и удвоение
     // съедало её целиком — 300 модулей в огромном spec-файле превращали это в
-    // секунды ожидания.
-    let mut last_task_at = std::time::Instant::now();
+    // секунды ожидания. `None`, пока ни одной задачи не было: горячее окно и
+    // спин не включаются до первой задачи, свежий изолят ведёт себя как
+    // безспиновый — парковка 1 мс, проколы за микросекунды (иначе `terminate()`
+    // свободного рантайма ловит скобку стора, тест `compat_hang`).
+    let mut last_task_at: Option<std::time::Instant> = None;
     loop {
-        let cmd = match cmd_rx.recv_timeout(poll_step) {
+        // A command first, without parking: a park costs the timer tick even
+        // when the platform has work ready (see `PLATFORM_SPIN`).
+        let cmd = match cmd_rx.try_recv() {
             Ok(cmd) => cmd,
-            Err(RecvTimeoutError::Timeout) => {
-                let pumped =
-                    run_platform_tasks(&mut inner, &platform, &stall, stall_sampler.as_ref());
+            Err(TryRecvError::Disconnected) => break,
+            Err(TryRecvError::Empty) => {
+                let hot =
+                    last_task_at.is_some_and(|t| t.elapsed() < PLATFORM_HOT_WINDOW);
+                let spin_until = match last_task_at {
+                    // The platform last handed us work within the hot window;
+                    // the next task of the same operation follows within the
+                    // workers' turnaround, not within a tick.
+                    Some(t) if hot => t + PLATFORM_SPIN,
+                    _ => std::time::Instant::now(),
+                };
+                let pumped = run_platform_tasks(
+                    &mut inner,
+                    &platform,
+                    &stall,
+                    stall_sampler.as_ref(),
+                    spin_until,
+                );
                 if pumped {
-                    last_task_at = std::time::Instant::now();
+                    last_task_at = Some(std::time::Instant::now());
+                    poll_step = PLATFORM_POLL_MIN;
+                    continue;
                 }
-                poll_step = if last_task_at.elapsed() < PLATFORM_HOT_WINDOW {
+                poll_step = if hot {
                     PLATFORM_POLL_MIN
                 } else {
                     poll_step.saturating_mul(2).min(PLATFORM_POLL_MAX)
                 };
-                continue;
+                match cmd_rx.recv_timeout(poll_step) {
+                    Ok(cmd) => cmd,
+                    Err(RecvTimeoutError::Timeout) => continue,
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
             }
-            Err(RecvTimeoutError::Disconnected) => break,
         };
         match cmd {
             V8Command::Run(job) => {
@@ -229,7 +299,15 @@ pub(super) fn v8_thread_main(
                 // async wasm compilation started by the script finishes on a
                 // V8 thread and lands here — so drain before going back to the
                 // wait, not after the next poll step.
-                run_platform_tasks(&mut inner, &platform, &stall, stall_sampler.as_ref());
+                if run_platform_tasks(
+                    &mut inner,
+                    &platform,
+                    &stall,
+                    stall_sampler.as_ref(),
+                    std::time::Instant::now(),
+                ) {
+                    last_task_at = Some(std::time::Instant::now());
+                }
                 poll_step = PLATFORM_POLL_MIN;
             }
             V8Command::Shutdown => break,
