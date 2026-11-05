@@ -42,8 +42,11 @@ const PLATFORM_HOT_WINDOW: Duration = Duration::from_millis(500);
 /// browser shares the CPU. Yielding hands the core straight back to the
 /// compile workers, so the wait collapses to their turnaround time; the window
 /// is short on purpose, so an isolate that has gone quiet burns at most this
-/// much CPU after its last task. The spin never holds the stall bracket (see
-/// `run_platform_tasks`): polling an empty queue is not a job.
+/// much CPU after its last task. The spin shares the job bracket of
+/// `run_platform_tasks`, but only ever starts once a task has actually run
+/// (the wait loop's `last_task_at` starts as `None`), so a runtime that never
+/// got work never holds the busy mark — and `terminate()` answers `false` for
+/// it (`compat_hang.rs`).
 const PLATFORM_SPIN: Duration = Duration::from_micros(500);
 
 /// Runs every foreground task V8 has queued for `inner`'s isolate and the
@@ -60,10 +63,12 @@ const PLATFORM_SPIN: Duration = Duration::from_micros(500);
 /// Bracketed by [`lumen_core::script_stall::StallHandle`] and the stall sampler
 /// exactly like a [`V8Command::Run`] job: a callback this drain runs is script
 /// execution on this thread, and the watchdog, the «страница не отвечает» bar
-/// and `any_hung()` must see it (`subsystems/js.md` §Invariants). The bracket
-/// covers each pump attempt, not the waits between them: waiting for work is
-/// not a job, and a busy mark held through [`PLATFORM_SPIN`] would make
-/// `terminate()` report a free runtime as busy (`compat_hang.rs`).
+/// and `any_hung()` must see it (`subsystems/js.md` §Invariants). One bracket
+/// per call — bracketing every pump attempt instead sent the watchdog tens of
+/// thousands of unparks per second in a browser with several runtimes and
+/// starved page startup; `terminate()` on a free runtime stays `false` because
+/// the spin engages only after the first task has run (`last_task_at` starts
+/// as `None`, see the wait loop).
 ///
 /// Returns whether any task ran — the caller uses that to decide between the
 /// short and the long poll step.
@@ -81,33 +86,31 @@ fn run_platform_tasks(
     sampler: Option<&super::stall_sampler::StallSampler>,
     spin_until: std::time::Instant,
 ) -> bool {
+    if let Some(s) = sampler {
+        s.job_started();
+    }
+    stall.job_started();
     let mut ran = false;
     loop {
-        // A pump can execute script (the reaction of a settled promise runs as
-        // a foreground task), so every attempt takes the bracket; the yielding
-        // between attempts stays outside it.
-        if let Some(s) = sampler {
-            s.job_started();
-        }
-        stall.job_started();
-        let pumped = v8::Platform::pump_message_loop(platform, &inner.isolate, false);
-        if pumped {
+        let mut pumped_now = false;
+        while v8::Platform::pump_message_loop(platform, &inner.isolate, false) {
+            pumped_now = true;
             // End of a task = end of its microtask checkpoint (HTML LS §8.1.7.3);
             // a `.then` chained onto the settled promise runs here, not later.
             inner.isolate.perform_microtask_checkpoint();
+        }
+        if pumped_now {
             ran = true;
-        }
-        stall.job_finished();
-        if let Some(s) = sampler {
-            s.job_finished();
-        }
-        if pumped {
-            continue; // drain fully while work keeps coming
+            break;
         }
         if std::time::Instant::now() >= spin_until {
             break;
         }
         std::thread::yield_now();
+    }
+    stall.job_finished();
+    if let Some(s) = sampler {
+        s.job_finished();
     }
     if ran {
         // Rejected promises queued by those tasks get the same report a
