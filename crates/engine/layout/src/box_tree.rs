@@ -266,6 +266,9 @@ mod vertical_row;
 mod vertical_float;
 mod vertical_margins;
 pub(crate) use vertical_margins::{escapes_end, escapes_start};
+// WebVTT §7.2 (VTT-RENDER-S6): обход перекрытий cue-боксов контейнера cue;
+// вызывает `layout_dispatch::finish_after_match`.
+mod vtt_cues;
 
 use bfc::{
     collapsed_bottom_margin, collapsed_top_margin, contained_content_height,

@@ -239,3 +239,148 @@ fn vtt_cue_text_tags_get_bold_italic_underline() {
         style_of("u", "text-decoration-line")
     );
 }
+
+// ── Обход перекрытий cue-боксов (WebVTT §7.2 «Rules for updating the
+// display of WebVTT text tracks», срез VTT-RENDER-S6): `avoid_cue_overlap`
+// в `finish_after_match` для контейнера cue. ──
+
+/// Два cue на `line auto` (§7.1 — низ области видео): второй сдвинут вверх
+/// и не пересекает первый; `x` и ширина обоих не изменились (§7.2 двигает
+/// бокс только по оси блока).
+#[test]
+fn vtt_overlap_two_cues_auto_second_shifts_above_first() {
+    let (_, root) = lay_vtt(
+        r#"<video style="width:320px;height:180px"></video>"#,
+        &[cue(CueSettings::default(), "Hi"), cue(CueSettings::default(), "Hi")],
+    );
+    let vid = first_video_child(&root);
+    let container = &vid.children[0];
+    assert_eq!(container.origin.role, BoxRole::VttCueContainer);
+    let b1 = &container.children[0];
+    let b2 = &container.children[1];
+    // Второй бокс не пересекает первый: его низ — не ниже верха первого
+    // (бриф §S6: `b2.rect.bottom() <= b1.rect.y`; эпсилон — на округление
+    // f32 при сдвиге на высоту пересёкшегося бокса).
+    assert!(
+        b2.rect.bottom() <= b1.rect.y + 0.1,
+        "b2 bottom={} vs b1 top={}",
+        b2.rect.bottom(),
+        b1.rect.y
+    );
+    // Сдвиг состоялся (второй не остался на первом).
+    assert!(
+        b2.rect.y < b1.rect.y - 0.1,
+        "b2 y={} vs b1 y={}",
+        b2.rect.y,
+        b1.rect.y
+    );
+    // Строчная ось не тронута: у обоих ширина — вся область видео, x —
+    // левый край видео.
+    for (name, b) in [("b1", b1), ("b2", b2)] {
+        assert!(approx(b.rect.width, 320.0), "{name} w={}", b.rect.width);
+        assert!(approx(b.rect.x, vid.rect.x), "{name} x={}", b.rect.x);
+    }
+}
+
+/// Два cue на `line:0` (§7.2: неотрицательная линия — сдвиг вниз):
+/// второй ниже первого, вплотную под ним.
+#[test]
+fn vtt_overlap_two_cues_line_zero_second_below_first() {
+    let s = CueSettings {
+        line: CueLine::Number(0.0),
+        ..Default::default()
+    };
+    let (_, root) = lay_vtt(
+        r#"<video style="width:320px;height:180px"></video>"#,
+        &[cue(s.clone(), "Hi"), cue(s, "Hi")],
+    );
+    let vid = first_video_child(&root);
+    let b1 = &vid.children[0].children[0];
+    let b2 = &vid.children[0].children[1];
+    assert!(
+        b2.rect.y >= b1.rect.bottom() - 0.1,
+        "b2 y={} vs b1 bottom={}",
+        b2.rect.y,
+        b1.rect.bottom()
+    );
+    // Оба прижаты к верхнему краю по `line:0` до обхода перекрытий:
+    // первый не сдвинут.
+    assert!(approx(b1.rect.y, vid.rect.y), "b1 y={} vs video y={}", b1.rect.y, vid.rect.y);
+}
+
+/// Три cue на `line auto`: цепочка сдвигов вверх не выталкивает боксы за
+/// область видео, соседние боксы не пересекаются.
+#[test]
+fn vtt_overlap_three_cues_stay_inside_video() {
+    let (_, root) = lay_vtt(
+        r#"<video style="width:320px;height:180px"></video>"#,
+        &[cue(CueSettings::default(), "A"), cue(CueSettings::default(), "B"), cue(CueSettings::default(), "C")],
+    );
+    let vid = first_video_child(&root);
+    let container = &vid.children[0];
+    assert_eq!(container.children.len(), 3);
+    let bottom = container.rect.y + container.rect.height;
+    let mut prev: Option<&LayoutBox> = None;
+    for (i, c) in container.children.iter().enumerate() {
+        assert!(
+            c.rect.y >= container.rect.y - 0.1 && c.rect.bottom() <= bottom + 0.1,
+            "cue {i}: y={} bottom={} outside video [{}, {}]",
+            c.rect.y,
+            c.rect.bottom(),
+            container.rect.y,
+            bottom
+        );
+        if let Some(p) = prev {
+            assert!(
+                c.rect.bottom() <= p.rect.y + 0.1 || c.rect.y >= p.rect.bottom() - 0.1,
+                "cue {i} [{}, {}] overlaps previous [{}, {}]",
+                c.rect.y,
+                c.rect.bottom(),
+                p.rect.y,
+                p.rect.bottom()
+            );
+        }
+        prev = Some(c);
+    }
+}
+
+/// `snapToLines === false` (`line` в процентах): сдвигов нет — оба cue
+/// стоят там, куда поставила геометрия `cue_box_css` (`top:40%`), даже
+/// пересекаясь.
+#[test]
+fn vtt_overlap_snap_to_lines_off_leaves_cues_in_place() {
+    let s = CueSettings {
+        line: CueLine::Percent(40.0),
+        ..Default::default()
+    };
+    let (_, root) = lay_vtt(
+        r#"<video style="width:320px;height:180px"></video>"#,
+        &[cue(s.clone(), "Hi"), cue(s, "Hi")],
+    );
+    let vid = first_video_child(&root);
+    let b1 = &vid.children[0].children[0];
+    let b2 = &vid.children[0].children[1];
+    // Одинаковая геометрия → одинаковые rect: ни один не сдвинут.
+    assert!(approx(b1.rect.x, b2.rect.x), "x1={} x2={}", b1.rect.x, b2.rect.x);
+    assert!(approx(b1.rect.y, b2.rect.y), "y1={} y2={}", b1.rect.y, b2.rect.y);
+    assert!(
+        approx(b1.rect.width, b2.rect.width),
+        "w1={} w2={}",
+        b1.rect.width,
+        b2.rect.width
+    );
+    assert!(
+        approx(b1.rect.height, b2.rect.height),
+        "h1={} h2={}",
+        b1.rect.height,
+        b2.rect.height
+    );
+    // И стоят на своей процентной линии: top = 40 % от 180 px = 72 px
+    // (проценты в `top` cue-бокса считаются от области видео).
+    assert!(
+        approx(b1.rect.y, vid.rect.y + 72.0),
+        "b1 y={} vs video y+72={}",
+        b1.rect.y,
+        vid.rect.y + 72.0
+    );
+}

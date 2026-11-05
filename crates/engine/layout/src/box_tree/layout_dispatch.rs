@@ -555,6 +555,15 @@ pub(super) fn finish_after_match(
     // bottom/left) are resolved from ComputedStyle in sticky_snap.rs::collect_sticky_rec()
     // after this pass. P3 calls collect_sticky_boxes() + compute_sticky_offset() to
     // apply scroll-driven paint transforms at render time.
+
+    // WebVTT §7.2 «Rules for updating the display of WebVTT text tracks»
+    // (VTT-RENDER-S6): обход перекрытий cue-боксов контейнера cue. Cue-боксы —
+    // абсолютные дети контейнера, `lay_out_abs_children` выше уже поставил их
+    // по финальному rect контейнера; у контейнера insets нет, поэтому его
+    // собственный rect здесь дальше не меняется.
+    if b.origin.role == BoxRole::VttCueContainer {
+        super::vtt_cues::avoid_cue_overlap(b);
+    }
 }
 
 /// Takes the `position: relative` offset that `finish_after_match` applied off

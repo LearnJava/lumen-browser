@@ -1615,6 +1615,19 @@ fn build_box_inner(
     } else {
         Vec::new()
     };
+    // WebVTT §7.2 (VTT-RENDER-S6): контейнер cue в UA-тени `<video>` —
+    // `div[data-lumen-vtt=container]`, роль ставит `Document::ua_vtt_role`
+    // (срез S3). Отдельный `BoxRole::VttCueContainer` — маркер для
+    // `finish_after_match`, который для такого бокса запускает обход
+    // перекрытий cue-боксов (`box_tree::vtt_cues`); прочие узлы —
+    // `BoxRole::Element` как раньше. Стоимость проверки — отказ по
+    // принадлежности светлому дереву (`ua_vtt_role` возвращает `None`) для
+    // каждого элемента обычных страниц.
+    let role = if matches!(doc.ua_vtt_role(id), Some((lumen_dom::UaVttRole::Container, _))) {
+        BoxRole::VttCueContainer
+    } else {
+        BoxRole::Element
+    };
     let fieldset_legend = if is_fieldset_element(doc, id) && cv_hidden.is_empty() {
         rendered_legend_index(doc, &children).map(|idx| FieldsetLegend {
             idx,
@@ -1642,7 +1655,7 @@ fn build_box_inner(
         col_span,
         row_span,
         svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
-        origin: BoxOrigin { node: Some(id), role: BoxRole::Element },
+        origin: BoxOrigin { node: Some(id), role },
     }
 }
 

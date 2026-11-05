@@ -131,3 +131,37 @@ harness OK, 31/178 сабтестов, 0 мин 58 с** против **42/322, 2
 **Оформлено:** баги [BUG-1748](../../bugs/BUG-1748-FIXED.md) (cue вне живого окна), [BUG-1749](../../bugs/BUG-1749-OPEN.md) (`cuechange`), [BUG-1750](../../bugs/BUG-1750-OPEN.md) (фон inline), [BUG-1751](../../bugs/BUG-1751-OPEN.md) (IDL `VTTCue`) → `STATUS-P3.md`; `ROADMAP.md` `VTT-RENDER` (R1–R4) и `VTT-ADDTRACK` (H5) → `STATUS-P1.md`; строка `::cue` в `CSS-SPECS.md` (R3/R5/R6, после `VTT-RENDER`) → `STATUS-P4.md`. Раннер не трогали: длительность рефтестов (~5.3 с) — следствие BUG-1749, не бюджета; таймауты не нужны. Порядок по приросту: `::cue` (53 п.п., но после VTT-RENDER) → VTT-RENDER (18 п.п.) → BUG-902 (≈9.7 п.п. H1–H3) → VTT-ADDTRACK / BUG-1751 / BUG-903.
 
 **Проверка/скрипты** (в `.tmp/` слота `p2-work`, не коммитятся): `vtt-run.ids.tsv.gz`, `vtt-run/webvtt.raw.jsonl` (снимки рефтестов base64), `vtt_cl.py [кластер]` — таблица, `vtt_shots.py list|dump <подстрока>`, `vtt_falsepass.py` (нужен `serve_wpt_like.py --port 18765`), пробники `.tmp/vtt-probe/*.html`.
+
+## Срезы VTT-RENDER S1–S6 (2026-11-04/05) и информационный прогон
+
+**Влито в main** (ветки `zs1-vtt-render-s1…s6`, бриф `docs/tasks/VTT-RENDER-slices.md`):
+S1 — разбор cue text §6.4 в DOM-узлы (`lumen_dom::vtt_text`); S2 — настройки cue §6.3
+и геометрия cue-бокса §7.2 (`lumen_dom::vtt_geometry`, inline-`style` узла из
+`cue_box_css`); S3 — поддерево cue как настоящие DOM-узлы в закрытой UA-тени `<video>`
+(`Document::set_vtt_cues`, роли `UaVttRole`, атрибуты `data-lumen-vtt*`); S4 —
+раскладка cue: дети UA-тени в box_tree, UA-типографика §7.4 (`apply_ua_vtt`); S5 —
+мост JS→DOM `__lumen_video_render_cues` и удаление самодельного оверлея
+([BUG-1748](../../bugs/BUG-1748-FIXED.md) FIXED: cue идёт общим display list и виден
+в окне, `--screenshot`, `--ipc-server` и CPU-растере); S6 — обход перекрытий §7.2
+(`BoxRole::VttCueContainer` + `lumen_layout::box_tree::vtt_cues::avoid_cue_overlap`
+в `finish_after_match`: сдвиг по оси блока на высоту пересёкшегося бокса, вниз при
+неотрицательной `line`, вверх при отрицательной/`auto`, разворот один раз при выходе
+за область видео — `switched`; `snapToLines === false` без сдвигов). Не из объёма:
+регионы §7.3, `::cue`/авторские стили (R5/R6 — строка в `CSS-SPECS.md`, зависимость
+от VTT-RENDER снята).
+
+**Информационный прогон** (проверка из «Как проверить» BUG-1748;
+`run_corpus.py --binary target/debug/lumen.exe --prefixes
+webvtt/rendering/cues-with-video/processing-model --processes 6`; debug-бинарь ветки
+`zs1-vtt-render-s6` от main `62925403a`, слот `zs1-work`; MANIFEST строился с нуля —
+1247 с, сам прогон 349 с; потоки/счёт в `.tmp/wpt-s6/` и `.tmp/s6_count_shots.py`
+слота, не коммитятся): **250 id, PASS 30 / FAIL 220**; снимок теста **непустой у
+167 id** (60 разных хешей; модальный «кадр пустого видео» — 53 id). На разведке
+2026-10-27 непустых не было ни одного — все 229 FAIL-снимка были пустым видео.
+Ни один из 167 непустых не PASS (все `FAIL`, ожидался `PASS`): от рефов их отличают
+отсутствующие `::cue`/авторские стили (R5/R6 — фон/шрифт/обводка почти всех тестов
+задаются `::cue`), шрифтовые метрики и недоделки геометрии; все 30 PASS лежат в
+пустой группе («пусто = пусто» — эталон на голом `<video>` или cue по спеке скрыт).
+Из перекрытий §7.2 непустой кадр даёт `2_cues_overlapping_partially_move_down`;
+`2_cues_overlapping_partially_move_up`/`*_completely_move_up` остаются пустыми —
+их cue не активируются до снимка (BUG-1749: reftest-wait без `cuechange`).
