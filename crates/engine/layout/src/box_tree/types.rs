@@ -384,6 +384,13 @@ pub enum BoxRole {
     /// placeholders and benchmark harnesses that need a `LayoutBox` value
     /// before any real layout has run.
     Placeholder,
+    /// Контейнер cue в UA-тени `<video>` (WebVTT §7.2 «Rules for updating
+    /// the display of WebVTT text tracks», VTT-RENDER-S6) —
+    /// `div[data-lumen-vtt=container]`, единственный ребёнок теневого
+    /// корня. Роль ставит `build_box_inner` по `Document::ua_vtt_role`;
+    /// `layout_dispatch::finish_after_match` запускает для такого бокса
+    /// обход перекрытий cue-боксов (`box_tree::vtt_cues`).
+    VttCueContainer,
 }
 
 /// Отрезок inline-контента с собственным стилем (до layout).
