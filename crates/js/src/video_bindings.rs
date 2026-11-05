@@ -39,6 +39,7 @@
 //! | `__lumen_video_container_load` | `(nid: f64, src: String)` | Queue a media-container load (registered only when the shell installed a `VideoDecoder`, UX-VIDEO-NATIVE) |
 //! | `__lumen_texttracks_json` | `(nid: f64) → String` | JSON of parsed `<track>` cues |
 //! | `__lumen_vtt_parse` | `(text: String) → String` | Parse a WebVTT file (BUG-775) |
+//! | `__lumen_video_render_cues` | `(nid: f64, json: String)` | Rebuild the `<video>` UA-shadow cue subtree (VTT-RENDER-S5, BUG-1748; registered with the document) |
 //!
 //! # The `HTMLMediaElement` state machine (BUG-825)
 //!
@@ -420,6 +421,133 @@ pub(crate) fn install_video_bindings_v8(
     Ok(())
 }
 
+/// VTT-RENDER-S5 (BUG-1748): the JS→DOM cue render bridge. The page-side shim
+/// diffs the active cues of every `mode === 'showing'` track (see
+/// `renderCues`/`pushCueRender` in `shim/video_element.js`) and calls
+/// `__lumen_video_render_cues(nid, json)` on a change; this native rebuilds
+/// the cue subtree in the `<video>`'s UA shadow via
+/// [`lumen_dom::Document::set_vtt_cues`] and marks the document changed the
+/// same way the neighboring document-mutating natives do
+/// (`install/dom_editing.rs`): an unattributable `DomTouched` record (the
+/// shadow is invisible to the page, so a precise restyle root-set is neither
+/// available nor needed — a full cascade is the correct answer), plus the
+/// relayout and same-tick-flush-stale flags.
+///
+/// Unlike [`install_video_bindings_v8`] this needs the document, so it takes
+/// the `Arc`s `install_dom` already holds and is called from there directly;
+/// a JSON that does not parse is silently dropped (only the shim writes it).
+#[cfg(feature = "v8-backend")]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+pub(crate) fn install_video_render_cues_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+    doc: &std::sync::Arc<std::sync::Mutex<lumen_dom::Document>>,
+    dom_dirty: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    flush_stale: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    dom_touched: &std::sync::Arc<std::sync::Mutex<crate::v8_runtime::DomTouched>>,
+) -> lumen_core::JsResult<()> {
+    use crate::v8_compat::into_v8_fn2;
+    use std::sync::atomic::Ordering;
+
+    let doc = std::sync::Arc::clone(doc);
+    let dom_dirty = std::sync::Arc::clone(dom_dirty);
+    let flush_stale = std::sync::Arc::clone(flush_stale);
+    let dom_touched = std::sync::Arc::clone(dom_touched);
+    let render_cues = into_v8_fn2(move |nid: f64, json: String| {
+        let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(&json) else {
+            return;
+        };
+        let cues: Vec<lumen_dom::vtt_tree::CueRender> =
+            entries.iter().map(cue_render_from_json).collect();
+        {
+            let mut d = doc.lock().unwrap_or_else(|e| e.into_inner());
+            d.set_vtt_cues(lumen_dom::NodeId::from_raw(nid.max(0.0) as u32), &cues);
+        }
+        // Документ изменён — тот же способ, что у соседних DOM-natives.
+        {
+            let mut t = dom_touched.lock().unwrap_or_else(|e| e.into_inner());
+            t.unattributed = true;
+            t.epoch = t.epoch.wrapping_add(1);
+            t.unattributed_gen = t.epoch;
+        }
+        dom_dirty.store(true, Ordering::Relaxed);
+        flush_stale.store(true, Ordering::Relaxed);
+    });
+    rt.register_native("__lumen_video_render_cues", render_cues)?;
+    Ok(())
+}
+
+/// IDL-значения одного cue из JSON-шима ([`CueRender`]) — значения по
+/// умолчанию WebVTT §7.1, неизвестные строки дают дефолт. Числовая `line` при
+/// `snapToLines: false` — процент (§6.3: процентная `line` выключает
+/// snap-to-lines, и шим передаёт её числом IDL-формы); `region` не едет —
+/// регионы вне среза.
+#[cfg(feature = "v8-backend")]
+fn cue_render_from_json(e: &serde_json::Value) -> lumen_dom::vtt_tree::CueRender {
+    use lumen_dom::vtt_geometry::{CueAlign, CueLine, CueSettings, LineAlign, PositionAlign, Vertical};
+
+    let text = e.get("text").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let id = e.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let snap_to_lines = e.get("snapToLines").and_then(|v| v.as_bool()).unwrap_or(true);
+    let line = match e.get("line") {
+        Some(serde_json::Value::Number(n)) => {
+            let v = n.as_f64().unwrap_or_default();
+            if snap_to_lines {
+                CueLine::Number(v)
+            } else {
+                CueLine::Percent(v.clamp(0.0, 100.0))
+            }
+        }
+        _ => CueLine::Auto,
+    };
+    let line_align = match e.get("lineAlign").and_then(|v| v.as_str()) {
+        Some("center") => LineAlign::Center,
+        Some("end") => LineAlign::End,
+        _ => LineAlign::Start,
+    };
+    let position = e
+        .get("position")
+        .and_then(|v| v.as_f64())
+        .map(|v| v.clamp(0.0, 100.0));
+    let position_align = match e.get("positionAlign").and_then(|v| v.as_str()) {
+        Some("line-left") => PositionAlign::LineLeft,
+        Some("center") => PositionAlign::Center,
+        Some("line-right") => PositionAlign::LineRight,
+        _ => PositionAlign::Auto,
+    };
+    let size = e
+        .get("size")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(100.0)
+        .clamp(0.0, 100.0);
+    let align = match e.get("align").and_then(|v| v.as_str()) {
+        Some("start") => CueAlign::Start,
+        Some("end") => CueAlign::End,
+        Some("left") => CueAlign::Left,
+        Some("right") => CueAlign::Right,
+        _ => CueAlign::Center,
+    };
+    let vertical = match e.get("vertical").and_then(|v| v.as_str()) {
+        Some("rl") => Vertical::Rl,
+        Some("lr") => Vertical::Lr,
+        _ => Vertical::Horizontal,
+    };
+    lumen_dom::vtt_tree::CueRender {
+        text,
+        id,
+        settings: CueSettings {
+            vertical,
+            snap_to_lines,
+            line,
+            line_align,
+            position,
+            position_align,
+            size,
+            align,
+            region: None,
+        },
+    }
+}
+
 // ── JavaScript shim ───────────────────────────────────────────────────────────
 
 /// HTMLVideoElement Phase 1 shim, verbatim `include_str!` (GAP-MEDIADECODE
@@ -506,9 +634,19 @@ pub(crate) mod tests_v8 {
     }
 
     /// Minimal DOM stubs so the shim can run without the full DOM bridge.
+    /// `setTimeout` queues (instead of firing) with a manual `__flush_timers()`
+    /// drain: that is exactly how the VTT-RENDER-S5 renderCues coalescing is
+    /// made deterministic in tests without a real event loop.
     fn install_minimal_dom(rt: &V8JsRuntime) {
         rt.eval(
             r#"
+var __timers = [];
+function setTimeout(fn, ms) { __timers.push(fn); return __timers.length; }
+function __flush_timers() {
+  var q = __timers;
+  __timers = [];
+  for (var i = 0; i < q.length; i++) q[i]();
+}
 var document = {
   querySelectorAll: function() { return []; },
   createElement: function(tag) {
@@ -521,7 +659,7 @@ var document = {
       dispatchEvent: function(){}
     };
   }
-};
+}
 "#,
         )
         .unwrap();
@@ -710,6 +848,247 @@ tt.length === 1
             .eval("document.createElement('video').textTracks.length")
             .unwrap();
         assert_eq!(len, JsValue::Number(0.0), "no store entry → empty TextTrackList");
+    }
+
+    /// Один трек «showing» с cue 0..5 «Hi» (nid 42) — общий файл для
+    /// шим-тестов моста рендера (VTT-RENDER-S5).
+    fn showing_track_store() -> Arc<crate::text_track_store::TextTrackStore> {
+        use crate::text_track_store::{CueData, TextTrackData, TextTrackStore};
+        let tstore = Arc::new(TextTrackStore::default());
+        tstore.tracks.lock().unwrap().insert(
+            42,
+            vec![TextTrackData {
+                kind: "subtitles".to_string(),
+                label: String::new(),
+                language: String::new(),
+                mode: "showing".to_string(),
+                cues: vec![CueData {
+                    id: "c1".to_string(),
+                    start: 0.0,
+                    end: 5.0,
+                    text: "Hi".to_string(),
+                    settings: lumen_dom::vtt::VttCueSettings::default(),
+                }],
+            }],
+        );
+        tstore
+    }
+
+    /// VTT-RENDER-S5: шим зовёт `__lumen_video_render_cues` один раз на
+    /// смену состояния — при входе cue в интервал (коалесцируя стартовые
+    /// триггеры в один вызов), при выходе — с пустым списком; смена `mode`
+    /// тоже перерисовывает, невалидное значение — TypeError.
+    #[test]
+    fn vtt_render_bridge_calls_native_once_per_state() {
+        use crate::text_track_store::set_text_track_store;
+        let _guard = STORE_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        set_text_track_store(showing_track_store());
+
+        let rt = with_video();
+        rt.eval(
+            r#"
+globalThis.__cue_calls = [];
+globalThis.__lumen_video_render_cues = function(nid, json) {
+  globalThis.__cue_calls.push([nid, json]);
+  return true;
+};
+var el = document.createElement('video');
+var tt = el.textTracks;
+// В голом рантайме часы видео не идут: сеттер ничего не хранит, а геттер
+// (decoded() === false) всегда отвечает 0. Подменяем только геттер на
+// управляемые часы; родной сеттер (checkCueChanges + renderCues) остаётся.
+var __clock = 0;
+(function() {
+  var desc = Object.getOwnPropertyDescriptor(el, 'currentTime');
+  var origSet = desc.set;
+  Object.defineProperty(el, 'currentTime', {
+    get: function() { return __clock; },
+    set: function(v) { origSet.call(el, v); },
+    configurable: true,
+  });
+})();
+globalThis.__set_clock = function(t) { __clock = t; };
+"#,
+        )
+        .unwrap();
+        // Отложенный рендер ещё не бежал.
+        let deferred = bool_eval(&rt, "__cue_calls.length === 0");
+        rt.eval("__flush_timers();").unwrap();
+        let first = bool_eval(
+            &rt,
+            "__cue_calls.length === 1 && __cue_calls[0][0] === 42
+  && JSON.parse(__cue_calls[0][1]).length === 1
+  && JSON.parse(__cue_calls[0][1])[0].text === 'Hi'
+  && JSON.parse(__cue_calls[0][1])[0].id === 'c1'
+  && JSON.parse(__cue_calls[0][1])[0].snapToLines === true",
+        );
+        // currentTime внутри того же cue — состояние не изменилось, вызова нет.
+        rt.eval("__set_clock(1); el.currentTime = 1; __flush_timers();").unwrap();
+        let stable = bool_eval(&rt, "__cue_calls.length === 1");
+        // Выход из интервала — пустой список.
+        rt.eval("__set_clock(6); el.currentTime = 6; __flush_timers();").unwrap();
+        let exited = bool_eval(&rt, "__cue_calls.length === 2 && __cue_calls[1][1] === '[]'");
+        // Возврат — cue снова в списке.
+        rt.eval("__set_clock(1); el.currentTime = 1; __flush_timers();").unwrap();
+        let returned = bool_eval(
+            &rt,
+            "__cue_calls.length === 3
+  && JSON.parse(__cue_calls[2][1]).length === 1
+  && JSON.parse(__cue_calls[2][1])[0].text === 'Hi'",
+        );
+        // mode: 'disabled' — перерисовка с пустым списком, cues становится null.
+        rt.eval("tt[0].mode = 'disabled'; __flush_timers();").unwrap();
+        let disabled = bool_eval(
+            &rt,
+            "__cue_calls.length === 4 && __cue_calls[3][1] === '[]'
+  && tt[0].cues === null && tt[0].activeCues === null",
+        );
+        // mode обратно — cue вернулся.
+        rt.eval("tt[0].mode = 'showing'; __flush_timers();").unwrap();
+        let reenabled = bool_eval(
+            &rt,
+            "__cue_calls.length === 5
+  && JSON.parse(__cue_calls[4][1]).length === 1",
+        );
+        // Невалидный mode — TypeError (IDL enum), состояние не менялось.
+        let invalid = bool_eval(
+            &rt,
+            "try { tt[0].mode = 'bogus'; false; } catch (e) { e instanceof TypeError; }",
+        );
+        assert!(
+            deferred && first && stable && exited && returned && disabled && reenabled && invalid,
+            "cue render bridge steps: deferred={deferred} first={first} stable={stable} \
+             exited={exited} returned={returned} disabled={disabled} reenabled={reenabled} \
+             invalid={invalid} calls={:?}",
+            rt.eval("JSON.stringify(__cue_calls)").unwrap(),
+        );
+    }
+
+    /// VTT-RENDER-S5: натив `__lumen_video_render_cues` разбирает JSON в
+    /// `CueRender` и строит ожидаемое поддерево в UA-тени `<video>` (натив с
+    /// двумя cue), пустой список контейнер убирает; флаги «документ изменён»
+    /// подняты, как у соседних DOM-natives.
+    #[test]
+    fn vtt_render_native_rebuilds_ua_shadow_subtree() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        use crate::v8_runtime::DomTouched;
+
+        let doc = Arc::new(std::sync::Mutex::new(lumen_dom::Document::new()));
+        let video = {
+            let mut d = doc.lock().unwrap();
+            let v = d.create_element(lumen_dom::QualName::html("video"));
+            let root = d.root();
+            d.append_child(root, v);
+            v
+        };
+        let nid = video.index() as u32;
+        let dirty = Arc::new(AtomicBool::new(false));
+        let stale = Arc::new(AtomicBool::new(false));
+        let touched = Arc::new(std::sync::Mutex::new(DomTouched::default()));
+
+        let rt = V8JsRuntime::new().unwrap();
+        install_video_render_cues_v8(&rt, &doc, &dirty, &stale, &touched).unwrap();
+
+        let json = concat!(
+            r#"[{"text":"hi","id":"","line":"auto","lineAlign":"start","position":"auto","#,
+            r#""positionAlign":"auto","size":100,"align":"center","vertical":"","snapToLines":true},"#,
+            r#"{"text":"second","id":"c2","line":50,"lineAlign":"center","position":25,"#,
+            r#""positionAlign":"line-left","size":50,"align":"end","vertical":"","snapToLines":false}]"#,
+        );
+        rt.eval(&format!("__lumen_video_render_cues({}, '{}');", nid, json))
+            .unwrap();
+
+        {
+            let d = doc.lock().unwrap();
+            let sr = d.shadow_root_of(video).unwrap();
+            let container = child_with_attr(&d, sr, "data-lumen-vtt", "container")
+                .expect("cue container built in the UA shadow");
+            let boxes = children(&d, container);
+            assert_eq!(boxes.len(), 2, "both cues become cue boxes, in input order");
+            let bg0 = child_with_attr(&d, boxes[0], "data-lumen-vtt", "bg").unwrap();
+            assert_eq!(text_of(&d, children(&d, bg0)[0]), "hi");
+            // Настройки второго cue доезжают до `style` через cue_box_css:
+            // line:50% с lineAlign:center, position:25% line-left, size:50%, align:end.
+            let style = attr(&d, boxes[1], "style");
+            assert!(style.starts_with("position:absolute"), "{style}");
+            assert!(style.contains("left:25%;"), "{style}");
+            assert!(style.contains("width:50%;"), "{style}");
+            assert!(style.contains("top:50%;"), "{style}");
+            assert!(style.contains("transform:translateY(-50%);"), "{style}");
+            assert!(style.ends_with("text-align:end"), "{style}");
+            // «Документ изменён» — как у соседних DOM-natives.
+            assert!(dirty.load(Ordering::Relaxed), "relayout flag raised");
+            assert!(stale.load(Ordering::Relaxed), "flush-stale flag raised");
+            assert!(touched.lock().unwrap().unattributed, "DomTouched unattributed");
+        }
+
+        // Пустой список удаляет контейнер (т и флаги остаются поднятыми).
+        rt.eval(&format!("__lumen_video_render_cues({}, '[]');", nid))
+            .unwrap();
+        let d = doc.lock().unwrap();
+        let sr = d.shadow_root_of(video).unwrap();
+        assert!(
+            child_with_attr(&d, sr, "data-lumen-vtt", "container").is_none(),
+            "empty list removes the cue container",
+        );
+    }
+
+    /// Натив молча игнорирует мусорный JSON и чужой nid (только шим его пишет,
+    /// но защита от падения в JS-потоке обязательна).
+    #[test]
+    fn vtt_render_native_tolerates_bad_json_and_foreign_nid() {
+        use std::sync::atomic::AtomicBool;
+
+        use crate::v8_runtime::DomTouched;
+
+        let doc = Arc::new(std::sync::Mutex::new(lumen_dom::Document::new()));
+        let dirty = Arc::new(AtomicBool::new(false));
+        let stale = Arc::new(AtomicBool::new(false));
+        let touched = Arc::new(std::sync::Mutex::new(DomTouched::default()));
+        let rt = V8JsRuntime::new().unwrap();
+        install_video_render_cues_v8(&rt, &doc, &dirty, &stale, &touched).unwrap();
+        rt.eval("__lumen_video_render_cues(9999, 'not json');").unwrap();
+        rt.eval("__lumen_video_render_cues(9999, '{\"text\":\"x\"}');").unwrap();
+        // Ничего не построено: у узла 9999 нет UA-тени, контейнера в документе нет.
+        let d = doc.lock().unwrap();
+        for i in 0..d.node_count() {
+            let id = lumen_dom::NodeId::from_raw(i as u32);
+            assert!(
+                child_with_attr(&d, id, "data-lumen-vtt", "container").is_none(),
+                "no cue container anywhere for a foreign nid",
+            );
+        }
+    }
+
+    /// Помощники инспекции DOM для тестов моста рендера (зеркало тестов
+    /// `lumen_dom::vtt_tree`).
+    fn child_with_attr(
+        doc: &lumen_dom::Document,
+        parent: lumen_dom::NodeId,
+        name: &str,
+        value: &str,
+    ) -> Option<lumen_dom::NodeId> {
+        doc.get(parent)
+            .children
+            .iter()
+            .copied()
+            .find(|&child| doc.get(child).get_attr(name) == Some(value))
+    }
+
+    fn attr(doc: &lumen_dom::Document, id: lumen_dom::NodeId, name: &str) -> String {
+        doc.get(id).get_attr(name).unwrap_or_default().to_string()
+    }
+
+    fn text_of(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> String {
+        match &doc.get(id).data {
+            lumen_dom::NodeData::Text(s) => s.clone(),
+            _ => String::new(),
+        }
+    }
+
+    fn children(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> Vec<lumen_dom::NodeId> {
+        doc.get(id).children.clone()
     }
 
     /// UX-VIDEO-NATIVE: with a decoder installed `canPlayType` is its answer

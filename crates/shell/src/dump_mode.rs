@@ -212,6 +212,9 @@ pub(crate) fn render_source_to_png(
         None,
     )?;
 
+    // VTT-RENDER-S5 (BUG-1748): cue pages need the store mirror + one timer
+    // drain before settle (its relayout is the one this path relies on).
+    mirror_tracks_and_settle_cues(&mut parsed, vp);
     load_web_fonts_before_snapshot(&mut parsed, &raw.base, &event_sink, vp);
     settle_after_load(&mut parsed, vp);
 
@@ -486,6 +489,54 @@ fn settle_reftest_wait(js: &dyn crate::persistent_js::PersistentJs, mut ts: f64)
 #[cfg(not(feature = "v8"))]
 pub(crate) fn settle_after_load(_parsed: &mut crate::page_pipeline::ParsedPage, _vp: Size) {}
 
+/// VTT-RENDER-S5 (BUG-1748): the one-shot snapshot path never ran the live
+/// loop's per-frame pumps, so the cue render bridge — the shim's initial
+/// `checkCueChanges` timer and its coalesced `setTimeout(…, 0)` render — never
+/// fired here and cue pages painted empty in `--screenshot`/`--dump-*`. For a
+/// page that carries `<track>`s: install the process-global text-track store
+/// if the live window hasn't, mirror this page's `page_tracks` into it, drain
+/// due timers once (`_lumen_tick_timers`) and re-layout when the bridge marked
+/// the document dirty. Pages without tracks return before any of that — their
+/// dumps stay byte for byte what they were.
+fn mirror_tracks_and_settle_cues(parsed: &mut crate::page_pipeline::ParsedPage, vp: Size) {
+    if parsed.page_tracks.tracks_by_video.is_empty() {
+        return;
+    }
+    let store = match lumen_js::get_text_track_store() {
+        Some(s) => s,
+        None => {
+            let s = std::sync::Arc::new(lumen_js::TextTrackStore::default());
+            lumen_js::set_text_track_store(std::sync::Arc::clone(&s));
+            s
+        }
+    };
+    crate::video_tick::mirror_tracks_into(&store, &parsed.page_tracks.tracks_by_video);
+    let Some(js) = parsed.js_ctx.clone() else { return };
+    // Дренаж таймеров в несколько оборотов: цепочка рендера cue асинхронная —
+    // `startTrackLoad` фетчит файл через setTimeout(…, 0), его промис доезжает
+    // на следующем тике (`_lumen_fetch_pump` качается тем же
+    // `_lumen_tick_timers`), `finishTrackLoad` ставит коалесцированный
+    // `renderCues` ещё одним setTimeout. Небольшой потолок; на странице без
+    // ответов цепочка просто иссякает.
+    for _ in 0..8 {
+        js.eval_js("if (typeof _lumen_tick_timers === 'function') _lumen_tick_timers();");
+    }
+    if js.take_dom_dirty() {
+        let layout = {
+            let Ok(doc) = parsed.document.lock() else { return };
+            lumen_layout::layout_measured_hyp(
+                &doc,
+                &parsed.stylesheet,
+                vp,
+                &parsed.measurer,
+                &NullHyphenationProvider,
+                false,
+            )
+        };
+        parsed.layout = layout;
+    }
+}
+
 /// Convert a `PersistentJs::flush_canvas_updates` drain into renderer image
 /// entries keyed exactly the way the display list refers to them.
 ///
@@ -524,7 +575,7 @@ pub(crate) fn do_print_to_pdf(
 
     let raw = source.load_bytes(event_sink.clone(), None)?;
     let vp = Size::new(PDF_PAGE_W as f32, PDF_PAGE_H as f32);
-    let parsed = parse_and_layout(
+    let mut parsed = parse_and_layout(
         &raw.bytes,
         raw.content_type.as_deref(),
         &raw.base,
@@ -553,6 +604,8 @@ pub(crate) fn do_print_to_pdf(
         raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(),
         None,
     )?;
+    // VTT-RENDER-S5 (BUG-1748): mirror tracks + timer drain for cue pages.
+    mirror_tracks_and_settle_cues(&mut parsed, vp);
 
     let ctx = PaginationContext {
         page_width: PDF_PAGE_W as f32,
@@ -620,7 +673,7 @@ pub(crate) fn do_print_to_pdf_with_opts(
     let scaled_w = (page_w as f32 * scale_factor).ceil();
     let scaled_h = (page_h as f32 * scale_factor).ceil();
     let vp = Size::new(scaled_w, scaled_h);
-    let parsed = parse_and_layout(
+    let mut parsed = parse_and_layout(
         &raw.bytes,
         raw.content_type.as_deref(),
         &raw.base,
@@ -649,6 +702,8 @@ pub(crate) fn do_print_to_pdf_with_opts(
         raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(),
         None,
     )?;
+    // VTT-RENDER-S5 (BUG-1748): mirror tracks + timer drain for cue pages.
+    mirror_tracks_and_settle_cues(&mut parsed, vp);
 
     let ctx = PaginationContext {
         page_width: scaled_w,
@@ -864,13 +919,17 @@ pub(crate) fn run_dump(
         }
         DumpKind::Layout => {
             let vp = dump_vp;
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type.as_deref(), &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, None, lumen_core::ColorSpace::Srgb, false, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy, raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(), None)?;
+            let mut parsed = parse_and_layout(&raw.bytes, raw.content_type.as_deref(), &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, None, lumen_core::ColorSpace::Srgb, false, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy, raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(), None)?;
+            // VTT-RENDER-S5 (BUG-1748): mirror tracks + timer drain for cue pages.
+            mirror_tracks_and_settle_cues(&mut parsed, vp);
             print!("{}", lumen_layout::serialize_layout_tree(&parsed.layout));
             Ok(())
         }
         DumpKind::DisplayList => {
             let vp = dump_vp;
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type.as_deref(), &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, None, lumen_core::ColorSpace::Srgb, false, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy, raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(), None)?;
+            let mut parsed = parse_and_layout(&raw.bytes, raw.content_type.as_deref(), &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, None, lumen_core::ColorSpace::Srgb, false, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy, raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(), None)?;
+            // VTT-RENDER-S5 (BUG-1748): mirror tracks + timer drain for cue pages.
+            mirror_tracks_and_settle_cues(&mut parsed, vp);
             let custom = crate::display_list_metrics::custom_highlights(parsed.js_ctx.as_deref());
             let highlights = {
                 let doc = parsed.document.lock().unwrap_or_else(|e| e.into_inner());

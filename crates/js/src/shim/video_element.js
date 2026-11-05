@@ -222,13 +222,17 @@
 
   // One TextTrack over a plain `{kind,label,language,mode,cues}` record. `el` is
   // the owning media element — `activeCues` needs its playback clock.
+  // `mode` is an accessor (VTT-RENDER-S5): the value lives in `_mode` and every
+  // change re-runs the cue render, so `track.mode = 'showing'` from a page puts
+  // the track's cues on (or off) the <video> the way the shell's `default`
+  // heuristic already does at load time.
   function makeTextTrack(el, td) {
     td = td || {};
     var track = {
       kind: td.kind || '',
       label: td.label || '',
       language: td.language || '',
-      mode: td.mode || 'disabled',
+      _mode: td.mode || 'disabled',
       id: '',
       oncuechange: null,
       _cues: [],
@@ -243,6 +247,25 @@
         if (k >= 0) this._listeners.splice(k, 1);
       },
     };
+    // HTML §4.8.11: `mode` is a WebIDL enum — an invalid value must throw,
+    // a valid one re-renders the video's cues (VTT-RENDER-S5).
+    Object.defineProperty(track, 'mode', {
+      get: function() { return this._mode; },
+      set: function(v) {
+        var m = String(v);
+        if (m !== 'showing' && m !== 'hidden' && m !== 'disabled') {
+          throw new TypeError(
+            "Failed to set the 'mode' property on 'TextTrack': The provided value '" + m +
+              "' is not a valid enum value.");
+        }
+        if (m !== this._mode) {
+          this._mode = m;
+          renderCues(el);
+        }
+      },
+      configurable: true,
+      enumerable: true,
+    });
     Object.defineProperty(track, 'cues', {
       get: function() { return this.mode === 'disabled' ? null : makeCueList(this._cues); },
       configurable: true,
@@ -261,6 +284,9 @@
       configurable: true,
     });
     appendCues(track, td.cues || []);
+    // VTT-RENDER-S5: cues arrived (or the track was re-created) — the video's
+    // cue render must see them even if no `cuechange` ever fires.
+    renderCues(el);
     return track;
   }
 
@@ -376,6 +402,78 @@
     }
   }
 
+  // ── VTT-RENDER-S5 (BUG-1748): the JS→DOM cue render bridge ──────────────────
+  //
+  // The shell's hand-made overlay is gone: cues now render as CSS boxes in the
+  // <video>'s UA shadow (VTT-RENDER-S3/S4), and *this* file decides when. Every
+  // trigger — the playback clock (`checkCueChanges`), a `mode` flip, a freshly
+  // loaded cue list — funnels into `renderCues`, which coalesces through
+  // `setTimeout(…, 0)` (a seek, a timeupdate and a mode write in one script
+  // turn cost exactly one native call) and, on the flush, builds the active-cue
+  // JSON — showing tracks in track order, cues in cue order, currently within
+  // `[startTime, endTime)` — and hands it to `__lumen_video_render_cues(nid,
+  // json)` only when the string differs from the previous one. The native
+  // rebuilds the cue subtree in the DOM and marks the document changed, so the
+  // snapshot pipeline (`--screenshot`, `--ipc-server`, CPU raster) sees cues
+  // through the same layout/paint code the live window does — that is the
+  // whole point of BUG-1748.
+  function renderCues(el) {
+    if (!el) return;
+    if (typeof setTimeout === 'function') {
+      if (el.__lumen_cue_render_pending) return;
+      el.__lumen_cue_render_pending = true;
+      setTimeout(function() {
+        el.__lumen_cue_render_pending = false;
+        try { pushCueRender(el); } catch (e) {
+          if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e);
+        }
+      }, 0);
+    } else {
+      // Bare runtime (unit tests): no timer to coalesce with — push directly.
+      try { pushCueRender(el); } catch (e) {
+        if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e);
+      }
+    }
+  }
+
+  // Builds the JSON snapshot and calls the native on a difference. Reads
+  // `el.__lumen_text_tracks` directly — `el.textTracks` here would re-enter
+  // `buildTextTracks` mid-build (the getter caches only after it returns).
+  function pushCueRender(el) {
+    var nid = el.__nid__;
+    if (nid === undefined || typeof __lumen_video_render_cues !== 'function') return;
+    var tl = el.__lumen_text_tracks;
+    if (!tl || tl.length === 0) return;
+    var ct = el.currentTime || 0;
+    var out = [];
+    for (var i = 0; i < tl.length; i++) {
+      var tr = tl[i];
+      if (tr.mode !== 'showing') continue;
+      for (var j = 0; j < tr._cues.length; j++) {
+        var c = tr._cues[j];
+        if (c.startTime <= ct && ct < c.endTime) {
+          out.push({
+            text: c.text,
+            id: c.id,
+            line: c.line,
+            lineAlign: c.lineAlign,
+            position: c.position,
+            positionAlign: c.positionAlign,
+            size: c.size,
+            align: c.align,
+            vertical: c.vertical,
+            snapToLines: c.snapToLines,
+          });
+        }
+      }
+    }
+    var json = JSON.stringify(out);
+    if (json !== el.__lumen_cue_render_sig) {
+      el.__lumen_cue_render_sig = json;
+      __lumen_video_render_cues(nid, json);
+    }
+  }
+
   function checkCueChanges(el) {
     var tl = el.__lumen_text_tracks;
     // Late population: the shell may parse <track> files after the shim ran.
@@ -392,6 +490,8 @@
       }
       if (sig !== tr._activeSig) { tr._activeSig = sig; fireTrackCueChange(tr); }
     }
+    // VTT-RENDER-S5: the playback clock moved — the cue render must follow it.
+    renderCues(el);
   }
 
   // ── <track> loading: HTML LS §4.8.11.1 «start the track processing model» ───
@@ -536,6 +636,9 @@
     var st = trackState(nid);
     st.readyState = 2; // HTMLTrackElement.LOADED
     appendCues(ensureTrackObject(nid), cues || []);
+    // VTT-RENDER-S5: a script-created track's file arrived — its video's cue
+    // render must see the new cues even if `currentTime` never moves.
+    renderCues(trackMediaElement(nid));
     fireTrackEvent(nid, 'load');
   }
 
@@ -639,12 +742,12 @@
   // markup on the snapshot would mean one page having two owners depending on
   // how each of its tracks happened to get there.
   //
-  // What does NOT move is painting: the shell keeps its own cue store and its own
-  // walk, so the overlay is unchanged, at the price of the file being fetched
-  // twice. That is the approximation `_lumen_link_prepare` and the `@import` path
-  // already carry, and one the createElement path has been paying since BUG-775
-  // anyway — a script-built track whose <video> is in the document is fetched by
-  // both halves today.
+  // What DOES move with it is painting: the DOM-side half (shell `load_video_tracks`
+  // → `__lumen_texttracks_json`) feeds only `video.textTracks`; the actual cue
+  // render runs through `renderCues` → `__lumen_video_render_cues` from the JS
+  // list alone (VTT-RENDER-S5), so a track only the JS half knows about still
+  // reaches the screen. The price stays the same as it has been since BUG-775:
+  // the file being fetched twice when both halves can see it.
   function scanTrackElements() {
     var tracks;
     try { tracks = document.getElementsByTagName('track'); } catch (e) { return; }
