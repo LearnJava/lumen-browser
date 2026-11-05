@@ -183,7 +183,9 @@ pub use noise_key::{set_noise_exceptions, set_noise_secret};
 pub use origin::set_public_suffix_list;
 pub use wake_lock::set_wake_lock_provider;
 pub use video_gif_store::{set_video_decoder, set_video_gif_store, VideoGifStore};
-pub use text_track_store::{set_text_track_store, CueData, TextTrackData, TextTrackStore};
+pub use text_track_store::{
+    get_text_track_store, set_text_track_store, CueData, TextTrackData, TextTrackStore,
+};
 pub use css_properties_values_api::{RegisteredProperty, RegisteredPropertiesMap, get_registered_properties};
 pub use paint_worklet::paint_worklet_epoch;
 pub use dom::{

@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-11-02",
+ "generated": "2026-11-05",
  "counts": {
   "open": 325,
-  "fixed": 1391,
+  "fixed": 1393,
   "inprogress": 0,
   "wontfix": 4
  },
- "total_bugs": 1720,
+ "total_bugs": 1722,
  "phases": [
   {
    "id": "P0",
@@ -2976,7 +2976,7 @@
        "id": "css-specs-t2",
        "title": "CSS модули — Tier 2 (High visual value)",
        "status": "active",
-       "note": "4✅ 9🟡 0⬜ 0🚫 из 13 модулей CSS-SPECS.md (Tier 2)"
+       "note": "5✅ 8🟡 0⬜ 0🚫 из 13 модулей CSS-SPECS.md (Tier 2)"
       },
       {
        "id": "css-specs-t3",
@@ -11783,13 +11783,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1748": {
-   "status": "open",
-   "title": "Найден WPT-VTT-SCOUT: оверлей cue субтитров дописывается в display list только перед GPU-кадром окна — в `--screenshot`/`--ipc-server` cue не рисуется при `acti…",
-   "component": "shell (`app/window_event/redraw_requested.rs:1172` `tracks::build_cue_overlay`; `lumen/automation.rs` `render_current_page_to_png`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1749": {
    "status": "open",
    "title": "Найден WPT-VTT-SCOUT: `cuechange` перепроверяется только по тику воспроизведения/seek и одним `setTimeout(0)` до загрузки `<track>` (ложное событие при пустом н…",
@@ -11808,13 +11801,6 @@
    "status": "open",
    "title": "Найден WPT-VTT-SCOUT (кластер H6): `VTTCue` — собственные data-свойства без IDL-аксессоров на прототипе, нет `IndexSizeError`/фильтра enum/`TypeError` на NaN, н…",
    "component": "js (`crates/js/src/shim/video_element.js:286` `VTTCue`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1752": {
-   "status": "open",
-   "title": "Найден WPT-WASM-SCOUT: очередь задач платформы V8 разбирается только в путях GC (`run_gc_pass`), цикл JS-потока не зовёт `Platform::pump_message_loop` — `Atomic…",
-   "component": "js (`crates/js/src/v8_runtime/thread.rs` — цикл JS-потока)",
    "date": null,
    "debtor": false
   },
@@ -12025,6 +12011,20 @@
    "status": "open",
    "title": "SITES-TRIAGE-2: ea.com — `bad_optional_access was thrown in -fno-exceptions mode`, окно умирает (DEAD, 2 из 2). Сайт: ea-com (вес 2).",
    "component": "js (V8, `-fno-exceptions`) — не локализовано",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1784": {
+   "status": "open",
+   "title": "`getComputedStyle(#empty).display` отдаёт `\"\"` вместо `\"inline\"` — тест `cases::bug1191_boxless_computed_style` красный на чистом main (проверено stash-эксперим…",
+   "component": "layout / driver (getComputedStyle бокссового элемента)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1785": {
+   "status": "open",
+   "title": "Конфликт канонов url() в cssText: border-image сериализует `url(\"a.png\")`, тест BUG-1552 ждёт `url(a.png)` — единственное расхождение `css_float_and_border_shor…",
+   "component": "layout/style (`border_image.rs:151,502` vs тест BUG-1552)",
    "date": null,
    "debtor": false
   },
@@ -21792,6 +21792,20 @@
    "component": "shell (`crates/shell/src/frames.rs::frame_scrollbar_overlay`, `lumen/scrolling.rs::frame_local_point`)",
    "date": "2026-10-28",
    "debtor": false
+  },
+  "BUG-1752": {
+   "status": "fixed",
+   "title": "Очередь задач платформы V8 разбиралась только в путях GC (`run_gc_pass`): `Atomics.waitAsync` (notify и таймаут), колбэки `FinalizationRegistry` и завершение ас…",
+   "component": "js (`crates/js/src/v8_runtime/thread.rs` — цикл JS-потока)",
+   "date": "2026-11-03",
+   "debtor": false
+  },
+  "BUG-1748": {
+   "status": "fixed",
+   "title": "",
+   "component": "Найден WPT-VTT-SCOUT: оверлей cue субтитров дописывается в display list только перед GPU-кадром окна — в `--screenshot`/`--ipc-server` cue не рисуется при `activeCues.length=1`; все 229 FAIL-рефтестов `webvtt/rendering/` — пустое видео.",
+   "date": "2026-11-05",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -24152,6 +24166,9 @@
   "layout / css-parser (`@color-profile`, `color()`)": [
    "BUG-282"
   ],
+  "layout / driver (getComputedStyle бокссового элемента)": [
+   "BUG-1784"
+  ],
   "layout / paint / shell (окна ниже; виновники не найдены)": [
    "BUG-1777"
   ],
@@ -24356,6 +24373,9 @@
   ],
   "layout/shell/js (привязка к snap и `scroll-padding` при программной прокрутке)": [
    "BUG-1574"
+  ],
+  "layout/style (`border_image.rs:151,502` vs тест BUG-1552)": [
+   "BUG-1785"
   ],
   "layout/text": [
    "BUG-120"
@@ -24789,9 +24809,6 @@
   "shell (`PageSource::from_arg`)": [
    "BUG-1636"
   ],
-  "shell (`app/window_event/redraw_requested.rs:1172` `tracks::build_cue_overlay`; `lumen/automation.rs` `render_current_page_to_png`)": [
-   "BUG-1748"
-  ],
   "shell (`chrome_ui.rs:365` `loading: …nav_start.is_some()` + спиннер вкладки, UX-LOADING)": [
    "BUG-1597"
   ],
@@ -25160,6 +25177,9 @@
   ],
   "wptrunner-исполнитель (`tools/wptrunner/wptrunner/executors/executorlumen.py` — `LumenBidiProtocol.is_alive`, `LumenTestharnessExecutor.do_test`)": [
    "BUG-1022"
+  ],
+  "Найден WPT-VTT-SCOUT: оверлей cue субтитров дописывается в display list только перед GPU-кадром окна — в `--screenshot`/`--ipc-server` cue не рисуется при `activeCues.length=1`; все 229 FAIL-рефтестов `webvtt/rendering/` — пустое видео.": [
+   "BUG-1748"
   ],
   "не изолирован (layout / paint / js)": [
    "BUG-733"

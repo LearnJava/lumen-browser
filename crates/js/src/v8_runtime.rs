@@ -290,6 +290,11 @@ impl V8JsRuntime {
         // file-API grants get (BUG-371). Cloned before `page_origin` is needed
         // again by the installs after `self.run` returns.
         let sw_origin = page_origin.clone();
+        // VTT-RENDER-S5 (BUG-1748): the cue render bridge native mutates the
+        // document and is installed after `self.run` returns (with the other
+        // `install_*_v8` dispatches), so it needs its own Arc clone — the run
+        // closure takes `doc` by move.
+        let cue_bridge_doc = Arc::clone(&doc);
 
         self.run(move |inner| {
             // ESM (S12b-23): fallback base URL the module resolver uses for
@@ -1216,6 +1221,20 @@ impl V8JsRuntime {
         install_v8!(url_pattern::install_url_pattern_api_v8);
         install_v8!(mse_bindings::install_mse_bindings_v8);
         install_v8!(video_bindings::install_video_bindings_v8);
+        // VTT-RENDER-S5 (BUG-1748): the cue render bridge mutates the document
+        // (UA-shadow cue subtree), so it takes the same handles as the
+        // document-mutating DOM natives — the doc itself plus the
+        // relayout/flush-stale/DomTouched flags. Plain call, not `install_v8!`:
+        // the macro passes only `self`.
+        if let Err(e) = crate::video_bindings::install_video_render_cues_v8(
+            self,
+            &cue_bridge_doc,
+            &Arc::clone(&self.dom_dirty),
+            &Arc::clone(&self.flush_stale),
+            &Arc::clone(&self.dom_touched),
+        ) {
+            eprintln!("v8: video_bindings::install_video_render_cues_v8 failed: {e}");
+        }
         install_v8!(video_pip::install_video_pip_api_v8);
         // CSS View Transitions L1 (BUG-545): takes `view_transition_events` by ref since
         // the native closures need the runtime-instance Arc, not just `&self` (mirrors the

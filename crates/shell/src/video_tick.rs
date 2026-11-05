@@ -31,6 +31,46 @@ fn playing_frame_wait(last_ms: Option<u64>, cur_ms: u64) -> (bool, u64) {
     if since >= VIDEO_FRAME_MS { (true, VIDEO_FRAME_MS) } else { (false, VIDEO_FRAME_MS - since) }
 }
 
+/// Body of `LoadedTrack` → `lumen_js::TextTrackData` mirroring, shared by the
+/// live loop ([`Lumen::sync_text_track_store`]) and the one-shot snapshot path
+/// (`dump_mode::mirror_tracks_and_settle_cues`, VTT-RENDER-S5 / BUG-1748).
+/// Fully replaces the store's contents (clear + repopulate), so navigating to
+/// a track-less page empties it.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+pub(crate) fn mirror_tracks_into(
+    store: &lumen_js::TextTrackStore,
+    tracks_by_video: &std::collections::HashMap<lumen_dom::NodeId, Vec<crate::tracks::LoadedTrack>>,
+) {
+    let mut guard = store.tracks.lock().unwrap();
+    guard.clear();
+    for (node, tracks) in tracks_by_video {
+        let nid = node.index() as u32;
+        let data: Vec<lumen_js::TextTrackData> = tracks
+            .iter()
+            .map(|t| lumen_js::TextTrackData {
+                kind: t.kind.clone(),
+                label: t.label.clone(),
+                language: t.language.clone(),
+                mode: t.mode.clone(),
+                cues: t
+                    .cues
+                    .iter()
+                    .map(|c| lumen_js::CueData {
+                        id: c.id.clone().unwrap_or_default(),
+                        start: c.start_s,
+                        end: c.end_s,
+                        text: c.text.clone(),
+                        // VTT-RENDER-S2 (BUG-902 п.2): сырые настройки едут
+                        // в store, IDL-JSON строит lumen_js.
+                        settings: c.settings.clone(),
+                    })
+                    .collect(),
+            })
+            .collect();
+        guard.insert(nid, data);
+    }
+}
+
 impl Lumen {
     /// Mirror `page_tracks.tracks_by_video` into the shared
     /// [`lumen_js::TextTrackStore`] so `video.textTracks` reflects the parsed
@@ -38,34 +78,7 @@ impl Lumen {
     /// so navigating to a track-less page empties it.
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn sync_text_track_store(&self) {
-        let mut guard = self.text_track_store.tracks.lock().unwrap();
-        guard.clear();
-        for (node, tracks) in &self.page_tracks.tracks_by_video {
-            let nid = node.index() as u32;
-            let data: Vec<lumen_js::TextTrackData> = tracks
-                .iter()
-                .map(|t| lumen_js::TextTrackData {
-                    kind: t.kind.clone(),
-                    label: t.label.clone(),
-                    language: t.language.clone(),
-                    mode: t.mode.clone(),
-                    cues: t
-                        .cues
-                        .iter()
-                        .map(|c| lumen_js::CueData {
-                            id: c.id.clone().unwrap_or_default(),
-                            start: c.start_s,
-                            end: c.end_s,
-                            text: c.text.clone(),
-                            // VTT-RENDER-S2 (BUG-902 п.2): сырые настройки едут
-                            // в store, IDL-JSON строит lumen_js.
-                            settings: c.settings.clone(),
-                        })
-                        .collect(),
-                })
-                .collect();
-            guard.insert(nid, data);
-        }
+        mirror_tracks_into(&self.text_track_store, &self.page_tracks.tracks_by_video);
     }
 
     /// Advance GIF-backed `<video>` playback: drain pending loads, decode GIFs,
