@@ -322,12 +322,6 @@ pub(super) fn v8_thread_main(
             V8Command::Shutdown => break,
         }
     }
-    // Free WASM import `v8::Global` GC roots on this thread while the isolate
-    // is still alive (mirrors QuickJS's `wasm::clear_registry()` discipline at
-    // `lib.rs:447` — see BUG-222). `Global::drop` no-ops safely on an already
-    // disposed isolate, but releasing the persistent handle here is the
-    // correct, leak-free order.
-    crate::wasm::v8_bridge::clear_registry();
     // Same discipline for the ESM module map's `v8::Global<v8::Module>` roots
     // (S12b-23): release them here, while the isolate is still alive.
     crate::v8_esm::reset();
