@@ -638,8 +638,12 @@ impl Drop for OwnedNativeFn {
 // variant (`v8_to_jsvalue` collapses functions to `Null`). `V8NativeFnScoped`
 // gives a native raw access to the call scope and `FunctionCallbackArguments`
 // instead, so it can read `Local<Function>` handles and mint `Global`s from
-// them. Used only by the WASM host-import bridge (`crate::wasm::v8_bridge`) —
-// every other native goes through the ergonomic `into_v8_fnN` path above.
+// them. Needed by the natives that take a raw `Function` argument or attach an
+// `External` self-reference (`_lumen_make_html_all_collection`,
+// `_lumen_capture_call_site`, `_lumen_run_classic_script`,
+// `_lumen_dom_reclaim_now`, `atob`/`btoa` in workers — see callers of
+// `register_v8_native_scoped`); every other native goes through the ergonomic
+// `into_v8_fnN` path above.
 
 /// Object-safe trait for natives needing raw V8 scope/argument access.
 pub(crate) trait V8NativeFnScoped: Send + 'static {
