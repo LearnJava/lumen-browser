@@ -37,13 +37,20 @@ thread_local! {
 
 /// JS-помощник стриминга: `__lumen_wasm_stream_start(source, id)`.
 ///
+/// Имя заводится присваиванием в `__lumen_C` (паттерн badging и соседей):
+/// `rt.eval` оборачивает скрипт, ссылающийся на имена контейнера, в
+/// `with (container)`, и функция живёт в контейнере — `getOwnPropertyNames`
+/// глобала её не видит (BUG-753, ценз `only_known_internal_names`). В замыкании
+/// функции остаётся with-объект, поэтому голые имена нативов
+/// `__lumen_wasm_stream_finish`/`_abort` разрешаются из контейнера и при
+/// вызове из колбэка V8.
+///
 /// MIME сравнивается вручную по ASCII-регистру: `application/wasm;` и
 /// `application/wasm;charset=UTF-8` обязаны отвергаться (WPT `contenttype`),
 /// а `APPLICATION/WASM` — приниматься; общий `String::toLowerCase` здесь
 /// шире нужного (Unicode-складывание), поэтому побайтовый цикл.
 const WASM_STREAMING_HELPER: &str = r#"
 (function () {
-  'use strict';
   var MIME = 'application/wasm';
   function mime_is_wasm(value) {
     if (typeof value !== 'string' || value.length !== MIME.length) return false;
@@ -54,7 +61,7 @@ const WASM_STREAMING_HELPER: &str = r#"
     }
     return true;
   }
-  globalThis.__lumen_wasm_stream_start = function (source, id) {
+  __lumen_C.__lumen_wasm_stream_start = function (source, id) {
     Promise.resolve(source).then(function (resp) {
       if (!(resp instanceof Response)) {
         throw new TypeError('WebAssembly streaming: the argument must resolve to a Response');
@@ -108,9 +115,12 @@ fn wasm_streaming_callback(
 ) {
     let ctx = scope.get_current_context();
     let global = ctx.global(scope);
+    // Помощник живёт в контейнере внутренних имён (BUG-753), не на глобале —
+    // читаем через holder_for, как все внутренние имена.
     let key = v8::String::new(scope, "__lumen_wasm_stream_start");
+    let holder = crate::internal_globals::holder_for(scope, ctx, "__lumen_wasm_stream_start");
     let start = key
-        .and_then(|k| global.get(scope, k.into()))
+        .and_then(|k| holder.get(scope, k.into()))
         .and_then(|v| v8::Local::<v8::Function>::try_from(v).ok());
     let Some(start) = start else {
         // Помощник не установлен: обещание обязано отклониться, а не повиснуть.
