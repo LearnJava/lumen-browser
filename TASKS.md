@@ -14,5 +14,5 @@
 | VTT-RENDER-S5 | Мост JS→DOM (__lumen_video_render_cues), удалить самодельный оверлей; закрывает BUG-1748; бриф §S5 | ✓ DONE (2026-11-05) |
 | VTT-RENDER-S6 | Обход перекрытий §7.2, BoxRole::VttCueContainer, обновление CAPABILITIES.md и docs/wpt-vendor-notes/webvtt.md; бриф §S6 | ✓ DONE (2026-11-05) |
 | WASM-V8-NATIVE-S1 | Убрать шим WebAssembly (родной глобал V8), set_allow_wasm_code_generation_callback; ветка p1-wasm-v8-native-s1 | ✓ DONE (2026-11-05, merge 13ce99231) |
-| WASM-V8-NATIVE-S2 | compileStreaming/instantiateStreaming через set_wasm_streaming_callback, v8_runtime/wasm_streaming.rs; бриф §S2 | ● IN PROGRESS (zs1-wasm-v8-native-s2, 2026-11-06) |
+| WASM-V8-NATIVE-S2 | compileStreaming/instantiateStreaming через set_wasm_streaming_callback, v8_runtime/wasm_streaming.rs; бриф §S2 | ✓ DONE (2026-11-06) |
 | WASM-V8-NATIVE-S3 | Удалить мёртвый интерпретатор crates/js/src/wasm/ (~5.7 тыс. строк), обновить CAPABILITIES.md и wpt-доки; бриф §S3 | ○ TODO |
