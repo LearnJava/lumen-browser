@@ -98,7 +98,7 @@ pub(crate) fn document_encoding(doc: &Document) -> lumen_encoding::Encoding {
 /// BUG-1413: тексты листов возвращаются кусками по узлам `<link>` (с переводом строки
 /// в конце каждого), а не одной строкой — порядок относительно инлайновых
 /// `<style>` выбирает `doc_extract::merge_sheet_chunks`.
-pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn EventSink>, cookie_jar: Option<Arc<lumen_storage::CookieJar>>, media_ctx: &lumen_css_parser::MediaContext) -> (SheetChunks, Vec<(NodeId, bool)>, Vec<String>) {
+pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn EventSink>, cookie_jar: Option<DocCookieJar>, media_ctx: &lumen_css_parser::MediaContext) -> (SheetChunks, Vec<(NodeId, bool)>, Vec<String>) {
     let mut hrefs = Vec::new();
     collect_link_hrefs(doc, doc.root(), &mut hrefs, media_ctx);
     let doc_encoding = document_encoding(doc);
@@ -216,7 +216,7 @@ pub(crate) fn resolve_inline_style_imports(
     chunks: &[(NodeId, String)],
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
     media_ctx: &lumen_css_parser::MediaContext,
     referring_encoding: lumen_encoding::Encoding,
     csp_gate: Option<(&[CspPolicy], Option<&Origin>)>,
@@ -276,7 +276,7 @@ fn fetch_stylesheet_text(
     href: &str,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
     link_charset_attr: Option<&str>,
     referring_encoding: lumen_encoding::Encoding,
     csp_gate: Option<(&[CspPolicy], Option<&Origin>)>,
@@ -379,7 +379,7 @@ fn fetch_stylesheet_for_cascade(
     href: &str,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
     link_charset_attr: Option<&str>,
     referring_encoding: lumen_encoding::Encoding,
     csp_gate: Option<(&[CspPolicy], Option<&Origin>)>,
@@ -439,7 +439,7 @@ pub(crate) fn inline_css_imports(
     css_text: &str,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
     media_ctx: &lumen_css_parser::MediaContext,
     seen: &mut std::collections::HashSet<String>,
     depth: u32,
@@ -597,7 +597,7 @@ pub(crate) fn build_stylesheet_node_registry(
     doc: &Document,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
 ) -> Vec<StylesheetNodeEntry> {
     let mut owners = Vec::new();
     collect_stylesheet_owners(doc, doc.root(), &mut owners);

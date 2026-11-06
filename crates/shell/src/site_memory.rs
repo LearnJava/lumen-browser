@@ -68,6 +68,8 @@ use std::time::Duration;
 
 use lumen_core::event::Event;
 use lumen_core::ext::EventSink;
+
+use crate::DocCookieJar;
 use lumen_network::RequestDestination;
 
 use crate::resource_base::ResourceBase;
@@ -419,7 +421,10 @@ pub(crate) fn replay(
         // A failed spawn drops `reservation`, which publishes an error: the
         // consumer then fetches the resource itself.
         let _ = std::thread::Builder::new().name("lumen-site-replay".to_owned()).spawn(move || {
-            let client = base.http_client_for_subresource(sink, Some(cookie_jar));
+            let client = base.http_client_for_subresource(
+                sink,
+                Some(DocCookieJar::for_base(cookie_jar, &base)),
+            );
             reservation.fill(
                 client
                     .fetch_subresource_with_content_type(&parsed, destination)

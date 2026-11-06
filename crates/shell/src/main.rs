@@ -294,7 +294,7 @@ use crate::stylesheets::{
 #[cfg(test)]
 use crate::stylesheets::{collect_link_hrefs, contains_ignore_ascii_case, inline_css_imports};
 use crate::parallel_fetch::parallel_map;
-use crate::resource_base::{ResolvedResource, ResourceBase, SW_FETCH_INTERCEPTOR, path_to_file_url};
+use crate::resource_base::{DocCookieJar, ResolvedResource, ResourceBase, SW_FETCH_INTERCEPTOR, path_to_file_url};
 use crate::input::keybindings::{KeyCommand, TypeableField, keybinding_for};
 use crate::input::layout_keys::{accesskey_chars, shortcut_code};
 use crate::input::winit_events::{css_cursor_to_winit, cursor_icon_for_hover, winit_modifiers_state};

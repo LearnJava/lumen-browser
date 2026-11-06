@@ -136,6 +136,7 @@ impl CookieJar {
         set_common_pragmas(&conn).map_err(|e| Error::Storage(format!("cookies pragmas: {e}")))?;
         run_migrations(&mut conn, MIGRATIONS)
             .map_err(|e| Error::Storage(format!("cookies init: {e}")))?;
+        migrate_legacy_partitions(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -251,6 +252,39 @@ impl CookieJar {
         Ok(count)
     }
 
+    /// Все не истёкшие cookies ВСЕХ партиций — для привилегированных
+    /// внешних API (WebDriver BiDi `storage.getCookies`, DEVX-20), которым
+    /// раздел внутренний и в запросе не задаётся.
+    pub fn list_all_partitions(&self, now_unix: i64) -> Result<Vec<Cookie>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| Error::Storage("cookies mutex poisoned".into()))?;
+        let mut stmt = conn
+            .prepare_cached(
+                "SELECT domain, path, name, value, expires_at, secure, http_only, same_site
+                 FROM cookies
+                 WHERE (expires_at IS NULL OR expires_at >= ?1)
+                 ORDER BY domain, path, name",
+            )
+            .map_err(|e| Error::Storage(format!("cookies prepare list: {e}")))?;
+        let rows = stmt
+            .query_map(params![now_unix], |row| {
+                Ok(Cookie {
+                    domain: row.get(0)?,
+                    path: row.get(1)?,
+                    name: row.get(2)?,
+                    value: row.get(3)?,
+                    expires_at: row.get(4)?,
+                    secure: row.get::<_, i32>(5)? != 0,
+                    http_only: row.get::<_, i32>(6)? != 0,
+                    same_site: SameSite::from_db_str(&row.get::<_, String>(7)?),
+                })
+            })
+            .map_err(|e| Error::Storage(format!("cookies query: {e}")))?;
+        rows.map(|r| r.map_err(|e| Error::Storage(format!("cookies row: {e}")))).collect()
+    }
+
     /// Все не истёкшие cookies раздела `top_level_site` без фильтра по хосту и
     /// пути — для интроспекции (WebDriver BiDi `storage.getCookies`, DEVX-20).
     pub fn list_all(&self, now_unix: i64, top_level_site: Option<&str>) -> Result<Vec<Cookie>> {
@@ -351,6 +385,59 @@ impl CookieJar {
         }
         Ok(out)
     }
+}
+
+/// BUG-1628: до включения партиционирования все cookies лежали под ключом
+/// `''` — после подключения TPC их не видел бы ни один запрос. Решение —
+/// миграция, а не обнуление: разделом legacy-строки становится сайт её
+/// собственного домена (registrable domain, как у `connection_site` в
+/// shell). Это честная аппроксимация «cookie ставился в first-party
+/// контексте»: такой cookie останется видимым сайту-владельцу как
+/// верхнему уровню и перестанет следовать за ним по чужим топ-сайтам —
+/// ровно то, что требует Total Cookie Protection. Строки, чей раздел уже
+/// занят живым cookie, не перезаписываются (`INSERT OR IGNORE`).
+/// Идемпотентна: запускается на каждом `open`, пока в таблице есть `''`.
+fn migrate_legacy_partitions(conn: &Connection) -> Result<()> {
+    let legacy_domains: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT domain FROM cookies WHERE top_level_site = ''")
+            .map_err(|e| Error::Storage(format!("cookies legacy domains: {e}")))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| Error::Storage(format!("cookies legacy domains query: {e}")))?;
+        rows.collect::<std::result::Result<_, _>>()
+            .map_err(|e| Error::Storage(format!("cookies legacy domains row: {e}")))?
+    };
+    if legacy_domains.is_empty() {
+        return Ok(());
+    }
+    let psl = crate::psl::PslProvider::new();
+    for domain in legacy_domains {
+        let host = domain.strip_prefix('.').unwrap_or(&domain);
+        // Тот же вывод сайта, что у `config::connection_site`: IP-литерал —
+        // сам себе сайт (PSL считает `127.0.0.1` именем и вернул бы `0.1`).
+        let site = if host.parse::<std::net::IpAddr>().is_ok() {
+            host.to_owned()
+        } else {
+            psl.registrable_domain(host)
+                .map(str::to_owned)
+                .unwrap_or_else(|| host.to_owned())
+        };
+        conn.execute(
+            "INSERT OR IGNORE INTO cookies
+             (top_level_site, domain, path, name, value, expires_at, secure, http_only, same_site)
+             SELECT ?1, domain, path, name, value, expires_at, secure, http_only, same_site
+             FROM cookies WHERE top_level_site = '' AND domain = ?2",
+            params![site, domain],
+        )
+        .map_err(|e| Error::Storage(format!("cookies legacy migrate insert: {e}")))?;
+        conn.execute(
+            "DELETE FROM cookies WHERE top_level_site = '' AND domain = ?1",
+            params![domain],
+        )
+        .map_err(|e| Error::Storage(format!("cookies legacy migrate delete: {e}")))?;
+    }
+    Ok(())
 }
 
 /// RFC 6265 §5.1.3 — request_host совпадает с cookie_domain ИЛИ
@@ -682,12 +769,34 @@ fn civil_to_unix(y: i32, m: u32, d: u32, hh: u32, mm: u32, ss: u32) -> i64 {
 pub struct CookieJarProvider {
     /// Shared cookie store (Arc so it can be cloned to HttpClient + JsRuntime).
     pub jar: Arc<CookieJar>,
+    /// BUG-1628 (Total Cookie Protection): сайт верхнего документа этого
+    /// browsing context — ключ партиции `cookies.top_level_site`. `Some`
+    /// переопределяет `top_level_site`-аргумент всех методов трейта: ключ
+    /// принадлежит контексту, а не запросу, поэтому скриптовый
+    /// `document.cookie` и HTTP-запрос одного документа видят один раздел.
+    /// `None` — legacy-режим: раздел берётся из аргумента (тесты, jar без
+    /// привязки к сайту).
+    partition: Option<String>,
 }
 
 impl CookieJarProvider {
     /// Create a provider backed by the given jar.
     pub fn new(jar: Arc<CookieJar>) -> Self {
-        Self { jar }
+        Self { jar, partition: None }
+    }
+
+    /// Привязать провайдер к партиции сайта верхнего документа (BUG-1628).
+    /// Пустая строка сайта — не сайт: партиция остаётся аргументной.
+    #[must_use]
+    pub fn with_partition(mut self, site: Option<String>) -> Self {
+        self.partition = site.filter(|s| !s.is_empty());
+        self
+    }
+
+    /// Ключ партиции для обращения к jar-у: привязанный сайтом, иначе
+    /// аргумент вызова.
+    fn partition<'a>(&'a self, arg: Option<&'a str>) -> Option<&'a str> {
+        self.partition.as_deref().or(arg)
     }
 }
 
@@ -721,7 +830,7 @@ impl CookieProvider for CookieJarProvider {
         is_cross_site: bool,
     ) -> String {
         let ctx = if is_cross_site { CookieSiteContext::CrossSite } else { CookieSiteContext::SameSite };
-        self.get_for_request_in_context(host, path, is_secure, top_level_site, ctx)
+        self.get_for_request_in_context(host, path, is_secure, self.partition(top_level_site), ctx)
     }
 
     fn get_for_request_in_context(
@@ -733,7 +842,7 @@ impl CookieProvider for CookieJarProvider {
         ctx: CookieSiteContext,
     ) -> String {
         let now = now_unix();
-        let Ok(cookies) = self.jar.get_for_request(host, path, is_secure, now, top_level_site)
+        let Ok(cookies) = self.jar.get_for_request(host, path, is_secure, now, self.partition(top_level_site))
         else {
             return String::new();
         };
@@ -753,7 +862,7 @@ impl CookieProvider for CookieJarProvider {
         is_secure: bool,
         top_level_site: Option<&str>,
     ) {
-        self.store(header, host, request_path, is_secure, top_level_site, false);
+        self.store(header, host, request_path, is_secure, self.partition(top_level_site), false);
     }
 
     fn get_for_script(
@@ -764,7 +873,7 @@ impl CookieProvider for CookieJarProvider {
         top_level_site: Option<&str>,
     ) -> String {
         let Ok(cookies) =
-            self.jar.get_for_request(host, path, is_secure, now_unix(), top_level_site)
+            self.jar.get_for_request(host, path, is_secure, now_unix(), self.partition(top_level_site))
         else {
             return String::new();
         };
@@ -786,7 +895,7 @@ impl CookieProvider for CookieJarProvider {
         is_secure: bool,
         top_level_site: Option<&str>,
     ) {
-        self.store(cookie, host, path, is_secure, top_level_site, true);
+        self.store(cookie, host, path, is_secure, self.partition(top_level_site), true);
     }
 }
 
@@ -1531,5 +1640,94 @@ mod tests {
             p.get_for_request("id.example.com", "/auth/authorize?x=1", false, None, false),
             "k=v",
         );
+    }
+
+    /// BUG-1628 (Total Cookie Protection): провайдер, привязанный к сайту
+    /// верхнего документа, игнорирует partition-аргумент вызова — раздел
+    /// принадлежит browsing context, поэтому `document.cookie` и HTTP-запросы
+    /// одного документа видят одни и те же cookie, а другой сайт их не видит.
+    #[test]
+    fn partitioned_provider_binds_context_partition() {
+        let jar = Arc::new(make_jar());
+        let site_a = CookieJarProvider::new(Arc::clone(&jar)).with_partition(Some("site-a".into()));
+        let site_b = CookieJarProvider::new(Arc::clone(&jar)).with_partition(Some("site-b".into()));
+
+        // Сторонний iframe под сайтом A ставит cookie — и через HTTP
+        // (Set-Cookie), и через document.cookie.
+        site_a.process_set_cookie("sess=abc; Path=/", "tracker.example", "/", false, None);
+        site_a.set_from_script("sid=1", "tracker.example", "/", false, None);
+
+        // Тот же хост под сайтом A: HTTP и script видят один раздел.
+        let http_a = site_a.get_for_request("tracker.example", "/", false, None, false);
+        assert!(http_a.contains("sess=abc") && http_a.contains("sid=1"), "{http_a}");
+        let script_a = site_a.get_for_script("tracker.example", "/", false, None);
+        assert!(script_a.contains("sess=abc") && script_a.contains("sid=1"), "{script_a}");
+        // Тот же iframe под сайтом B: раздел пуст.
+        assert_eq!(site_b.get_for_request("tracker.example", "/", false, None, false), "");
+        assert_eq!(site_b.get_for_script("tracker.example", "/", false, None), "");
+        // …и даже если вызов передаст чужой partition-аргумент, привязка
+        // провайдера его перекрывает.
+        assert_eq!(
+            site_a.get_for_script("tracker.example", "/", false, Some("site-b")),
+            script_a,
+        );
+    }
+
+    /// Без `with_partition` провайдер honours partition-аргумент вызова —
+    /// legacy-поведение для jar без browsing context (тесты, фоновые fetch).
+    #[test]
+    fn unpartitioned_provider_uses_call_argument() {
+        let p = provider();
+        p.set_from_script("k=v", "a.example", "/", false, Some("site-a"));
+        assert_eq!(p.get_for_script("a.example", "/", false, Some("site-a")), "k=v");
+        assert_eq!(p.get_for_script("a.example", "/", false, Some("site-b")), "");
+        assert_eq!(p.get_for_script("a.example", "/", false, None), "");
+    }
+
+    /// BUG-1628: legacy-строки с `top_level_site = ''` при открытии jar-а
+    /// переписываются в раздел сайта их собственного домена — cookie
+    /// first-party контекста остаётся видимым сайту-владельцу.
+    #[test]
+    fn legacy_empty_partition_migrates_to_own_site() {
+        let path = std::env::temp_dir().join(format!(
+            "lumen-cookies-legacy-{}-{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        {
+            let jar = CookieJar::open(&path).unwrap();
+            jar.set(
+                Cookie {
+                    domain: "example.com".into(),
+                    path: "/".into(),
+                    name: "legacy".into(),
+                    value: "1".into(),
+                    expires_at: None,
+                    secure: false,
+                    http_only: false,
+                    same_site: SameSite::Lax,
+                },
+                None, // legacy-запись до включения партиционирования
+            )
+            .unwrap();
+        }
+        let jar = CookieJar::open(&path).unwrap();
+        // После миграции раздел — сайт самого домена cookie.
+        assert_eq!(
+            jar.get_for_request("example.com", "/", false, now_unix(), Some("example.com"))
+                .unwrap()
+                .len(),
+            1,
+        );
+        assert!(
+            jar.get_for_request("example.com", "/", false, now_unix(), Some("other.com"))
+                .unwrap()
+                .is_empty(),
+            "legacy cookie не должна течь в чужой раздел",
+        );
+        let _ = std::fs::remove_file(&path);
     }
 }

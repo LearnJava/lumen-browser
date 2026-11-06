@@ -149,7 +149,7 @@ pub(crate) fn fetch_iframe_source(
     src: &str,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
     send_uir_header: bool,
     referrer_policy: lumen_network::ReferrerPolicy,
 ) -> Result<FrameSource, FetchError> {
@@ -166,7 +166,7 @@ pub(crate) fn fetch_iframe_source_with_body(
     body: Option<&lumen_network::NavigationBody>,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
     send_uir_header: bool,
     referrer_policy: lumen_network::ReferrerPolicy,
 ) -> Result<FrameSource, FetchError> {
@@ -333,7 +333,7 @@ pub(crate) fn fetch_embedded_source(
     src: &str,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
     send_uir_header: bool,
     referrer_policy: lumen_network::ReferrerPolicy,
 ) -> Option<(FrameSource, EmbeddedResourceKind)> {
@@ -693,7 +693,7 @@ pub(crate) fn fetch_frame_subresources(
     doc: &mut Document,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
     media_ctx: &lumen_css_parser::MediaContext,
     viewport: lumen_core::geom::Size,
     target: lumen_core::ColorSpace,
@@ -924,7 +924,7 @@ pub(crate) fn fetch_frame_background_images(
     layout: &lumen_layout::LayoutBox,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
     target: lumen_core::ColorSpace,
     csp_gate: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
     self_origin: Option<&lumen_network::Origin>,
@@ -1080,7 +1080,7 @@ pub(crate) fn fetch_web_fonts_blocking(
     pending: Vec<crate::subresources::PendingWebFont>,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
     csp_gate: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
     self_origin: Option<&lumen_network::Origin>,
     referrer_policy: lumen_network::ReferrerPolicy,
@@ -1187,7 +1187,7 @@ pub(crate) fn load_frame_fonts(
     font_faces: &[lumen_css_parser::FontFaceRule],
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
     csp_gate: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
     self_origin: Option<&lumen_network::Origin>,
     referrer_policy: lumen_network::ReferrerPolicy,
@@ -2061,7 +2061,7 @@ pub(crate) struct FrameLoadEnv {
     /// Приёмник событий загрузки — тот же, что у страницы.
     pub(crate) sink: Arc<dyn EventSink>,
     /// Банка cookie сессии.
-    pub(crate) cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    pub(crate) cookie_jar: Option<DocCookieJar>,
     /// Провайдер `window.fetch()` под-документа.
     pub(crate) fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     /// Провайдер `new WebSocket()`.

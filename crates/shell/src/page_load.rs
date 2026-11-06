@@ -103,7 +103,9 @@ impl Lumen {
                 })
                 .unwrap_or(referrer_policy);
             let bytes = match fetch_image_bytes(
-                fetch_url, &eff_base, &self.event_sink, Some(self.active_cookie_jar()), img_referrer_policy,
+                fetch_url, &eff_base, &self.event_sink,
+                Some(DocCookieJar::for_base(self.active_cookie_jar(), &eff_base)),
+                img_referrer_policy,
             ) {
                 Ok(b) => b,
                 Err(e) => {
@@ -1674,7 +1676,7 @@ impl Lumen {
                 // апгрейд меняет только адрес запроса (срез 43).
                 let fetch_url: &str = upgraded.as_deref().unwrap_or(&req.url);
                 let decoded = image_cache::IMAGE_CACHE.get_or_decode(generation, &req.url, || {
-                    decode_image(fetch_url, &base, &sink, Some(cookie_jar), target, referrer_policy)
+                    decode_image(fetch_url, &base, &sink, Some(DocCookieJar::for_base(cookie_jar, &base)), target, referrer_policy)
                 });
                 match decoded {
                     // BUG-1048: was a silent drop ("streaming best-effort: финальный
@@ -2385,7 +2387,9 @@ fn feed_preload_and_emit(
     // stylesheet/script warm-up below.
     let doc_csp: Vec<_> = header_csp.iter().chain(&meta_csp).cloned().collect();
     crate::page_pipeline::warm_preload_cache(
-        &early, base, &warm_client.sink, warm_client.cookie_jar.clone(), &doc_csp,
+        &early, base, &warm_client.sink,
+        warm_client.cookie_jar.clone().map(|j| DocCookieJar::for_base(j, base)),
+        &doc_csp,
     );
     let self_origin = base.origin();
     // PH1-2 + BUG-171: speculatively fetch subresources off the UI thread while the
@@ -2453,7 +2457,10 @@ fn feed_preload_and_emit(
                     continue;
                 };
                 let link_sink = Arc::clone(&warm_client.sink);
-                let link_jar = warm_client.cookie_jar.clone();
+                let link_jar = warm_client
+                    .cookie_jar
+                    .clone()
+                    .map(|j| DocCookieJar::for_base(j, base));
                 crate::prefetch::PREFETCH_CACHE.warm_with(
                     generation,
                     &resolved,
@@ -2526,7 +2533,7 @@ impl WarmClient {
         }
         let client = Arc::new(base.http_client_for_subresource_with_policy(
             Arc::clone(&self.sink),
-            self.cookie_jar.clone(),
+            self.cookie_jar.clone().map(|j| DocCookieJar::for_base(j, base)),
             policy,
         ));
         self.shared = Some(WarmClientKey { base: base_key, policy, client: Arc::clone(&client) });

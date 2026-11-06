@@ -17,6 +17,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use crate::DocCookieJar;
 use lumen_core::ext::EventSink;
 use lumen_network::csp::CspPolicy;
 
@@ -71,7 +72,7 @@ pub(crate) struct DynamicImgFetchHook {
     pub(crate) base: ResourceBase,
     pub(crate) csp_gate: Option<(Vec<CspPolicy>, String)>,
     pub(crate) sink: Arc<dyn EventSink>,
-    pub(crate) cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    pub(crate) cookie_jar: Option<DocCookieJar>,
     pub(crate) target: lumen_core::ColorSpace,
     pub(crate) referrer_policy: lumen_network::ReferrerPolicy,
     pub(crate) ctx: DynamicImageHookCtx,
@@ -89,7 +90,7 @@ impl DynamicImgFetchHook {
         doc: &lumen_dom::Document,
         base: ResourceBase,
         sink: Arc<dyn EventSink>,
-        cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+        cookie_jar: Option<DocCookieJar>,
         target: lumen_core::ColorSpace,
         viewport: (f32, f32),
         ctx: DynamicImageHookCtx,

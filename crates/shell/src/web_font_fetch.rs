@@ -125,7 +125,7 @@ impl Lumen {
                         // `@font-face` на один URL — сеть и декод один раз на URL.
                         let family = pf.family.clone();
                         let bytes = fetches.get_or_fetch(&gate_url, || {
-                            let raw = match fetch_font_bytes(&gate_url, &base, &sink, Some(cookie_jar), referrer_policy) {
+                            let raw = match fetch_font_bytes(&gate_url, &base, &sink, Some(DocCookieJar::for_base(cookie_jar, &base)), referrer_policy) {
                                 Ok(b) => b,
                                 Err(e) => {
                                     eprintln!("@font-face «{family}»: не загружен {}: {e}", pf.url);
