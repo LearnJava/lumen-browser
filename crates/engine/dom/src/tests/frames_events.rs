@@ -90,6 +90,30 @@ fn collect_iframes_finds_iframe_without_sandbox() {
     assert!(frames[0].sandbox.is_empty());
 }
 
+/// BUG-1595: `<iframe>` внутри author shadow tree — такой же хост вложенного
+/// browsing context (Cloudflare Turnstile рендерит виджет в closed shadow
+/// root). Shadow root не DOM-ребёнок хоста, поэтому обход обязан спускаться
+/// в него явно.
+#[test]
+fn collect_iframes_finds_iframe_inside_shadow_root() {
+    let mut doc = Document::new();
+    let host = doc.create_element(QualName::html("div"));
+    doc.append_child(doc.root(), host);
+    let shadow = doc.attach_shadow(host, ShadowRootMode::Closed);
+    let iframe = doc.create_element(QualName::html("iframe"));
+    if let NodeData::Element { attrs, .. } = &mut doc.get_mut(iframe).data {
+        attrs.push(Attribute { name: QualName::html("src"), value: "https://challenges.cloudflare.com/x".to_string() });
+        attrs.push(Attribute { name: QualName::html("sandbox"), value: "allow-scripts".to_string() });
+    }
+    doc.append_child(shadow, iframe);
+
+    let frames = collect_iframes(&doc);
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0].node, iframe);
+    assert_eq!(frames[0].src.as_deref(), Some("https://challenges.cloudflare.com/x"));
+    assert!(frames[0].is_sandboxed);
+}
+
 /// BUG-854: `<frame>` — такой же хост вложенного browsing context.
 /// Строится не через `make_iframe`, чтобы тег был виден в самом тесте.
 fn make_frame(attrs_in: &[(&str, &str)]) -> Document {

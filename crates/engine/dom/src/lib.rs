@@ -2868,6 +2868,13 @@ fn collect_iframes_inner(doc: &Document, id: NodeId, out: &mut Vec<IframeInfo>) 
     for &child in &node.children.clone() {
         collect_iframes_inner(doc, child, out);
     }
+    // BUG-1595: `<iframe>` внутри shadow tree — тоже хост вложенного browsing
+    // context (Cloudflare Turnstile кладёт свой iframe в closed shadow root).
+    // Shadow root — не DOM-ребёнок хоста, поэтому обычный обход его не достаёт;
+    // светлые дети хоста при этом уже обойдены выше и через slot не дублируются.
+    if let Some(sr) = doc.shadow_root_of(id) {
+        collect_iframes_inner(doc, sr, out);
+    }
 }
 
 /// `type="image/…"` на `<object>`/`<embed>` — автор обещал картинку.
