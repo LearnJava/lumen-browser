@@ -91,6 +91,7 @@ mod style_flush;
 #[cfg(test)]
 pub(crate) use style_flush::CONTENT_JOURNAL_DISABLED;
 mod thread;
+pub(crate) mod wasm_streaming;
 
 pub use named_access::ensure_v8_platform;
 pub(crate) use command::DOM_EXCEPTION_POLYFILL;
@@ -1271,6 +1272,12 @@ impl V8JsRuntime {
         // `DOMException` already exist.
         install_v8!(xpath::install_xpath_v8);
         install_v8!(web_codecs::install_webcodecs_bindings_v8);
+        // WASM-V8-NATIVE-S2: нативный стриминг (hand-port — `install_v8!`
+        // разворачивается в путь `crate::<module>`, а модуль живёт внутри
+        // `v8_runtime`, как соседние `codegen_hook`/`wasm_streaming`).
+        if let Err(e) = wasm_streaming::install_wasm_streaming_bindings_v8(self) {
+            eprintln!("v8: wasm_streaming::install_wasm_streaming_bindings_v8 failed: {e}");
+        }
         install_v8!(webgpu::install_webgpu_bindings_v8);
         // Ph3 V8 migration S10: worker + shared_worker (hand-port — extra
         // per-runtime state beyond `&ctx`, same shape as S5-S7 batch 3's

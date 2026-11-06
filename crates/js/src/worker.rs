@@ -509,7 +509,14 @@ pub(crate) fn install_worker_scope_globals_v8(
     // `_lumen_port_prepare_transfer`/`_lumen_port_post_to_worker`/
     // `_lumen_port_post_reply` (message_channel_shim.js, worker.rs).
     rt.eval(crate::dom::MESSAGE_CHANNEL_SHIM)?;
-    // `WebAssembly` is V8's native global; streaming arrives in WASM-V8-NATIVE-S2.
+    // WASM-V8-NATIVE-S2: стриминг WebAssembly (колбэк изолята уже стоит в
+    // thread.rs до создания контекста). Помощник `__lumen_wasm_stream_start`
+    // трогает `Response` только внутри тела, поэтому его можно ставить до
+    // worker_net-шима (`install_worker_globals_v8`/`sw_worker` ставит
+    // `Response` позже), как раньше ставился целиком шим WebAssembly.
+    // Shared here (dedicated, shared and service workers all go through this
+    // function), same as the rest of the `[Exposed=Worker]` surface.
+    crate::v8_runtime::wasm_streaming::install_wasm_streaming_bindings_v8(rt)?;
     // BUG-1086: Trusted Types (`self.trustedTypes`/`TrustedHTML`/`TrustedScript`/
     // `TrustedScriptURL`/`TrustedTypePolicy`) is `[Exposed=(Window,Worker)]`
     // (TT L2 §2.2), but `TRUSTED_TYPES_SHIM` was only ever evaluated by the
@@ -2585,7 +2592,12 @@ mod tests_v8 {
         }
     }
 
-    /// Workers use V8's native WebAssembly surface; streaming is added by S2.
+    /// WASM-V8-NATIVE-S2: workers again expose the full streaming surface —
+    /// the isolate streaming callback is installed in `thread.rs` for every
+    /// runtime (window and all worker flavours), and this function evaluates
+    /// the JS helper, so V8's native `WebAssembly` gains the five methods.
+    /// BUG-1078: before the worker install the worker saw streaming methods
+    /// only in the page runtime.
     #[test]
     fn v8_worker_globals_have_wasm_streaming() {
         let rt = V8JsRuntime::new().unwrap();
@@ -2593,10 +2605,11 @@ mod tests_v8 {
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)), None).unwrap();
         for expr in [
+            "typeof WebAssembly.compileStreaming",
+            "typeof WebAssembly.instantiateStreaming",
             "typeof WebAssembly.compile",
             "typeof WebAssembly.instantiate",
             "typeof WebAssembly.validate",
-            "typeof WebAssembly.Memory",
         ] {
             assert_eq!(rt.eval(expr).unwrap(), lumen_core::JsValue::String("function".into()), "{expr}");
         }

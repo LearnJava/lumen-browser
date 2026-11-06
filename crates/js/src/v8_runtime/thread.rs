@@ -149,6 +149,12 @@ pub(super) fn v8_thread_main(
     crate::v8_esm::install_import_meta_hook(&mut isolate);
     // BUG-716: unhandledrejection/rejectionhandled dispatch, also isolate-wide.
     install_promise_reject_hook(&mut isolate);
+    // WASM-V8-NATIVE-S2: колбэк стриминга обязан стоять до создания контекста —
+    // иначе V8 не заведёт `compileStreaming`/`instantiateStreaming` в изоляте.
+    // Ставится здесь (единственное место `Isolate::new`), поэтому покрывает и
+    // окно, и все воркеры; сами нативы с JS-помощником ставит
+    // `install_wasm_streaming_bindings_v8` (install_dom / worker.rs).
+    crate::v8_runtime::wasm_streaming::install_streaming_callback_on_isolate(&mut isolate);
     // Create the context inside a short-lived HandleScope so the scope's borrow
     // of `isolate` ends before we move `isolate` into `V8Inner`.
     let (context, baseline_globals) = {
