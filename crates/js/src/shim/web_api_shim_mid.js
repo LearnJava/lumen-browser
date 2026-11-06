@@ -8766,6 +8766,15 @@ function _lumen_tag_name_predicate(qualifiedName) {
 // knows collapses into the HTML one at creation time, so such an element can
 // only be found under the namespace it collapsed to, not the one it was asked
 // for. That is a limitation of the enum, not of this matcher.
+// BUG-1694: нормализация `namespace`-аргумента `getElementsByTagNameNS`
+// для нативных `_lumen_get_elements_by_tag_ns*` — то же правило, что
+// `_lumen_tag_ns_predicate` применял к `wantNs`: null/undefined/'' —
+// «неймспейса нет», остальное — строка.
+function _lumen_ns_arg(namespace) {
+    return (namespace === null || namespace === undefined || namespace === '')
+        ? null : String(namespace);
+}
+
 function _lumen_tag_ns_predicate(namespace, localName) {
     var wantNs = (namespace === null || namespace === undefined || namespace === '')
         ? null : String(namespace);
@@ -10009,14 +10018,14 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // through the native walker; the name matching itself is spec-shaped and
         // lives in the predicates above.
         getElementsByTagName: function(qualifiedName) { var nid = this.__nid__;
-            return _lumen_static_html_collection(_lumen_collect_matching(
-                _lumen_query_selector_all_scoped(nid, '*'),
-                _lumen_tag_name_predicate(qualifiedName)));
+            // BUG-1694: нативный проход — JS-цикл `_lumen_collect_matching`
+            // делал два перехода JS↔Rust на каждый элемент поддерева.
+            return _lumen_static_html_collection(
+                _lumen_get_elements_by_tag_scoped(nid, String(qualifiedName)));
         },
         getElementsByTagNameNS: function(namespace, localName) { var nid = this.__nid__;
-            return _lumen_static_html_collection(_lumen_collect_matching(
-                _lumen_query_selector_all_scoped(nid, '*'),
-                _lumen_tag_ns_predicate(namespace, localName)));
+            return _lumen_static_html_collection(
+                _lumen_get_elements_by_tag_ns_scoped(nid, _lumen_ns_arg(namespace), String(localName)));
         },
         matches: function(sel) { var nid = this.__nid__;
             return _lumen_node_matches_selector(nid, _lumen_sel(sel));
@@ -14505,17 +14514,19 @@ var document = {
     // exact string equality and so answered nothing at all for
     // `getElementsByTagName('DIV')` and mis-parsed a non-identifier name.
     getElementsByTagName: function(qualifiedName) {
-        return _lumen_static_html_collection(_lumen_collect_matching(
-            _lumen_query_selector_all('*'),
-            _lumen_tag_name_predicate(qualifiedName)));
+        // BUG-1694: нативный проход по всему документу за один вызов —
+        // JS-цикл `_lumen_collect_matching` делал два перехода JS↔Rust
+        // (`_lumen_get_local_name` + `_lumen_get_namespace_uri`) на каждый
+        // элемент за каждый parser-end scan.
+        return _lumen_static_html_collection(
+            _lumen_get_elements_by_tag(String(qualifiedName)));
     },
     // DOM LS §4.5: getElementsByTagNameNS(namespace, localName) — the
     // namespace-aware sibling, missing from the document as well as the element
     // until BUG-416.
     getElementsByTagNameNS: function(namespace, localName) {
-        return _lumen_static_html_collection(_lumen_collect_matching(
-            _lumen_query_selector_all('*'),
-            _lumen_tag_ns_predicate(namespace, localName)));
+        return _lumen_static_html_collection(
+            _lumen_get_elements_by_tag_ns(_lumen_ns_arg(namespace), String(localName)));
     },
     // DOM LS §4.5: getElementsByClassName(names) — document-global variant.
     // Static HTMLCollection, not a live one (same simplification as above).

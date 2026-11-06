@@ -304,11 +304,12 @@ impl V8JsRuntime {
             // write in `QuickJsRuntime::install_dom`.
             crate::v8_esm::set_page_url(&page_url);
             crate::v8_esm::set_fetch_provider(fp_esm);
-            // BUG-384: point the Window named-properties interceptor (installed
-            // on the global object template back at context creation) at this
-            // navigation's document. Done here, on the JS thread, because the
-            // slot it writes is thread-local to the isolate's owning thread.
-            set_named_access_document(&doc);
+            // BUG-384/BUG-1694: point the Window named-properties interceptor
+            // (installed on the global object template back at context
+            // creation) at this navigation's document plus its mutation
+            // tracker — done here, on the JS thread, because the slot it
+            // writes is thread-local to the isolate's owning thread. The
+            // `dom_touched` clone a few lines below is the same Arc.
             // Disjoint field borrows: scope borrows isolate, native_fn_store is separate.
             let isolate = &mut inner.isolate;
             let context_global = &inner.context;
@@ -328,6 +329,7 @@ impl V8JsRuntime {
             let dom_dirty = Arc::clone(&self.dom_dirty);
             let flush_stale = Arc::clone(&self.flush_stale);
             let dom_touched = Arc::clone(&self.dom_touched);
+            set_named_access_document(&doc, &dom_touched);
             let image_load_hook = self.image_load_hook.clone();
             let raf_pending = Arc::clone(&self.raf_pending);
             let layout_rects = Arc::clone(&self.layout_rects);
