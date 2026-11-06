@@ -1560,6 +1560,38 @@ impl Lumen {
             }
         }
 
+        // Console вложенных документов: у каждого фрейма свой JS-рантайм со
+        // своим буфером `console_messages`, и до этого среза он никто не
+        // дренировал — `console.error`/непойманные исключения внутри iframe
+        // исчезали бесследно (BUG-1595: молчаливый отказ Turnstile-кадра).
+        // `take_console_messages` — обычный drain Mutex<Vec>, engine-поток
+        // не нужен. Собираем сначала: итерация держит `&self.frames`, а
+        // push_batch/request_redraw требуют `&mut self`.
+        let mut frame_msgs: Vec<(String, Vec<(u8, String)>)> = Vec::new();
+        for frame in &self.frames {
+            if let Some(js) = &frame.js {
+                let msgs = js.take_console_messages();
+                if !msgs.is_empty() {
+                    frame_msgs.push((frame.url.clone(), msgs));
+                }
+            }
+        }
+        let had_frame_msgs = !frame_msgs.is_empty();
+        for (url, msgs) in frame_msgs {
+            if health_log::is_enabled() {
+                for (level, text) in &msgs {
+                    if *level == 2 {
+                        health_log::log_console_error(&url, text);
+                    }
+                }
+            }
+            self.devtools_console.push_batch(msgs);
+        }
+        if had_frame_msgs && self.devtools_console.visible {
+            self.relayout_chrome_host();
+            self.request_redraw();
+        }
+
         // JS scroll requests: drain programmatic scrolls queued by scrollTo/scrollBy/
         // scrollIntoView.  Scroll position is applied directly to the existing layout
         // tree (no CSS re-computation needed — scroll only affects paint offsets), the
