@@ -149,7 +149,7 @@ impl ResourceBase {
     pub(crate) fn http_client_for_subresource(
         &self,
         sink: Arc<dyn EventSink>,
-        cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+        cookie_jar: Option<DocCookieJar>,
     ) -> lumen_network::HttpClient {
         // GAP-REFERRER срез 3: callers that hold a `&Document` (and so can
         // resolve `<meta name=referrer>`/the `Referrer-Policy` header) go
@@ -182,7 +182,7 @@ impl ResourceBase {
     pub(crate) fn http_client_for_subresource_with_policy(
         &self,
         sink: Arc<dyn EventSink>,
-        cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+        cookie_jar: Option<DocCookieJar>,
         referrer_policy: lumen_network::ReferrerPolicy,
     ) -> lumen_network::HttpClient {
         use lumen_network::{
@@ -200,17 +200,23 @@ impl ResourceBase {
             // called fresh per fetch batch, so cross-navigation preflight
             // reuse is not the goal here, only enabling the call at all.
             .with_cors_cache(Arc::new(lumen_network::PreflightCache::new()));
-        // BUG-1616: the document's own site is the site-for-cookies of every
-        // subresource / `fetch()` / XHR / frame request made on its behalf —
-        // `SameSite=Strict|Lax` cookies stay home on a cross-site request.
-        // A frame fetches through the embedder's base, so its document request
-        // is judged against the embedding page's site. `None` for `file:`.
+        // BUG-1616/1628: site-for-cookies и партиция cookie — сайт ВЕРХНЕГО
+        // документа (`DocCookieJar.partition_site`): SameSite сравнивает
+        // запрос с верхним уровнем, а раздел `cookies.top_level_site` — тот
+        // же ключ. У фрейма `self.url()` — адрес фрейма, он годится только
+        // как legacy-fallback для `DocCookieJar::new` без сайта.
         let document_url = self.url();
-        if let Some(jar) = cookie_jar {
-            builder = builder.with_cookie_jar(
-                Arc::new(lumen_storage::CookieJarProvider::new(jar)),
-                document_url.as_ref().map(crate::config::connection_site),
-            );
+        if let Some(cookies) = cookie_jar {
+            let site = cookies
+                .partition_site
+                .clone()
+                .or_else(|| document_url.as_ref().map(crate::config::connection_site));
+            builder = builder
+                .with_cookie_jar(
+                    Arc::new(lumen_storage::CookieJarProvider::new(Arc::clone(&cookies.jar))),
+                    site.clone(),
+                )
+                .with_cookie_partition(site);
         }
         let mut client = crate::config::global().apply_http(builder);
         // PH3-20: attach the session Service Worker fetch interceptor so that
@@ -240,6 +246,53 @@ impl ResourceBase {
             return client.with_mixed_content_policy(origin, MixedContentMode::SpecDefault);
         }
         client
+    }
+}
+
+/// BUG-1628 (Total Cookie Protection): cookie jar документа ВМЕСТЕ с ключом
+/// его партиции — сайтом верхнего документа browsing context'а (не обязательно
+/// сайтом самого документа: у `<iframe>` это сайт внешней страницы). Едет по
+/// всему пути подресурсов вместо голого `Arc<CookieJar>`, чтобы HTTP-клиент и
+/// `document.cookie` любого документа контекста видели один раздел
+/// `cookies.top_level_site`.
+#[derive(Clone)]
+pub(crate) struct DocCookieJar {
+    /// Общий jar профиля — раздел выбирается партицией, не копией хранилища.
+    pub jar: Arc<lumen_storage::CookieJar>,
+    /// Ключ партиции: registrable domain сайта ВЕРХНЕГО документа. `None` —
+    /// верхний документ без хоста (`file:`, `about:`) либо legacy-вызовы:
+    /// партиция деградирует до общего ключа `''`.
+    pub partition_site: Option<String>,
+}
+
+impl DocCookieJar {
+    /// Jar без привязки к сайту — тесты, headless, навигационные пути, где
+    /// партиция вычисляется из целевого URL в `page_source`.
+    pub(crate) fn new(jar: Arc<lumen_storage::CookieJar>) -> Self {
+        Self {
+            jar,
+            partition_site: None,
+        }
+    }
+
+    /// Jar, разбитый по сайту `base` — для документов, чей верхний уровень
+    /// они и есть (top-level страница, её подресурсы).
+    pub(crate) fn for_base(jar: Arc<lumen_storage::CookieJar>, base: &ResourceBase) -> Self {
+        Self::for_site(jar, base.url().as_ref().map(crate::config::connection_site))
+    }
+
+    /// Jar, разбитый по сайту URL — для мест, где есть только адрес
+    /// документа (например, `Link:`-хинты финального ответа навигации).
+    pub(crate) fn for_url(jar: Arc<lumen_storage::CookieJar>, url: &lumen_core::url::Url) -> Self {
+        Self::for_site(jar, Some(crate::config::connection_site(url)))
+    }
+
+    /// Jar с явным сайтом верхнего документа; пустой сайт — не сайт.
+    pub(crate) fn for_site(jar: Arc<lumen_storage::CookieJar>, site: Option<String>) -> Self {
+        Self {
+            jar,
+            partition_site: site.filter(|s| !s.is_empty()),
+        }
     }
 }
 

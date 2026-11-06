@@ -104,9 +104,15 @@ impl Lumen {
                     }
                     // BUG-1119: a thawed page's `document.cookie` reads the
                     // tab's live jar — cookies set while it was frozen included.
-                    rt = rt.with_cookie_jar(Arc::new(lumen_storage::CookieJarProvider::new(
-                        self.active_cookie_jar(),
-                    )));
+                    // BUG-1628: партиция сохраняется — сайт оттаявшего
+                    // документа (bfcache бывает только у верхнего уровня).
+                    let cookie_partition = lumen_core::url::Url::parse(url)
+                        .ok()
+                        .map(|u| crate::config::connection_site(&u));
+                    rt = rt.with_cookie_jar(Arc::new(
+                        lumen_storage::CookieJarProvider::new(self.active_cookie_jar())
+                            .with_partition(cookie_partition),
+                    ));
                     let idb_backend = self.idb_dir.as_deref().and_then(|d| idb_store_for_url(url, Some(d)));
                     let fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>> = None;
                     let ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>> = None;

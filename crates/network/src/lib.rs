@@ -2515,13 +2515,6 @@ fn host_in_site(host: &str, site: &str) -> bool {
     host == site || host.strip_suffix(site).is_some_and(|rest| rest.ends_with('.'))
 }
 
-/// Ключ хранилища cookie (Total Cookie Protection), который `HttpClient` отдаёт
-/// jar-у. `None`, пока разбиение не подключено сквозь документ, фреймы и
-/// `document.cookie` (BUG-1616 закрывает только SameSite): `top_level_site`
-/// клиента служит ему лишь для SameSite и third-party, а не ключом БД — иначе
-/// cookie, выставленные в одном контексте, не читались бы в другом.
-pub(crate) const COOKIE_PARTITION: Option<&str> = None;
-
 /// Контекст SameSite запроса к `host` из документа сайта `top_level_site`
 /// (RFC 6265bis §5.2): для top-level навигации безопасным методом `Lax`
 /// проходит и межсайтово, для остального межсайтового — нет.
@@ -2574,6 +2567,14 @@ fn fetch_with_redirect(
     extra_request_headers: &str,
     cookie_jar: Option<&dyn CookieProvider>,
     top_level_site: Option<&str>,
+    // BUG-1628: ключ партиции Total Cookie Protection для jar-а — сайт
+    // ВЕРХНЕГО документа browsing context, не обязательно совпадающий с
+    // `top_level_site` (для навигации тот — сайт инициатора ради SameSite,
+    // а партиция — сайт целевого документа; у фрейма — сайт страницы,
+    // а не сайта фрейма). Обычно задан в `HttpClient::cookie_partition`;
+    // провайдер с собственной привязкой (`CookieJarProvider::with_partition`)
+    // аргумент игнорирует — там партиция авторитетна.
+    cookie_partition: Option<&str>,
     // BUG-1146: ASCII host of the document the request is made on behalf of
     // (`HttpClient::document_context`), for EasyList `$domain=`. Unlike
     // `top_level_site` it is the full host, not the registrable domain, so
@@ -2915,7 +2916,7 @@ fn fetch_with_redirect(
                 &host_ascii,
                 &url.path_and_query(),
                 is_tls,
-                COOKIE_PARTITION,
+                cookie_partition,
                 site_ctx,
             );
             if !cookie_val.is_empty() {
@@ -3096,7 +3097,7 @@ fn fetch_with_redirect(
             // прятал cookie от соседних путей каталога (BUG-756).
             let request_path = url.path_and_query();
             for val in all_header_values(&resp.headers, "set-cookie") {
-                jar.process_set_cookie(val, &host_ascii, &request_path, is_tls, COOKIE_PARTITION);
+                jar.process_set_cookie(val, &host_ascii, &request_path, is_tls, cookie_partition);
             }
         }
 
@@ -3163,6 +3164,7 @@ fn fetch_with_redirect(
                     "",
                     cookie_jar,
                     top_level_site,
+                    cookie_partition,
                     document_host,
                     proxy,
                     socks5_proxy,
@@ -3338,8 +3340,17 @@ pub struct HttpClient {
     cache_bypass: bool,
     /// RFC 6265 cookie jar. Injects `Cookie:` headers and persists `Set-Cookie:` responses.
     cookie_jar: Option<Arc<dyn CookieProvider>>,
-    /// Registrable domain of the top-level page, used for Total Cookie Protection partitioning.
+    /// Registrable domain of the site-for-cookies (SameSite evaluation and
+    /// the EasyList third-party option) — for a navigation this is the
+    /// *initiator's* site, for subresources the document's own.
     top_level_site: Option<String>,
+    /// BUG-1628: partition key handed to the cookie jar (Total Cookie
+    /// Protection) — the site of the top-level document of this browsing
+    /// context. Defaults to `top_level_site` in [`Self::with_cookie_jar`];
+    /// navigations override it with the target site's via
+    /// [`Self::with_cookie_partition`]. A partition-bound
+    /// `CookieProvider` ignores this value — its own binding wins.
+    cookie_partition: Option<String>,
     /// HTTP fingerprinting profile (Standard/Strict/Tor) — determines header order and casing
     /// matching Chrome to avoid detection (ADR-007 Layer 3). Default is Standard.
     fingerprint_profile: HttpProfile,
@@ -3497,6 +3508,7 @@ impl HttpClient {
             cache_bypass: false,
             cookie_jar: None,
             top_level_site: None,
+            cookie_partition: None,
             fingerprint_profile: HttpProfile::Chrome,
             identity: lumen_core::IdentityProfile::from_variant(lumen_core::identity_variant()).identity(),
             tls_profile: tls::TlsProfile::Standard,
@@ -3986,9 +3998,11 @@ impl HttpClient {
     /// `top_level_site` — registrable domain of the site the requests are made
     /// for (the tab's top-level document, or the initiator of a navigation).
     /// Drives SameSite evaluation and the EasyList third-party option; it is
-    /// **not** the cookie storage partition key (see [`COOKIE_PARTITION`]).
-    /// Pass `None` when no site context is known (e.g. background fetch): every
-    /// request is then treated as same-site.
+    /// also the default cookie partition key (BUG-1628) unless overridden by
+    /// [`Self::with_cookie_partition`] — navigations pass the *initiator*'s
+    /// site here but partition by the *target* site. Pass `None` when no site
+    /// context is known (e.g. background fetch): every request is then
+    /// treated as same-site.
     #[must_use]
     pub fn with_cookie_jar(
         mut self,
@@ -3999,6 +4013,17 @@ impl HttpClient {
         // An empty site (a document without a host: `about:blank`, `data:`)
         // is no site at all — otherwise every request would look cross-site.
         self.top_level_site = top_level_site.filter(|s| !s.is_empty());
+        self.cookie_partition = self.top_level_site.clone();
+        self
+    }
+
+    /// BUG-1628: override the cookie partition key (Total Cookie Protection)
+    /// independently of the SameSite site-for-cookies. Top-level navigations
+    /// use it to partition by the *target* document's site while
+    /// `top_level_site` keeps the initiator's site for SameSite purposes.
+    #[must_use]
+    pub fn with_cookie_partition(mut self, site: Option<String>) -> Self {
+        self.cookie_partition = site.filter(|s| !s.is_empty());
         self
     }
 
@@ -4173,6 +4198,7 @@ impl HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.cookie_partition.as_deref(),
             self.document_host(),
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
@@ -4220,6 +4246,7 @@ impl HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.cookie_partition.as_deref(),
             self.document_host(),
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
@@ -4301,6 +4328,7 @@ impl HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.cookie_partition.as_deref(),
             self.document_host(),
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
@@ -4513,6 +4541,7 @@ impl HttpClient {
                     &combined_extra_headers,
                     self.cookie_jar.as_deref(),
                     self.top_level_site.as_deref(),
+                    self.cookie_partition.as_deref(),
                     self.document_host(),
                     self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
@@ -4583,6 +4612,7 @@ impl HttpClient {
             &extra_headers,
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.cookie_partition.as_deref(),
             self.document_host(),
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
@@ -4709,6 +4739,7 @@ impl HttpClient {
             &extra,
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.cookie_partition.as_deref(),
             self.document_host(),
             self.proxy.as_deref(),
             self.socks5_proxy.as_deref(),
@@ -4822,7 +4853,7 @@ impl HttpClient {
                     self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
                     &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
                     self.mixed_content.as_ref(), destination, None, &combined_extra_headers,
-                    self.cookie_jar.as_deref(), self.top_level_site.as_deref(), self.document_host(),
+                    self.cookie_jar.as_deref(), self.top_level_site.as_deref(), self.cookie_partition.as_deref(), self.document_host(),
                     self.proxy.as_deref(), self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
                     self.h3_pool(),
@@ -4861,7 +4892,7 @@ impl HttpClient {
             self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
             &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
             self.mixed_content.as_ref(), destination, None, &uir_header,
-            self.cookie_jar.as_deref(), self.top_level_site.as_deref(), self.document_host(),
+            self.cookie_jar.as_deref(), self.top_level_site.as_deref(), self.cookie_partition.as_deref(), self.document_host(),
             self.proxy.as_deref(), self.socks5_proxy.as_deref(),
             self.h3_alt_svc(),
             self.h3_pool(),
@@ -4948,7 +4979,7 @@ impl HttpClient {
                     self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
                     &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
                     self.mixed_content.as_ref(), destination, None, &combined_extra_headers,
-                    self.cookie_jar.as_deref(), self.top_level_site.as_deref(), self.document_host(),
+                    self.cookie_jar.as_deref(), self.top_level_site.as_deref(), self.cookie_partition.as_deref(), self.document_host(),
                     self.proxy.as_deref(), self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
                     self.h3_pool(),
@@ -4990,7 +5021,7 @@ impl HttpClient {
             self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
             &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
             self.mixed_content.as_ref(), destination, None, &uir_header,
-            self.cookie_jar.as_deref(), self.top_level_site.as_deref(), self.document_host(),
+            self.cookie_jar.as_deref(), self.top_level_site.as_deref(), self.cookie_partition.as_deref(), self.document_host(),
             self.proxy.as_deref(), self.socks5_proxy.as_deref(),
             self.h3_alt_svc(),
             self.h3_pool(),
@@ -5061,6 +5092,7 @@ impl NetworkTransport for HttpClient {
                     &snap.conditional_headers,
                     self.cookie_jar.as_deref(),
                     self.top_level_site.as_deref(),
+                    self.cookie_partition.as_deref(),
                     self.document_host(),
                     self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
@@ -5105,6 +5137,7 @@ impl NetworkTransport for HttpClient {
             self.cache_bypass_headers(),
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.cookie_partition.as_deref(),
             self.document_host(),
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
@@ -8101,8 +8134,9 @@ mod tests {
         fn process_set_cookie(&self, _: &str, _: &str, _: &str, _: bool, _: Option<&str>) {}
     }
 
-    /// BUG-1616: контекст запроса зависит от сайта документа и вида запроса;
-    /// ключ раздела jar-а остаётся `None` (TCP не подключён).
+    /// BUG-1616/1628: контекст запроса зависит от сайта документа и вида
+    /// запроса; ключ раздела jar-а — сайт верхнего документа (по умолчанию
+    /// равен `top_level_site` клиента).
     #[test]
     fn cookie_site_context_follows_document_site_and_request_kind() {
         use lumen_core::ext::CookieSiteContext::{CrossSite, CrossSiteTopLevelSafe, SameSite};
@@ -8120,7 +8154,10 @@ ok".to_vec());
             .fetch_subresource(&Url::parse(&format!("http://127.0.0.1:{port}/img")).unwrap(), RequestDestination::Image)
             .expect("fetch_subresource");
         server.join().unwrap();
-        assert_eq!(*jar.seen.lock().unwrap(), vec![(CrossSite, None)]);
+        assert_eq!(
+            *jar.seen.lock().unwrap(),
+            vec![(CrossSite, Some("example.com".to_owned()))]
+        );
 
         // Top-level GET-навигация с чужого сайта: Lax едет.
         let (port, server) = ok();
@@ -8130,7 +8167,10 @@ ok".to_vec());
             .fetch_page(&Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap(), None, false)
             .expect("fetch_page");
         server.join().unwrap();
-        assert_eq!(*jar.seen.lock().unwrap(), vec![(CrossSiteTopLevelSafe, None)]);
+        assert_eq!(
+            *jar.seen.lock().unwrap(),
+            vec![(CrossSiteTopLevelSafe, Some("example.com".to_owned()))]
+        );
 
         // Тот же сайт — и подресурс, и навигация без ограничений.
         let (port, server) = ok();
@@ -8140,7 +8180,10 @@ ok".to_vec());
             .fetch_subresource(&Url::parse(&format!("http://127.0.0.1:{port}/img")).unwrap(), RequestDestination::Image)
             .expect("fetch_subresource");
         server.join().unwrap();
-        assert_eq!(*jar.seen.lock().unwrap(), vec![(SameSite, None)]);
+        assert_eq!(
+            *jar.seen.lock().unwrap(),
+            vec![(SameSite, Some("127.0.0.1".to_owned()))]
+        );
 
         // Без контекста сайта (фон, нет инициатора) — как раньше, всё same-site.
         let (port, server) = ok();
@@ -8151,6 +8194,31 @@ ok".to_vec());
             .expect("fetch_subresource");
         server.join().unwrap();
         assert_eq!(*jar.seen.lock().unwrap(), vec![(SameSite, None)]);
+    }
+
+    /// BUG-1628: `with_cookie_partition` отделяет ключ раздела cookie от
+    /// сайта-for-cookies — навигация делит cookie по сайту ЦЕЛЕВОГО
+    /// документа, а SameSite-контекст остаётся у инициатора.
+    #[test]
+    fn cookie_partition_overrides_site_for_cookies() {
+        use lumen_core::ext::CookieSiteContext::CrossSiteTopLevelSafe;
+        let (port, server) = mock_http_server(1, |_| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_vec()
+        });
+        let jar = Arc::new(ContextJar::default());
+        let client = HttpClient::new()
+            .with_cookie_jar(jar.clone(), Some("initiator.example".into()))
+            .with_cookie_partition(Some("target.example".into()));
+        client
+            .fetch_page(&Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap(), None, false)
+            .expect("fetch_page");
+        server.join().unwrap();
+        // SameSite-контекст — от инициатора (127.0.0.1 ≠ initiator.example →
+        // межсайтовая top-level GET), а раздел — от целевого сайта.
+        assert_eq!(
+            *jar.seen.lock().unwrap(),
+            vec![(CrossSiteTopLevelSafe, Some("target.example".to_owned()))]
+        );
     }
 
     #[test]

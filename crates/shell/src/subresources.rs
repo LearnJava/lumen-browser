@@ -30,7 +30,7 @@ pub(crate) fn fetch_vtt_text(
     src: &str,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
     referrer_policy: lumen_network::ReferrerPolicy,
 ) -> Option<String> {
     match base.resolve(src) {
@@ -70,7 +70,7 @@ pub(crate) fn fetch_and_decode_background_images(
     layout: &LayoutBox,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
     target: lumen_core::ColorSpace,
     csp_gate: Option<(&[lumen_network::csp::CspPolicy], Option<&lumen_network::Origin>)>,
     referrer_policy: lumen_network::ReferrerPolicy,
@@ -169,7 +169,7 @@ pub(crate) fn decode_background_image(
     fetch_url: &str,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
     target: lumen_core::ColorSpace,
     referrer_policy: lumen_network::ReferrerPolicy,
 ) -> Option<Arc<lumen_image::Image>> {
@@ -189,7 +189,7 @@ pub(crate) struct BackgroundPrefetch {
     /// Эффективная база документа — та же, что получит финальный проход.
     pub(crate) base: ResourceBase,
     pub(crate) sink: Arc<dyn EventSink>,
-    pub(crate) cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    pub(crate) cookie_jar: Option<DocCookieJar>,
     pub(crate) target: lumen_core::ColorSpace,
     /// Политика CSP документа и его origin — заблокированный `img-src` URL не
     /// уходит в сеть и здесь; событие о нарушении шлёт финальный проход.
@@ -305,7 +305,7 @@ pub(crate) fn load_font_faces(
     font_faces: &[lumen_css_parser::FontFaceRule],
     _base: &ResourceBase,
     _sink: &Arc<dyn EventSink>,
-    _cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    _cookie_jar: Option<DocCookieJar>,
 ) -> (lumen_font::FontRegistry, Vec<PendingWebFont>) {
     use lumen_css_parser::FontFaceSourceKind;
     use lumen_core::FontStyle;
@@ -468,7 +468,7 @@ pub(crate) fn fetch_and_decode_images(
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     viewport: lumen_core::geom::Size,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
     target: lumen_core::ColorSpace,
     // BUG-935 срез 94: узлы, которым `apply_intrinsic_size` дописал `width`/`height` —
     // вызывающий сообщает их трекеру мутаций страницы (см. `Lumen::note_shell_attr_writes`).
@@ -703,7 +703,7 @@ pub(crate) fn fetch_image_bytes(
     raw_src: &str,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
     referrer_policy: lumen_network::ReferrerPolicy,
 ) -> Result<Vec<u8>, Box<dyn Error>> {
     fetch_subresource_bytes(
@@ -731,7 +731,7 @@ pub(crate) fn fetch_font_bytes(
     raw_src: &str,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
     referrer_policy: lumen_network::ReferrerPolicy,
 ) -> Result<Vec<u8>, Box<dyn Error>> {
     fetch_subresource_bytes(
@@ -753,7 +753,7 @@ pub(crate) fn fetch_color_profile_bytes(
     raw_src: &str,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
     referrer_policy: lumen_network::ReferrerPolicy,
 ) -> Result<Vec<u8>, Box<dyn Error>> {
     fetch_subresource_bytes(
@@ -777,7 +777,7 @@ pub(crate) fn load_sheet_color_profiles(
     sheet: &mut lumen_css_parser::Stylesheet,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
     referrer_policy: lumen_network::ReferrerPolicy,
 ) {
     if sheet.color_profiles.is_empty() {
@@ -802,7 +802,7 @@ pub(crate) fn fetch_video_bytes(
     raw_src: &str,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
     referrer_policy: lumen_network::ReferrerPolicy,
 ) -> Result<Vec<u8>, Box<dyn Error>> {
     fetch_subresource_bytes(
@@ -820,7 +820,7 @@ fn fetch_subresource_bytes(
     raw_src: &str,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
     destination: lumen_network::RequestDestination,
     span_label: &str,
     referrer_policy: lumen_network::ReferrerPolicy,
@@ -871,7 +871,7 @@ pub(crate) fn decode_image(
     raw_src: &str,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
     target: lumen_core::ColorSpace,
     referrer_policy: lumen_network::ReferrerPolicy,
 ) -> Option<image_cache::DecodedImage> {
@@ -907,7 +907,7 @@ struct CorsImageFetch<'a> {
     mode: lumen_layout::CrossOriginMode,
     base: &'a ResourceBase,
     sink: &'a Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
     target: lumen_core::ColorSpace,
     referrer_policy: lumen_network::ReferrerPolicy,
 }

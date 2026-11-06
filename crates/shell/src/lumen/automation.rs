@@ -242,13 +242,14 @@ impl Lumen {
         /// Non-expired cookies of the active profile's jar for
         /// `AutomationCommand::GetCookies` (DEVX-20, `storage.getCookies`).
         /// The jar is the one pages read through `document.cookie` and requests
-        /// send from; cookie storage is not partitioned (`COOKIE_PARTITION` is
-        /// `None`), so the `None` partition is the whole store.
+        /// send from. BUG-1628: хранилище разбито по сайтам верхнего уровня,
+        /// а BiDi-запрос раздела не несёт — отдаём объединение всех разделов,
+        /// как браузерный менеджер cookie.
         pub(crate) fn automation_get_cookies(&self) -> Vec<lumen_driver::AutomationCookie> {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
-            let Ok(cookies) = self.active_cookie_jar().list_all(now, None) else { return Vec::new() };
+            let Ok(cookies) = self.active_cookie_jar().list_all_partitions(now) else { return Vec::new() };
             cookies
                 .into_iter()
                 .map(|c| lumen_driver::AutomationCookie {
@@ -291,13 +292,25 @@ impl Lumen {
                 http_only: cookie.http_only,
                 same_site,
             };
-            self.active_cookie_jar().set(stored, None).map_err(|e| e.to_string())
+            // BUG-1628: запись идёт в раздел текущей верхней страницы —
+            // тем же ключом, что читают её запросы и `document.cookie`.
+            let partition = self
+                .document_resource_base()
+                .and_then(|b| b.url())
+                .map(|u| crate::config::connection_site(&u));
+            self.active_cookie_jar().set(stored, partition.as_deref()).map_err(|e| e.to_string())
         }
 
         /// Remove one cookie from the active profile's jar for
         /// `AutomationCommand::DeleteCookie` (DEVX-20, `storage.deleteCookies`).
         pub(crate) fn automation_delete_cookie(&self, domain: &str, path: &str, name: &str) -> Result<(), String> {
-            self.active_cookie_jar().delete(domain, path, name, None).map_err(|e| e.to_string())
+            // BUG-1628: удаление из раздела текущей верхней страницы — см.
+            // `automation_set_cookie`.
+            let partition = self
+                .document_resource_base()
+                .and_then(|b| b.url())
+                .map(|u| crate::config::connection_site(&u));
+            self.active_cookie_jar().delete(domain, path, name, partition.as_deref()).map_err(|e| e.to_string())
         }
 
         /// Poll an `AutomationCommand::Wait` condition against current shell

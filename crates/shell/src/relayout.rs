@@ -311,7 +311,7 @@ impl Lumen {
             &src.stylesheet.font_faces,
             &base,
             &self.event_sink,
-            Some(self.active_cookie_jar()),
+            Some(DocCookieJar::for_base(self.active_cookie_jar(), &base)),
         );
         self.spawn_web_font_fetches(pending);
     }

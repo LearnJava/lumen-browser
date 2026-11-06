@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 use lumen_core::ext::EventSink;
 use lumen_dom::Document;
 
-use crate::{PersistentJs, ResourceBase};
+use crate::{DocCookieJar, PersistentJs, ResourceBase};
 
 /// Rebuild a [`crate::ResourceBase`] from a persisted page URL string.
 ///
@@ -87,6 +87,9 @@ pub(crate) fn restore_js_context(
     image_hook_ctx: Option<RestoreImageHookCtx>,
 ) -> (Arc<Mutex<Document>>, Option<Arc<dyn PersistentJs>>) {
     let base = resource_base_from_url(url);
+    // BUG-1628: восстановленная страница — верхний уровень сама для себя,
+    // партиция = сайт её URL.
+    let cookie_jar = cookie_jar.map(|jar| DocCookieJar::for_base(jar, &base));
 
     // BUG-164: re-collect classic + module scripts in document order and
     // re-fetch external `<script src>` bodies, so a restored tab re-runs the

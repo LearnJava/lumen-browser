@@ -268,6 +268,14 @@ impl PageSource {
                         Arc::new(lumen_storage::CookieJarProvider::new(jar)),
                         initiator_site(referrer.as_deref()),
                     );
+                    // BUG-1628: партиция навигации — сайт ЦЕЛЕВОГО документа
+                    // (он и станет сайтом верхнего уровня), а не инициатора.
+                    // Запрошенный URL — приближение финального: при
+                    // кросс-сайтовом редиректе промежуточные Set-Cookie лягут
+                    // в раздел сайта запроса.
+                    builder = builder.with_cookie_partition(Some(
+                        crate::config::connection_site(&lumen_url),
+                    ));
                 }
                 let client = crate::config::global()
                     .apply_http(builder)
@@ -404,6 +412,11 @@ impl PageSource {
                 Arc::new(lumen_storage::CookieJarProvider::new(jar)),
                 initiator_site(referrer.as_deref()),
             );
+            // BUG-1628: см. `load_bytes` — партиция навигации это сайт
+            // целевого документа.
+            builder = builder.with_cookie_partition(Some(
+                crate::config::connection_site(&lumen_url),
+            ));
         }
         let client = crate::config::global()
             .apply_http(builder)
@@ -607,7 +620,10 @@ fn emit_response_link_headers(
         .iter()
         .map(|p| lumen_network::csp::parse_csp_header(p))
         .collect();
-    emit_link_hints(&response_link_headers(resp_headers), final_url, sink, cookie_jar, &csp);
+    // BUG-1628: preload-хинты финального ответа идут в партиции ЭТОГО
+    // документа — он и есть верхний уровень своей страницы.
+    let cookies = cookie_jar.map(|jar| DocCookieJar::for_url(jar, final_url));
+    emit_link_hints(&response_link_headers(resp_headers), final_url, sink, cookies, &csp);
 }
 
 /// Starts what the `Link:` header values of a response at `base_url` ask for
@@ -620,7 +636,7 @@ pub(crate) fn emit_link_hints(
     links: &[String],
     base_url: &lumen_core::url::Url,
     sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
     csp: &[lumen_network::csp::CspPolicy],
 ) {
     let hints: Vec<lumen_html_parser::PreloadHint> = links

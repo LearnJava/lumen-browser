@@ -417,9 +417,10 @@ pub(crate) fn install_cookie(
             || !parsed.as_ref().is_some_and(|u| matches!(u.scheme(), "http" | "https"));
 
         if let Some(jar) = cookie_jar.filter(|_| !cookie_averse) {
-            // `top_level_site = None`: the page's `HttpClient` is attached to
-            // the same jar with `None` too, so script and network share one
-            // partition.
+            // `top_level_site = None`: партиция пришита к провайдеру
+            // (`CookieJarProvider::with_partition`, BUG-1628) — тот же
+            // bound provider получает и `HttpClient` документа, поэтому
+            // script и network делят один раздел `cookies.top_level_site`.
             let jar_get = Arc::clone(&jar);
             let (host_get, path_get) = (host.clone(), path.clone());
             reg!(scope, ctx, store, "_lumen_cookie_get", move || -> String {

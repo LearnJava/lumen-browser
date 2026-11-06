@@ -281,6 +281,8 @@ pub(crate) struct EventSource {
 pub(crate) struct SseCookies {
     pub(crate) jar: Arc<dyn lumen_core::ext::CookieProvider>,
     pub(crate) document_host: Option<String>,
+    /// BUG-1628: cookie partition key (site of the top-level document).
+    pub(crate) partition: Option<String>,
 }
 
 /// Read the HTTP status line and headers off `reader` (up to the blank line
@@ -350,7 +352,7 @@ impl EventSource {
         if c.document_host.as_deref().is_some_and(|d| d != host) {
             return String::new();
         }
-        let val = c.jar.get_for_request(&host, &self.url.path_and_query(), is_tls, crate::COOKIE_PARTITION, false);
+        let val = c.jar.get_for_request(&host, &self.url.path_and_query(), is_tls, c.partition.as_deref(), false);
         if val.is_empty() { String::new() } else { format!("Cookie: {val}\r\n") }
     }
 
@@ -412,7 +414,7 @@ impl EventSource {
             let request_path = self.url.path_and_query();
             for (k, v) in &headers {
                 if k.eq_ignore_ascii_case("set-cookie") {
-                    c.jar.process_set_cookie(v, &host, &request_path, is_tls, crate::COOKIE_PARTITION);
+                    c.jar.process_set_cookie(v, &host, &request_path, is_tls, c.partition.as_deref());
                 }
             }
         }
@@ -1190,6 +1192,7 @@ mod tests {
         let cookies = SseCookies {
             jar: Arc::new(FixedJar),
             document_host: Some("127.0.0.1".to_owned()),
+            partition: None,
         };
         let es = EventSource::connect(&url, Arc::new(LoopbackDns), Arc::new(lumen_core::ext::NoopEventSink), TabId(0), Some(cookies));
         if let Err(e) = &es { panic!("connect: {e}") }

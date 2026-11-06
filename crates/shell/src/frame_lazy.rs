@@ -40,7 +40,7 @@ pub(crate) struct FrameLazyLoaded {
 pub(crate) fn fetch_frame_lazy_images(
     frame: &mut FrameHandle,
     sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
     target: lumen_core::ColorSpace,
 ) -> FrameLazyLoaded {
     let pending = std::mem::take(&mut frame.pending_lazy);
@@ -133,12 +133,18 @@ impl Lumen {
         }
         let sink = Arc::clone(&self.event_sink);
         let cookie_jar = self.active_cookie_jar();
+        // BUG-1628: lazy-картинки фрейма идут в партиции ВЕРХНЕГО документа —
+        // сайт текущей страницы, а не сайта фрейма.
+        let cookies = self
+            .document_resource_base()
+            .map(|b| DocCookieJar::for_base(Arc::clone(&cookie_jar), &b))
+            .unwrap_or_else(|| DocCookieJar::new(Arc::clone(&cookie_jar)));
         let target = self.target_color_space();
         for i in 0..self.frames.len() {
             let loaded = frame_lazy::fetch_frame_lazy_images(
                 &mut self.frames[i],
                 &sink,
-                Some(Arc::clone(&cookie_jar)),
+                Some(cookies.clone()),
                 target,
             );
             for (key, image) in loaded.images {

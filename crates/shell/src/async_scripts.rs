@@ -45,7 +45,7 @@ impl AsyncScriptFeed {
         env: ScriptFetchEnv,
         base: ResourceBase,
         sink: Arc<dyn EventSink>,
-        cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+        cookie_jar: Option<DocCookieJar>,
         wake: impl Fn() + Send + Sync + 'static,
     ) -> Arc<Self> {
         let total = items.len();

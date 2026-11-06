@@ -1182,6 +1182,7 @@ impl HttpClient {
             &author_headers,
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.cookie_partition.as_deref(),
             self.document_host(),
             self.proxy.as_deref(),
             self.socks5_proxy.as_deref(),
@@ -1268,6 +1269,7 @@ impl SseProvider for HttpClient {
         let cookies = self.cookie_jar.as_ref().map(|jar| sse::SseCookies {
             jar: Arc::clone(jar),
             document_host: self.document_host().map(str::to_owned),
+            partition: self.cookie_partition.clone(),
         });
         let es = sse::EventSource::connect(url, Arc::clone(&self.resolver), sink, tab_id, cookies)?;
         Ok(Box::new(es))

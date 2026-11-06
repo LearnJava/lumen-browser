@@ -438,7 +438,7 @@ pub(crate) fn resolve_script_sources(
     items: &[ScriptSource],
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
     doc: &Document,
 ) -> Vec<ResolvedScript> {
     let env = ScriptFetchEnv::of(doc, base);
@@ -460,7 +460,7 @@ pub(crate) fn resolve_one_script(
     meta: &ScriptElementMeta,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
-    cookie_jar: &Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: &Option<DocCookieJar>,
     env: &ScriptFetchEnv,
 ) -> Option<ResolvedScript> {
     let ScriptFetchEnv { csp_gate, self_origin, referrer_policy } = env;
@@ -880,7 +880,7 @@ pub(crate) fn run_scripts_with_dom(
     // sends `Cookie` from — handed to `document.cookie` so script and network
     // see one store. `None` (headless dump/PDF, opaque-origin frames) keeps
     // `document.cookie` empty.
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cookie_jar: Option<DocCookieJar>,
     // BUG-1198: связи фрейма с предками, регистрируемые до первой строки
     // его скрипта (`frame_ancestry.rs`). `None` у всех, кроме
     // `frames::spawn_frame`.
@@ -957,8 +957,11 @@ pub(crate) fn run_scripts_with_dom(
                 if let Some(hook) = image_load_hook {
                     rt = rt.with_image_load_hook(hook);
                 }
-                if let Some(jar) = cookie_jar {
-                    rt = rt.with_cookie_jar(Arc::new(lumen_storage::CookieJarProvider::new(jar)));
+                if let Some(cookies) = cookie_jar {
+                    rt = rt.with_cookie_jar(Arc::new(
+                        lumen_storage::CookieJarProvider::new(Arc::clone(&cookies.jar))
+                            .with_partition(cookies.partition_site.clone()),
+                    ));
                 }
                 // BUG-1208: `window.origin`/`self.origin` inherit the
                 // parent's origin for a non-sandboxed `about:blank`/

@@ -137,7 +137,9 @@ impl Lumen {
             let fetch_url: &str = upgraded.as_deref().unwrap_or(&src);
 
             let bytes = match fetch_image_bytes(
-                fetch_url, &base, &self.event_sink, Some(self.active_cookie_jar()), referrer_policy,
+                fetch_url, &base, &self.event_sink,
+                Some(DocCookieJar::for_base(self.active_cookie_jar(), &base)),
+                referrer_policy,
             ) {
                 Ok(b) => b,
                 Err(e) => {
@@ -354,7 +356,7 @@ impl Lumen {
                 fetch_url,
                 &base,
                 &self.event_sink,
-                Some(self.active_cookie_jar()),
+                Some(DocCookieJar::for_base(self.active_cookie_jar(), &base)),
                 referrer_policy,
             ) {
                 Ok(b) => b,

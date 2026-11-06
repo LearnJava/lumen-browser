@@ -280,7 +280,7 @@ impl Lumen {
                 // безопасно — следующая навигация пересоздаёт набор в streaming.
                 let sink = self.event_sink.clone();
                 let hp = Arc::clone(&self.hyp_provider);
-                let cookie_jar = Some(self.active_cookie_jar());
+                let cookie_jar = Some(DocCookieJar::for_base(self.active_cookie_jar(), &raw.base));
                 let sw_worker_store = Some(Arc::clone(&self.sw_worker_store));
                 let cache_backend =
                     Some(Arc::clone(&self.cache_store) as Arc<dyn lumen_core::ext::CacheBackend>);
