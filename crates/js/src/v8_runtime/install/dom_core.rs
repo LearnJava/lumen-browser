@@ -23,6 +23,44 @@ pub(super) fn log_foreign_node_id(doc: &lumen_dom::Document, what: &str, id: u32
     );
 }
 
+/// HTML-неймспейс, по которому `getElementsByTagName` матчит имя без учёта
+/// регистра (правило `_lumen_tag_name_predicate` в шиме, BUG-416).
+const HTML_NS_URI: &str = "http://www.w3.org/1999/xhtml";
+
+/// Предикат `_lumen_tag_name_predicate` на стороне Rust: HTML-элемент
+/// матчит имя без учёта регистра обеих сторон, элемент другого
+/// неймспейса — точным qualified name; `'*'` — любой элемент.
+fn tag_name_matches(node: &lumen_dom::Node, want: &str) -> bool {
+    let Some(name) = node.element_name() else {
+        return false;
+    };
+    if want == "*" {
+        return true;
+    }
+    if name.namespace.uri() == Some(HTML_NS_URI) {
+        name.local.to_lowercase() == want.to_lowercase()
+    } else {
+        name.local == want
+    }
+}
+
+/// Предикат `_lumen_tag_ns_predicate` на стороне Rust: `want_ns = None`
+/// соответствует JS `null`/`''`/`undefined` (неймспейс «отсутствует»),
+/// `Some("*")` матчит любой неймспейс; local name — точное совпадение или
+/// `'*'`.
+fn tag_ns_matches(node: &lumen_dom::Node, want_ns: Option<&str>, want_local: &str) -> bool {
+    let Some(name) = node.element_name() else {
+        return false;
+    };
+    if let Some(ns) = want_ns
+        && ns != "*"
+        && name.namespace.uri() != Some(ns)
+    {
+        return false;
+    }
+    want_local == "*" || name.local == want_local
+}
+
 /// BUG-1118 срез 2: `_lumen_set_attr`'s image-load hook only fires when the
 /// `src` attribute is *assigned after* the `<img>` already exists in the
 /// document — a subtree built by `innerHTML`/`insertAdjacentHTML` (parsed
@@ -527,6 +565,74 @@ pub(crate) fn install_node_lookup(
                         .map(|n| n.raw())
                         .collect()
                 })
+            }
+        );
+        // BUG-1694: `getElementsByTagName(NS)` used to enumerate `'*'` and
+        // then call `_lumen_get_local_name`/`_lumen_get_namespace_uri` per
+        // element — two JS↔Rust crossings per node per call. On a ~17k-node
+        // document every parser-end scan (`_lumen_link_hints_scan`,
+        // `_lumen_script_empty_src_scan`, `_lumen_details_open_scan`, …)
+        // cost seconds. The whole match now happens inside one native pass
+        // with the same rules the JS predicates encode (BUG-416).
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store,
+            "_lumen_get_elements_by_tag",
+            move |qualified_name: String| -> Vec<u32> {
+                let doc = d.lock().unwrap();
+                query_all(&doc, "*")
+                    .into_iter()
+                    .filter(|&n| tag_name_matches(doc.get(n), &qualified_name))
+                    .map(|n| n.raw())
+                    .collect()
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store,
+            "_lumen_get_elements_by_tag_scoped",
+            move |node_id: u32, qualified_name: String| -> Vec<u32> {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_raw(node_id);
+                // BUG-919: same stale-id guard as `_lumen_query_selector_all_scoped` above.
+                if !doc.contains_id(nid) {
+                    return Vec::new();
+                }
+                query_all_within(&doc, nid, "*")
+                    .into_iter()
+                    .filter(|&n| tag_name_matches(doc.get(n), &qualified_name))
+                    .map(|n| n.raw())
+                    .collect()
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store,
+            "_lumen_get_elements_by_tag_ns",
+            move |namespace: Option<String>, local_name: String| -> Vec<u32> {
+                let doc = d.lock().unwrap();
+                query_all(&doc, "*")
+                    .into_iter()
+                    .filter(|&n| {
+                        tag_ns_matches(doc.get(n), namespace.as_deref(), &local_name)
+                    })
+                    .map(|n| n.raw())
+                    .collect()
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store,
+            "_lumen_get_elements_by_tag_ns_scoped",
+            move |node_id: u32, namespace: Option<String>, local_name: String| -> Vec<u32> {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_raw(node_id);
+                if !doc.contains_id(nid) {
+                    return Vec::new();
+                }
+                query_all_within(&doc, nid, "*")
+                    .into_iter()
+                    .filter(|&n| {
+                        tag_ns_matches(doc.get(n), namespace.as_deref(), &local_name)
+                    })
+                    .map(|n| n.raw())
+                    .collect()
             }
         );
     }

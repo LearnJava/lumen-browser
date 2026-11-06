@@ -12,7 +12,7 @@ use super::*;
 // [`V8Inner::context`]) the way a `V8Command::Run` job can. The only state it
 // has is what `PromiseRejectMessage`/`v8::callback_scope!` hands it, so
 // per-isolate bookkeeping lives in `thread_local!`s here instead, mirroring
-// `NAMED_ACCESS_DOC` above.
+// `NAMED_ACCESS` above.
 //
 // Firing `unhandledrejection` immediately from inside the callback would be
 // wrong: a `.catch()` attached in the same synchronous turn (extremely common

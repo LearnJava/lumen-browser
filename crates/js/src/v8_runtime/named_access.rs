@@ -116,14 +116,36 @@ fn apply_v8_test_gc_flag() {
 
 // ── Window named properties (HTML LS §7.3.3) ──────────────────────────────────
 
+/// Per-document state the Window named-property interceptor resolves names
+/// against (BUG-384, BUG-1694).
+struct NamedAccessState {
+    /// Document the interceptor resolves names against — the document of the
+    /// page currently installed in this isolate. Written by every
+    /// [`V8JsRuntime::install_dom`] from inside its JS-thread job, so it always
+    /// points at the right document. Worker isolates never call `install_dom`
+    /// and the whole mechanism stays inert there.
+    doc: Arc<Mutex<lumen_dom::Document>>,
+    /// DOM-mutation tracker sharing the runtime's [`DomTouched`] — its
+    /// `epoch` is the invalidation key for `index` (BUG-1694).
+    touched: Arc<Mutex<DomTouched>>,
+    /// `touched.epoch` the `index` was built at; differs from the live epoch
+    /// means the index is stale and gets rebuilt on the next lookup.
+    index_epoch: u64,
+    /// BUG-1694: `id`/`name` → `NodeId` of the first match in tree order.
+    /// The lookup this replaces was a full tree walk *per name*, and V8's
+    /// global-object [[Set]]/query path fires the interceptor on every
+    /// absent-name access — the shim's own window→globalThis copy loop alone
+    /// issues ~255 stores during `install_dom`, each of which used to walk
+    /// all ~17k nodes (~1.2 s on the BUG-1694 document). One index build per
+    /// DOM-mutation epoch answers every name in O(1); every mutation
+    /// primitive (`setAttribute`, child-list edits, unattributed touches)
+    /// bumps `epoch`, so a stale index can never outlive the mutation that
+    /// would have changed the answer.
+    index: std::collections::HashMap<String, u32>,
+}
+
 thread_local! {
-    /// Document the Window named-property interceptor resolves names against
-    /// (BUG-384). Written by every [`V8JsRuntime::install_dom`] from inside its
-    /// JS-thread job, so it always points at the document of the page currently
-    /// installed in this isolate. `None` before the first install — and forever
-    /// in worker isolates, which never call `install_dom` — where the whole
-    /// mechanism is simply inert.
-    static NAMED_ACCESS_DOC: std::cell::RefCell<Option<Arc<Mutex<lumen_dom::Document>>>> =
+    static NAMED_ACCESS: std::cell::RefCell<Option<NamedAccessState>> =
         const { std::cell::RefCell::new(None) };
     /// Re-entrancy guard for the interceptor. Building the returned element
     /// wrapper calls back into JS (`_lumen_make_element`), and any global miss
@@ -132,11 +154,54 @@ thread_local! {
     static NAMED_ACCESS_BUSY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Publish `doc` as the document the Window named-property interceptor resolves
-/// against (BUG-384). Must be called on the JS thread — the slot is
-/// thread-local, matching the isolate's single-thread ownership.
-pub(super) fn set_named_access_document(doc: &Arc<Mutex<lumen_dom::Document>>) {
-    NAMED_ACCESS_DOC.with(|slot| *slot.borrow_mut() = Some(Arc::clone(doc)));
+/// Publish `doc`/`touched` as the state the Window named-property interceptor
+/// resolves against (BUG-384). Must be called on the JS thread — the slot is
+/// thread-local, matching the isolate's single-thread ownership. A fresh
+/// state also drops the name index, so a new document never inherits the
+/// previous page's answers.
+pub(super) fn set_named_access_document(
+    doc: &Arc<Mutex<lumen_dom::Document>>,
+    touched: &Arc<Mutex<DomTouched>>,
+) {
+    NAMED_ACCESS.with(|slot| {
+        *slot.borrow_mut() = Some(NamedAccessState {
+            doc: Arc::clone(doc),
+            touched: Arc::clone(touched),
+            index_epoch: u64::MAX,
+            index: std::collections::HashMap::new(),
+        })
+    });
+}
+
+/// One pre-order pass over the document collecting every supported
+/// named-property key (`id` on any element, `name` on
+/// `img`/`form`/`iframe`/`embed`/`object`) → first matching `NodeId`, the
+/// same answer [`find_first_matching`] gave per name: tree order, first
+/// claim wins, children only (no shadow-root descent — same walk as before).
+fn build_named_access_index(doc: &lumen_dom::Document) -> std::collections::HashMap<String, u32> {
+    let mut index = std::collections::HashMap::new();
+    let mut stack = vec![doc.root()];
+    while let Some(nid) = stack.pop() {
+        let node = doc.get(nid);
+        if let Some(tag) = node.element_name() {
+            let raw = nid.index() as u32;
+            if let Some(id) = node.get_attr("id") {
+                index.entry(id.to_string()).or_insert(raw);
+            }
+            if matches!(
+                tag.local.as_str(),
+                "img" | "form" | "iframe" | "embed" | "object"
+            ) && let Some(name) = node.get_attr("name")
+            {
+                index.entry(name.to_string()).or_insert(raw);
+            }
+        }
+        // Pre-order with children in document order: push them reversed.
+        for &child in node.children.iter().rev() {
+            stack.push(child);
+        }
+    }
+    index
 }
 
 /// How long a named-property lookup waits for the document lock before giving
@@ -199,21 +264,20 @@ fn named_access_lookup(name: &str) -> Option<u32> {
     if name.is_empty() {
         return None;
     }
-    NAMED_ACCESS_DOC.with(|slot| {
-        let borrowed = slot.borrow();
-        let doc = lock_document_bounded(borrowed.as_ref()?)?;
-        find_first_matching(&doc, doc.root(), &|node| match &node.data {
-            NodeData::Element { name: tag, .. } => {
-                node.get_attr("id") == Some(name)
-                    || (node.get_attr("name") == Some(name)
-                        && matches!(
-                            tag.local.as_str(),
-                            "img" | "form" | "iframe" | "embed" | "object"
-                        ))
-            }
-            _ => false,
-        })
-        .map(|n| n.index() as u32)
+    NAMED_ACCESS.with(|slot| {
+        let mut state = slot.borrow_mut();
+        let state = state.as_mut()?;
+        // BUG-1694: rebuild the name index when the DOM mutation epoch moved.
+        // A poisoned tracker declines the lookup entirely — same answer the
+        // document lock gives below.
+        let epoch = state.touched.lock().ok()?.epoch;
+        if epoch != state.index_epoch {
+            let doc = Arc::clone(&state.doc);
+            let doc = lock_document_bounded(&doc)?;
+            state.index = build_named_access_index(&doc);
+            state.index_epoch = epoch;
+        }
+        state.index.get(name).copied()
     })
 }
 
