@@ -1205,6 +1205,11 @@ pub(crate) struct Lumen {
     /// (`build_media_controls_overlay`). Опрашивается кликом до диспетчеризации
     /// в DOM; пуст между navigation-ами и пока панелей на странице нет.
     pub(crate) media_panel_hits: Vec<crate::lumen::media_controls::MediaHit>,
+    /// BUG-1719: активное удержание зоны панели (`handle_media_panel_click`
+    /// ставит на press, `finish_media_panel_drag` снимает на release). Для
+    /// seek/volume — drag значения по сохранённому треку, для кнопок —
+    /// только захват: парный release странице не диспетчерится.
+    pub(crate) media_panel_drag: Option<crate::lumen::media_controls::MediaDrag>,
     /// Shared TextTrack store — same Arc used by JS native bindings (P3-webvtt).
     ///
     /// Mirrors `page_tracks.tracks_by_video` so `video.textTracks` exposes the

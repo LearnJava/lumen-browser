@@ -18,12 +18,24 @@
 //! что и нативы `__lumen_video_play/pause` (семантика повторена 1:1), и будят
 //! тик-цикл через `note_playback_change`.
 //!
+//! Срез 3: press на seek/volume начинает drag (`Lumen::media_panel_drag`) —
+//! `CursorMoved` тянет значение по сохранённому треку, release завершает и
+//! вместе с ним гасится, чтобы страница не увидела mouseup без mousedown.
+//! Вolume-полоса мутирует `audio_levels` и через `__lumen_media_ui_volume`
+//! доводит значение до JS-модели элемента (`volume`/`muted` живут в замыкании
+//! шима, не в store); кнопка fullscreen переключает оконный fullscreen по
+//! образцу Escape-ветки `keyboard.rs` и синхронизирует JS-состояние через
+//! `_lumen_notify_fullscreen_enter/exit`.
+//!
 //! Ограничения среза: панели не следуют CSS-трансформам бокса (кроме
 //! `position: fixed`, он учтён); `<video>` внутри `<iframe>` — своё дерево
-//! layout, см. BUG-1720; у `<audio>` сессии воспроизведения ещё нет (Phase 0
-//! аудио-декода), панель рисуется в paused-состоянии; hover-события
-//! (mousemove/pointermove над панелью) доставляются странице — гасится
-//! только press.
+//! layout, см. BUG-1720; fullscreen растягивает окно, но не сам элемент —
+//! позиционирование `:fullscreen` (CSS Fullscreen §5 UA-правила + top-layer)
+//! отдельная работа; hover-события над панелью доставляются странице —
+//! гасятся press и движение при активном drag; play/pause (и события
+//! play/pause/volumechange) идут через JS-хуки, поэтому в сборке без
+//! `v8` кнопка play неактивна (seek/mute продолжают работать — их store-
+//! мутации шелловые).
 
 use crate::*;
 use lumen_core::geom::Rect;
@@ -40,10 +52,19 @@ const BTN_INSET: f32 = 4.0;
 const SEEK_H: f32 = 4.0;
 const TIME_SIZE: f32 = 12.0;
 const GAP: f32 = 8.0;
+/// Ширина полосы громкости.
+const VOL_W: f32 = 56.0;
 /// Ниже этой ширины полосы текст времени прячется, остаётся play + seek + mute.
 const TIME_MIN_BAR_W: f32 = 190.0;
+/// Ниже этой ширины кнопка fullscreen не ставится (seek остаётся ≥ 24px).
+const FS_MIN_BAR_W: f32 = 148.0;
+/// Ниже этой ширины полоса громкости не ставится.
+const VOL_MIN_BAR_W: f32 = 330.0;
 /// Ниже этой ширины панель не рисуется вовсе.
 const MIN_BAR_W: f32 = 72.0;
+/// Вертикальный запас hit-зон seek/volume вокруг видимого трека (4px) —
+/// по 4px-полосе попасть трудно, ловим в полосе ±10px.
+const TRACK_HIT_PAD: f32 = 10.0;
 
 const BAR_BG: Color = Color { r: 24, g: 24, b: 24, a: 200 };
 const FG: Color = Color { r: 255, g: 255, b: 255, a: 235 };
@@ -54,9 +75,18 @@ const TRACK: Color = Color { r: 255, g: 255, b: 255, a: 70 };
 pub(crate) enum MediaZone {
     PlayPause,
     Mute,
-    /// Клик по seek-треку: прыжок на долю `x / width` длительности
-    /// (drag-перемотка — отдельный срез).
+    /// Seek-трек: прыжок/перетаскивание на долю `x / width` длительности.
     Seek,
+    /// Полоса громкости: доля `x / width` → `audio_levels[nid].0`.
+    Volume,
+    Fullscreen,
+}
+
+impl MediaZone {
+    /// Зоны-треки: press запоминает трек, `CursorMoved` тянет значение.
+    fn is_track(self) -> bool {
+        matches!(self, MediaZone::Seek | MediaZone::Volume)
+    }
 }
 
 /// Прямоугольник зоны в оконных CSS px — живёт между кадрами в
@@ -66,6 +96,22 @@ pub(crate) struct MediaHit {
     pub(crate) nid: u32,
     pub(crate) zone: MediaZone,
     pub(crate) rect: Rect,
+    /// Бокс `<audio>`: provider-сторона элемента живёт в JS-модели
+    /// (`audio_element.rs`), поэтому коммит seek на release уходит туда.
+    pub(crate) audio: bool,
+}
+
+/// Активное удержание зоны панели между press и release. Для треков —
+/// перетаскивание значения, для кнопок — только захват: парный release
+/// странице не принадлежит и гасится.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MediaDrag {
+    pub(crate) nid: u32,
+    pub(crate) zone: MediaZone,
+    /// Трек, по которому считается доля (оконные координаты на момент press).
+    pub(crate) track: Rect,
+    /// См. `MediaHit::audio`.
+    pub(crate) audio: bool,
 }
 
 /// Состояние воспроизведения, достаточное для отрисовки панели.
@@ -75,6 +121,8 @@ struct PanelState {
     cur_ms: u64,
     dur_ms: u64,
     muted: bool,
+    /// `audio_levels[nid].0` (громкость 0..1); дефолт 1.0 — как у audio sink.
+    volume: f32,
 }
 
 /// Геометрия одной панели в оконных координатах.
@@ -83,8 +131,11 @@ struct PanelUi {
     bar: Rect,
     play_btn: Rect,
     mute_btn: Rect,
+    fs_btn: Option<Rect>,
     /// Трек seek-полосы (заполненная часть рисуется внутри него).
     seek: Rect,
+    /// Трек громкости; `None` на узких полосах.
+    volume: Option<Rect>,
     /// Прямоугольник текста времени и сама строка; `None` на узких полосах.
     time: Option<(Rect, String)>,
 }
@@ -127,24 +178,26 @@ fn center(r: Rect) -> [f32; 2] {
     [r.x + r.width * 0.5, r.y + r.height * 0.5]
 }
 
+/// Доля позиции `x` по горизонтальному треку, 0..1.
+fn frac_of(track: Rect, x: f32) -> f32 {
+    if track.width <= 0.0 {
+        return 0.0;
+    }
+    ((x - track.x) / track.width).clamp(0.0, 1.0)
+}
+
 /// Геометрия зоны панели внутри полосы `bar`. `None` — бокс слишком узкий.
 fn panel_ui(bar: Rect, cur_ms: u64, dur_ms: u64) -> Option<PanelUi> {
     if bar.width < MIN_BAR_W {
         return None;
     }
     let cy = bar.y + bar.height * 0.5;
-    let play_btn = Rect {
-        x: bar.x + BTN_INSET,
-        y: cy - BTN * 0.5,
-        width: BTN,
-        height: BTN,
-    };
-    let mute_btn = Rect {
-        x: bar.right() - BTN_INSET - BTN,
-        y: cy - BTN * 0.5,
-        width: BTN,
-        height: BTN,
-    };
+    let vbtn = |x: f32| Rect { x, y: cy - BTN * 0.5, width: BTN, height: BTN };
+    let play_btn = vbtn(bar.x + BTN_INSET);
+    // Правый край: fullscreen (самый внешний), затем mute левее.
+    let fs_btn = (bar.width >= FS_MIN_BAR_W).then(|| vbtn(bar.right() - BTN_INSET - BTN));
+    let mute_right = fs_btn.map_or(bar.right() - BTN_INSET, |b| b.x - BTN_INSET);
+    let mute_btn = vbtn(mute_right - BTN);
     let time = (bar.width >= TIME_MIN_BAR_W).then(|| {
         let label = format!("{} / {}", fmt_time(cur_ms), fmt_time(dur_ms));
         // ~6.2 px на символ при 12px; хватает и для «1:23:45 / 1:23:45» с
@@ -161,10 +214,20 @@ fn panel_ui(bar: Rect, cur_ms: u64, dur_ms: u64) -> Option<PanelUi> {
         Some((r, _)) => r.right() + GAP,
         None => play_btn.right() + GAP,
     };
+    let volume = (bar.width >= VOL_MIN_BAR_W).then_some(Rect {
+        x: mute_btn.x - GAP - VOL_W,
+        y: cy - SEEK_H * 0.5,
+        width: VOL_W,
+        height: SEEK_H,
+    });
+    let seek_right = match volume {
+        Some(ref v) => v.x - GAP,
+        None => mute_btn.x - GAP,
+    };
     let seek = Rect {
         x: seek_x,
         y: cy - SEEK_H * 0.5,
-        width: (mute_btn.x - GAP - seek_x).max(0.0),
+        width: (seek_right - seek_x).max(0.0),
         height: SEEK_H,
     };
     if seek.width < 24.0 {
@@ -174,9 +237,20 @@ fn panel_ui(bar: Rect, cur_ms: u64, dur_ms: u64) -> Option<PanelUi> {
         bar,
         play_btn,
         mute_btn,
+        fs_btn,
         seek,
+        volume,
         time,
     })
+}
+
+/// Полоса ±TRACK_HIT_PAD вокруг видимого трека — hit-прямоугольник.
+fn track_hit(track: Rect) -> Rect {
+    Rect {
+        y: track.y - TRACK_HIT_PAD,
+        height: track.height + TRACK_HIT_PAD * 2.0,
+        ..track
+    }
 }
 
 /// Треугольник play (⏵) вокруг центра кнопки.
@@ -233,6 +307,32 @@ fn speaker_icon(c: [f32; 2], muted: bool) -> Vec<Vec<[f32; 2]>> {
     contours
 }
 
+/// Четыре угловые скобки fullscreen (⤢): каждая — два тонких прямоугольника
+/// (горизонтальное и вертикальное плечо), 8 выпуклых контуров.
+fn fullscreen_icon(c: [f32; 2]) -> Vec<Vec<[f32; 2]>> {
+    let [cx, cy] = c;
+    let s = 9.0; // полудлина скобки
+    let t = 1.8; // толщина плеча
+    let bar = |x0: f32, y0: f32, x1: f32, y1: f32| {
+        let (nx, ny) = (-(y1 - y0), x1 - x0);
+        let len = (nx * nx + ny * ny).sqrt().max(0.001);
+        let (ux, uy) = (nx / len * t, ny / len * t);
+        vec![[x0 + ux, y0 + uy], [x1 + ux, y1 + uy], [x1 - ux, y1 - uy], [x0 - ux, y0 - uy]]
+    };
+    let (l, r, tp, bt) = (cx - s, cx + s, cy - s, cy + s);
+    let a = 5.0; // длина плеча угла
+    vec![
+        bar(l, tp, l + a, tp),
+        bar(l, tp, l, tp + a),
+        bar(r, tp, r - a, tp),
+        bar(r, tp, r, tp + a),
+        bar(l, bt, l + a, bt),
+        bar(l, bt, l, bt - a),
+        bar(r, bt, r - a, bt),
+        bar(r, bt, r, bt - a),
+    ]
+}
+
 fn emit_panel(out: &mut Vec<DisplayCommand>, ui: &PanelUi, st: &PanelState) {
     out.push(DisplayCommand::FillRoundedRect {
         rect: ui.bar,
@@ -260,6 +360,24 @@ fn emit_panel(out: &mut Vec<DisplayCommand>, ui: &PanelUi, st: &PanelState) {
             radii: Default::default(),
         });
     }
+    // Полоса громкости: тот же трек + заполненная часть по `volume`.
+    if let Some(vol) = ui.volume {
+        out.push(DisplayCommand::FillRoundedRect {
+            rect: vol,
+            color: TRACK,
+            radii: Default::default(),
+        });
+        if st.volume > 0.0 {
+            out.push(DisplayCommand::FillRoundedRect {
+                rect: Rect {
+                    width: vol.width * st.volume.clamp(0.0, 1.0),
+                    ..vol
+                },
+                color: FG,
+                radii: Default::default(),
+            });
+        }
+    }
     // Иконка play/pause по фактическому состоянию.
     let contours = if st.paused {
         play_icon(center(ui.play_btn))
@@ -275,6 +393,12 @@ fn emit_panel(out: &mut Vec<DisplayCommand>, ui: &PanelUi, st: &PanelState) {
         contours: speaker_icon(center(ui.mute_btn), st.muted),
         color: FG,
     });
+    if let Some(fs) = ui.fs_btn {
+        out.push(DisplayCommand::DrawSvgFill {
+            contours: fullscreen_icon(center(fs)),
+            color: FG,
+        });
+    }
     // Время: текст шейпит сам бэкенд рендера.
     if let Some((rect, text)) = &ui.time {
         out.push(DisplayCommand::DrawText {
@@ -334,10 +458,18 @@ impl Lumen {
     }
 
     /// Клик по зоне UA-панели медиа. Возвращает `true`, если точка попала в
-    /// панель — тогда диспетчеризация в DOM не нужна. Мутации playback-store
-    /// повторяют нативы `__lumen_video_play` / `__lumen_video_pause` 1:1
-    /// ( freeze при паузе, ре-якорь `play_epoch_ms` при старте), чтобы
-    /// JS-наблюдатели (`video.paused`, `currentTime`) увидели то же самое.
+    /// панель — тогда диспетчеризация в DOM не нужна.
+    ///
+    /// Мутации идут двумя дорогами: seek/mute/volume пишет store прямо из
+    /// шелла (семантика нативов `__lumen_video_seek` и т.п. — freeze при
+    /// паузе, ре-якорь `play_epoch_ms` на игре), а play/pause и звуковые
+    /// хуки проводятся через JS-модель элемента (`__lumen_media_ui_*`), та
+    /// же дорога, что у скриптового `el.play()` — иначе события play/pause/
+    /// volumechange до страницы не доходят или дублируются.
+    ///
+    /// Press дополнительно захватывается в `media_panel_drag`: треки тянут
+    /// значение в `update_media_panel_drag`, у кнопок он держит только
+    /// захват — парный release странице не принадлежит.
     pub(crate) fn handle_media_panel_click(&mut self, x_css: f32, y_css: f32) -> bool {
         let Some(hit) = self
             .media_panel_hits
@@ -350,40 +482,62 @@ impl Lumen {
         let nid = hit.nid;
         let now = self.media_clock_ms();
         let store = std::sync::Arc::clone(&self.video_gif_store);
+        self.media_panel_drag = Some(MediaDrag {
+            nid,
+            zone: hit.zone,
+            track: hit.rect,
+            audio: hit.audio,
+        });
         match hit.zone {
+            // Play/pause мутирует store ТОЛЬКО через JS-хук (`el.play()` /
+            // `el.pause()` → нативы `__lumen_video_play/pause`): если шелл
+            // перевернёт `paused` синхронно, шим на хуке увидит уже
+            // переключённое состояние, `wasPaused` внутри `el.pause()`
+            // станет true и события play/pause до страницы не дойдут.
+            // native-мутация будит тик через `note_playback_change`, панель
+            // обновляется на следующем redraw (одна итерация цикла событий).
             MediaZone::PlayPause => {
-                let rate = store
-                    .playback_rates
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .get(&nid)
-                    .copied()
-                    .unwrap_or(1.0);
-                let mut pb = store.playback.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some(e) = pb.get_mut(&nid) {
-                    if e.paused {
-                        e.play_epoch_ms = Some(now);
-                        e.paused = false;
-                    } else {
-                        e.freeze(now, rate);
-                        e.paused = true;
-                    }
-                    drop(pb);
-                    store.note_playback_change(now as f64);
-                    self.request_redraw();
-                }
+                #[cfg(feature = "v8")]
+                self.route_media_ui_hook(nid, "toggle", "");
             }
             MediaZone::Mute => {
-                let mut levels = store.audio_levels.lock().unwrap_or_else(|e| e.into_inner());
-                let entry = levels.entry(nid).or_insert((1.0, false));
-                entry.1 = !entry.1;
-                drop(levels);
+                let muted = {
+                    let mut levels = store.audio_levels.lock().unwrap_or_else(|e| e.into_inner());
+                    let entry = levels.entry(nid).or_insert((1.0, false));
+                    entry.1 = !entry.1;
+                    entry.1
+                };
                 self.request_redraw();
+                // `video.muted` живёт в замыкании шима, не в store — без
+                // хука геттер после клика по панели врёт.
+                self.route_media_ui_hook(nid, "muted", if muted { "true" } else { "false" });
             }
+            MediaZone::Volume | MediaZone::Seek => {
+                self.apply_media_track(nid, hit.zone, hit.rect, x_css, now, hit.audio);
+            }
+            MediaZone::Fullscreen => {
+                self.toggle_media_fullscreen(nid);
+            }
+        }
+        true
+    }
+
+    /// Трек-зоны (seek / volume): доля курсора по треку → store (+ для
+    /// `<audio>` — provider через JS-хук). Семантика seek повторяет натив
+    /// `__lumen_video_seek`: `position_ms` переписывается и на паузе (тик
+    /// передекодирует кадр), на игре — ре-якорь эпохи под текущий rate.
+    fn apply_media_track(
+        &mut self,
+        nid: u32,
+        zone: MediaZone,
+        track: Rect,
+        x_css: f32,
+        now: u64,
+        audio: bool,
+    ) {
+        let store = std::sync::Arc::clone(&self.video_gif_store);
+        match zone {
             MediaZone::Seek => {
-                // Доля клика по треку → цель в мс; семантика `__lumen_video_seek`:
-                // `position_ms` переписывается и на паузе (тик передекодирует кадр),
-                // на игре — ре-якорь эпохи под текущий rate.
                 let dur = store
                     .playback
                     .lock()
@@ -391,9 +545,9 @@ impl Lumen {
                     .get(&nid)
                     .map_or(0, |e| e.cycle_ms);
                 if dur == 0 {
-                    return true;
+                    return;
                 }
-                let frac = (((x_css - hit.rect.x) / hit.rect.width) as f64).clamp(0.0, 1.0);
+                let frac = frac_of(track, x_css) as f64;
                 let mut pb = store.playback.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(e) = pb.get_mut(&nid) {
                     e.position_ms = (frac * dur as f64) as u64;
@@ -403,10 +557,122 @@ impl Lumen {
                     drop(pb);
                     store.note_playback_change(now as f64);
                     self.request_redraw();
+                    // У `<audio>` позиция живёт в provider; без вызова
+                    // provider останется на старом месте, а следующий
+                    // pump-синк откатит панель.
+                    if audio {
+                        let secs = frac * dur as f64 / 1000.0;
+                        self.route_media_ui_hook(nid, "seek", &format!("{secs:.3}"));
+                    }
                 }
+            }
+            MediaZone::Volume => {
+                let frac = frac_of(track, x_css);
+                store
+                    .audio_levels
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .entry(nid)
+                    .or_insert((1.0, false))
+                    .0 = frac;
+                self.request_redraw();
+                self.route_media_ui_hook(nid, "volume", &format!("{frac:.3}"));
+            }
+            _ => {}
+        }
+    }
+
+    /// Кнопка fullscreen на панели: войти/выйти из оконного fullscreen того
+    /// же вида, что делает Escape-ветка `keyboard.rs` и drain
+    /// `take_fullscreen_requests` в `about_to_wait.rs`. JS-состояние
+    /// (`fullscreenElement`, `fullscreenchange`, sentinel-атрибут
+    /// `data-lumen-fullscreen`) синхронизируется уведомлением шима.
+    fn toggle_media_fullscreen(&mut self, nid: u32) {
+        if self.fullscreen_nid == Some(nid) {
+            self.fullscreen_nid = None;
+            let prev = self.window.as_ref().map(|w| {
+                w.set_fullscreen(None);
+                w.inner_size()
+            });
+            if let Some(prev) = prev {
+                self.arm_fullscreen_resize(prev);
+            }
+            #[cfg(feature = "v8")]
+            route_eval_js(
+                self.engine_thread.as_ref(),
+                self.js_ctx.as_ref(),
+                "if(typeof _lumen_notify_fullscreen_exit==='function')_lumen_notify_fullscreen_exit()"
+                    .to_string(),
+            );
+        } else {
+            self.fullscreen_nid = Some(nid);
+            let prev = self.window.as_ref().map(|w| {
+                w.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+                w.inner_size()
+            });
+            if let Some(prev) = prev {
+                self.arm_fullscreen_resize(prev);
+            }
+            #[cfg(feature = "v8")]
+            route_eval_js(
+                self.engine_thread.as_ref(),
+                self.js_ctx.as_ref(),
+                format!("if(typeof _lumen_notify_fullscreen_enter==='function')_lumen_notify_fullscreen_enter({nid})"),
+            );
+        }
+        self.request_redraw();
+    }
+
+    /// `CursorMoved` при удержании трека панели: значение следует за
+    /// курсором по сохранённому на press треку. Кнопочные захваты ничего
+    /// не делают.
+    pub(crate) fn update_media_panel_drag(&mut self, x_css: f32, _y_css: f32) {
+        let Some(drag) = self.media_panel_drag else {
+            return;
+        };
+        if !drag.zone.is_track() {
+            return;
+        }
+        let now = self.media_clock_ms();
+        self.apply_media_track(drag.nid, drag.zone, drag.track, x_css, now, drag.audio);
+    }
+
+    /// Release после захвата панели. Возвращает `true`, если press был
+    /// панельным — тогда mouseup/pointerup/click странице не диспетчерятся.
+    /// Для `<audio>` здесь дотягивается финальный seek: последний
+    /// `CursorMoved` мог не дойти до актуальной позиции курсора.
+    pub(crate) fn finish_media_panel_drag(&mut self, x_css: f32, _y_css: f32) -> bool {
+        let Some(drag) = self.media_panel_drag.take() else {
+            return false;
+        };
+        if drag.zone == MediaZone::Seek && drag.audio {
+            let dur = self
+                .video_gif_store
+                .playback
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&drag.nid)
+                .map_or(0, |e| e.cycle_ms);
+            if dur > 0 {
+                let secs = frac_of(drag.track, x_css) as f64 * dur as f64 / 1000.0;
+                self.route_media_ui_hook(drag.nid, "seek", &format!("{secs:.3}"));
             }
         }
         true
+    }
+
+    /// Вызов `__lumen_media_ui_*`-хука JS-модели медиаэлемента (шим ставит
+    /// их на каждый `<video>`/`<audio>`). Fire-and-forget: хук проводит
+    /// мутацию той же дорогой, что и скриптовый вызов, со всеми событиями.
+    #[cfg(feature = "v8")]
+    fn route_media_ui_hook(&self, nid: u32, hook: &str, args: &str) {
+        route_eval_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            format!(
+                "var _me=_lumen_make_element({nid});if(_me&&typeof _me.__lumen_media_ui_{hook}==='function')_me.__lumen_media_ui_{hook}({args})"
+            ),
+        );
     }
 }
 
@@ -453,6 +719,7 @@ fn walk_media_boxes(
                 _ => false,
             };
             if has_controls {
+                let is_audio = matches!(kind, BoxKind::Audio { .. });
                 let nid = b.node.index() as u32;
                 let rate = ctx
                     .store
@@ -467,18 +734,19 @@ fn walk_media_boxes(
                     pb.get(&nid)
                         .map_or((true, 0, 0), |s| (s.paused, s.current_ms(ctx.clock_ms, rate), s.cycle_ms))
                 };
-                let muted = ctx
+                let (volume, muted) = ctx
                     .store
                     .audio_levels
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .get(&nid)
-                    .is_some_and(|(_, m)| *m);
+                    .map_or((1.0, false), |(v, m)| (*v, *m));
                 let st = PanelState {
                     paused,
                     cur_ms,
                     dur_ms,
                     muted,
+                    volume,
                 };
                 let bar_h = PANEL_H.min(win.height);
                 let bar = Rect {
@@ -498,21 +766,17 @@ fn walk_media_boxes(
                     if clipped {
                         out.push(DisplayCommand::PopClip);
                     }
-                    ctx.hits.push(MediaHit {
-                        nid,
-                        zone: MediaZone::PlayPause,
-                        rect: ui.play_btn,
-                    });
-                    ctx.hits.push(MediaHit {
-                        nid,
-                        zone: MediaZone::Mute,
-                        rect: ui.mute_btn,
-                    });
-                    ctx.hits.push(MediaHit {
-                        nid,
-                        zone: MediaZone::Seek,
-                        rect: ui.seek,
-                    });
+                    let hit = |zone, rect| MediaHit { nid, zone, rect, audio: is_audio };
+                    // Порядок = приоритет hit-test-а; зоны не пересекаются.
+                    ctx.hits.push(hit(MediaZone::PlayPause, ui.play_btn));
+                    ctx.hits.push(hit(MediaZone::Seek, track_hit(ui.seek)));
+                    if let Some(v) = ui.volume {
+                        ctx.hits.push(hit(MediaZone::Volume, track_hit(v)));
+                    }
+                    ctx.hits.push(hit(MediaZone::Mute, ui.mute_btn));
+                    if let Some(fs) = ui.fs_btn {
+                        ctx.hits.push(hit(MediaZone::Fullscreen, fs));
+                    }
                 }
             }
         }
@@ -551,11 +815,27 @@ mod tests {
         let ui = panel_ui(bar, 65_000, 600_000).expect("wide bar");
         assert!(ui.time.is_some(), "400px bar shows time text");
         assert_eq!(ui.play_btn.x, bar.x + BTN_INSET);
-        assert!((ui.mute_btn.right() - bar.right() + BTN_INSET).abs() < 0.01);
-        // Seek между текстом времени и mute, достаточно широкий.
-        assert!(ui.seek.width > 100.0);
+        // Правый край: fullscreen, затем mute; между ними зазор BTN_INSET.
+        let fs = ui.fs_btn.expect("400px bar has fullscreen");
+        assert!((fs.right() - bar.right() + BTN_INSET).abs() < 0.01);
+        assert!((ui.mute_btn.right() - fs.x + BTN_INSET).abs() < 0.01);
+        // Порядок play → seek → volume → mute, без перекрытий.
+        assert!(ui.seek.width > 80.0);
         assert!(ui.seek.x > ui.play_btn.right());
-        assert!(ui.seek.right() < ui.mute_btn.x);
+        let vol = ui.volume.expect("400px bar has volume");
+        assert!(ui.seek.right() < vol.x);
+        assert!(vol.right() < ui.mute_btn.x);
+        assert!((vol.width - VOL_W).abs() < 0.01);
+    }
+
+    #[test]
+    fn panel_ui_on_a_medium_bar_hides_volume() {
+        let bar = r(0.0, 0.0, 300.0, PANEL_H);
+        let ui = panel_ui(bar, 0, 0).expect("300px bar");
+        assert!(ui.time.is_some());
+        assert!(ui.volume.is_none(), "volume starts at VOL_MIN_BAR_W");
+        assert!(ui.fs_btn.is_some());
+        assert!(ui.seek.width >= 24.0);
     }
 
     #[test]
@@ -563,6 +843,8 @@ mod tests {
         let bar = r(0.0, 0.0, 120.0, PANEL_H);
         let ui = panel_ui(bar, 0, 0).expect("120px bar");
         assert!(ui.time.is_none());
+        assert!(ui.volume.is_none());
+        assert!(ui.fs_btn.is_none());
         assert!(ui.seek.width >= 24.0);
     }
 
@@ -570,6 +852,19 @@ mod tests {
     fn panel_ui_rejects_a_degenerate_bar() {
         assert!(panel_ui(r(0.0, 0.0, 40.0, PANEL_H), 0, 0).is_none());
         assert!(panel_ui(r(0.0, 0.0, MIN_BAR_W, 4.0), 0, 0).is_none());
+    }
+
+    #[test]
+    fn track_hit_pads_the_visual_track() {
+        let t = r(10.0, 118.0, 100.0, SEEK_H);
+        let hit = track_hit(t);
+        assert!((hit.height - (SEEK_H + TRACK_HIT_PAD * 2.0)).abs() < 0.01);
+        assert_eq!(hit.x, t.x);
+        assert!((hit.width - t.width).abs() < 0.01);
+        // Доля по расширенному hit-прямоугольнику совпадает с видимой полосой.
+        assert!((frac_of(hit, t.x + t.width * 0.5) - 0.5).abs() < 0.001);
+        assert_eq!(frac_of(hit, t.x - 5.0), 0.0);
+        assert_eq!(frac_of(hit, t.right() + 5.0), 1.0);
     }
 
     #[test]
@@ -588,5 +883,6 @@ mod tests {
         assert_eq!(pause_icon([16.0, 16.0]).len(), 2);
         assert_eq!(speaker_icon([16.0, 16.0], false).len(), 2);
         assert_eq!(speaker_icon([16.0, 16.0], true).len(), 4);
+        assert_eq!(fullscreen_icon([16.0, 16.0]).len(), 8);
     }
 }

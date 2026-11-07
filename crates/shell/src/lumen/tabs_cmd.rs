@@ -127,6 +127,8 @@ impl Lumen {
         self.scroll_drag = None;
         self.hscroll_drag = None;
         self.frame_scroll_drag = None;
+        // BUG-1719: удержание UA-панели медиа переживать смену вкладки не должно.
+        self.media_panel_drag = None;
         // ADR-016 M2.2c-2b: очищаем хэндл + DOM в движковом потоке для чистой вкладки.
         self.sync_engine_js_state();
     }

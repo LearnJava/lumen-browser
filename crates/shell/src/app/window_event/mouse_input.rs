@@ -559,6 +559,21 @@ impl Lumen {
                 }
             }
         } else {
+            // BUG-1719: press был перехвачен UA-панелью медиа — парный release
+            // странице не принадлежит (ни mouseup/pointerup, ни click), а drag
+            // seek/volume завершается (для `<audio>` — финальный коммит seek).
+            let dpr = self
+                .renderer
+                .as_ref()
+                .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                .max(1e-6);
+            let (x_css, y_css) = self
+                .cursor_position
+                .map(|p| ((p.x as f32) / dpr, (p.y as f32) / dpr))
+                .unwrap_or((0.0, 0.0));
+            if self.finish_media_panel_drag(x_css, y_css) {
+                return;
+            }
             // Released — завершаем drag (если был) и сбрасываем resize.
             self.resize_active = None;
             // BUG-480 срез 23: `:active` под-документа снимается на отпускании
