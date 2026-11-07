@@ -1,6 +1,6 @@
 # BUG-1616 — SameSite и разделение cookie не работают в браузере (top_level_site=None)
 
-**Статус:** FIXED 2026-10-14 (P6) — SameSite; разбиение по сайту вынесено в [BUG-1628](BUG-1628-OPEN.md)
+**Статус:** FIXED 2026-10-14 (P6) — SameSite; разбиение по сайту вынесено в [BUG-1628](BUG-1628-FIXED.md)
 **Заведён:** 2026-10-12 (координационная сессия: сверка задач по `docs/research/` с кодом на `main`)
 **Область:** shell/network (`page_source.rs:266`, `resource_base.rs:206`, `network/src/lib.rs:2802`, `storage/src/cookies.rs:678`)
 
@@ -34,7 +34,7 @@
 
 ## Исправлено (2026-10-14, P6)
 
-SameSite теперь работает в живом окне; Total Cookie Protection сознательно оставлена выключенной и заведена отдельно ([BUG-1628](BUG-1628-OPEN.md)).
+SameSite теперь работает в живом окне; Total Cookie Protection сознательно оставлена выключенной и заведена отдельно ([BUG-1628](BUG-1628-FIXED.md)).
 
 - **Сайт документа доходит до `HttpClient`.** Навигация (`page_source.rs` `initiator_site`) передаёт сайт инициатора из уже обработанного `Referer`; подресурсы, `fetch()`/XHR и iframe-документы (`resource_base.rs` `http_client_for_subresource_with_policy`) — сайт документа-владельца (`config::connection_site`, eTLD+1 по PSL). Для `file:`, `about:blank`, `data:` и навигации без инициатора (адресная строка, история, `no-referrer`) — `None`: запрос считается same-site.
 - **Контекст запроса — трёхзначный** (`lumen_core::ext::CookieSiteContext`, `CookieProvider::get_for_request_in_context`): `SameSite`, `CrossSiteTopLevelSafe` (межсайтовая top-level навигация методом GET: `Strict` не уходит, `Lax` уходит), `CrossSite` (подресурс, фрейм, POST-навигация: уходят только `None` и cookie без атрибута). Булев `get_for_request` остался для старых реализаций.
