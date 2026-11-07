@@ -57,6 +57,7 @@ mod palette;
 mod panel_data;
 mod panel_keys;
 mod pip;
+mod media_controls;
 mod pointer;
 mod printing;
 mod resize_grip;

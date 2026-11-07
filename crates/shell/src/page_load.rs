@@ -749,6 +749,8 @@ impl Lumen {
                 self.scroll_drag = None;
                 self.hscroll_drag = None;
                 self.frame_scroll_drag = None;
+                // BUG-1719: drag зоны UA-панели медиа — nid старой страницы.
+                self.media_panel_drag = None;
                 // Активные анимации старой страницы сбрасываем.
                 self.scroll_anim = None;
                 self.momentum_anim = None;

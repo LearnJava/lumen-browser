@@ -246,6 +246,21 @@ impl Lumen {
             self.relayout_chrome_host();
             self.request_redraw();
         }
+        // BUG-1719: drag seek/volume UA-панели медиа — значение следует за
+        // курсором, а страница mousemove/pointermove не видит (press панели
+        // ей не доставлялся; Chrome ведёт себя так же через неявный захват).
+        if self.media_panel_drag.is_some() {
+            let dpr = self
+                .renderer
+                .as_ref()
+                .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                .max(1e-6);
+            self.update_media_panel_drag(
+                (position.x as f32) / dpr,
+                (position.y as f32) / dpr,
+            );
+            return;
+        }
         // Pointer Lock: skip normal hover/mousemove dispatch while locked.
         // Raw movement deltas arrive via device_event → _lumen_dispatch_locked_mousemove.
         #[cfg(feature = "v8")]

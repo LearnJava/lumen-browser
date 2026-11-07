@@ -37,6 +37,7 @@
 //! | `__lumen_audio_ready_state` | `(handle: f64) → f64` | W3C readyState (0–4) |
 //! | `__lumen_audio_has_error` | `(handle: f64) → bool` | Had load/decode error? |
 //! | `__lumen_audio_can_play_type` | `(mime: String) → String` | canPlayType probe |
+//! | `__lumen_audio_ui_sync` | `(nid: f64, pos_s: f64, dur_s: f64, paused: bool, now_ms: f64)` | BUG-1719: write provider state into the shared playback store the UA media panel renders |
 
 use std::sync::{Arc, OnceLock, RwLock};
 
@@ -77,7 +78,8 @@ fn get_provider() -> Option<Arc<dyn AudioPlaybackProvider>> {
 pub(crate) fn install_audio_element_bindings_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
 ) -> lumen_core::JsResult<()> {
-    use crate::v8_compat::{into_v8_fn0, into_v8_fn1, into_v8_fn2};
+    use crate::v8_compat::{into_v8_fn0, into_v8_fn1, into_v8_fn2, into_v8_fn5};
+    use crate::video_gif_store::get_video_gif_store;
     use lumen_core::ext::JsRuntime as _;
 
     {
@@ -226,6 +228,63 @@ pub(crate) fn install_audio_element_bindings_v8(
         rt.register_native("__lumen_audio_can_play_type", can_play_type)?;
     }
 
+    // BUG-1719: write-through of provider-backed `<audio>` state into the
+    // shared playback store the shell's UA media panel renders from. The
+    // shell never opens a decode session for `<audio>` (its `playback`
+    // entries come from video decode sessions only), so without this the
+    // panel shows a paused 0:00 stub for the whole life of the element. The
+    // shim calls it from the pump/tupdate ticks it already runs; `now_ms`
+    // anchors/re-anchors the play epoch exactly like the `__lumen_video_*`
+    // natives do for video.
+    {
+        let sync = into_v8_fn5(
+            move |nid: f64, pos_s: f64, dur_s: f64, paused: bool, now_ms: f64| {
+                let Some(s) = get_video_gif_store() else {
+                    return;
+                };
+                let nid = nid as u32;
+                let now = now_ms.max(0.0) as u64;
+                let pos_ms = (pos_s * 1000.0).max(0.0) as u64;
+                let dur_ms = if dur_s.is_finite() && dur_s > 0.0 {
+                    (dur_s * 1000.0) as u64
+                } else {
+                    0
+                };
+                let mut pb = s.playback.lock().unwrap_or_else(|e| e.into_inner());
+                let e = pb.entry(nid).or_insert_with(|| crate::video_gif_store::VideoPlaybackState {
+                    paused: true,
+                    position_ms: 0,
+                    play_epoch_ms: None,
+                    cycle_ms: 0,
+                    // `loop_count: 0` would read as an infinite duration to
+                    // `duration_secs()`; one finite cycle matches `<audio>`.
+                    loop_count: 1,
+                    width: 0,
+                    height: 0,
+                });
+                if dur_ms > 0 {
+                    e.cycle_ms = dur_ms;
+                }
+                let was_paused = e.paused;
+                // The provider is the authoritative clock for `<audio>` (loop
+                // wrap, buffering stalls): the store just mirrors its position
+                // and interpolates from the sync instant between syncs.
+                e.position_ms = pos_ms;
+                e.play_epoch_ms = if paused { None } else { Some(now) };
+                e.paused = paused;
+                drop(pb);
+                // A paused element syncs on every pump tick with unchanged
+                // values — waking the shell's redraw each time would keep the
+                // whole page repainting forever. Wake only on a pause↔play
+                // transition, or while playing (the panel clock advances).
+                if paused != was_paused || !paused {
+                    s.note_playback_change(now_ms);
+                }
+            },
+        );
+        rt.register_native("__lumen_audio_ui_sync", sync)?;
+    }
+
     rt.eval(AUDIO_ELEMENT_SHIM)?;
     Ok(())
 }
@@ -269,6 +328,14 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
       var ev = new Event(name, { bubbles: false, cancelable: false });
       el.dispatchEvent(ev);
     } catch(e) {}
+  }
+
+  // Page time origin for the playback-store clock (`video_element.js` uses
+  // the same definition; `VideoGifStore` anchors play epochs to it).
+  function nowMs() {
+    return (typeof performance !== 'undefined' && performance.now)
+      ? performance.now()
+      : Date.now();
   }
 
   function patchAudioElement(el) {
@@ -411,7 +478,11 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
       var _myLoadGen = _loadGen;
       __lumen_C._lumen_media_pumps.push(function() {
         if (_myLoadGen !== _loadGen) return false;
-        return pollLoad();
+        var keep = pollLoad();
+        // BUG-1719: the panel reads the shared store; mirror provider state
+        // on the same cadence the pump already polls.
+        syncPanelStore();
+        return keep;
       });
     }
 
@@ -424,6 +495,7 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
           clearInterval(_tupdateTimer); _tupdateTimer = null; return;
         }
         fireEvent(el, 'timeupdate');
+        syncPanelStore();
         if (__lumen_audio_ended(_handle)) {
           clearInterval(_tupdateTimer); _tupdateTimer = null;
           fireEvent(el, 'ended');
@@ -523,6 +595,48 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
       },
       configurable: true,
     });
+
+    // BUG-1719: hooks for the shell's UA media panel (§4.8.11.13), same
+    // contract as `video_element.js` — the panel press never reaches the
+    // DOM, so it drives the element through these; every hook goes through
+    // the same property/method a script would call, keeping the provider,
+    // the element model and the events in sync.
+    el.__lumen_media_ui_toggle = function () {
+      if (el.paused) { el.play(); } else { el.pause(); }
+    };
+    el.__lumen_media_ui_seek = function (s) {
+      el.currentTime = Number(s) || 0;
+    };
+    el.__lumen_media_ui_volume = function (v) {
+      el.volume = Math.min(1, Math.max(0, Number(v) || 0));
+    };
+    el.__lumen_media_ui_muted = function (b) { el.muted = !!b; };
+
+    // BUG-1719: mirror provider-backed state into the shared playback store
+    // the shell's media panel reads (`VideoGifStore::playback`, keyed by nid
+    // exactly like the video path). The shell never opens a session for
+    // `<audio>` — the provider handle lives only here — so without this
+    // write-through the panel would render a paused 0:00 stub forever and a
+    // panel-initiated play would show a fake running clock with no sound.
+    // The engine's pump/tupdate ticks already poll the provider; one extra
+    // native call on the same cadence keeps the panel honest (position,
+    // duration, pause state — including a provider-side end).
+    function syncPanelStore() {
+      // The store is keyed by the DOM node id (`b.node.index()` shell-side);
+      // a detached stub element (unit-test DOM stub, `new Audio()` before the
+      // bindings assign one) has no id yet — nothing to sync.
+      if (!HAS_PROVIDER || el.__nid__ === undefined) return;
+      if (typeof __lumen_audio_ui_sync !== 'function') return;
+      var rs = __lumen_audio_ready_state(_handle);
+      if (rs < 1) return;  // no metadata yet — the panel stays on 0:00 / 0:00
+      __lumen_audio_ui_sync(
+        el.__nid__,
+        __lumen_audio_current_time(_handle),
+        __lumen_audio_duration(_handle),
+        __lumen_audio_paused(_handle),
+        nowMs()
+      );
+    }
 
     Object.defineProperty(el, 'playbackRate', {
       get: function() { return _rate; },
@@ -1294,5 +1408,81 @@ beforeRemove && afterRemove"#,
             ok,
             "removeAttribute('loading') should resume a deferred load immediately"
         );
+    }
+
+    /// BUG-1719: the shell's UA media panel renders `<audio>` from the shared
+    /// playback store; `__lumen_audio_ui_sync` is the shim's write-through of
+    /// provider state. Playing anchors the epoch to the sync instant (the
+    /// store interpolates between syncs), pausing freezes at the provider's
+    /// position with the epoch cleared.
+    #[test]
+    fn ui_sync_mirrors_provider_state_into_playback_store() {
+        use crate::video_gif_store::{
+            get_video_gif_store, set_video_gif_store, VideoGifStore,
+        };
+
+        let rt = with_audio();
+        set_video_gif_store(Arc::new(VideoGifStore::default()));
+
+        // Playing at 1.5s of a 120s track, synced at page-time 1000ms.
+        rt.eval("__lumen_audio_ui_sync(7, 1.5, 120.0, false, 1000)")
+            .unwrap();
+        let store = get_video_gif_store().unwrap();
+        {
+            let pb = store.playback.lock().unwrap();
+            let e = &pb[&7];
+            assert_eq!(e.cycle_ms, 120_000, "duration mirrors cycle_ms");
+            assert_eq!(e.position_ms, 1_500);
+            assert_eq!(e.play_epoch_ms, Some(1_000), "playing anchors the epoch");
+            assert!(!e.paused);
+        }
+
+        // Pause at 2.0s, page-time 3000ms: position is provider truth (not
+        // 1.5s + interpolated 2s), epoch cleared so the panel holds still.
+        rt.eval("__lumen_audio_ui_sync(7, 2.0, 120.0, true, 3000)")
+            .unwrap();
+        {
+            let pb = store.playback.lock().unwrap();
+            let e = &pb[&7];
+            assert!(e.paused);
+            assert_eq!(e.position_ms, 2_000);
+            assert_eq!(e.play_epoch_ms, None);
+        }
+
+        // A NaN duration (metadata not decoded yet) must not clobber a
+        // previously known cycle length.
+        rt.eval("__lumen_audio_ui_sync(7, 2.0, NaN, true, 3100)")
+            .unwrap();
+        {
+            let pb = store.playback.lock().unwrap();
+            assert_eq!(pb[&7].cycle_ms, 120_000);
+        }
+    }
+
+    /// BUG-1719: the panel drives `<audio>` through the `__lumen_media_ui_*`
+    /// hooks — same contract as `video_element.js`. Volume/mute land in the
+    /// element model and fire volumechange even though the panel press never
+    /// reaches the DOM; toggle flips playback through `el.play()`/`el.pause()`.
+    #[test]
+    fn media_ui_hooks_drive_audio_element_model() {
+        let rt = with_audio();
+        let ok = bool_eval(
+            &rt,
+            r#"var el = document.createElement('audio');
+el.__lumen_media_ui_volume(0.5);
+el.__lumen_media_ui_muted(true);
+var volMuted = el.volume === 0.5 && el.muted === true;
+var vc = 0;
+for (var i = 0; i < _events.length; i++) { if (_events[i] === 'volumechange') vc++; }
+el.__lumen_media_ui_seek(3.25);
+var seeked = el.currentTime === 3.25 || el.currentTime === 0; // provider is null-backed
+el.__lumen_media_ui_toggle(); // paused → play()
+var hooksPresent = typeof el.__lumen_media_ui_toggle === 'function'
+  && typeof el.__lumen_media_ui_seek === 'function'
+  && typeof el.__lumen_media_ui_volume === 'function'
+  && typeof el.__lumen_media_ui_muted === 'function';
+hooksPresent && volMuted && seeked && vc === 2"#,
+        );
+        assert!(ok, "panel hooks must drive the element model and fire volumechange");
     }
 }

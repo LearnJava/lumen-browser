@@ -794,6 +794,18 @@ impl Lumen {
                 overlay_buf = combined;
             }
         }
+        // BUG-1719: UA-панели `<video controls>`/`<audio controls>` — живут в
+        // overlay-буфере по той же причине, что полоса прокрутки: display list
+        // страницы кэшируется между кадрами, а состояние воспроизведения
+        // меняется каждый тик. Зоны запоминаются для клика
+        // (`handle_media_panel_click`).
+        let mut media_cmds: lumen_paint::DisplayList = Vec::new();
+        let media_hits = self.build_media_controls_overlay(&mut media_cmds);
+        self.media_panel_hits = media_hits;
+        if !media_cmds.is_empty() {
+            media_cmds.append(&mut overlay_buf);
+            overlay_buf = media_cmds;
+        }
         if let Some(t0) = frame_log_t0 {
             bmarks[1] = t0.elapsed().as_secs_f64() * 1e3;
         }

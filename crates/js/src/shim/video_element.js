@@ -1550,6 +1550,24 @@
       configurable: true,
     });
 
+    // BUG-1719: hooks for the shell's UA media panel (§4.8.11.13). The panel
+    // press never reaches the DOM, so it drives the element through these —
+    // every hook routes through the same property/method a script would call,
+    // so paused/currentTime/volume stay consistent for observers and the
+    // usual events (play/pause/volumechange/seeking) fire exactly once.
+    // Fire-and-forget from the shell side; re-entry via the store natives is
+    // guarded there (idempotent under the already-mutated state).
+    el.__lumen_media_ui_toggle = function () {
+      if (isPaused()) { el.play(); } else { el.pause(); }
+    };
+    el.__lumen_media_ui_seek = function (s) {
+      try { el.currentTime = Number(s) || 0; } catch (e) {}
+    };
+    el.__lumen_media_ui_volume = function (v) {
+      try { el.volume = Math.min(1, Math.max(0, Number(v) || 0)); } catch (e) {}
+    };
+    el.__lumen_media_ui_muted = function (b) { el.muted = !!b; };
+
     // §4.8.11.10: same rule for `ratechange` over playbackRate and
     // defaultPlaybackRate. Neither property existed at all before BUG-825, so
     // `v.playbackRate = 2` merely created an expando.

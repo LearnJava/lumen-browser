@@ -4818,6 +4818,26 @@ function _lumen_notify_fullscreen_exit() {
     }
 }
 
+// Called by the shell (via eval_js) when fullscreen is entered externally —
+// BUG-1719: the UA media-controls button never runs requestFullscreen(), so
+// the promise path (which sets _fs_nid and the :fullscreen sentinel) did not
+// execute. Same state side as requestFullscreen §4.3: exit the previous
+// element when it differs, set the sentinel, fire fullscreenchange on the
+// element and the document.
+function _lumen_notify_fullscreen_enter(nid) {
+    if (_fs_nid === nid) { return; }
+    if (_fs_nid !== -1) {
+        _lumen_remove_attr(_fs_nid, _FS_ATTR);
+        var prev = _lumen_make_element(_fs_nid);
+        if (prev) { prev.dispatchEvent(new Event('fullscreenchange', { bubbles: true })); }
+    }
+    _fs_nid = nid;
+    _lumen_set_attr(nid, _FS_ATTR, '');
+    var el = _lumen_make_element(nid);
+    if (el) { el.dispatchEvent(new Event('fullscreenchange', { bubbles: true })); }
+    document.dispatchEvent(new Event('fullscreenchange'));
+}
+
 // ── Web Animations API Level 1 (W3C Web Animations §3) ─────────────────────
 // Pure JS implementation; ticks via a shared requestAnimationFrame loop.
 // P4 wires CSS animation-* properties separately; P2 handles compositor offload.

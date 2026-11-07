@@ -1357,6 +1357,36 @@ globalThis.__set_clock = function(t) { __clock = t; };
             assert!(truthy(&rt, "n === 1 && v.muted === true"), "expected exactly one volumechange");
         }
 
+        /// BUG-1719: the shell's UA media panel drives the element through the
+        /// `__lumen_media_ui_*` hooks. Volume/mute must land in the element
+        /// model (and fire the queued volumechange) even though the panel
+        /// press never reaches the DOM; a no-op write must stay silent, like
+        /// the scripted setters.
+        #[test]
+        fn media_ui_hooks_drive_video_element_model() {
+            let rt = rt_with_dom();
+            rt.eval(
+                "var n = 0;
+                 var v = document.createElement('video');
+                 v.addEventListener('volumechange', function() { n++; });
+                 v.__lumen_media_ui_volume(0.5);
+                 v.__lumen_media_ui_muted(true);
+                 var first = (n === 2 && v.volume === 0.5 && v.muted === true);
+                 v.__lumen_media_ui_volume(0.5);
+                 v.__lumen_media_ui_muted(true);
+                 var idempotent = (n === 2);
+                 var hooks = typeof v.__lumen_media_ui_toggle === 'function'
+                   && typeof v.__lumen_media_ui_seek === 'function';
+                 first && idempotent && hooks",
+            )
+            .unwrap();
+            settle(&rt);
+            assert!(
+                truthy(&rt, "v.volume === 0.5 && v.muted === true && n === 2"),
+                "panel hooks must reach the element model with the usual event accounting"
+            );
+        }
+
         /// GAP-MEDIADECODE срез 18: `playbackRate` fires `ratechange` on a
         /// real change and stays silent on a no-op write, the same rule
         /// `volume`/`muted` already follow — and the native call it triggers
