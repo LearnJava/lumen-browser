@@ -34,7 +34,7 @@ Test category, added 2026-07-27 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 1. Однобайтовые таблицы WHATWG и полная таблица меток (`ENC-SINGLEBYTE`) — дёшево, снимает E и половину `streams`.
 2. CJK-декодеры и кодеры (`ENC-CJK`): Shift_JIS, EUC-JP, ISO-2022-JP, EUC-KR, Big5 (HKSCS), GBK/GB18030; таблицы индексов генерируются скриптом из `index-*.txt` Encoding Standard — `encoding_rs` по ADR-027 остаётся в «никогда не берём».
 3. Кодировка запроса URL и формы (`ENC-QUERY`): `<a href>`/`URL`-парсер по кодировке документа, `accept-charset`, `&#NNNN;` для неотображаемых.
-4. Баги: `form.target` ([BUG-1269](../../bugs/BUG-1269-OPEN.md), кластер A), задержка загрузки iframe ([BUG-1693](../../bugs/BUG-1693-OPEN.md), H), загрузка большого документа ([BUG-1694](../../bugs/BUG-1694-OPEN.md), C), API `TextDecoder`/`TextEncoder` ([BUG-1695](../../bugs/BUG-1695-OPEN.md), F), `TextDecoderStream`/`TextEncoderStream` ([BUG-1696](../../bugs/BUG-1696-OPEN.md), G), service worker ([BUG-1226](../../bugs/BUG-1226-OPEN.md), D).
+4. Баги: `form.target` ([BUG-1269](../../bugs/BUG-1269-OPEN.md), кластер A), задержка загрузки iframe ([BUG-1693](../../bugs/BUG-1693-OPEN.md), H), загрузка большого документа ([BUG-1694](../../bugs/BUG-1694-FIXED.md), C), API `TextDecoder`/`TextEncoder` ([BUG-1695](../../bugs/BUG-1695-OPEN.md), F), `TextDecoderStream`/`TextEncoderStream` ([BUG-1696](../../bugs/BUG-1696-OPEN.md), G), service worker ([BUG-1226](../../bugs/BUG-1226-OPEN.md), D).
 
 ### Заведено по итогам разведки
 
@@ -42,7 +42,7 @@ Test category, added 2026-07-27 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 |---|---|
 | A | [BUG-1269](../../bugs/BUG-1269-OPEN.md) (target формы) + `ENC-QUERY` |
 | B | `ENC-QUERY` (+ `ENC-CJK`-кодеры) |
-| C | `ENC-CJK` + [BUG-1694](../../bugs/BUG-1694-OPEN.md) (перф загрузки; блокирует измерение) |
+| C | `ENC-CJK` + [BUG-1694](../../bugs/BUG-1694-FIXED.md) (перф загрузки; блокирует измерение) |
 | D | дополнение к [BUG-1226](../../bugs/BUG-1226-OPEN.md) |
 | E | `ENC-SINGLEBYTE` + `ENC-CJK` |
 | F | [BUG-1695](../../bugs/BUG-1695-OPEN.md) |
