@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-10-28T12:07:13",
+  "timestamp": "2026-11-07T21:50:34",
   "git": {
-    "commit": "49f20c316",
-    "branch": "p1-fieldset-legend-4",
-    "subject": "Влить ветку p5-queue-refill-20261028: пополнение очереди P2 (WPT-DROP-1027-S1…S9)"
+    "commit": "48d580be6",
+    "branch": "p3-bug-1719",
+    "subject": "BUG-1719 (WIP): срез 3 UA-панели — seek-drag, громкость, фулскрин"
   },
   "crop_offset": [
     8,
@@ -12,10 +12,10 @@
   "halted_at": null,
   "summary": {
     "total": 172,
-    "passed": 119,
-    "failed": 8,
+    "passed": 112,
+    "failed": 14,
     "errors": 0,
-    "debtors": 45,
+    "debtors": 46,
     "skipped": 0
   },
   "tests": [
@@ -255,7 +255,7 @@
       "html": "19-object-fit.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 9.7834,
+      "diff_pct": 9.7622,
       "diff_region": {
         "top": 26,
         "left": 26,
@@ -373,7 +373,7 @@
       "html": "27-direction-rtl.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2581,
+      "diff_pct": 0.2584,
       "diff_region": {
         "top": 190,
         "left": 143,
@@ -443,7 +443,7 @@
       "html": "32-list-markers.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.7686,
+      "diff_pct": 3.6985,
       "diff_region": {
         "top": 33,
         "left": 60,
@@ -480,7 +480,7 @@
       "html": "34-forms.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.0821,
+      "diff_pct": 3.096,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -615,8 +615,13 @@
       "html": "44-media-queries.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null,
+      "diff_pct": 0.1389,
+      "diff_region": {
+        "top": 0,
+        "left": 0,
+        "bottom": 0,
+        "right": 1023
+      },
       "capture": "ipc"
     },
     {
@@ -626,12 +631,12 @@
       "html": "45-multiple-backgrounds.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.3523,
+      "diff_pct": 1.5025,
       "diff_region": {
-        "top": 22,
-        "left": 21,
+        "top": 0,
+        "left": 0,
         "bottom": 460,
-        "right": 868
+        "right": 1023
       },
       "capture": "gdigrab",
       "debtor": {
@@ -647,7 +652,7 @@
       "html": "46-individual-transforms.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.3816,
+      "diff_pct": 1.3463,
       "diff_region": {
         "top": 75,
         "left": 16,
@@ -695,8 +700,13 @@
       "html": "49-background-blend-mode.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null,
+      "diff_pct": 0.1389,
+      "diff_region": {
+        "top": 0,
+        "left": 0,
+        "bottom": 0,
+        "right": 1023
+      },
       "capture": "ipc"
     },
     {
@@ -717,7 +727,7 @@
       "html": "51-scrollbar-rendering.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.5244,
+      "diff_pct": 0.576,
       "diff_region": {
         "top": 23,
         "left": 21,
@@ -738,10 +748,10 @@
       "html": "52-text-shadow-blur.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.2927,
+      "diff_pct": 1.3472,
       "diff_region": {
         "top": 67,
-        "left": 112,
+        "left": 111,
         "bottom": 295,
         "right": 911
       },
@@ -759,7 +769,7 @@
       "html": "53-background-origin.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.0395,
+      "diff_pct": 1.2108,
       "diff_region": {
         "top": 36,
         "left": 33,
@@ -796,10 +806,10 @@
       "html": "55-video-placeholder.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3537,
+      "diff_pct": 0.4222,
       "diff_region": {
-        "top": 125,
-        "left": 123,
+        "top": 123,
+        "left": 122,
         "bottom": 411,
         "right": 711
       },
@@ -811,14 +821,9 @@
       "label": "CSS Compositing L1 §5 — mix-blend-mode: normal/multiply/darken/color-burn/screen/lighten/color-dodge/overlay/hard-light/soft-light/difference/exclusion/hue/saturation/color/luminosity + nesting",
       "html": "56-mix-blend-mode.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 14.1195,
-      "diff_region": {
-        "top": 50,
-        "left": 60,
-        "bottom": 518,
-        "right": 821
-      },
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null,
       "capture": "gdigrab"
     },
     {
@@ -828,11 +833,11 @@
       "html": "57-canvas-2d.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2851,
+      "diff_pct": 0.4,
       "diff_region": {
-        "top": 173,
-        "left": 96,
-        "bottom": 401,
+        "top": 184,
+        "left": 94,
+        "bottom": 402,
         "right": 701
       },
       "capture": "gdigrab"
@@ -844,7 +849,7 @@
       "html": "58-first-letter-line.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.4719,
+      "diff_pct": 2.4695,
       "diff_region": {
         "top": 37,
         "left": 33,
@@ -865,11 +870,11 @@
       "html": "59-image-set-cross-fade.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 10.0224,
+      "diff_pct": 10.078,
       "diff_region": {
         "top": 28,
         "left": 25,
-        "bottom": 394,
+        "bottom": 396,
         "right": 1022
       },
       "capture": "gdigrab",
@@ -902,7 +907,7 @@
       "html": "61-view-transitions.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 10.7784,
+      "diff_pct": 10.7166,
       "diff_region": {
         "top": 32,
         "left": 40,
@@ -922,19 +927,19 @@
       "label": "CSS Scroll Snap L1: scroll-snap-type (y/x mandatory, both proximity), scroll-snap-align (start), scroll-snap-stop (always); static layout geometry of snap containers",
       "html": "62-scroll-snap.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 0.337,
+      "status": "DEBTOR",
+      "diff_pct": 0.5603,
       "diff_region": {
-        "top": 9,
-        "left": 9,
+        "top": 0,
+        "left": 0,
         "bottom": 710,
-        "right": 1014
+        "right": 1023
       },
       "capture": "gdigrab",
       "debtor": {
         "bug": "BUG-644",
         "baseline": 0.75,
-        "verdict": "REMOVE"
+        "verdict": "OK"
       }
     },
     {
@@ -944,7 +949,7 @@
       "html": "63-masonry.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.4041,
+      "diff_pct": 1.3966,
       "diff_region": {
         "top": 31,
         "left": 11,
@@ -965,7 +970,7 @@
       "html": "64-table.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 7.6691,
+      "diff_pct": 7.5806,
       "diff_region": {
         "top": 41,
         "left": 21,
@@ -985,8 +990,8 @@
       "label": "CSS Flexbox align-content: flex-start/end/center/space-between/space-around/space-evenly/stretch for multi-line flex containers",
       "html": "65-flex-align-content.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.4979,
+      "status": "FAIL",
+      "diff_pct": 0.5013,
       "diff_region": {
         "top": 30,
         "left": 2,
@@ -1002,7 +1007,7 @@
       "html": "66-selection-pseudo.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.0122,
+      "diff_pct": 1.0088,
       "diff_region": {
         "top": 41,
         "left": 41,
@@ -1023,7 +1028,7 @@
       "html": "67-attr-typed.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.3698,
+      "diff_pct": 1.3569,
       "diff_region": {
         "top": 61,
         "left": 41,
@@ -1071,7 +1076,7 @@
       "html": "70-object-fit.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.1966,
+      "diff_pct": 1.1941,
       "diff_region": {
         "top": 26,
         "left": 20,
@@ -1204,11 +1209,11 @@
       "html": "78-scroll-driven-animations.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.377,
+      "diff_pct": 2.9022,
       "diff_region": {
         "top": 28,
         "left": 25,
-        "bottom": 522,
+        "bottom": 523,
         "right": 904
       },
       "capture": "gdigrab",
@@ -1225,9 +1230,9 @@
       "html": "79-text-underline-offset.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 5.6158,
+      "diff_pct": 5.823,
       "diff_region": {
-        "top": 45,
+        "top": 44,
         "left": 60,
         "bottom": 477,
         "right": 600
@@ -1246,7 +1251,7 @@
       "html": "80-border-collapse.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.2552,
+      "diff_pct": 2.3184,
       "diff_region": {
         "top": 22,
         "left": 21,
@@ -1283,7 +1288,7 @@
       "html": "82-svg-use.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.6767,
+      "diff_pct": 1.6812,
       "diff_region": {
         "top": 35,
         "left": 20,
@@ -1304,7 +1309,7 @@
       "html": "83-scroll-behavior.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 8.3021,
+      "diff_pct": 8.1931,
       "diff_region": {
         "top": 31,
         "left": 51,
@@ -1325,7 +1330,7 @@
       "html": "84-text-decoration-skip-ink.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 6.0102,
+      "diff_pct": 5.9638,
       "diff_region": {
         "top": 33,
         "left": 41,
@@ -1518,7 +1523,7 @@
       "html": "109-clippath-transform.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.185,
+      "diff_pct": 0.1862,
       "diff_region": {
         "top": 85,
         "left": 87,
@@ -1599,10 +1604,10 @@
       "html": "90-avif-image.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.883,
+      "diff_pct": 0.9082,
       "diff_region": {
         "top": 23,
-        "left": 127,
+        "left": 126,
         "bottom": 590,
         "right": 925
       },
@@ -1642,7 +1647,7 @@
       "html": "93-field-sizing.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.026,
+      "diff_pct": 3.0202,
       "diff_region": {
         "top": 13,
         "left": 13,
@@ -1674,7 +1679,7 @@
       "html": "95-font-size-adjust.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.9472,
+      "diff_pct": 2.9473,
       "diff_region": {
         "top": 50,
         "left": 40,
@@ -1706,12 +1711,12 @@
       "html": "97-counter-set.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.3965,
+      "diff_pct": 1.3677,
       "diff_region": {
         "top": 55,
         "left": 46,
         "bottom": 632,
-        "right": 315
+        "right": 316
       },
       "capture": "gdigrab",
       "debtor": {
@@ -1791,12 +1796,12 @@
       "html": "112-clip-path-fill-rule.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0003,
+      "diff_pct": 0.2262,
       "diff_region": {
-        "top": 137,
-        "left": 280,
+        "top": 90,
+        "left": 256,
         "bottom": 137,
-        "right": 281
+        "right": 305
       },
       "capture": "ipc"
     },
@@ -1866,11 +1871,11 @@
       "html": "117-quotes.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.068,
+      "diff_pct": 1.1789,
       "diff_region": {
-        "top": 58,
+        "top": 57,
         "left": 41,
-        "bottom": 277,
+        "bottom": 278,
         "right": 385
       },
       "capture": "gdigrab",
@@ -1941,7 +1946,7 @@
       "html": "122-line-height-step.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 9.5839,
+      "diff_pct": 9.5775,
       "diff_region": {
         "top": 32,
         "left": 41,
@@ -2043,7 +2048,7 @@
       "html": "130-svg-dynamic-nested-transforms.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3011,
+      "diff_pct": 0.2995,
       "diff_region": {
         "top": 112,
         "left": 202,
@@ -2133,7 +2138,7 @@
       "html": "135-svg-dynamic-paint-order.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.1788,
+      "diff_pct": 1.181,
       "diff_region": {
         "top": 101,
         "left": 650,
@@ -2154,12 +2159,12 @@
       "html": "136-svg-dynamic-ellipse-radial.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.5016,
+      "diff_pct": 0.5025,
       "diff_region": {
         "top": 91,
         "left": 81,
         "bottom": 709,
-        "right": 955
+        "right": 972
       },
       "capture": "gdigrab",
       "debtor": {
@@ -2223,7 +2228,7 @@
       "html": "140-placeholder-pseudo.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.2877,
+      "diff_pct": 1.2876,
       "diff_region": {
         "top": 41,
         "left": 41,
@@ -2244,7 +2249,7 @@
       "html": "141-backface-visibility.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.5015,
+      "diff_pct": 1.4563,
       "diff_region": {
         "top": 74,
         "left": 141,
@@ -2298,7 +2303,7 @@
       "html": "145-writing-mode.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.7577,
+      "diff_pct": 3.7679,
       "diff_region": {
         "top": 27,
         "left": 24,
@@ -2330,10 +2335,10 @@
       "html": "147-background-repeat-space.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.959,
+      "diff_pct": 2.9088,
       "diff_region": {
         "top": 41,
-        "left": 43,
+        "left": 49,
         "bottom": 440,
         "right": 982
       },
@@ -2362,7 +2367,7 @@
       "html": "149-nested-overflow-scroll.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.0136,
+      "diff_pct": 1.0177,
       "diff_region": {
         "top": 22,
         "left": 21,
@@ -2383,7 +2388,7 @@
       "html": "150-font-variant-caps.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 7.4896,
+      "diff_pct": 7.4881,
       "diff_region": {
         "top": 46,
         "left": 37,
@@ -2399,12 +2404,12 @@
       "html": "151-unicode-bidi.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 6.0608,
+      "diff_pct": 6.2122,
       "diff_region": {
         "top": 44,
         "left": 29,
         "bottom": 639,
-        "right": 999
+        "right": 996
       },
       "capture": "ipc"
     },
@@ -2442,7 +2447,7 @@
       "html": "154-svg-external-image-gradients.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2616,
+      "diff_pct": 0.262,
       "diff_region": {
         "top": 32,
         "left": 21,
@@ -2458,7 +2463,7 @@
       "html": "155-svg-inline-gradients.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 1.3177,
+      "diff_pct": 1.3192,
       "diff_region": {
         "top": 26,
         "left": 20,
@@ -2474,7 +2479,7 @@
       "html": "156-svg-mask.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.9594,
+      "diff_pct": 1.9702,
       "diff_region": {
         "top": 46,
         "left": 20,
@@ -2522,7 +2527,7 @@
       "html": "159-background-clip-text.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 2.5065,
+      "diff_pct": 2.5066,
       "diff_region": {
         "top": 34,
         "left": 41,
@@ -2592,13 +2597,13 @@
       "label": "SVG-CLIPPATH CSS Masking L1 §3.1 / SVG 1.1 §14.3: clip-path: url(#id) на <clipPath>. Строка 1 (HTML-боксы): objectBoundingBox-круг · userSpaceOnUse-квадрат · два rect в objectBoundingBox (объединение). Строка 2 (SVG): атрибут clip-path на rect · <g> с вложенным clip-path на <clipPath> (круг ∩ левая половина) · clip-rule nonzero vs evenodd (пентаграмма с дырой) · transform на <clipPath>. Только цветные боксы, без текста",
       "html": "165-svg-clip-path.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0338,
+      "status": "FAIL",
+      "diff_pct": 13.1441,
       "diff_region": {
-        "top": 55,
-        "left": 55,
-        "bottom": 350,
-        "right": 278
+        "top": 41,
+        "left": 41,
+        "bottom": 360,
+        "right": 860
       },
       "capture": "ipc"
     },
@@ -2609,10 +2614,10 @@
       "html": "166-text-quality.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 9.112,
+      "diff_pct": 10.604,
       "diff_region": {
-        "top": 9,
-        "left": 8,
+        "top": 8,
+        "left": 7,
         "bottom": 620,
         "right": 789
       },
@@ -2629,9 +2634,14 @@
       "label": "FIELDSET-LEGEND-3 HTML Rendering §15.3.13: fieldset с column-count/column-width — legend на границе, колонки строятся в анонимном контейнере содержимого ниже него (legend не попадает в колонку). A: 2 колонки, legend выше рамки · B: legend ниже 24px-рамки · C: явная высота + column-fill:auto · D: column-width + column-gap + column-rule · E: 3 колонки, высота по содержимому + legend · F: break-before:column + legend margin-left:auto. Только цветные боксы, без текста",
       "html": "167-fieldset-multicol.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null,
+      "status": "FAIL",
+      "diff_pct": 9.9687,
+      "diff_region": {
+        "top": 25,
+        "left": 25,
+        "bottom": 489,
+        "right": 936
+      },
       "capture": "ipc"
     },
     {
@@ -2640,13 +2650,13 @@
       "label": "MULTICOL-VERTICAL CSS Multicol L1 §3 + Writing Modes L3 §3: multicol в вертикальном writing-mode — колонки по физической y, длина колонки = ширина контейнера, поток от края начала блока. A: vertical-rl, column-fill:auto, рамка+padding · B: vertical-lr, балансировка при auto-ширине · C: column-span:all + break-before:column · D: блок шире колонки режется (slice, border-radius) · E: спаннер внутри обёртки · F: multicol как flex-элементы ряда. Только цветные боксы, без текста",
       "html": "168-multicol-vertical-writing-mode.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.108,
+      "status": "FAIL",
+      "diff_pct": 21.2231,
       "diff_region": {
-        "top": 350,
-        "left": 12,
+        "top": 12,
+        "left": 0,
         "bottom": 649,
-        "right": 71
+        "right": 837
       },
       "capture": "ipc"
     },
@@ -2656,11 +2666,11 @@
       "label": "BDB CSS Fragmentation L3 §5.1: box-decoration-break на inline-боксе, разрезанном строками или блоком. A: slice — левая рамка/padding на первой строке, правая на последней · B: clone — края на каждой строке, правый край резервируется при переносе · C: slice, блок внутри span · D: clone, блок внутри span — оба края у каждого куска · E: clone + border-radius · F: clone, br внутри span. Без текста, строки из inline-block-ов",
       "html": "169-box-decoration-break.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0694,
+      "status": "FAIL",
+      "diff_pct": 1.1176,
       "diff_region": {
         "top": 25,
-        "left": 25,
+        "left": 17,
         "bottom": 435,
         "right": 844
       },
@@ -2672,12 +2682,12 @@
       "label": "BIMG CSS Backgrounds L3 §6: border-image на блоке. A: slice 30 stretch · B: repeat — плитки центрируются, крайние обрезаются · C: round — целое число плиток · D: space — зазоры между плитками · E: fill + border-image-width 25px + outset 10px · F: линейный градиент как источник. Без текста",
       "html": "170-border-image.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.3075,
+      "status": "FAIL",
+      "diff_pct": 23.1527,
       "diff_region": {
-        "top": 31,
+        "top": 25,
         "left": 25,
-        "bottom": 548,
+        "bottom": 554,
         "right": 906
       },
       "capture": "ipc"
@@ -2688,12 +2698,12 @@
       "label": "BCBA CSS Backgrounds L4 §3.8: background-clip: border-area — фон только под нарисованной рамкой. A: градиент, сплошная рамка · B: цвет + border-radius 50px · C: разные радиусы углов 20/80 и градиент · D: разные ширины сторон · E: два слоя border-area + padding-box · F: эталон border-box. Без текста",
       "html": "171-background-clip-border-area.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0232,
+      "status": "FAIL",
+      "diff_pct": 19.7251,
       "diff_region": {
         "top": 25,
-        "left": 341,
-        "bottom": 214,
+        "left": 33,
+        "bottom": 534,
         "right": 906
       },
       "capture": "ipc"
@@ -2704,9 +2714,14 @@
       "label": "FSVFG HTML Rendering §15.3.13 + Writing Modes L3: flex/grid-fieldset в вертикальном writing-mode, legend на границе блока-начала. A: vertical-rl flex · B: vertical-lr flex · C: vertical-rl flex column · D: vertical-rl grid · E: vertical-lr grid · F: legend внутри толстой рамки, justify-self: end. Без текста",
       "html": "172-fieldset-vertical-flex-grid.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null,
+      "status": "FAIL",
+      "diff_pct": 19.7331,
+      "diff_region": {
+        "top": 12,
+        "left": 10,
+        "bottom": 639,
+        "right": 941
+      },
       "capture": "ipc"
     }
   ]
