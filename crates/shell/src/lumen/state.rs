@@ -1200,6 +1200,11 @@ pub(crate) struct Lumen {
     /// creation time.  The shell's render tick drains `pending_loads`, decodes
     /// GIFs, and re-registers frames under `"video:{nid}"` image keys.
     pub(crate) video_gif_store: std::sync::Arc<lumen_js::VideoGifStore>,
+    /// BUG-1719: зоны UA-панели медиа (`<video controls>`/`<audio controls>`)
+    /// в оконных координатах, собранные при последней отрисовке
+    /// (`build_media_controls_overlay`). Опрашивается кликом до диспетчеризации
+    /// в DOM; пуст между navigation-ами и пока панелей на странице нет.
+    pub(crate) media_panel_hits: Vec<crate::lumen::media_controls::MediaHit>,
     /// Shared TextTrack store — same Arc used by JS native bindings (P3-webvtt).
     ///
     /// Mirrors `page_tracks.tracks_by_video` so `video.textTracks` exposes the

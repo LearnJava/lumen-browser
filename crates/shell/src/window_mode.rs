@@ -654,6 +654,7 @@ fn run_window_mode_inner(
         video_sessions: HashMap::new(),
         video_last_ms: HashMap::new(),
         video_audio_sinks: HashMap::new(),
+        media_panel_hits: Vec::new(),
         video_last_audio_ms: HashMap::new(),
         mse_sessions: HashMap::new(),
         frames: Vec::new(),

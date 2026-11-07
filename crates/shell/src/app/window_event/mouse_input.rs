@@ -248,6 +248,12 @@ impl Lumen {
                     return;
                 }
             }
+            // BUG-1719: press по зоне UA-панели медиа принадлежит панели —
+            // DOM его не видит (ни mousedown/pointerdown ниже, ни click, ни
+            // drag-select). Слой ниже chrome-панелей, выше страницы.
+            if self.handle_media_panel_click(x_css, y_css) {
+                return;
+            }
             // UX-DBLCLICK: count this press within the OS double-click time
             // and zone; the count is `detail` of mousedown/mouseup/click.
             let clicks = self.click_streak.press(
