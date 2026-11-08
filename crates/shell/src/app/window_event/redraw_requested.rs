@@ -978,12 +978,18 @@ impl Lumen {
                 if !comp.is_empty() {
                     let tree = StackingTree::build(lb);
                     let order = PaintOrder::from_tree(&tree);
-                    let (dl, ranges) = build_display_list_ordered_with_anim_split(
+                    let (mut dl, mut ranges) = build_display_list_ordered_with_anim_split(
                         lb,
                         &tree,
                         &order,
                         Some(&comp),
                     );
+                    // BUG-1720: список пересобран из layout мимо записи
+                    // `Lumen::display_list`, где содержимое фреймов вклеивается
+                    // вместо заглушек — без повторной вклейки здесь пользователь
+                    // видит серые заглушки всё время активных CSS-анимаций.
+                    // Диапазоны анимируемых сегментов правятся на вставки.
+                    frames::splice_frame_content_anim(&mut dl, &self.frames, &mut ranges);
                     if std::env::var("LUMEN_FRAME_LOG").is_ok_and(|v| v != "0") {
                         eprintln!(
                             "[frame] anim_dl: {} cmds, {} ranges, {} overrides",

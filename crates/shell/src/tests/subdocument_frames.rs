@@ -334,6 +334,50 @@ fn splice_frame_content_offsets_child_by_its_scroll() {
     }
 }
 
+/// BUG-1720: вклейка в список compositor-offload'а анимаций правит диапазоны
+/// анимируемых сегментов — вставка раздвигает команды, и несдвинутый диапазон
+/// указал бы переопределение предка на чужие команды хвоста.
+///
+/// Три случая одним списком: сегмент ПОСЛЕ заглушки сдвигается на размер
+/// вставки, сегмент ДО неё не трогается, сегмент, НАКРЫВАВШИЙ заглушку
+/// (анимированный предок фрейма), удлиняется — его переопределение обязано
+/// доехать и до содержимого ребёнка.
+#[test]
+fn splice_frame_content_anim_shifts_ranges_around_insertion() {
+    let (mut dl, host_rect) = page_with_iframe_placeholder("child.html");
+    let at = placeholder_at(&dl, "child.html").expect("заглушка");
+    let content = vec![lumen_paint::DisplayCommand::FillRect {
+        rect: Rect::new(0.0, 0.0, 40.0, 20.0),
+        color: lumen_layout::Color { r: 1, g: 2, b: 3, a: 255 },
+    }];
+    let frames = vec![splice_handle("child.html", host_rect, content)];
+    // Обёртка: клип, трансформа, [контент], PopTransform, PopClip.
+    let inserted = frames[0].content_dl.len() + 4;
+
+    // Индекс `at + 1` может выйти за конец списка (заглушка бывает последней
+    // командой) — сдвигаемой границы не обязана существовать в списке.
+    let mut ranges = vec![
+        0..at,          // сегмент до заглушки
+        at..at + 1,     // сегмент ровно с заглушки
+        at + 1..at + 2, // сегмент после заглушки
+    ];
+    crate::frames::splice_frame_content_anim(&mut dl, &frames, &mut ranges);
+
+    assert_eq!(ranges[0], 0..at, "сегмент до вставки не двигается");
+    assert_eq!(
+        ranges[1],
+        at..at + inserted,
+        "сегмент, накрывавший заглушку, накрыл и её контент"
+    );
+    assert_eq!(
+        ranges[2],
+        (at + inserted)..(at + 1 + inserted),
+        "сегмент после вставки сдвинут на чистый прирост (вставка минус заглушка)"
+    );
+    // Сама вклейка состоялась: на месте заглушки — клип ребёнка.
+    assert!(matches!(&dl[at], lumen_paint::DisplayCommand::PushClipRect { .. }));
+}
+
 /// Горизонтальный аналог
 /// [`pointer_target_in_scrolled_frame_hits_visible_block_with_viewport_point`]
 /// (FRAME-3 срез 1) — колонки вместо полос, `scroll_x` вместо `scroll_y`.
