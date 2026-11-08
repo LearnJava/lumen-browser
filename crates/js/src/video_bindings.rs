@@ -70,7 +70,7 @@
 #[cfg(feature = "v8-backend")]
 use crate::text_track_store::get_text_track_store;
 #[cfg(feature = "v8-backend")]
-use crate::video_gif_store::{get_video_decoder, get_video_gif_store};
+use crate::video_gif_store::{get_video_decoder, get_video_gif_store, VideoLoadRequest};
 
 /// Current `video.playbackRate` for `nid`, spec default `1.0` when unset —
 /// GAP-MEDIADECODE срез 18. Pulled out because every reader of
@@ -104,9 +104,22 @@ pub(crate) fn install_video_bindings_v8(
 
     {
         let store = get_video_gif_store();
+        // BUG-1796: nid в очереди — индекс арены СВОЕГО документа рантайма;
+        // слот читается на каждый вызов (`own_doc_slots` — реестр, не Arc
+        // документа), чтобы натив не запоминал документ мимо реестра.
+        let slots = rt.own_doc_slots();
         let load = into_v8_fn2(move |nid: f64, src: String| {
+            let doc = slots
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .self_doc
+                .clone();
             if let Some(s) = &store {
-                s.pending_loads.lock().unwrap().push((nid as u32, src));
+                s.pending_loads.lock().unwrap().push(VideoLoadRequest {
+                    nid: nid as u32,
+                    src,
+                    doc,
+                });
             }
         });
         rt.register_native("__lumen_video_load", load)?;
@@ -364,9 +377,25 @@ pub(crate) fn install_video_bindings_v8(
     // lets sources it cannot open fall through to the failure steps.
     if get_video_decoder().is_some() {
         let store = get_video_gif_store();
+        // BUG-1796: nid в очереди — индекс арены СВОЕГО документа рантайма;
+        // слот читается на каждый вызов (`own_doc_slots` — реестр, не Arc
+        // документа), чтобы натив не запоминал документ мимо реестра.
+        let slots = rt.own_doc_slots();
         let container_load = into_v8_fn2(move |nid: f64, src: String| {
+            let doc = slots
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .self_doc
+                .clone();
             if let Some(s) = &store {
-                s.pending_container_loads.lock().unwrap().push((nid as u32, src));
+                s.pending_container_loads
+                    .lock()
+                    .unwrap()
+                    .push(VideoLoadRequest {
+                        nid: nid as u32,
+                        src,
+                        doc,
+                    });
             }
         });
         rt.register_native("__lumen_video_container_load", container_load)?;
@@ -787,7 +816,7 @@ var document = {
 
         let loads = store.pending_loads.lock().unwrap();
         assert!(!loads.is_empty(), "load should be queued");
-        assert!(loads.iter().any(|(n, s)| *n == 99 && s == "test.gif"));
+        assert!(loads.iter().any(|l| l.nid == 99 && l.src == "test.gif"));
     }
 
     #[test]
@@ -1135,7 +1164,7 @@ globalThis.__set_clock = function(t) { __clock = t; };
 
         let loads = store.pending_container_loads.lock().unwrap();
         assert!(!loads.is_empty(), "container load should be queued");
-        assert!(loads.iter().any(|(n, s)| *n == 99 && s == "test.webm"));
+        assert!(loads.iter().any(|l| l.nid == 99 && l.src == "test.webm"));
         assert!(store.pending_loads.lock().unwrap().is_empty(), "must not touch the GIF queue");
     }
 
