@@ -1857,7 +1857,42 @@ pub(crate) fn pointer_target(
 /// больше нет — повторный проход по уже склеенному списку ничего не делает.
 pub(crate) fn splice_frame_content(dl: &mut DisplayList, frames: &[FrameHandle]) {
     for h in frames.iter().filter(|h| h.parent_doc.is_none() && h.paints_in_host()) {
-        splice_one_frame(dl, h);
+        let _ = splice_one_frame(dl, h);
+    }
+}
+
+/// То же для списка, собранного compositor-offload'ом анимаций
+/// (`build_display_list_ordered_with_anim_split`, BUG-1720): тот пересобирается
+/// из layout на каждом анимационном кадре, мимо записи `Lumen::display_list`, и
+/// без этой вклейки пользователь видит серые заглушки фреймов всё время, пока
+/// на странице крутится хоть одна CSS-анимация. `ranges` — диапазоны
+/// анимируемых сегментов в ЭТОМ списке: вклейка раздвигает команды, поэтому
+/// после каждой вставки диапазоны правятся — сегмент, накрывавший заглушку
+/// (анимированный предок фрейма), обязан накрыть и её содержимое, иначе
+/// переопределение предка не доедет до контента ребёнка.
+pub(crate) fn splice_frame_content_anim(
+    dl: &mut DisplayList,
+    frames: &[FrameHandle],
+    ranges: &mut [std::ops::Range<usize>],
+) {
+    for h in frames.iter().filter(|h| h.parent_doc.is_none() && h.paints_in_host()) {
+        let Some((at, inserted)) = splice_one_frame(dl, h) else {
+            continue;
+        };
+        // Чистый прирост длины списка: `inserted` вставленных команд минус
+        // сама заглушка, которую вклейка удалила. Ему равен сдвиг индексов
+        // всего, что лежало после неё.
+        let net = inserted - 1;
+        for r in ranges.iter_mut() {
+            if r.start <= at && at < r.end {
+                // Заглушка внутри сегмента: сегмент удлиняется на прирост.
+                r.end += net;
+            } else if r.start > at {
+                // Сегмент целиком после вставки: сдвигается на прирост.
+                r.start += net;
+                r.end += net;
+            }
+        }
     }
 }
 
@@ -1870,7 +1905,7 @@ fn splice_children_of(dl: &mut DisplayList, frames: &[FrameHandle], parent: usiz
             .is_some_and(|pd| Arc::ptr_eq(pd, &frames[parent].doc))
             && h.paints_in_host()
     }) {
-        splice_one_frame(dl, h);
+        let _ = splice_one_frame(dl, h);
     }
 }
 
@@ -1890,12 +1925,17 @@ fn splice_children_of(dl: &mut DisplayList, frames: &[FrameHandle], parent: usiz
 ///
 /// Прокрутка под-документа (срез 17) входит в ЭТО смещение, а не в клип:
 /// клип — это окно фрейма на странице, оно на месте, а уезжает содержимое.
-fn splice_one_frame(dl: &mut DisplayList, h: &FrameHandle) {
-    let Some(rect) = h.host_rect else { return };
+///
+/// `Some((индекс заглушки, сколько команд вставлено))` — для вызывающих,
+/// которым надо править индексацию списка после вставки (BUG-1720: диапазоны
+/// anim-split'а); у остальных вставка сдвигает хвост списка, и они её
+/// игнорируют.
+fn splice_one_frame(dl: &mut DisplayList, h: &FrameHandle) -> Option<(usize, usize)> {
+    let rect = h.host_rect?;
     if h.content_dl.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 {
-        return;
+        return None;
     }
-    let Some(at) = dl.iter().position(|c| match c {
+    let at = dl.iter().position(|c| match c {
         DisplayCommand::DrawImage { rect: r, src, .. } => {
             src == &h.host_src
                 && (r.x - rect.x).abs() < 0.01
@@ -1904,9 +1944,7 @@ fn splice_one_frame(dl: &mut DisplayList, h: &FrameHandle) {
                 && (r.height - rect.height).abs() < 0.01
         }
         _ => false,
-    }) else {
-        return;
-    };
+    })?;
     let mut wrapped: DisplayList = Vec::with_capacity(h.content_dl.len() + 4);
     wrapped.push(DisplayCommand::PushClipRect { rect });
     wrapped.push(DisplayCommand::PushTransform {
@@ -1915,7 +1953,9 @@ fn splice_one_frame(dl: &mut DisplayList, h: &FrameHandle) {
     wrapped.extend(h.content_dl.iter().cloned());
     wrapped.push(DisplayCommand::PopTransform);
     wrapped.push(DisplayCommand::PopClip);
+    let inserted = wrapped.len();
     dl.splice(at..at + 1, wrapped);
+    Some((at, inserted))
 }
 
 /// Начало координат под-документа фрейма `idx` в системе координат документа
