@@ -806,6 +806,18 @@ impl V8JsRuntime {
         key != 0 && crate::frame_bridge::take_frame_dom_dirty(key)
     }
 
+    /// BUG-1796: слот собственного документа этого изолята для нативов, чья
+    /// очередь ключуется nid (`__lumen_video_load`/`__lumen_video_container_load`):
+    /// nid такой очереди — индекс арены СВОЕГО документа
+    /// ([`crate::frame_bridge::FrameDocSlots::self_doc`]), и потребителю очереди
+    /// нужен именно он, а не документ верхнего уровня. Реестр, а не сам документ:
+    /// натив читает слот на каждый вызов и не запоминает `Arc` мимо живого
+    /// состояния реестра. До `install_dom` слот пуст — натив ставит в очередь
+    /// `doc: None`.
+    pub(crate) fn own_doc_slots(&self) -> crate::frame_bridge::FrameDocRegistry {
+        Arc::clone(&self.frame_docs)
+    }
+
     /// Enable or disable deterministic render mode (8F) before calling `install_dom`.
     ///
     /// `rng_seed` (DEVX-16, `--rng-seed`): overrides the URL-hash-derived

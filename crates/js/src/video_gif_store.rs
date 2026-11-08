@@ -9,7 +9,7 @@
 //!
 //! Two kinds of shared state:
 //!
-//! 1. **Pending loads** (`pending_loads`): URLs queued by JS `__lumen_video_load`.
+//! 1. **Pending loads** (`pending_loads`): loads queued by JS `__lumen_video_load`.
 //!    The shell drains this on each tick, fetches + decodes the GIF, and inserts
 //!    a [`VideoPlaybackState`] entry.  No `lumen_image` dependency needed here.
 //!
@@ -100,6 +100,24 @@ impl VideoPlaybackState {
 
 // ── Store ─────────────────────────────────────────────────────────────────────
 
+/// Один запрос загрузки `<video>` из шима (`__lumen_video_load` /
+/// `__lumen_video_container_load`) — BUG-1796.
+///
+/// `nid` — индекс арены того документа, из чьего рантайма ушёл запрос, а не
+/// верхнего: страница и каждый фрейм держат свою арену `NodeId`, и тик шелла
+/// обязан читать/писать узел в документе-хозяине. Рантайм кладёт в `doc` свой
+/// собственный документ (`FrameDocSlots::self_doc`); `None` оставляют
+/// минимальные изоляты без `install_dom` — шелл обрабатывает такой запрос
+/// по-старому, как узел верхнего документа.
+pub struct VideoLoadRequest {
+    /// `el.__nid__` в документе-хозяине.
+    pub nid: u32,
+    /// Сырое значение `src` — резолвится шеллом от базы документа-хозяина.
+    pub src: String,
+    /// Собственный документ рантайма, поставившего запрос.
+    pub doc: Option<Arc<Mutex<lumen_dom::Document>>>,
+}
+
 /// Shared state for all `<video>`-element GIF animations, keyed by DOM node index.
 ///
 /// Created by the shell; shared with JS native bindings via [`set_video_gif_store`].
@@ -111,15 +129,15 @@ pub struct VideoGifStore {
     /// carries no GIF-specific field), so both decode backends reuse the same
     /// `__lumen_video_play`/`pause`/`seek`/`current_time`/… natives.
     pub playback: Mutex<HashMap<u32, VideoPlaybackState>>,
-    /// Pending GIF load requests: `(nid, src_url)` queued by `__lumen_video_load`.
+    /// Pending GIF load requests queued by `__lumen_video_load`.
     /// Drained by the shell's tick loop.
-    pub pending_loads: Mutex<Vec<(u32, String)>>,
-    /// Pending media-container load requests: `(nid, src_url)` queued by
+    pub pending_loads: Mutex<Vec<VideoLoadRequest>>,
+    /// Pending media-container load requests queued by
     /// `__lumen_video_container_load` (registered only when a [`VideoDecoder`]
     /// is installed, see [`set_video_decoder`]). Drained by the shell's tick
     /// loop (`tick_video_sessions`), which opens the container through that
     /// decoder.
-    pub pending_container_loads: Mutex<Vec<(u32, String)>>,
+    pub pending_container_loads: Mutex<Vec<VideoLoadRequest>>,
     /// `<video>` nodes attached to a `MediaSource` (COMPAT-MSE): `nid → source id`.
     /// Set by `__lumen_mse_attach` when `<video src=blob:MediaSource>` starts
     /// loading, removed by `__lumen_mse_detach`. Unlike a container load there are
@@ -274,7 +292,7 @@ pub(crate) static DECODER_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 #[cfg(test)]
 mod tests {
-    use super::VideoGifStore;
+    use super::{VideoGifStore, VideoLoadRequest};
 
     #[test]
     fn has_pending_video_load_false_when_both_queues_empty() {
@@ -285,7 +303,11 @@ mod tests {
     #[test]
     fn has_pending_video_load_true_for_gif_queue() {
         let store = VideoGifStore::default();
-        store.pending_loads.lock().unwrap().push((1, "a.gif".to_string()));
+        store.pending_loads.lock().unwrap().push(VideoLoadRequest {
+            nid: 1,
+            src: "a.gif".to_string(),
+            doc: None,
+        });
         assert!(store.has_pending_video_load());
     }
 
@@ -296,14 +318,22 @@ mod tests {
             .pending_container_loads
             .lock()
             .unwrap()
-            .push((1, "a.mp4".to_string()));
+            .push(VideoLoadRequest {
+                nid: 1,
+                src: "a.mp4".to_string(),
+                doc: None,
+            });
         assert!(store.has_pending_video_load());
     }
 
     #[test]
     fn has_pending_video_load_false_after_drain() {
         let store = VideoGifStore::default();
-        store.pending_loads.lock().unwrap().push((1, "a.gif".to_string()));
+        store.pending_loads.lock().unwrap().push(VideoLoadRequest {
+            nid: 1,
+            src: "a.gif".to_string(),
+            doc: None,
+        });
         store.pending_loads.lock().unwrap().clear();
         assert!(!store.has_pending_video_load());
     }

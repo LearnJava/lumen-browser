@@ -71,6 +71,31 @@ pub(crate) fn mirror_tracks_into(
     }
 }
 
+/// nid-домен одного запроса загрузки `<video>` (BUG-1796).
+///
+/// nid в очереди магазина — индекс арены ДОКУМЕНТА, из чьего рантайма ушёл
+/// запрос: страница и каждый фрейм держат свою арену `NodeId`, и тик шелла
+/// обязан читать/писать узел в документе-хозяине. До BUG-1796 nid читался как
+/// индекс ВЕРХНЕГО документа: относительный `src` видео фрейма резолвился от
+/// базы страницы (HTML LS §4.8.4 «media element base URL» — база документа
+/// САМОГО элемента), `poster` читался у чужого узла с тем же числовым nid,
+/// intrinsic-размеры писались в чужой узел верхнего документа.
+struct VideoNidDomain {
+    /// Живой документ-хозяин nid: под-документ фрейма ([`FrameHandle::doc`])
+    /// или `layout_source` верхнего уровня. `None` — верхний путь без
+    /// собранного layout (запрос из парсерного окна до `apply_loaded_page`
+    /// либо от минимального изолята без `install_dom`): читатели документа
+    /// пропускаются, как и до BUG-1796.
+    doc: Option<Arc<Mutex<lumen_dom::Document>>>,
+    /// Эффективная база документа-хозяина (`<base href>` учтён): у фрейма —
+    /// от `FrameHandle::base`, у верхнего пути — от источника страницы.
+    base: ResourceBase,
+    /// Живой фрейм, если nid из его под-документа: intrinsic-запись в
+    /// под-документ не проходит через каскадный флаш страницы, ребёнку
+    /// нужен явный релейаут ([`Lumen::refresh_frames`]).
+    frame: Option<usize>,
+}
+
 impl Lumen {
     /// Mirror `page_tracks.tracks_by_video` into the shared
     /// [`lumen_js::TextTrackStore`] so `video.textTracks` reflects the parsed
@@ -81,6 +106,65 @@ impl Lumen {
         mirror_tracks_into(&self.text_track_store, &self.page_tracks.tracks_by_video);
     }
 
+    /// Разрешить nid-домен запроса загрузки `<video>` (BUG-1796).
+    ///
+    /// Рантайм кладёт в запрос свой собственный документ
+    /// (`FrameDocSlots::self_doc`), поэтому домен узнаётся по `Arc`-у:
+    /// совпал с документом живого фрейма — под-документ, база от
+    /// `FrameHandle::base`; иначе — верхний путь как до BUG-1796, включая
+    /// запрос с `doc: None` (минимальный изолят без `install_dom`) и запрос,
+    /// чей документ уже ушёл (навигация фрейма, замена страницы): грузить его
+    /// «правильно» уже некому, как и раньше он обрабатывается от верхнего
+    /// документа. `None` — верхний источник без базы, от которой резолвить
+    /// (`Empty`/`AboutBlank`/`Static`) — вызывающая сторона делает `continue`.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    fn video_load_domain(
+        &self,
+        req: &lumen_js::video_gif_store::VideoLoadRequest,
+    ) -> Option<VideoNidDomain> {
+        if let Some(d) = req.doc.as_ref()
+            && let Some(idx) = self.frames.iter().position(|h| Arc::ptr_eq(&h.doc, d))
+        {
+            let frame = &self.frames[idx];
+            let base = effective_base(&frame.doc.lock().unwrap(), &frame.base);
+            return Some(VideoNidDomain {
+                doc: Some(Arc::clone(&frame.doc)),
+                base,
+                frame: Some(idx),
+            });
+        }
+        let base = match &self.source {
+            PageSource::File(p) => ResourceBase::File(p.clone()),
+            PageSource::Url { url, .. } => ResourceBase::Url(url.clone()),
+            PageSource::Snapshot { base_url, .. } => ResourceBase::Url(base_url.clone()),
+            PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => return None,
+        };
+        let base = self
+            .layout_source
+            .as_ref()
+            .map(|ls| effective_base(&ls.document.lock().unwrap(), &base))
+            .unwrap_or(base);
+        Some(VideoNidDomain {
+            doc: self.layout_source.as_ref().map(|ls| Arc::clone(&ls.document)),
+            base,
+            frame: None,
+        })
+    }
+
+    /// Релейаут фреймов, чьим узлам тик дописал intrinsic-размеры (BUG-1796):
+    /// каскадный флаш страницы про под-документы не знает — тот же вход,
+    /// что и при нативном переключении контрола формы (BUG-480 срез 18).
+    /// После цикла загрузок, одним проходом: `refresh_frames` пересобирает
+    /// display list всей страницы, по разу на фрейм, а не на узел.
+    fn refresh_frames_with_intrinsic_writes(&mut self, frames_relaid: &[usize]) {
+        let mut idxs = frames_relaid.to_vec();
+        idxs.sort_unstable();
+        idxs.dedup();
+        for idx in idxs {
+            self.refresh_frames(Some(idx));
+        }
+    }
+
     /// Advance GIF-backed `<video>` playback: drain pending loads, decode GIFs,
     /// register current frames, request redraws while any video is playing.
     ///
@@ -89,7 +173,7 @@ impl Lumen {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn tick_video_gifs(&mut self, elapsed_ms: u64) {
         // Drain pending load requests queued by JS `__lumen_video_load`.
-        let loads: Vec<(u32, String)> = self
+        let loads: Vec<lumen_js::video_gif_store::VideoLoadRequest> = self
             .video_gif_store
             .pending_loads
             .lock()
@@ -97,21 +181,14 @@ impl Lumen {
             .drain(..)
             .collect();
 
-        for (nid, src) in loads {
-            // Resolve URL relative to current page source, adjusted for
-            // `<base href>` if the live document has one (BUG-752) — same
-            // deferred-load reasoning as `fetch_and_register_lazy_images`.
-            let base = match &self.source {
-                PageSource::File(p) => ResourceBase::File(p.clone()),
-                PageSource::Url { url, .. } => ResourceBase::Url(url.clone()),
-                PageSource::Snapshot { base_url, .. } => ResourceBase::Url(base_url.clone()),
-                PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => continue,
-            };
-            let base = self
-                .layout_source
-                .as_ref()
-                .map(|ls| effective_base(&ls.document.lock().unwrap(), &base))
-                .unwrap_or(base);
+        let mut frames_relaid: Vec<usize> = Vec::new();
+        for req in loads {
+            let (nid, src) = (req.nid, &req.src);
+            // BUG-1796: nid — индекс арены документа, из чьего рантайма ушёл
+            // запрос: база, CSP и referrer — от документа-хозяина, а не всегда
+            // от верхнего.
+            let Some(domain) = self.video_load_domain(&req) else { continue };
+            let base = domain.base;
 
             // GAP-CSPENF срез 51: `upgrade-insecure-requests` for this GIF fetch
             // — same one-shot policy read and `resolve → upgrade` order as
@@ -121,20 +198,18 @@ impl Lumen {
             // only point with a live `&Document` for this path, so it is where
             // the scheme rewrite has to happen — срез 50 named this path (as
             // opposed to `<audio src>`/`<track src>`) still uncovered.
-            let csp_gate = self.layout_source.as_ref().and_then(|ls| {
-                let doc = ls.document.lock().unwrap();
+            let upgraded = domain.doc.as_ref().and_then(|d| {
+                let doc = d.lock().unwrap();
                 let root = doc.root();
-                crate::csp_enforce::document_csp_policy(&doc, root)
+                let (policy, _) = crate::csp_enforce::document_csp_policy(&doc, root)?;
+                crate::csp_enforce::upgrade_insecure_url(&policy, &base.resolve_str(src))
             });
-            // GAP-REFERRER срез 5: same one-shot read as `csp_gate` above.
-            let referrer_policy = self.layout_source.as_ref().map_or_else(
+            // GAP-REFERRER срез 5: same one-shot read as the policy above.
+            let referrer_policy = domain.doc.as_ref().map_or_else(
                 lumen_network::ReferrerPolicy::default_policy,
-                |ls| crate::resource_base::document_referrer_policy(&ls.document.lock().unwrap()),
+                |d| crate::resource_base::document_referrer_policy(&d.lock().unwrap()),
             );
-            let upgraded = csp_gate.as_ref().and_then(|(policy, _)| {
-                crate::csp_enforce::upgrade_insecure_url(policy, &base.resolve_str(&src))
-            });
-            let fetch_url: &str = upgraded.as_deref().unwrap_or(&src);
+            let fetch_url: &str = upgraded.as_deref().unwrap_or(src);
 
             let bytes = match fetch_image_bytes(
                 fetch_url, &base, &self.event_sink,
@@ -173,11 +248,20 @@ impl Lumen {
                         self.pending_images.push((key.clone(), first));
                     }
                     // Apply intrinsic size so layout uses actual GIF dimensions.
-                    if let Some(src_ref) = self.layout_source.as_ref() {
-                        let mut doc = src_ref.document.lock().unwrap();
+                    // BUG-1796: узел — из документа-хозяина nid; у фрейма и
+                    // viewport-density, и релейаут — самого фрейма.
+                    if let Some(doc) = domain.doc.as_ref() {
+                        let viewport = match domain.frame {
+                            Some(idx) => self.frames[idx].viewport,
+                            None => self.relayout_viewport().unwrap_or(Size::new(0.0, 0.0)),
+                        };
+                        let mut doc = doc.lock().unwrap();
                         let node_id = lumen_dom::NodeId::from_index(nid as usize);
-                        if apply_intrinsic_size(&mut doc, node_id, gif.width, gif.height, self.relayout_viewport().unwrap_or(Size::new(0.0, 0.0))) {
-                            self.note_shell_attr_writes(vec![nid]);
+                        if apply_intrinsic_size(&mut doc, node_id, gif.width, gif.height, viewport) {
+                            match domain.frame {
+                                Some(idx) => frames_relaid.push(idx),
+                                None => self.note_shell_attr_writes(vec![nid]),
+                            }
                         }
                     }
                     eprintln!(
@@ -210,6 +294,7 @@ impl Lumen {
                 Err(e) => eprintln!("video GIF: ошибка декодирования {src}: {e}"),
             }
         }
+        self.refresh_frames_with_intrinsic_writes(&frames_relaid);
 
         // Advance frames for playing videos. A paused video is not skipped
         // outright (GAP-MEDIADECODE срез 8): `__lumen_video_seek` rewrites
@@ -309,7 +394,7 @@ impl Lumen {
         let decoder = lumen_js::video_gif_store::get_video_decoder();
 
         // Drain pending load requests queued by JS `__lumen_video_container_load`.
-        let loads: Vec<(u32, String)> = self
+        let loads: Vec<lumen_js::video_gif_store::VideoLoadRequest> = self
             .video_gif_store
             .pending_container_loads
             .lock()
@@ -317,40 +402,36 @@ impl Lumen {
             .drain(..)
             .collect();
 
-        for (nid, src) in loads {
+        let mut frames_relaid: Vec<usize> = Vec::new();
+        for req in loads {
+            let (nid, src) = (req.nid, &req.src);
             // A fresh load for this node supersedes any earlier failure — a
             // `load()` retry after fixing `src` must not stay haunted by the
             // previous attempt (GAP-MEDIADECODE срез 9).
             self.video_gif_store.load_failures.lock().unwrap().remove(&nid);
 
-            let base = match &self.source {
-                PageSource::File(p) => ResourceBase::File(p.clone()),
-                PageSource::Url { url, .. } => ResourceBase::Url(url.clone()),
-                PageSource::Snapshot { base_url, .. } => ResourceBase::Url(base_url.clone()),
-                PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => continue,
-            };
-            let base = self
-                .layout_source
-                .as_ref()
-                .map(|ls| effective_base(&ls.document.lock().unwrap(), &base))
-                .unwrap_or(base);
+            // BUG-1796: nid — индекс арены документа, из чьего рантайма ушёл
+            // запрос: база, CSP и referrer — от документа-хозяина, а не всегда
+            // от верхнего.
+            let Some(domain) = self.video_load_domain(&req) else { continue };
+            let base = domain.base;
             // GAP-REFERRER срез 5: this producer's only point with a live
             // `&Document`, same read as `fetch_and_register_lazy_images`.
-            let referrer_policy = self.layout_source.as_ref().map_or_else(
+            let referrer_policy = domain.doc.as_ref().map_or_else(
                 lumen_network::ReferrerPolicy::default_policy,
-                |ls| crate::resource_base::document_referrer_policy(&ls.document.lock().unwrap()),
+                |d| crate::resource_base::document_referrer_policy(&d.lock().unwrap()),
             );
 
             // BUG-692: контейнерный путь `<video src>` — та же перезапись схемы
             // (`upgrade-insecure-requests`, Fetch §4.1 шаг 5), что у GIF-пути
             // выше; ключ `load_failures`/лог остаются на сыром `src`.
-            let upgraded = self.layout_source.as_ref().and_then(|ls| {
-                let doc = ls.document.lock().unwrap();
+            let upgraded = domain.doc.as_ref().and_then(|d| {
+                let doc = d.lock().unwrap();
                 let root = doc.root();
                 let (policy, _) = crate::csp_enforce::document_csp_policy(&doc, root)?;
-                crate::csp_enforce::upgrade_insecure_url(&policy, &base.resolve_str(&src))
+                crate::csp_enforce::upgrade_insecure_url(&policy, &base.resolve_str(src))
             });
-            let fetch_url: &str = upgraded.as_deref().unwrap_or(&src);
+            let fetch_url: &str = upgraded.as_deref().unwrap_or(src);
 
             let bytes = match crate::subresources::fetch_video_bytes(
                 fetch_url,
@@ -414,8 +495,8 @@ impl Lumen {
             // decoded frame is held back. Marking position 0 as already shown
             // keeps the paused tick below from registering it either; `play()`
             // or a seek moves the position and the tick draws the real frame.
-            let has_poster = self.layout_source.as_ref().is_some_and(|ls| {
-                let doc = ls.document.lock().unwrap();
+            let has_poster = domain.doc.as_ref().is_some_and(|d| {
+                let doc = d.lock().unwrap();
                 doc.get(lumen_dom::NodeId::from_index(nid as usize))
                     .get_attr("poster")
                     .is_some_and(|p| !p.trim().is_empty())
@@ -430,11 +511,20 @@ impl Lumen {
             } else {
                 self.pending_images.push((key.clone(), image));
             }
-            if let Some(src_ref) = self.layout_source.as_ref() {
-                let mut doc = src_ref.document.lock().unwrap();
+            if let Some(doc) = domain.doc.as_ref() {
+                // BUG-1796: узел — из документа-хозяина nid; у фрейма и
+                // viewport-density, и релейаут — самого фрейма.
+                let viewport = match domain.frame {
+                    Some(idx) => self.frames[idx].viewport,
+                    None => self.relayout_viewport().unwrap_or(Size::new(0.0, 0.0)),
+                };
+                let mut doc = doc.lock().unwrap();
                 let node_id = lumen_dom::NodeId::from_index(nid as usize);
-                if apply_intrinsic_size(&mut doc, node_id, width, height, self.relayout_viewport().unwrap_or(Size::new(0.0, 0.0))) {
-                    self.note_shell_attr_writes(vec![nid]);
+                if apply_intrinsic_size(&mut doc, node_id, width, height, viewport) {
+                    match domain.frame {
+                        Some(idx) => frames_relaid.push(idx),
+                        None => self.note_shell_attr_writes(vec![nid]),
+                    }
                 }
             }
             let cycle_ms = session.duration_secs().map_or(0, |s| (s * 1000.0) as u64);
@@ -464,6 +554,7 @@ impl Lumen {
             self.video_last_audio_ms.remove(&nid);
             self.request_redraw();
         }
+        self.refresh_frames_with_intrinsic_writes(&frames_relaid);
 
         // COMPAT-MSE: сессии поверх `MediaSource` заводятся здесь же, до цикла выдачи кадров.
         self.tick_mse_sessions();
