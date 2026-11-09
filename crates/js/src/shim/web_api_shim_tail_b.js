@@ -11,7 +11,31 @@ window.Range            = Range;
 function _lumen_computed_property(nid, name) {
     if (nid == null) return '';
     if (name.slice(0, 2) === '--') return _lumen_get_custom_property(nid, name) || '';
-    return _lumen_get_computed_style(nid, name) || '';
+    var v = _lumen_get_computed_style(nid, name) || '';
+    // BUG-1775: computed `background-image` serialises its `url("…")` layers as
+    // the resolved document URL with the query encoded in the document's
+    // encoding (getComputedStyle of `background="?ÿ"` on a windows-1252 page
+    // reads `…?%FF"`). The cascade stores the url text as written, so the
+    // resolution happens at the read; it is idempotent for already-absolute
+    // urls, and an empty `url("")` stays empty rather than becoming the base.
+    if (name === 'background-image' || name === '-webkit-background-image') {
+        v = _lumen_resolve_css_urls(v);
+    }
+    return v;
+}
+// The `url("…")` occurrences of a serialised image value, double-quoted with
+// `\` and `"` escaped by the serializer (`background_layers_to_css`) — the
+// only quote form that path emits.
+var _LUMEN_CSS_URL_RE = /url\("((?:[^"\\]|\\.)*)"\)/g;
+function _lumen_resolve_css_urls(value) {
+    if (typeof value !== 'string' || value.indexOf('url("') < 0) return value;
+    var base = _lumen_document_base_url();
+    return value.replace(_LUMEN_CSS_URL_RE, function(m, raw) {
+        if (raw === '') return m;
+        var u = raw.replace(/\\(.)/g, '$1');
+        var r = String(_url_resolve_doc(u, base));
+        return 'url("' + r.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '")';
+    });
 }
 // CSSOM-6 (BUG-490): normalizes the `pseudoElt` argument to one of the four
 // pseudo-elements Lumen tracks a resolved style for, dropping an optional
@@ -100,6 +124,14 @@ window.getComputedStyle = function(element, pseudoElt) {
                 pseudo ? _lumen_get_computed_style_pseudo_entries(nid, pseudo)
                        : _lumen_get_computed_style_entries(nid, false)
             );
+            // BUG-1775: the same read-time url() resolution `_lumen_computed_property`
+            // applies to a single property — the iteration/indexing view must not
+            // disagree with getPropertyValue for `background-image`.
+            for (var i = 0; i < entries.length; i++) {
+                if (entries[i][0] === 'background-image') {
+                    entries[i][1] = _lumen_resolve_css_urls(entries[i][1]);
+                }
+            }
         }
         return entries;
     }
@@ -1146,10 +1178,14 @@ function _lumen_document_base_url() {
 
 // «Reflect a URL» steps: an absent or empty attribute reflects as '' (NOT as the
 // document URL), anything else is resolved against the document base URL.
+// BUG-1775: this is an «encoding parse a URL» — the query percent-encodes with
+// the document's encoding, so it goes through `_url_resolve_doc`, not the
+// plain UTF-8 `_url_resolve` (`new URL()` semantics would give `?%C3%BF`
+// where a windows-1252 document must reflect `?%FF`).
 function _lumen_reflect_url(nid, attr) {
     var v = _lumen_u2n(_lumen_get_attr(nid, attr));
     if (v === null || String(v) === '') return '';
-    return _url_resolve(String(v), _lumen_document_base_url());
+    return _url_resolve_doc(String(v), _lumen_document_base_url());
 }
 
 // The node id behind a reflection receiver, or -1 when the accessor was called
@@ -2327,7 +2363,7 @@ Object.defineProperty(HTMLBaseElement.prototype, 'href', {
         if (n === -1) return docUrl;
         var v = _lumen_u2n(_lumen_get_attr(n, 'href'));
         if (v === null || String(v) === '') return docUrl;
-        return _url_resolve(String(v), docUrl);
+        return _url_resolve_doc(String(v), docUrl);
     },
     set: function(v) {
         var n = _lumen_reflect_nid(this);
