@@ -66,6 +66,7 @@ breakdown, host-vs-engine split and caveats in [docs/wpt/pass-rate.md](docs/wpt/
 
 ### lumen-encoding (`crates/engine/encoding`)
 - ✅ Decoders: Windows-1251, Windows-1252 (`ascii`/`latin1`/`iso-8859-1` labels), KOI8-R, CP866, UTF-16 LE/BE (surrogates), UTF-8; BOM strip; `from_label` (WHATWG aliases).
+- ✅ Single-byte **encoder** for URL query (BUG-1775, 2026-11-08): «encoding parse a URL» (HTML LS §2.1) — не-ASCII кодпойнты query у документных резолвов (отражение URL-атрибутов `a.href`/`img.src`/…, `location`-навигация, computed `background-image`) процент-кодируются кодировкой документа (`?ÿ` → `?%FF` на windows-1252, → `?%26%23255%3B` на windows-1251), непредставимый кодпойнт — numeric character reference; `new URL()` остаётся всегда UTF-8.
 - ✅ `detect()` chain: BOM → `<meta charset>` → HTTP hint → valid-UTF-8 → Russian-frequency heuristic.
 - ✅ ICU4x 2.2 unicode provider (line-break UAX#14, grapheme/word UAX#29, bidi UAX#9); Knuth-Liang hyphenation (11 locales, used when `hyphens: auto`).
 - ⬜ ISO-8859-5, MacCyrillic, full HTML5 prescan, UTF-32.
