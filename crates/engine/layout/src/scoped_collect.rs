@@ -674,6 +674,14 @@ impl<'a> ScopedCollection<'a> {
             }
         }
         let fresh_len = fresh.len() as u32;
+        // BUG-1776: an entry the plan proved unchanged (in `skips.own` and already
+        // published) must survive `extend` as-is. A rebuilt InlineRun's segment
+        // entries can carry the same node as a kept own box — a leading `<br>`
+        // converted to a run (`give_leading_breaks_a_line`) publishes itself as a
+        // segment — and an attribute change that leaves the style equal
+        // (dir="ltr" → dir="LtR") rebuilds the run while keeping the own entry,
+        // which the three-property segment map would otherwise overwrite.
+        fresh.retain(|idx, _| !(self.skips.own.contains(idx) && out.contains_key(idx)));
         out.extend(fresh);
         stats.built = fresh_len;
         stats.reasons = self.skips.reasons;
@@ -1164,6 +1172,61 @@ mod tests {
         plan.collect_computed_styles(&doc, VIEWPORT, &mut styles);
         assert_eq!(styles[&(a.index() as u32)].get("sentinel").map(String::as_str), Some("kept"));
         assert_ne!(styles[&(b.index() as u32)], before_b, "b's entry was rebuilt with its new background");
+    }
+
+    /// BUG-1776: a leading `<br>` is laid out as an InlineRun that publishes itself
+    /// as a segment (`give_leading_breaks_a_line`). An attribute change that leaves
+    /// the style equal — dir="ltr" → dir="LtR" — keeps the own entry (`skips.own`)
+    /// while the run is rebuilt anyway (the node is in the changed closure), and the
+    /// rebuilt segment entry must not overwrite the kept full map.
+    #[test]
+    fn a_kept_own_entry_survives_a_rebuilt_inline_run_segment() {
+        use crate::box_tree::{layout_measured_hyp_with_counters, layout_mutation_incremental_restyle};
+        use crate::counters::{set_incremental_restyle, ContentDirty, RestyleDelta};
+        use lumen_core::ext::NullHyphenationProvider;
+
+        let html = "<body style=\"margin:0\" id=\"body\"><br id=\"br\" dir=\"ltr\"></body>";
+        let css = "br { color: red; }";
+        let mut doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let hp = NullHyphenationProvider;
+        let (prev, prev_counters) = layout_measured_hyp_with_counters(&doc, &sheet, VIEWPORT, &Fixed, &hp, false);
+        let published = crate::collect_layout_rects(&prev, &doc);
+        let mut styles = crate::collect_computed_styles(&prev, &doc, None, VIEWPORT);
+
+        let (body, br) = (doc.find_by_id("body").unwrap(), doc.find_by_id("br").unwrap());
+        let br_idx = br.index() as u32;
+        assert_eq!(styles[&br_idx].get("color").map(String::as_str), Some("rgb(255, 0, 0)"),
+            "the leading br owns a full entry, not the segment map");
+
+        if let lumen_dom::NodeData::Element { attrs, .. } = &mut doc.get_mut(br).data {
+            for attr in attrs.iter_mut().filter(|a| a.name.local == "dir") {
+                attr.value = "LtR".to_string();
+            }
+        }
+        // The attribute mutation the DOM records for the br, with a dirty root above it.
+        let content = HashSet::from([br]);
+        let delta = RestyleDelta {
+            prev_styles: prev_counters.into_styles(),
+            dirty_roots: HashSet::from([body]),
+            content_dirty: ContentDirty::Nodes(&content),
+            shallow_roots: Default::default(), point_roots: Default::default(),
+        };
+        set_incremental_restyle(true);
+        let (after, counters) =
+            layout_mutation_incremental_restyle(&doc, &sheet, VIEWPORT, &Fixed, &hp, false, prev, delta);
+        set_incremental_restyle(false);
+
+        let changed = ChangedNodes::new(&doc, &counters, &content).expect("no shadow root");
+        let plan = ScopedCollection::plan(
+            &after, &HashSet::from([body]), counters.clean_subtrees(), &published, VIEWPORT, Some(&changed),
+        );
+        assert!(plan.keeps_computed_style(br_idx), "the restyle was equal, so the own entry is kept");
+        styles.get_mut(&br_idx).unwrap().insert("sentinel", "kept".into());
+        plan.collect_computed_styles(&doc, VIEWPORT, &mut styles);
+        assert_eq!(styles[&br_idx].get("sentinel").map(String::as_str), Some("kept"),
+            "the rebuilt segment entry does not replace the kept own entry");
+        assert_eq!(styles[&br_idx].get("color").map(String::as_str), Some("rgb(255, 0, 0)"));
     }
 
     /// Lays `html` out, applies `mutate` to the document, re-cascades `dirty` (an id)
