@@ -115,6 +115,29 @@ pub(crate) fn url_parse_native(href: String, base: Option<String>) -> Option<JsV
     Some(url_to_js_object(&url))
 }
 
+/// `_lumen_url_resolve_doc(href, base?)` — «encoding parse a URL» (HTML LS
+/// §2.1, BUG-1775): the same resolution as [`url_parse_native`]'s, but the
+/// query's non-ASCII code points are percent-encoded with the DOCUMENT's
+/// encoding (`character_set`) instead of always UTF-8 — the resolution every
+/// document-sourced URL uses (IDL reflection of `href`/`src`/…,
+/// `location`-навигация), while `new URL()` keeps the plain UTF-8
+/// [`url_parse_native`]. Returns just the resolved href string (`None` on a
+/// parse failure — the JS wrapper falls back to `_url_resolve`'s
+/// return-input-unchanged semantics then).
+pub(crate) fn url_resolve_doc_native(character_set: &str, href: &str, base: Option<&str>) -> Option<String> {
+    let enc = lumen_encoding::Encoding::from_label(character_set)
+        .unwrap_or(lumen_encoding::Encoding::Utf8);
+    let href = lumen_encoding::encode_url_query(href, enc);
+    match base {
+        Some(base) if !base.is_empty() => {
+            let base_url = Url::parse(base).ok()?;
+            base_url.resolve(&href).ok()
+        }
+        _ => Url::parse(&href).ok(),
+    }
+    .map(|u| u.href_whatwg().to_string())
+}
+
 /// Registers `_lumen_url_parse` on `rt` — called from both the page
 /// (`V8JsRuntime::install_dom`, via [`crate::v8_runtime::install::install_url_parse`])
 /// and every worker flavour (`install_worker_exposed_v8`), the same way
@@ -226,5 +249,38 @@ mod tests {
     fn embedded_tab_and_newline_are_stripped() {
         let obj = url_parse_native("http://exa\tmple.\norg/".to_string(), None).unwrap();
         assert_eq!(s(field(&obj, "hostname")), "example.org");
+    }
+
+    #[test]
+    fn doc_url_resolution_encodes_query_with_document_encoding() {
+        // BUG-1775 / attributes.sub.html?encoding=windows-1252: `url("?ÿ")`
+        // отражается как `<base>?%FF`, а не как UTF-8 `?%C3%BF`.
+        assert_eq!(
+            url_resolve_doc_native("windows-1252", "?ÿ", Some("https://example.com/p")).unwrap(),
+            "https://example.com/p?%FF",
+        );
+        // windows-1251: непредставимый `ÿ` идёт numeric character reference.
+        assert_eq!(
+            url_resolve_doc_native("windows-1251", "?ÿ", Some("https://example.com/p")).unwrap(),
+            "https://example.com/p?%26%23255%3B",
+        );
+        // UTF-8 документ — та же семантика, что у `new URL`.
+        assert_eq!(
+            url_resolve_doc_native("utf-8", "?ÿ", Some("https://example.com/p")).unwrap(),
+            "https://example.com/p?%C3%BF",
+        );
+        // Неизвестная метка кодировки от документа трактуется как UTF-8.
+        assert_eq!(
+            url_resolve_doc_native("not-a-charset", "?ÿ", Some("https://example.com/p")).unwrap(),
+            "https://example.com/p?%C3%BF",
+        );
+        // Уже процент-кодированный query не перекодируется (idempotence of
+        // re-resolving an already-resolved absolute URL).
+        assert_eq!(
+            url_resolve_doc_native("windows-1252", "https://example.com/p?%FF", Some("https://example.com/p")).unwrap(),
+            "https://example.com/p?%FF",
+        );
+        // Битая база — None, как у url_parse_native.
+        assert!(url_resolve_doc_native("windows-1252", "?ÿ", Some("not a url")).is_none());
     }
 }

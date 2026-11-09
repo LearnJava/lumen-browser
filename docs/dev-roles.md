@@ -204,7 +204,10 @@ ROADMAP.md (one line per task, status ≠ done)   ← master task list for P1/P2
   (all `STATUS-P*.md` files at once; sources you did not touch are skipped). Run it **once, before the
   commit** — it assumes the pointers were correct at `--base`, so a second run over already-fixed
   numbers would resolve them against the wrong anchors. It refuses to guess for a pointer whose bug
-  moved to the archive: that one is stale and its line must simply be deleted (protocol step 4).
+  moved to the archive: that one is stale and its line must simply be deleted (protocol step 4) —
+  delete it **after** the run, never before: the tool recovers each pointer's anchor from its line
+  content, so a pre-deleted line and a re-run over rewritten numbers both desynchronize the pool
+  (measured 2026-11-09, BUG-1775 close: pool lost two pointers and had to be rebuilt from HEAD).
   Manual arithmetic (`NN ≥ L → +K`) is still correct but was measured at 194 pointers for P3 alone.
 - **On completion:** delete the STATUS-PN.md line → delete (or `## Status: MERGED`) the task file →
   set `ROADMAP.md` status to `done` (run `python scripts/gen_roadmap.py`) → mark

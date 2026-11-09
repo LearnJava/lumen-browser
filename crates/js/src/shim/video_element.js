@@ -612,7 +612,7 @@
       } catch (e) { return Promise.reject(e); }
     }
     var abs = (typeof _url_resolve === 'function' && typeof _lumen_document_base_url === 'function')
-      ? _url_resolve(url, _lumen_document_base_url()) : url;
+      ? ((typeof _url_resolve_doc === 'function') ? _url_resolve_doc : _url_resolve)(url, _lumen_document_base_url()) : url;
     // GAP-CSPENF срез 17: `media-src` covers text tracks as well as video and
     // audio (CSP3 §6.1 «media-src»), so the same gate runs here — before the
     // `fetch()` below, so a blocked track never reaches the network. Only this
@@ -910,9 +910,13 @@
     // must still reach the honest `loadstart` → `error` pair instead of going
     // silent, which is the very defect BUG-825 is about.
     function resolveUrl(u) {
-      if (typeof _url_resolve === 'function' && typeof _lumen_document_base_url === 'function') {
+      // BUG-1775: a media element's src is an «encoding parse a URL» — the
+      // query percent-encodes with the DOCUMENT's encoding when the doc-parsing
+      // native is present (worker/plain fallbacks keep the UTF-8 resolver).
+      var resolver = (typeof _url_resolve_doc === 'function') ? _url_resolve_doc : _url_resolve;
+      if (typeof resolver === 'function' && typeof _lumen_document_base_url === 'function') {
         try {
-          var r = _url_resolve(u, _lumen_document_base_url());
+          var r = resolver(u, _lumen_document_base_url());
           if (r) return String(r);
         } catch (e) {}
       }

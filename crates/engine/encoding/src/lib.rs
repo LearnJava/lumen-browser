@@ -131,6 +131,82 @@ impl Encoding {
             _ => None,
         }
     }
+
+    /// Таблица старшей половины (0x80–0xFF) однобайтной кодировки —
+    /// инверсия декодера для [`encode_byte`].
+    fn single_byte_table(self) -> Option<&'static [char; 128]> {
+        match self {
+            Self::Windows1251 => Some(&crate::tables::WIN1251),
+            Self::Windows1252 => Some(&crate::tables::WIN1252),
+            Self::Koi8R => Some(&crate::tables::KOI8_R),
+            Self::Cp866 => Some(&crate::tables::CP866),
+            _ => None,
+        }
+    }
+}
+
+/// Байт, в который `enc` кодирует кодпойнт `c`, — прямой для ASCII и первый
+/// обратный индекс таблицы для старшей половины (WHATWG Encoding §4 «index of
+/// a code point» берёт именно первый). `None` — кодпойнт в `enc` не
+/// представим: плейсхолдеры U+FFFD неопределённых позиций не считаются
+/// представимыми, чтобы U+FFFD всегда шёл по пути numeric character reference
+/// (URL Standard §1.5). Энкодер существует только ради URL-query (BUG-1775):
+/// TextEncoder по спецификации всегда UTF-8 и этой функцией не пользуется.
+#[must_use]
+pub fn encode_byte(enc: Encoding, c: char) -> Option<u8> {
+    if (c as u32) < 0x80 {
+        return Some(c as u8);
+    }
+    let table = enc.single_byte_table()?;
+    table
+        .iter()
+        .position(|&t| t == c && c != '\u{FFFD}')
+        .map(|i| i as u8 + 0x80)
+}
+
+/// HTML LS §2.1 «encoding parse a URL» + URL Standard §4.2 (query state):
+/// не-ASCII кодпойнты query резолвимого URL кодируются кодировкой ДОКУМЕНТА,
+/// а не всегда UTF-8. Кодпойнт, который кодировка не может представить,
+/// записывается своим numeric character reference (`&#N;`), сам
+/// процент-кодированным (URL §1.5 «percent-encode after encoding», шаг
+/// encoder error) — так `ÿ` в документе windows-1251 даёт `%26%23255%3B`,
+/// а U+FFFD в windows-1252 — `%26%2365533%3B` (BUG-1775).
+///
+/// Это пред-кодирование входной строки ДО url-парсера: готовые `%XX`
+/// последовательности — ASCII — не трогаются (парсер не раскрывает их),
+/// не-ASCII вне query (хост, путь, фрагмент) тоже — их кодирует сам парсер
+/// как UTF-8, как требует стандарт. UTF-8/16/32 и так дают UTF-8 query
+/// (HTML подставляет UTF-8 вместо UTF-16 для URL), поэтому возвращается
+/// вход без изменений.
+#[must_use]
+pub fn encode_url_query(href: &str, enc: Encoding) -> String {
+    if enc.single_byte_table().is_none() {
+        return href.to_string();
+    }
+    // Query открывает первый '?', не лежащий внутри фрагмента (`page#f?x` —
+    // '?' принадлежит фрагменту, кодируется парсером как UTF-8).
+    let Some(q) = href.find('?') else {
+        return href.to_string();
+    };
+    if href.find('#').is_some_and(|h| h < q) {
+        return href.to_string();
+    }
+    let (head, rest) = href.split_at(q + 1); // head включает '?'
+    let end = rest.find('#').unwrap_or(rest.len());
+    let (query, tail) = rest.split_at(end);
+    let mut out = String::with_capacity(href.len());
+    out.push_str(head);
+    for c in query.chars() {
+        if c.is_ascii() {
+            out.push(c);
+        } else if let Some(b) = encode_byte(enc, c) {
+            out.push_str(&format!("%{b:02X}"));
+        } else {
+            out.push_str(&format!("%26%23{}%3B", c as u32));
+        }
+    }
+    out.push_str(tail);
+    out
 }
 
 #[cfg(test)]
@@ -148,5 +224,42 @@ mod tests {
         }
         assert_eq!(Encoding::Windows1252.name(), "windows-1252");
         assert_eq!(Encoding::Windows1252.canonical_name(), "windows-1252");
+    }
+
+    #[test]
+    fn encode_byte_uses_first_index_and_skips_fffd() {
+        // Прямое соответствие ASCII и высоких позиций обеих 125x.
+        assert_eq!(super::encode_byte(Encoding::Windows1252, 'a'), Some(b'a'));
+        assert_eq!(super::encode_byte(Encoding::Windows1252, 'ÿ'), Some(0xFF));
+        assert_eq!(super::encode_byte(Encoding::Windows1251, 'ё'), Some(0xB8));
+        // ÿ нет в windows-1251 → numeric character reference.
+        assert_eq!(super::encode_byte(Encoding::Windows1251, 'ÿ'), None);
+        // U+FFFD не представим ни в одной таблице (плейсхолдер не считается).
+        assert_eq!(super::encode_byte(Encoding::Windows1252, '\u{FFFD}'), None);
+        // Многобайтные семейства не имеют однобайтного энкодера.
+        assert_eq!(super::encode_byte(Encoding::Utf8, 'ÿ'), None);
+    }
+
+    #[test]
+    fn url_query_encoding_matches_wpt_expectations() {
+        use super::encode_url_query;
+        // attributes.sub.html?encoding=windows-1252: `?ÿ` → `?%FF`.
+        assert_eq!(encode_url_query("?ÿ", Encoding::Windows1252), "?%FF");
+        // windows-1251 (x-cp1251 вариант): `ÿ` → numeric character reference.
+        assert_eq!(encode_url_query("?ÿ", Encoding::Windows1251), "?%26%23255%3B");
+        // lone-surrogates.sub.html: U+FFFD в windows-1252 → `&#65533;` в %-виде.
+        assert_eq!(encode_url_query("?\u{FFFD}", Encoding::Windows1252), "?%26%2365533%3B");
+        // UTF-8 документ — пред-кодирование не нужно, строку не трогаем.
+        assert_eq!(encode_url_query("?ÿ", Encoding::Utf8), "?ÿ");
+        // Готовые %-последовательности (ASCII) не перекодируются; не-query
+        // части (путь до '?', фрагмент после '#') остаются на url-парсере.
+        assert_eq!(
+            encode_url_query("/п?%41ÿ#ÿ", Encoding::Windows1252),
+            "/п?%41%FF#ÿ",
+        );
+        // Без '?' запроса нет — строка не меняется.
+        assert_eq!(encode_url_query("/ÿ", Encoding::Windows1252), "/ÿ");
+        // '?' внутри фрагмента не открывает query — фрагмент кодирует парсер.
+        assert_eq!( encode_url_query("p#f?ÿ", Encoding::Windows1252), "p#f?ÿ");
     }
 }

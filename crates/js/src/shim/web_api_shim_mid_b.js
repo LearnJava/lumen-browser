@@ -249,8 +249,13 @@ function _lumen_set_location_hash(v) {
 function _lumen_navigate_or_fragment(rawUrl, replace) {
     var url = String(rawUrl || '');
     var resolved = null;
+    // BUG-1775: navigation is an «encoding parse a URL» — the query
+    // percent-encodes with the DOCUMENT's encoding (`location.href = '?ÿ'` on
+    // a windows-1252 page navigates to `…?%FF`). Callers that already pass a
+    // resolved href (the `<a>` activation behaviour's `el.href`) are
+    // unaffected: their escapes are ASCII and pass through untouched.
     try {
-        resolved = new URL(url, _lumen_loc_href).href;
+        resolved = _url_resolve_doc(url, _lumen_loc_href);
     } catch (e) {
         resolved = null;
     }

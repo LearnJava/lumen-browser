@@ -177,6 +177,25 @@ function _url_resolve(href, base) {
     // that already looked absolute (regex short-circuit, no base needed).
     return p ? p.href : href;
 }
+// «Encoding parse a URL» (HTML LS §2.1, BUG-1775): the same resolution, but
+// the query's non-ASCII code points percent-encode with the DOCUMENT's
+// encoding (`?ÿ` on a windows-1252 page → `?%FF`, not the UTF-8 `?%C3%BF`;
+// an unencodable code point goes as its numeric character reference). Every
+// document-sourced resolution — URL-attribute IDL reflection (`_lumen_reflect_url`),
+// `location` navigation — must go through here; `new URL()` and `fetch()`'s own
+// resolution stay on plain `_url_resolve` (the URL constructor is always UTF-8
+// by spec). The native `_lumen_url_resolve_doc` exists only in the page scope
+// (it reads `Document::characterSet`); workers have no document encoding and
+// keep the UTF-8 path.
+function _url_resolve_doc(href, base) {
+    href = String(href || '');
+    if (href === '') return String(base || '');
+    if (typeof _lumen_url_resolve_doc === 'function') {
+        var r = _lumen_url_resolve_doc(href, base !== undefined && base !== null ? String(base) : undefined);
+        if (r !== null && r !== undefined) return r;
+    }
+    return _url_resolve(href, base);
+}
 // Implementation slots of a URL object. They are defined non-enumerable so a
 // page walking the object (`for…in`, `Object.keys`) sees only the WebIDL
 // attributes, which live on the prototype (BUG-375 §5).

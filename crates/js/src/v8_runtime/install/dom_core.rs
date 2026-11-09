@@ -196,6 +196,17 @@ pub(crate) fn install_document_meta(
         reg!(scope, ctx, store, "_lumen_get_document_character_set", move || -> String {
             d.lock().unwrap().character_set().to_string()
         });
+        // BUG-1775: «encoding parse a URL» — резолв относительного URL с
+        // кодированием query кодировкой ДОКУМЕНТА (а не всегда UTF-8). Питается
+        // тем же `Document::character_set`, что и геттер выше; вызывается
+        // JS-обёрткой `_url_resolve_doc` (url_shim.js) для отражения URL-атрибутов
+        // и location-навигации. `new URL()` сознательно остаётся на чистом
+        // `_lumen_url_parse` — у конструктора кодировка всегда UTF-8.
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store, "_lumen_url_resolve_doc", move |href: String, base: Option<String>| -> Option<String> {
+            let charset = d.lock().unwrap().character_set().to_string();
+            crate::js_url::url_resolve_doc_native(&charset, &href, base.as_deref())
+        });
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store, "_lumen_get_document_content_type", move || -> String {
             d.lock().unwrap().content_type().to_string()
