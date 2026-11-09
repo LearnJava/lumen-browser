@@ -678,8 +678,9 @@ impl ComputedStyle {
             overscroll_behavior_y: OverscrollBehavior::Auto,
             overscroll_behavior_block: OverscrollBehavior::Auto,
             overscroll_behavior_inline: OverscrollBehavior::Auto,
-            // CSS Table — border-collapse and border-spacing are inherited (CSS Tables L2 §17.6).
-            border_collapse: inherited.border_collapse,
+            // CSS Table — border-spacing, empty-cells, caption-side are inherited (CSS 2.1 §17.6 / §17.4.1).
+            // border-collapse and table-layout are NOT inherited.
+            border_collapse: BorderCollapse::Separate,
             empty_cells: inherited.empty_cells,
             caption_side: inherited.caption_side,
             table_layout: TableLayout::Auto,
