@@ -1081,6 +1081,24 @@ pub(crate) fn install_canvas2d_bindings_v8(
         }),
     )?;
 
+    // ── drawElementImage (HTML-in-canvas, WICG) ─────────────────────────────────
+    rt.register_native(
+        "_lumen_canvas2d_draw_element_image",
+        into_v8_fn4(|dst_nid: u32, _element_nid: u32, _dx: f64, _dy: f64| {
+            // TODO: Implement drawElementImage - render element subtree to canvas
+            // This requires:
+            // 1. Find LayoutBox for element_nid
+            // 2. Build display list for element subtree
+            // 3. Render to offscreen bitmap
+            // 4. Draw bitmap to canvas at (dx, dy)
+            // For now, mark as dirty but don't draw (returns undefined)
+            with_canvas(dst_nid, |c| {
+                c.taint(); // Drawing from element taints canvas (cross-origin potential)
+            });
+            mark_dirty(dst_nid);
+        }),
+    )?;
+
     // ── ImageData ────────────────────────────────────────────────────────────
     rt.register_native(
         "_lumen_canvas2d_put_image_data",

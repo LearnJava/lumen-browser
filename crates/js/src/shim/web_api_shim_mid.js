@@ -7567,6 +7567,15 @@ _lumen_c2d_method('drawImage', function(image, a, b, c, d, e, f, g, h) {
         }
     }
 });
+// drawElementImage(element, dx, dy) — HTML-in-canvas (WICG)
+// Source is a DOM element (has __nid__), not a canvas/img.
+_lumen_c2d_method('drawElementImage', function(element, dx, dy) {
+    var nid = _lumen_c2d(this, 'drawElementImage').nid;
+    if (!element || element.__nid__ === undefined) {
+        throw new TypeError("drawElementImage: argument 1 is not an Element");
+    }
+    _lumen_canvas2d_draw_element_image(nid, element.__nid__, +dx, +dy);
+});
 // Text
 _lumen_c2d_method('fillText', function(t, x, y) {
     _lumen_canvas2d_fill_text(_lumen_c2d(this, 'fillText').nid,
