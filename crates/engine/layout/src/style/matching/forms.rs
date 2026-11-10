@@ -883,13 +883,13 @@ fn matches_target_within(doc: &Document, node: NodeId) -> bool {
     }
     any_descendant(doc, node, |n| doc.get(n).get_attr("id") == Some(target))
 }
-
+ 
 /// `:dir(ltr|rtl)` (CSS Selectors L4 §13.2): совпадает с directionality
 /// элемента по HTML LS §3.2.6.1 — см. [`element_directionality`].
 fn matches_dir(doc: &Document, node: NodeId, want: DirArg) -> bool {
     element_directionality(doc, node) == want
 }
-
+ 
 /// Directionality элемента (HTML LS §3.2.6.1, BUG-1450):
 /// - `dir=ltr|rtl` (без учёта регистра) — это значение;
 /// - `dir=auto`, а также `<bdi>` без валидного `dir` — направление первого
@@ -898,6 +898,8 @@ fn matches_dir(doc: &Document, node: NodeId, want: DirArg) -> bool {
 /// - `<input type=tel>` без валидного `dir` — `ltr`, предка не спрашиваем;
 /// - иначе (нет `dir` или значение невалидно) — directionality родителя,
 ///   у корня `ltr`.
+///
+/// Для `<slot>` используется assigned nodes или host (HTML LS §3.2.6.1).
 fn element_directionality(doc: &Document, node: NodeId) -> DirArg {
     let mut cur = Some(node);
     while let Some(n) = cur {
@@ -907,7 +909,12 @@ fn element_directionality(doc: &Document, node: NodeId) -> DirArg {
             match node_ref.get_attr("dir").map(|v| v.trim().to_ascii_lowercase()).as_deref() {
                 Some("ltr") => return DirArg::Ltr,
                 Some("rtl") => return DirArg::Rtl,
-                Some("auto") => return auto_directionality(doc, n),
+                Some("auto") => {
+                    if tag == "slot" {
+                        return slot_element_directionality(doc, n);
+                    }
+                    return auto_directionality(doc, n);
+                }
                 _ if tag.eq_ignore_ascii_case("bdi") => return auto_directionality(doc, n),
                 _ if is_tel_input(doc, n) => return DirArg::Ltr,
                 _ => {}
@@ -917,7 +924,57 @@ fn element_directionality(doc: &Document, node: NodeId) -> DirArg {
     }
     DirArg::Ltr
 }
-
+ 
+/// Directionality for a slot element with dir=auto.
+/// Uses assigned nodes' directionality or host's directionality.
+fn slot_element_directionality(doc: &Document, slot: NodeId) -> DirArg {
+    // Find the shadow root containing this slot
+    let mut cur = Some(slot);
+    let mut shadow_root = None;
+    while let Some(n) = cur {
+        if matches!(doc.get(n).data, NodeData::ShadowRoot { .. }) {
+            shadow_root = Some(n);
+            break;
+        }
+        cur = doc.get(n).parent;
+    }
+    let Some(sr) = shadow_root else {
+        return DirArg::Ltr;
+    };
+    // Find the host of the shadow root
+    let Some(host) = doc.shadow_host_of(sr) else {
+        return DirArg::Ltr;
+    };
+    // Get the slot's name
+    let slot_name = doc.get(slot).get_attr("name").unwrap_or("").to_string();
+    // Find assigned nodes: light DOM children of host with matching slot attribute
+    for &child in &doc.get(host).children {
+        let child_slot = doc.get(child).get_attr("slot").unwrap_or("").to_string();
+        if child_slot == slot_name {
+            // Check this assigned node for strong directionality
+            if let Some(dir) = first_strong_direction(doc, child) {
+                return match dir {
+                    Direction::Ltr => DirArg::Ltr,
+                    Direction::Rtl => DirArg::Rtl,
+                };
+            }
+        }
+    }
+    // No assigned nodes with strong directionality -> use host's directionality
+    element_directionality(doc, host)
+}
+ 
+/// Check if element matches `:dir(ltr|rtl)` pseudo-class.
+/// Used by shim's element.matches() for :dir() pseudo-class.
+pub(in crate::style) fn element_matches_dir(doc: &Document, node: NodeId, dir: &str) -> bool {
+    let want = match dir.to_ascii_lowercase().as_str() {
+        "ltr" => DirArg::Ltr,
+        "rtl" => DirArg::Rtl,
+        _ => return false,
+    };
+    element_directionality(doc, node) == want
+}
+ 
 /// Направление «auto» (HTML LS §3.2.6.1 «auto directionality») для `n`.
 fn auto_directionality(doc: &Document, n: NodeId) -> DirArg {
     let found = if uses_value_for_dir(doc, n) {

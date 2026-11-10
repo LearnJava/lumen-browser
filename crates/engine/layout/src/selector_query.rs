@@ -24,8 +24,7 @@ use crate::style::{
     FlexBasis, FlexDirection, FlexWrap,
     ContainerType, Content, ContentItem, ContentVisibility,
     CssColor, CssContinue, ShapeOutside,
-    Cursor, Direction, Display, FillRule, FilterFn, FloatSide, ForcedColorAdjust, FontStretch,
-    FontStyle, FontWeight,
+    Cursor, Direction, Display, FillRule, FilterFn, FloatSide, ForcedColorAdjust, FontWeight,
     FontVariantCaps, FontVariantEmoji, FontVariantLigatures, FontVariantNumeric,
     FontVariantPosition, ImageRendering, InterpolateSizeMode, Isolation, IterationCount, Length,
     LengthOrAuto,
@@ -39,6 +38,7 @@ use crate::style::{
     TransformFn, UnicodeBidi, VerticalAlign, Visibility, WebkitBoxAlign, WebkitBoxDirection, WebkitBoxOrient, WebkitBoxPack, WhiteSpace,
     WhiteSpaceCollapse, WritingMode,
     ComputedStyle,
+    FontStyle, FontStretch,
 };
 
 // ──────────────── LayoutBox extension methods ────────────────
@@ -483,7 +483,13 @@ pub fn matches_selector(doc: &Document, node: NodeId, sel: &str) -> bool {
     }
     node_matches(node, doc, &selectors)
 }
-
+ 
+/// Check if element matches `:dir(ltr|rtl)` pseudo-class.
+/// Used by shim's element.matches() for :dir() pseudo-class.
+pub fn element_matches_dir(doc: &Document, node: NodeId, dir: &str) -> bool {
+    crate::style::element_matches_dir(doc, node, dir)
+}
+ 
 // ──────────────── CSS computed style serialisation ────────────────
 
 /// Serialises a single CSS pixel value as a CSS string (`"16px"`, `"0px"`).

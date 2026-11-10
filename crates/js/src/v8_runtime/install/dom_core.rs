@@ -534,6 +534,19 @@ pub(crate) fn install_node_lookup(
                 })
             }
         );
+        // :dir() pseudo-class for shim's element.matches()
+        let d = Arc::clone(&doc);
+        let fnid = mirror.clone();
+        reg!(scope, ctx, store,
+            "_lumen_element_dir",
+            move |node_id: u32, dir: String| -> bool {
+                with_focus_state(&fnid, || {
+                    let doc = d.lock().unwrap();
+                    let nid = NodeId::from_raw(node_id);
+                    lumen_layout::element_matches_dir(&doc, nid, &dir)
+                })
+            }
+        );
         // DOM LS §4.2.6: `Element`/`DocumentFragment`/`ShadowRoot` querySelector(All)
         // must search only the calling node's descendants, not the whole document
         // (found while diagnosing P2-wpt S4 — `document.querySelectorAll` above was

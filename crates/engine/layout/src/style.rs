@@ -382,6 +382,12 @@ pub(in crate::style) use matching::matches_simple;
 use matching::{complex_has_host, matches_slotted_complex};
 pub(in crate::style) use matching::matches_part_complex;
 
+/// Check if element matches `:dir(ltr|rtl)` pseudo-class.
+/// Used by shim's element.matches() for :dir() pseudo-class.
+pub fn element_matches_dir(doc: &lumen_dom::Document, node: lumen_dom::NodeId, dir: &str) -> bool {
+    matching::forms::element_matches_dir(doc, node, dir)
+}
+
 // SPLIT-ST11. UA-таблица (`style::ua`), презентационные HTML-атрибуты
 // (`style::presentational`), quirks-режим (`style::quirks`) и шрифтовые
 // парсеры (`style::parse::font`) уехали из этого файла; вызыватели в этом

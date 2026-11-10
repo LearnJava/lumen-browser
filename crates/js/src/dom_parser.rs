@@ -1032,7 +1032,17 @@ function _vMatchSimple(node, sel) {
       notSels.push(sel.slice(ns, i));
       if (sel[i] === ')') i++;
     } else if (c === ':') {
-      // Skip pseudo-classes/elements
+      // Handle :dir(ltr) and :dir(rtl) pseudo-classes
+      if (sel.slice(i, i + 7) === ':dir(ltr)' || sel.slice(i, i + 7) === ':dir(rtl)') {
+        var dir = sel.slice(i + 5, i + 8); // "ltr" or "rtl"
+        i += 8; // skip ":dir(ltr)" or ":dir(rtl)"
+        // Call native function to check :dir()
+        if (node.__nid__ !== undefined) {
+          return _lumen_element_dir(node.__nid__, dir);
+        }
+        return false;
+      }
+      // Skip other pseudo-classes/elements
       i++;
       while (i < sel.length && /[a-zA-Z\-]/.test(sel[i])) i++;
       if (i < sel.length && sel[i] === '(') {
