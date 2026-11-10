@@ -413,7 +413,7 @@ use quirks::{apply_quirks_html_height, apply_quirks_line_height, apply_quirks_ta
 use ua::{
     apply_ua_block_margins, snapshot_ua_block_box, swap_ua_block_box_for_vertical, apply_ua_body_margin, apply_ua_dialog_display, apply_ua_fieldset_style, read_ua_fieldset_fields, redo_ua_fieldset_for_writing_mode, parse_writing_mode, apply_ua_form_controls,
     apply_ua_form_controls_field_sizing_clear, apply_ua_heading_style, apply_ua_hidden,
-    apply_ua_hr_style, apply_ua_inert_important, apply_ua_interactivity, apply_ua_list, apply_ua_slot, apply_ua_table_cell_padding,
+    apply_ua_hr_style, apply_ua_inert_important, apply_ua_interactivity, apply_ua_list, apply_ua_slot, apply_ua_table_cell_padding, apply_ua_table_styles,
     apply_ua_text_decoration, apply_ua_vtt,
     default_display, is_appearance_disabling_property, is_disableable_widget,
     strip_ua_appearance_box_styling, ua_font_family, ua_font_size_factor,

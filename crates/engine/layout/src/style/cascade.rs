@@ -33,7 +33,7 @@ use crate::style::{
     apply_quirks_line_height, apply_quirks_table_reset, apply_svg_presentational_hints,
     apply_table_cell_width_hint, apply_text_color_presentational_hint, apply_ua_body_margin,
     apply_ua_dialog_display, apply_ua_fieldset_style, read_ua_fieldset_fields, redo_ua_fieldset_for_writing_mode, parse_writing_mode, apply_ua_form_controls, apply_ua_form_controls_field_sizing_clear,
-    apply_ua_block_margins, snapshot_ua_block_box, swap_ua_block_box_for_vertical, apply_ua_heading_style, apply_ua_hidden, apply_ua_hr_style, apply_ua_inert_important, apply_ua_interactivity, apply_ua_list, apply_ua_slot, apply_ua_table_cell_padding,
+    apply_ua_block_margins, snapshot_ua_block_box, swap_ua_block_box_for_vertical, apply_ua_heading_style, apply_ua_hidden, apply_ua_hr_style, apply_ua_inert_important, apply_ua_interactivity, apply_ua_list, apply_ua_slot, apply_ua_table_cell_padding, apply_ua_table_styles,
     apply_ua_vtt,
     apply_ua_text_decoration, apply_webkit_scrollbar_pseudos, coerce_overflow_axes,
     complex_has_host, default_display, ensure_cascade_index, expand_attr_val,
@@ -384,6 +384,9 @@ pub(crate) fn compute_style_shareable(
     // UA stylesheet: <td>/<th> → padding: 1px (HTML Rendering §15.3.8); the
     // ancestor <table cellpadding=N> overrides it. Author `padding` wins.
     apply_ua_table_cell_padding(doc, node, &mut style);
+    // UA stylesheet: <table> → border-spacing: 2px, box-sizing: border-box,
+    // border-collapse: separate, text-indent: 0 (HTML Rendering §15.3.2/§15.3.8).
+    apply_ua_table_styles(doc, node, &mut style);
     // UA stylesheet (CSS UI L4 §6.4): `dialog:modal`, `:fullscreen` { interactivity: auto }.
     // Pre-cascade UA phase, so an author `interactivity` wins. The `[inert]` rule
     // is `!important` and runs after the cascade (`apply_ua_inert_important`).

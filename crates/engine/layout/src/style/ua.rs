@@ -11,7 +11,7 @@
 use lumen_dom::{Document, NodeData, NodeId};
 
 use crate::style::{
-    BorderStyle, Color, ComputedStyle, ContentVisibility, CssColor, Display, FontStyle,
+    BorderStyle, BoxSizing, Color, ComputedStyle, ContentVisibility, CssColor, Display, FontStyle,
     FontWeight, Length, LengthOrAuto, ListStyleType, TextAlign, VerticalAlign, WhiteSpace, WritingMode,
 };
 use crate::style::AlignValue;
@@ -880,6 +880,24 @@ pub(in crate::style) fn apply_ua_table_cell_padding(doc: &Document, node: NodeId
     style.padding_right = Length::Px(pad);
     style.padding_bottom = Length::Px(pad);
     style.padding_left = Length::Px(pad);
+}
+/// UA stylesheet (HTML Rendering §15.3.2 / §15.3.8): `<table>` default styles.
+/// `border-spacing: 2px`, `box-sizing: border-box`, `border-collapse: separate`,
+/// `text-indent: 0`. Applied pre-cascade so author CSS wins.
+pub(in crate::style) fn apply_ua_table_styles(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let node_ref = doc.get(node);
+    let NodeData::Element { name, .. } = &node_ref.data else { return };
+    if name.local.as_str() != "table" {
+        return;
+    }
+    // HTML spec default: border-spacing: 2px
+    style.border_spacing_h = 2.0;
+    style.border_spacing_v = 2.0;
+    // HTML spec default: box-sizing: border-box
+    style.box_sizing = BoxSizing::BorderBox;
+    // HTML spec default: border-collapse: separate (already default in ComputedStyle::initial)
+    // HTML spec default: text-indent: 0 (reset from parent)
+    style.text_indent = Length::Px(0.0);
 }
 /// UA stylesheet (HTML LS §3.2.6.2 / Rendering §hiddenCSS): the `hidden`
 /// attribute's presentational effect.
