@@ -503,12 +503,15 @@ pub(crate) fn compute_style_shareable(
         if imp { -layer_idx } else { layer_idx }
     };
     // Second sort field: encapsulation context, then the `style` attribute bit
-    // (CSS Cascade L5 §6.1: context precedes element-attached styles). `depth` is the
-    // shadow-tree depth of the sheet the declaration came from (document 0, a shadow
-    // tree 1 + depth of its host's tree). Normal declarations: the OUTER context wins
-    // (higher rank for smaller depth); `!important`: the INNER one wins.
+    // (CSS Cascade L5 §6.1: context precedes element-attached styles).
+    // Normal declarations: INNER context wins (higher rank for larger depth).
+    // `!important` declarations: OUTER context wins (higher rank for smaller depth).
     let cx = |imp: bool, depth: u32, inline: bool| -> u32 {
-        let rank = if imp { depth.min(CTX_MAX) } else { CTX_MAX - depth.min(CTX_MAX) };
+        let rank = if imp {
+            CTX_MAX - depth.min(CTX_MAX)
+        } else {
+            depth.min(CTX_MAX)
+        };
         rank * 2 + u32::from(inline)
     };
     // (important, is_inline, layer_priority, specificity, rule_idx, decl_idx,
@@ -749,13 +752,11 @@ pub(crate) fn compute_style_shareable(
     // into `matched` outlive the (closure-scoped) thread-local borrow.
     let any_shadow = SHADOW_SHEETS.with(|c| !c.borrow().is_empty());
     let node_depth = if doc.has_author_shadow_roots() { shadow_tree_depth(doc, node) } else { 0 };
-    // CSS Scoping L1 §3.1: a document rule never reaches into a shadow tree. Everything
-    // pushed so far came from the document sheet, so an element inside a shadow tree
-    // drops it; only that tree's own sheet, `::part()` rules of the outer trees and the
-    // `style` attribute apply to it below.
-    if node_depth > 0 {
-        matched.clear();
-    }
+    // CSS Scoping L1 §3.1: encapsulation context is expressed in the cascade
+    // sort key (the `cx` field below). Document rules (depth 0) lose to inner
+    // tree normal declarations (depth > 0) and win for `!important`. We no
+    // longer clear `matched` here — the sort key handles scoping correctly,
+    // and UA rules (normal, depth 0) naturally apply to shadow trees per spec.
     let own_shadow: Option<Arc<Stylesheet>> = if any_shadow && doc.is_shadow_host(node) {
         SHADOW_SHEETS.with(|c| c.borrow().get(&node).cloned())
     } else {

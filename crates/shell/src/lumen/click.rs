@@ -612,6 +612,27 @@ impl Lumen {
                 mod_flags,
                 self.click_streak.count(),
             );
+            // If the hit node is a <label> with a labeled control, also dispatch
+            // a click event on the labeled control (HTML LS §4.10.4).
+            if let (Some(result), Some(src)) = (hit_result.as_ref(), self.layout_source.as_ref()) {
+                let doc = src.document.lock().unwrap();
+                if doc.get(result.node).element_name().map(|q| q.local.as_str()) == Some("label") {
+                    if let Some(control) = forms::labeled_control(&doc, result.node) {
+                        if control != result.node {
+                            drop(doc);
+                            let script = format!(
+                                "_lumen_dispatch_mouse_event({}, 'click', {}, {}, 0, 1, {}, {})",
+                                control.index(),
+                                x_css as i32,
+                                y_css as i32,
+                                mod_flags,
+                                self.click_streak.count(),
+                            );
+                            route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
+                        }
+                    }
+                }
+            }
             // ADR-016 M2.2c-2d (10): read-after-eval click dispatch — сам
             // `_lumen_dispatch_mouse_event('click', …)` уходит fire-and-forget через
             // `route_eval_js`, а последующий `take_navigate_request` (навигация, что

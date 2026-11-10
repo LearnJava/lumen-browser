@@ -127,7 +127,7 @@ fn activation_target(doc: &Document, node: NodeId) -> Option<NodeId> {
 /// else its first labelable descendant in tree order. A label whose `for` names
 /// a non-labelable element (or nothing) has no control at all, and per spec that
 /// is not a fallback to the descendant search.
-fn labeled_control(doc: &Document, label: NodeId) -> Option<NodeId> {
+pub fn labeled_control(doc: &Document, label: NodeId) -> Option<NodeId> {
     let is_labelable = |id: NodeId| {
         doc.get(id)
             .element_name()
