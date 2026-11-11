@@ -374,7 +374,9 @@ pub(in crate::style) fn apply_font_element_presentational_hints(
 /// направление по первому сильному символу текста элемента (UAX #9 P2/P3,
 /// пусто → `ltr`) + `isolate`. Hint применяется ДО CSS-каскада — author
 /// `direction`/`unicode-bidi` перекроет. Неизвестное значение `dir` игнорируется.
-/// Для `<slot dir=auto>` направление определяется по assigned nodes (HTML LS §3.2.6.1).
+/// Для `<slot dir=auto>` направление определяется по assigned nodes (HTML LS §3.2.6.1):
+/// если есть assigned nodes с сильной направленностью — используем её;
+/// иначе используем направление host'а (не flat-tree parent).
 pub(in crate::style) fn apply_dir_presentational_hint(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
     let NodeData::Element { name, .. } = &doc.get(node).data else {
         return;
@@ -386,7 +388,13 @@ pub(in crate::style) fn apply_dir_presentational_hint(doc: &Document, node: Node
         Some("rtl") => Direction::Rtl,
         Some("auto") => {
             if is_slot {
-                slot_auto_directionality(doc, node)
+                // For slot[dir=auto]: use assigned nodes' directionality if any have strong direction;
+                // otherwise use host's directionality (HTML LS §3.2.6.1).
+                if let Some(assigned_dir) = slot_assigned_directionality(doc, node) {
+                    assigned_dir
+                } else {
+                    slot_host_directionality(doc, node).unwrap_or(Direction::Ltr)
+                }
             } else {
                 first_strong_direction(doc, node).unwrap_or(Direction::Ltr)
             }
@@ -397,6 +405,53 @@ pub(in crate::style) fn apply_dir_presentational_hint(doc: &Document, node: Node
     };
     style.direction = dir;
     style.unicode_bidi = if name.local == "bdo" { UnicodeBidi::IsolateOverride } else { UnicodeBidi::Isolate };
+}
+
+/// Returns `Some(Direction)` if the slot has assigned nodes with strong directionality,
+/// `None` otherwise.
+fn slot_assigned_directionality(doc: &Document, slot: NodeId) -> Option<Direction> {
+    // Find the shadow root containing this slot
+    let mut cur = Some(slot);
+    let mut shadow_root = None;
+    while let Some(n) = cur {
+        if matches!(doc.get(n).data, NodeData::ShadowRoot { .. }) {
+            shadow_root = Some(n);
+            break;
+        }
+        cur = doc.get(n).parent;
+    }
+    let sr = shadow_root?;
+    // Find the host of the shadow root
+    let host = doc.shadow_host_of(sr)?;
+    // Get the slot's name
+    let slot_name = doc.get(slot).get_attr("name").unwrap_or("").to_string();
+    // Find assigned nodes: light DOM children of host with matching slot attribute
+    for &child in &doc.get(host).children {
+        let child_slot = doc.get(child).get_attr("slot").unwrap_or("").to_string();
+        if child_slot == slot_name {
+            // Check this assigned node for strong directionality
+            if let Some(dir) = first_strong_direction(doc, child) {
+                return Some(dir);
+            }
+        }
+    }
+    None
+}
+
+/// Returns the host's directionality for a slot element.
+fn slot_host_directionality(doc: &Document, slot: NodeId) -> Option<Direction> {
+    let mut cur = Some(slot);
+    let mut shadow_root = None;
+    while let Some(n) = cur {
+        if matches!(doc.get(n).data, NodeData::ShadowRoot { .. }) {
+            shadow_root = Some(n);
+            break;
+        }
+        cur = doc.get(n).parent;
+    }
+    let sr = shadow_root?;
+    let host = doc.shadow_host_of(sr)?;
+    Some(element_directionality(doc, host))
 }
 
 /// HTML LS §3.2.6.1: для `<slot dir=auto>` направление определяется по
