@@ -127,6 +127,7 @@ pub(in crate::style) use cascade_index::{
     reset_scrollbar_pseudo_cascades, scrollbar_pseudo_cascades, CASCADE_INDEX_SLOTS,
     PSEUDO_BASE_BUILDS, SCROLLBAR_PSEUDO_CASCADES,
 };
+pub(crate) use presentational::slot_assigned_directionality;
 // `NodeData` перестала быть нужна производственному `style.rs` вместе с
 // `compute_style`, но её по-прежнему читают `style::tests::{color,restyle}`
 // через `use super::*` — отсюда `cfg`-импорт (тот же приём, что у
