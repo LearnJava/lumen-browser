@@ -628,7 +628,13 @@ impl Lumen {
                                 mod_flags,
                                 self.click_streak.count(),
                             );
-                            route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
+                            // Use route_query_js to make the dispatch synchronous
+                            // so WebDriver click action waits for it to complete.
+                            let _ = route_query_js(
+                                self.engine_thread.as_ref(),
+                                self.js_ctx.as_ref(),
+                                move |j| j.eval_js_value(&script),
+                            );
                         }
                     }
                 }
