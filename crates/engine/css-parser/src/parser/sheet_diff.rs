@@ -1,4 +1,4 @@
-//! BUG-935 срез 64/93 — what separates two versions of the cascade sheet.
+//! BUG-935 срез 64/93, BUG-1800 — what separates two versions of the cascade sheet.
 //!
 //! A page that inserts a `<style>` (CSS-in-JS, an ad widget) or a shell that merges a
 //! just-loaded stylesheet into the base one gives the next flush a sheet that differs
@@ -16,9 +16,9 @@ use super::{Rule, Stylesheet};
 impl Stylesheet {
     /// The style rules whose presence or place in the cascade differs between `self` (the
     /// older sheet) and `newer` — added, removed, or moved relative to the others — taken
-    /// from the plain rules (`Self::rules`) and from the `@media`/`@supports` blocks (a block
-    /// that differs contributes every rule inside it). `None` when the two differ in
-    /// anything else (`@layer`, `@property`, `@scope`, `@container`, …): then the effect of
+    /// from the plain rules (`Self::rules`) and from the `@media`/`@supports`/`@container`
+    /// blocks (a block that differs contributes every rule inside it). `None` when the two
+    /// differ in anything else (`@layer`, `@property`, `@scope`, …): then the effect of
     /// the change is not confined to the elements a rule selects, and the caller has to
     /// recascade it all.
     ///
@@ -33,6 +33,16 @@ impl Stylesheet {
     /// run is kept). An
     /// element that no returned rule selects therefore matches the same rules in the same
     /// order in both sheets, and cascades to the same style.
+    ///
+    /// BUG-1800: the same argument covers `@container` blocks, with one extra step. The
+    /// cascade never reads them (`compute_style` walks only `rules`/`media_rules`;
+    /// container rules are applied post-layout by `apply_container_styles`, which the
+    /// incremental path runs over the whole fresh tree anyway), and a block's condition
+    /// is evaluated against the container's size — unchanged between the basis and this
+    /// flush for every container outside the dirty roots, whose boxes were grafted as
+    /// clean. A `@container` change therefore only has to name the elements its inner
+    /// rules select as restyle roots: their boxes are rebuilt, and the container pass
+    /// applies the new sheet's rules to them over fresh cascade styles.
     ///
     /// `@font-face` and `@keyframes` do not take part: the cascade reads neither (fonts reach
     /// layout through the shell's registry, keyframes are sampled at animation-tick time from
@@ -50,6 +60,9 @@ impl Stylesheet {
             changed.extend(&block.rules);
         }
         for block in changed_items(&self.supports_rules, &newer.supports_rules) {
+            changed.extend(&block.rules);
+        }
+        for block in changed_items(&self.container_rules, &newer.container_rules) {
             changed.extend(&block.rules);
         }
         Some(changed)
@@ -78,7 +91,7 @@ impl Stylesheet {
             scope_rules,
             starting_style_rules,
             view_transition_rules,
-            container_rules,
+            container_rules: _,
             font_palette_values,
             color_profiles,
             function_rules,
@@ -103,7 +116,9 @@ impl Stylesheet {
         check("scope_rules", *scope_rules == other.scope_rules);
         check("starting_style_rules", *starting_style_rules == other.starting_style_rules);
         check("view_transition_rules", *view_transition_rules == other.view_transition_rules);
-        check("container_rules", *container_rules == other.container_rules);
+        // BUG-1800: `container_rules` left this list — the cascade never reads it (the
+        // rules are applied post-layout by `apply_container_styles`), so a difference is
+        // expressible through the changed blocks' inner rules instead of a full recascade.
         check("font_palette_values", *font_palette_values == other.font_palette_values);
         check("color_profiles", *color_profiles == other.color_profiles);
         check("function_rules", *function_rules == other.function_rules);
