@@ -42,6 +42,12 @@ pub const MAX_JS_TRANSFORMS: usize = 20;
 /// whole design system, only a cosmetic override (ADR-034 §4).
 pub const MAX_CSS_BYTES: usize = 4096;
 
+/// Protection shields a `protection` record may name (COMPAT-PACK-PROTECTION).
+/// Data, never code: an unknown name is rejected by [`CompatPack::validate`],
+/// the same rule as for engine flags. Only the ad-block filter blocks requests
+/// today, so the vocabulary is one name.
+pub const KNOWN_PROTECTIONS: &[&str] = &["adblock"];
+
 /// Upper bound on a pack document — it is network input until verified.
 pub const MAX_PACK_BYTES: usize = 1 << 20;
 const MAX_ENTRIES: usize = 2000;
@@ -315,6 +321,19 @@ impl CompatPack {
         Self::parse_signed(bytes, PACK_TRUSTED_KEYS, psl)
     }
 
+    /// The first active `protection` record whose `matches` cover `host`
+    /// (COMPAT-PACK-PROTECTION) — the only lookup a consumer (the filter gate)
+    /// may act on. `None` — no active record, the shields stay as the user set
+    /// them. Note the direction: the *source tab's* site asks here, so a record
+    /// for host A lifts blocking for A's requests and leaves every other tab
+    /// filtered.
+    #[must_use]
+    pub fn protection_for_host(&self, host: &str, policy: &CompatPolicy) -> Option<&CompatEntry> {
+        self.active_entries_for_host(host, policy)
+            .into_iter()
+            .find(|e| matches!(e.action, Action::Protection { .. }))
+    }
+
     /// The exact bytes [`Self::signature`] covers: every field but `signature`, through a
     /// dedicated struct so a field added to the wire type is signed only by a deliberate change.
     fn signing_body(&self) -> Vec<u8> {
@@ -555,6 +574,11 @@ fn validate_entry(e: &CompatEntry, index: usize, psl: &dyn PublicSuffixList) -> 
         && !lumen_core::engine_flags::EngineFlags::is_known(flag)
     {
         return bad("unknown engine flag (the vocabulary is lumen_core::engine_flags::KNOWN_ENGINE_FLAGS)");
+    }
+    if let Action::Protection { name } = &e.action
+        && !KNOWN_PROTECTIONS.contains(&name.as_str())
+    {
+        return bad("unknown protection (the vocabulary is compat_pack::KNOWN_PROTECTIONS)");
     }
     if e.root_cause.starts_with("engine-") {
         match e.engine_max.as_deref().map(Version::parse) {

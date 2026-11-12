@@ -15,6 +15,9 @@ pub struct AppliedFix {
     pub root_cause: String,
     /// `BUG-NNN` или `KB-NNN`, на который опирается запись.
     pub bug: String,
+    /// Machine name of the action (`css`, `protection`, …) — поповер щитов
+    /// показывает исключение защиты отдельным текстом (COMPAT-PACK-PROTECTION).
+    pub kind: String,
 }
 
 /// Записи пакета, применённые к `host` с учётом выбора пользователя, в порядке применения.
@@ -22,7 +25,7 @@ pub struct AppliedFix {
 pub fn applied_fixes(pack: &CompatPack, host: &str, policy: &CompatPolicy) -> Vec<AppliedFix> {
     pack.active_entries_for_host(host, policy)
         .into_iter()
-        .map(|e| AppliedFix { id: e.id.clone(), root_cause: e.root_cause.clone(), bug: e.bug.clone() })
+        .map(|e| AppliedFix { id: e.id.clone(), root_cause: e.root_cause.clone(), bug: e.bug.clone(), kind: e.action.kind().to_owned() })
         .collect()
 }
 
@@ -64,6 +67,8 @@ mod tests {
         let pack = pack(TWO_ENTRIES);
         let fixes = applied_fixes(&pack, "www.example.com", &CompatPolicy::default());
         assert_eq!(fixes.len(), 2);
+        assert_eq!(fixes[0].kind, "css");
+        assert_eq!(fixes[1].kind, "known_issue");
         let batch = console_batch(&fixes);
         assert_eq!(batch.len(), 2);
         assert!(batch[0].1.contains("a-css") && batch[0].1.contains("BUG-1"));

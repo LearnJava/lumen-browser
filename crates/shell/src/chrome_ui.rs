@@ -935,6 +935,11 @@ impl Lumen {
             popover_domain: self.shields.current_domain.clone().unwrap_or_default(),
             site_shields_on: self.shields.enabled_for_current(),
             compat_fixes: u32::try_from(self.compat_applied.len()).unwrap_or(u32::MAX),
+            // COMPAT-PACK-PROTECTION: the popover names the protection exception
+            // instead of the generic fix count when one is applied here.
+            compat_note: self.compat_applied.iter().find(|f| f.kind == "protection").map(|f| {
+                format!("Действует исключение защиты из списка совместимости ({})", f.id)
+            }),
             fix: self.fix_panel_model(),
             palette,
             cert,

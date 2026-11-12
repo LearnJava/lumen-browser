@@ -21,6 +21,21 @@ fn sync_compat_policy_mirror(policy: &CompatPolicy) {
     }
 }
 
+/// Паттерны записей `protection`, активных при этом выборе пользователя
+/// (COMPAT-PACK-PROTECTION) — для реестра исключений блокировщика в
+/// `lumen_network`. В отладочной сборке пакет не применяется — список пуст.
+fn protection_exempt_patterns(policy: &CompatPolicy) -> Vec<String> {
+    if cfg!(debug_assertions) {
+        return Vec::new();
+    }
+    let pack = CompatPack::base(&lumen_storage::PslProvider::new());
+    pack.entries
+        .iter()
+        .filter(|e| matches!(e.action, lumen_update_manifest::compat_pack::Action::Protection { .. }) && policy.is_entry_on(&e.id))
+        .flat_map(|e| e.matches.iter().cloned())
+        .collect()
+}
+
 /// Профиль записи `identity` для URL документа (COMPAT-PACK-IDENTITY, ADR-034
 /// §1): единственный источник для HTTP-клиентов страницы и её JS-рантайма,
 /// чтобы `User-Agent`/`Sec-CH-UA*` и `navigator.*` не разошлись. `None` —
@@ -52,6 +67,7 @@ impl Lumen {
             disabled: self.settings_store.compat_disabled_ids(),
         };
         sync_compat_policy_mirror(&policy);
+        lumen_network::install_protection_exempt_patterns(&protection_exempt_patterns(&policy));
         policy
     }
 
