@@ -289,6 +289,9 @@ impl Lumen {
                 let cookie_banner_dismiss = self.cookie_banner_dismiss;
                 let deterministic = self.deterministic;
                 let dark_mode = self.dark_mode;
+                // COMPAT-PACK-CSS: записи пакета для хоста документа — на UI-потоке,
+                // где живы настройки; дальше уезжает в рендер-поток как данные.
+                let compat_inject = self.compat_inject_for_base(&raw.base);
                 let proxy = self.load_proxy.clone();
                 let mut preload_dispatched = std::mem::take(&mut self.preload_dispatched);
                 let target = self.target_color_space();
@@ -347,6 +350,7 @@ impl Lumen {
                         raw.sync_xhr_permissions_policy,
                         raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(),
                         dynamic_image_hook_ctx,
+                        compat_inject,
                     )
                     .map_err(|e| e.to_string())
                     // ph3-tls-hardening, live-wiring slice: `render_bytes` doesn't
