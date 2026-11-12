@@ -14,6 +14,7 @@ pub mod capability;
 pub mod color;
 pub mod crash;
 pub mod deep_stack;
+pub mod engine_flags;
 pub mod error;
 pub mod event;
 pub mod ext;

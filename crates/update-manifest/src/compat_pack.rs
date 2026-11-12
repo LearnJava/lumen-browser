@@ -402,6 +402,21 @@ impl CompatPack {
     pub fn overdue(&self, today: &str) -> Vec<&CompatEntry> {
         self.entries.iter().filter(|e| e.review_by.as_str() < today).collect()
     }
+
+    /// Named engine flags switched on for `host` (lowercase ASCII) under the user's
+    /// [`CompatPolicy`] — the only lookup a consumer gates behaviour on. Each document
+    /// (top-level or iframe) asks with **its own** host, so a flag from a record for
+    /// host A is on in A's document and off in an iframe or tab of host B.
+    #[must_use]
+    pub fn engine_flags_for_host(&self, host: &str, policy: &CompatPolicy) -> lumen_core::engine_flags::EngineFlags {
+        let mut flags = lumen_core::engine_flags::EngineFlags::default();
+        for entry in self.active_entries_for_host(host, policy) {
+            if let Action::EngineFlag { flag } = &entry.action {
+                flags.enable(flag);
+            }
+        }
+        flags
+    }
 }
 
 /// The user's choice over the pack (`about:compat`, ADR-034 §4): the whole list off, or single
@@ -501,6 +516,11 @@ fn validate_entry(e: &CompatEntry, index: usize, psl: &dyn PublicSuffixList) -> 
     }
     if e.action.payloads().iter().any(|s| s.trim().is_empty()) {
         return bad("action payload is empty");
+    }
+    if let Action::EngineFlag { flag } = &e.action
+        && !lumen_core::engine_flags::EngineFlags::is_known(flag)
+    {
+        return bad("unknown engine flag (the vocabulary is lumen_core::engine_flags::KNOWN_ENGINE_FLAGS)");
     }
     if e.root_cause.starts_with("engine-") {
         match e.engine_max.as_deref().map(Version::parse) {
