@@ -257,6 +257,17 @@ fn invalid(entry: &CompatEntry, index: usize, reason: impl Into<String>) -> Pack
     PackError::Invalid { entry: name, reason: reason.into() }
 }
 
+impl From<IdentityProfile> for lumen_core::IdentityProfile {
+    fn from(p: IdentityProfile) -> Self {
+        match p {
+            IdentityProfile::ChromeLumen => Self::ChromeLumen,
+            IdentityProfile::ChromeUnbranded => Self::ChromeUnbranded,
+            IdentityProfile::ChromeBrandGoogle => Self::ChromeBrandGoogle,
+            IdentityProfile::FirefoxWin => Self::FirefoxWin,
+        }
+    }
+}
+
 impl CompatPack {
     /// The base copy compiled into the binary. Validated like any pack but not signed — the
     /// build is its trust anchor. A broken copy is a build defect (the unit test catches it),
@@ -399,6 +410,20 @@ impl CompatPack {
         let mut hits = self.entries_for_host(host);
         hits.retain(|e| !policy.is_entry_off(&e.id));
         hits
+    }
+
+    /// The identity profile switched on for `host` (lowercase ASCII) under the
+    /// user's [`CompatPolicy`] — the only lookup a consumer (HTTP headers, the
+    /// document's JS runtime) may act on; the HTTP `User-Agent`, `Sec-CH-UA*`
+    /// and `navigator.*` must all derive from this one profile (ADR-034 §1).
+    /// First matching record wins (`entries_for_host` order); `None` — no
+    /// active `identity` record, every layer keeps the process default.
+    #[must_use]
+    pub fn identity_for_host(&self, host: &str, policy: &CompatPolicy) -> Option<lumen_core::IdentityProfile> {
+        self.active_entries_for_host(host, policy).iter().find_map(|e| match &e.action {
+            Action::Identity { profile } => Some((*profile).into()),
+            _ => None,
+        })
     }
 
     /// Records whose `review_by` is before `today` (`YYYY-MM-DD`) — for the health metric and tooling.

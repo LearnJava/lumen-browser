@@ -49,7 +49,14 @@ pub(crate) fn global_user_agent_override() -> Option<String> {
 /// an own property exists (or there is no `Navigator`), otherwise redefine the
 /// prototype getter.
 pub fn user_agent_override_script(ua: &str) -> String {
-    let id = lumen_core::Identity::from_user_agent(ua);
+    identity_override_script(&lumen_core::Identity::from_user_agent(ua))
+}
+
+/// [`user_agent_override_script`] from a complete [`lumen_core::Identity`] —
+/// the per-document path (COMPAT-PACK-IDENTITY) passes the profile the pack
+/// selected, whose Client Hints brands (`chrome_brand_google`) are NOT a
+/// function of the UA string, so deriving from `ua` alone would lose them.
+pub fn identity_override_script(id: &lumen_core::Identity) -> String {
     let q = crate::navigator_bindings::json_string;
     let user_agent_data = match &id.ua_data {
         Some(d) => format!("put('userAgentData', {});", crate::ua_client_hints::ua_data_instance_expr(d)),

@@ -16,6 +16,9 @@ pub(crate) struct CompatInject {
     pub(crate) css: String,
     /// `(селектор, обязательный текст)` всех записей `hide_banner`.
     pub(crate) hide_banners: Vec<(String, String)>,
+    /// Профиль первой записи `identity` (COMPAT-PACK-IDENTITY): его
+    /// представляет весь документ — HTTP-клиенты страницы и JS-рантайм.
+    pub(crate) identity: Option<lumen_core::IdentityProfile>,
 }
 
 impl CompatInject {
@@ -35,6 +38,11 @@ impl CompatInject {
                 }
                 Action::HideBanner { selector, text } => {
                     inject.hide_banners.push((selector.clone(), text.clone()));
+                }
+                // Записи приходят отсортированными по ранку; первая запись
+                // identity и есть та, которую представляют слои документа.
+                Action::Identity { profile } if inject.identity.is_none() => {
+                    inject.identity = Some((*profile).into());
                 }
                 _ => {}
             }
@@ -206,5 +214,20 @@ mod tests {
         let inject = CompatInject::from_entries(&entries);
         assert_eq!(inject.css, "#t{color:red}\n");
         assert_eq!(inject.hide_banners, vec![("#ad".into(), "реклама".into())]);
+        assert_eq!(inject.identity, None);
+        // COMPAT-PACK-IDENTITY: первая запись identity задаёт профиль документа.
+        let with_id = CompatInject::from_entries(&[CompatEntry {
+            id: "d-id".into(),
+            root_cause: "gate-ua".into(),
+            matches: vec!["a.com".into()],
+            site_class: lumen_update_manifest::compat_pack::SiteClass::Bank,
+            action: Action::Identity { profile: lumen_update_manifest::compat_pack::IdentityProfile::FirefoxWin },
+            bug: "BUG-1".into(),
+            review_by: "2027-01-31".into(),
+            tests: vec!["t".into()],
+            test_exemption: None,
+            engine_max: None,
+        }]);
+        assert_eq!(with_id.identity, Some(lumen_core::IdentityProfile::FirefoxWin));
     }
 }

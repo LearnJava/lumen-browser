@@ -126,3 +126,22 @@ fn user_agent_override_renames_every_identity_field() {
     .unwrap();
     assert!(is_true(&rt, "navigator.userAgentData.brands.some(function(b) { return b.brand === 'Chromium' && b.version === '140'; })"));
 }
+
+/// COMPAT-PACK-IDENTITY: a profile installed before `install_dom` presents the
+/// whole identity to the document — the brands come from the profile (which a
+/// UA string cannot express: `chrome_brand_google` shares the Chromium UA), so
+/// the page must read «Google Chrome» next to the Chromium UA.
+#[test]
+fn identity_profile_override_presents_the_whole_profile() {
+    let rt = V8JsRuntime::new()
+        .unwrap()
+        .with_identity_profile(lumen_core::IdentityProfile::ChromeBrandGoogle);
+    rt.install_dom(make_doc(), "https://example.test/", None, None, None, None, None, None, None, None, None, false, None)
+        .unwrap();
+    let _ = is_true(&rt, "navigator.userAgentData.brands.some(function(b) { return b.brand === 'Google Chrome'; })");
+    let script = crate::v8_runtime::identity_override_script(&lumen_core::IdentityProfile::ChromeBrandGoogle.identity());
+    rt.eval(&script).unwrap();
+    assert!(is_true(&rt, "navigator.userAgentData.brands.some(function(b) { return b.brand === 'Google Chrome'; })"));
+    assert!(is_true(&rt, "navigator.userAgent.indexOf('Chrome/') > 0"));
+    assert!(is_true(&rt, "navigator.userAgent.indexOf('Lumen/') === -1"));
+}

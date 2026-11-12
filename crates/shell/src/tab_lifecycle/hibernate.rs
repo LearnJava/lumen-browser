@@ -188,6 +188,9 @@ pub(crate) fn restore_js_context(
         image_hook,
         // BUG-1119: the restored page's `document.cookie` sees the tab's jar.
         js_cookie_jar,
+        // COMPAT-PACK-IDENTITY: восстановленная страница — тот же документ,
+        // её профиль берётся по хосту `url`, как при первой загрузке.
+        crate::lumen::compat::compat_identity_for_url(url),
         // BUG-1198: a restored top-level page has no ancestors.
         None,
     );

@@ -285,6 +285,28 @@ fn engine_flag_applies_only_to_matched_host_documents() {
 }
 
 #[test]
+fn identity_applies_only_to_matched_host_documents() {
+    let p = pack(vec![
+        entry("a-id", "a.com", Action::Identity { profile: IdentityProfile::FirefoxWin }),
+        entry("g-id", "google.com", Action::Identity { profile: IdentityProfile::ChromeBrandGoogle }),
+    ]);
+    assert!(p.validate(&TestPsl).is_ok());
+    let policy = CompatPolicy::default();
+
+    assert_eq!(p.identity_for_host("a.com", &policy), Some(lumen_core::IdentityProfile::FirefoxWin));
+    assert_eq!(p.identity_for_host("www.a.com", &policy), Some(lumen_core::IdentityProfile::FirefoxWin));
+    assert_eq!(p.identity_for_host("google.com", &policy), Some(lumen_core::IdentityProfile::ChromeBrandGoogle));
+    assert_eq!(p.identity_for_host("b.com", &policy), None);
+    // A record the user switched off applies nowhere; the whole pack off too.
+    let off = CompatPolicy { pack_off: false, disabled: vec!["a-id".into()] };
+    assert_eq!(p.identity_for_host("a.com", &off), None);
+    assert_eq!(p.identity_for_host("a.com", &CompatPolicy { pack_off: true, disabled: Vec::new() }), None);
+    // The mapped profile builds the full identity (UA family follows the record).
+    let id = p.identity_for_host("a.com", &policy).unwrap().identity();
+    assert_eq!(id.family, lumen_core::UaFamily::Firefox);
+}
+
+#[test]
 fn unknown_engine_flag_name_is_rejected() {
     let reason = rejected(vec![entry("a-flag", "a.com", Action::EngineFlag { flag: "webkit-scrollbar".into() })]);
     assert!(reason.contains("unknown engine flag"), "{reason}");

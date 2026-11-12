@@ -234,11 +234,20 @@ impl ResourceBase {
         // `http_client_for_subresource` call sites. срез 3: `referrer_policy`
         // is the caller's resolved policy (see this method's doc comment) —
         // still the project default at every call site not yet upgraded.
+        // COMPAT-PACK-IDENTITY: субресурсы документа уходят с тем же профилем,
+        // что и сам документ и его JS (`document_url` = адрес документа;
+        // один конструктор покрывает все шесть мест вызова).
+        let identity_profile = document_url
+            .as_ref()
+            .and_then(|u| crate::lumen::compat::compat_identity_for_url(u.as_str()));
         if let Some(document_url) = document_url {
             // PERF-13: pooled connections are partitioned by document site.
             client = client
                 .with_connection_site(&crate::config::connection_site(&document_url))
                 .with_document_context(document_url, referrer_policy);
+        }
+        if let Some(profile) = identity_profile {
+            client = client.with_identity(profile.identity());
         }
         if let Some(origin) = self.origin()
             && origin.is_potentially_trustworthy()

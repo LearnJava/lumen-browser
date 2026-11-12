@@ -8,14 +8,51 @@ use crate::compat_indicator;
 use crate::compat_page::{self, CompatAction, CompatView, PackSource};
 use crate::*;
 
+/// Зеркало [`CompatPolicy`] для потоков вне UI (COMPAT-PACK-IDENTITY): потоки
+/// загрузки и пайплайна строят HTTP-клиенты и JS-рантаймы без `&Lumen`, а
+/// профиль записи `identity` обязан совпадать во всех слоях документа.
+/// UI-поток обновляет зеркало при каждом [`Lumen::compat_policy`] — то есть
+/// перед каждым запуском конвейера и после каждой мутации `about:compat`.
+static COMPAT_POLICY_MIRROR: std::sync::RwLock<Option<CompatPolicy>> = std::sync::RwLock::new(None);
+
+fn sync_compat_policy_mirror(policy: &CompatPolicy) {
+    if let Ok(mut guard) = COMPAT_POLICY_MIRROR.write() {
+        *guard = Some(policy.clone());
+    }
+}
+
+/// Профиль записи `identity` для URL документа (COMPAT-PACK-IDENTITY, ADR-034
+/// §1): единственный источник для HTTP-клиентов страницы и её JS-рантайма,
+/// чтобы `User-Agent`/`Sec-CH-UA*` и `navigator.*` не разошлись. `None` —
+/// подходящей записи нет, слои держат процессную идентичность. В debug-сборках
+/// пакет всегда пуст (`compat_pack_active`), чтобы тесты были детерминированы.
+pub(crate) fn compat_identity_for_url(url: &str) -> Option<lumen_core::IdentityProfile> {
+    if cfg!(debug_assertions) {
+        return None;
+    }
+    let parsed = lumen_core::url::Url::parse(url).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return None;
+    }
+    let host = parsed.host_ascii().ok()?;
+    let policy = COMPAT_POLICY_MIRROR
+        .read()
+        .ok()
+        .and_then(|g| g.clone())
+        .unwrap_or_default();
+    CompatPack::base(&lumen_storage::PslProvider::new()).identity_for_host(&host, &policy)
+}
+
 impl Lumen {
     /// Выбор пользователя из настроек. Отладочная сборка пакет не применяет
     /// независимо от выбора — это учитывает [`Self::compat_pack_active`].
     pub(crate) fn compat_policy(&self) -> CompatPolicy {
-        CompatPolicy {
+        let policy = CompatPolicy {
             pack_off: self.settings_store.compat_pack_off(),
             disabled: self.settings_store.compat_disabled_ids(),
-        }
+        };
+        sync_compat_policy_mirror(&policy);
+        policy
     }
 
     /// Записи пакета, применимые к `host` с учётом выбора пользователя; в отладочной
