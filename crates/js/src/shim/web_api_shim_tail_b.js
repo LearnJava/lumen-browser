@@ -813,7 +813,7 @@ function _lumen_is_focusable(nid) {
 // `el.onfocus = fn` works next to `addEventListener('focus', fn)`.
 function _lumen_dispatch_focus_event(nid, type, bubbles, related) {
     var ev = new FocusEvent(type, {
-        bubbles: bubbles, cancelable: false, isTrusted: true, relatedTarget: related,
+        bubbles: bubbles, cancelable: false, composed: true, isTrusted: true, relatedTarget: related,
     });
     ev.target = _lumen_make_element(nid);
     var cur = nid;
@@ -911,8 +911,13 @@ function _lumen_focus_not_rendered(nid) {
     var htmlId = _lumen_u2n(_lumen_get_html_element());
     var anc = nid;
     for (var guard = 0; guard < 512 && anc !== null && anc !== undefined; guard++) {
-        // A `display: none` element publishes no computed style in the
-        // snapshot, so «none» and «no entry» both mean no box.
+        // A shadow root publishes no computed style (no box by design —
+        // box_tree/build.rs BoxKind::Skip) — it is not a `display: none`
+        // ancestor; hop straight to its host (BUG-1777 focus fixup drop).
+        if (_lumen_is_shadow_root(anc)) {
+            anc = _lumen_u2n(_lumen_get_shadow_root_host(anc));
+            continue;
+        }
         var d = _lumen_get_computed_style(anc, 'display');
         if (d === 'none' || d === '') return true;
         if (anc === htmlId) return false;

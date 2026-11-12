@@ -1218,7 +1218,7 @@ function _lumen_path_target(nid) {
 // its listeners. A detached subtree gets neither tail entry — the spec's path
 // stops at its own root, and that is what keeps a `dispatchEvent` on a node the
 // page has already removed from reaching the page's delegated handlers.
-function _lumen_event_path(start_nid) {
+function _lumen_event_path(start_nid, crossShadow) {
     if (start_nid === _LUMEN_WIN_LISTENER_NID) return [_LUMEN_WIN_LISTENER_NID];
     if (start_nid === _LUMEN_DOC_LISTENER_NID || start_nid === _lumen_root_nid) {
         return [_LUMEN_DOC_LISTENER_NID, _LUMEN_WIN_LISTENER_NID];
@@ -1231,7 +1231,15 @@ function _lumen_event_path(start_nid) {
         if (cur === _lumen_root_nid) { connected = true; break; }
         path.push(cur);
         var pid = _lumen_u2n(_lumen_get_parent(cur));
-        cur = (pid !== null && pid !== undefined) ? pid : null;
+        if (pid === null || pid === undefined) {
+            // DOM LS: only a composed event crosses the shadow boundary to the
+            // host — the same climb `_lumen_resource_is_connected` makes; a
+            // non-composed event stops at the shadow root (BUG-1777).
+            cur = (crossShadow && _lumen_is_shadow_root(cur))
+                ? _lumen_u2n(_lumen_get_shadow_root_host(cur)) : null;
+        } else {
+            cur = pid;
+        }
     }
     if (connected) {
         path.push(_LUMEN_DOC_LISTENER_NID);
@@ -1322,7 +1330,7 @@ function _lumen_propagate(target_nid, event) {
     // SMIL event-base `begin`/`end` listeners must exist before the event (svg.rs).
     if (typeof _lumen_smil_prebind === 'function') _lumen_smil_prebind();
     if (!event || event.type === undefined || event.type === null) return true;
-    var path = _lumen_event_path(target_nid);
+    var path = _lumen_event_path(target_nid, !!(event && event.composed));
     if (path.length === 0) return !event.defaultPrevented;
     event.target = _lumen_path_target(path[0]);
     event._path = path; // backs composedPath() — see Event.prototype (BUG-577)
@@ -1406,7 +1414,7 @@ function _lumen_dispatch_rich(start_nid, event) {
 function _lumen_dispatch_mouse_event(start_nid, type, clientX, clientY, button, buttons, mod, detail) {
     _lumen_note_activation_input(type);
     var ev = new MouseEvent(type, {
-        bubbles: true, cancelable: true, isTrusted: true,
+        bubbles: true, cancelable: true, composed: true, isTrusted: true,
         detail: detail | 0,
         clientX: clientX, clientY: clientY,
         screenX: clientX, screenY: clientY,
@@ -1714,7 +1722,7 @@ function _lumen_set_field_value(nid, value) {
 function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location, mod, repeat, isComposing) {
     _lumen_note_activation_input(type, key);
     var ev = new KeyboardEvent(type, {
-        bubbles: true, cancelable: true, isTrusted: true,
+        bubbles: true, cancelable: true, composed: true, isTrusted: true,
         key: key, code: code, keyCode: keyCode, charCode: keyCode,
         which: keyCode, location: location,
         repeat: !!repeat, isComposing: !!isComposing,
@@ -1803,7 +1811,7 @@ function _lumen_dispatch_clipboard_event(nid, type, text) {
     var dt = new DataTransfer();
     if (type === 'paste') dt.setData('text/plain', String(text));
     var evt = new ClipboardEvent(type, {
-        bubbles: true, cancelable: true, isTrusted: true, clipboardData: dt
+        bubbles: true, cancelable: true, composed: true, isTrusted: true, clipboardData: dt
     });
     _lumen_dispatch_rich(nid, evt);
     return evt.defaultPrevented ? 'P' + (dt.getData('text/plain') || '') : 'N';
@@ -1813,7 +1821,7 @@ function _lumen_dispatch_clipboard_event(nid, type, text) {
 // edit. Reply '1' = not cancelled.
 function _lumen_dispatch_input_event(nid, type, inputType, data) {
     var evt = new InputEvent(type, {
-        bubbles: true, cancelable: type === 'beforeinput', isTrusted: true,
+        bubbles: true, cancelable: type === 'beforeinput', composed: true, isTrusted: true,
         inputType: inputType, data: data == null ? null : String(data)
     });
     _lumen_dispatch_rich(nid, evt);
@@ -14495,6 +14503,20 @@ var document = {
         if (n === null || n === undefined || n === -1) {
             var bid = _lumen_u2n(_lumen_get_body());
             return bid !== null ? _lumen_make_element(bid) : null;
+        }
+        // HTML LS §6.6.3: focus inside a shadow tree reads as the top-level
+        // host; the inner element is `ShadowRoot.activeElement`'s job (BUG-1777).
+        for (var guard = 0; guard < 16; guard++) {
+            var top = n;
+            for (var g2 = 0; g2 < 1024 && top !== null && top !== undefined; g2++) {
+                var tp = _lumen_u2n(_lumen_get_parent(top));
+                if (tp === null || tp === undefined) break;
+                top = tp;
+            }
+            if (!_lumen_is_shadow_root(top)) break;
+            var host = _lumen_u2n(_lumen_get_shadow_root_host(top));
+            if (host === null || host === undefined) break;
+            n = host;
         }
         return _lumen_make_element(n);
     },

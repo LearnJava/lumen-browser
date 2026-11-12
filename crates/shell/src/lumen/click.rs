@@ -604,9 +604,28 @@ impl Lumen {
         // handlers can read event.clientX/clientY/ctrlKey/etc.
         if let Some(result) = hit_result.as_ref() {
             let mod_flags: u8 = self.modifier_flags();
+            // DOM LS: the target of a click on inline text is the text's parent
+            // ELEMENT, not the block box owning the InlineRun — a <label> whose
+            // text lives in the parent's inline run must still receive the
+            // event (and trigger the forwarding below), like every other
+            // inline element. Falls back to the hit node when the inline
+            // source has no element ancestor.
+            let target_node = match self.layout_source.as_ref() {
+                Some(src) => {
+                    let doc = src.document.lock().unwrap();
+                    let mut n = result.source_node;
+                    while !matches!(doc.get(n).data, NodeData::Element { .. })
+                        && let Some(p) = doc.get(n).parent
+                    {
+                        n = p;
+                    }
+                    n
+                }
+                None => result.node,
+            };
             let script = format!(
                 "_lumen_dispatch_mouse_event({}, 'click', {}, {}, 0, 1, {}, {})",
-                result.node.index(),
+                target_node.index(),
                 x_css as i32,
                 y_css as i32,
                 mod_flags,
@@ -614,11 +633,11 @@ impl Lumen {
             );
             // If the hit node is a <label> with a labeled control, also dispatch
             // a click event on the labeled control (HTML LS §4.10.4).
-            if let (Some(result), Some(src)) = (hit_result.as_ref(), self.layout_source.as_ref()) {
+            if let Some(src) = self.layout_source.as_ref() {
                 let doc = src.document.lock().unwrap();
-                if doc.get(result.node).element_name().map(|q| q.local.as_str()) == Some("label")
-                    && let Some(control) = forms::labeled_control(&doc, result.node)
-                    && control != result.node
+                if doc.get(target_node).element_name().map(|q| q.local.as_str()) == Some("label")
+                    && let Some(control) = forms::labeled_control(&doc, target_node)
+                    && control != target_node
                 {
                     drop(doc);
                     let script = format!(

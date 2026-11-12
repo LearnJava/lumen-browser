@@ -55,11 +55,38 @@ probe-пейдж выявил корни, бисект по окну не пон
 схлопнуты двойные `if` в `lumen/click.rs:619` (clippy collapsible_if, висел на main после
 `4f3ad6c59`).
 
+**2026-11-12 (P3, позже): `event-propagate-disabled-keyboard` 28/30 → 30/30 и
+`proxy-modifier-click-to-associated-element` 1/4 → 4/4.** Не регресс окна — тест стал честным:
+`1e7913d580` (p1-shadow-parts) сделал `attachShadow` настоящим (фрагмент переносится детьми,
+`ShadowRoot.getElementById` — scoped), до этого shadow-механика была инертной и тестовые
+fallback-и проходили мимо. Три корня, найдены пробами, бисект не понадобился:
+
+1. Путь события не пересекал границу shadow-дерева: `_lumen_event_path` останавливался на
+   shadow root (родитель null) — bubbling-события из shadow-контента не доходили до
+   light-DOM предков, document, window. Теперь подъём продолжается от shadow root к host
+   (тот же обход, что у `_lumen_resource_is_connected`).
+2. `document.activeElement` при фокусе внутри shadow-дерева возвращал внутренний элемент, а
+   не top-level host (delegatesFocus-подтест падал на assert ещё до key-событий). Теперь
+   подъём до корня дерева и переход к host, вложенность до 16 границ.
+3. Per-frame `_lumen_focus_fixup` сбрасывал фокус shadow-узла: `_lumen_focus_not_rendered`
+   в подъёме предков спрашивал `display` у самого shadow root — а тот не публикует
+   computed style вовсе (BoxKind::Skip), читался как «not rendered» → `_lumen_focus_drop()`
+   каждый кадр. Теперь shadow root в подъёме пропускается (переход к host).
+   Диагностика: shell-side eprintln показал `focus_reqs [Some(17)] → … → [None]` — фокус
+   применялся и тут же сбрасывался фикса́пом.
+
+`proxy-modifier-click` пал тем же кликом-целью: JS-клик целился в блок-владелец InlineRun
+(`hit_result.node` = `<div>`-обёртка), поэтому label-forwarding (HTML LS §4.10.4) не
+срабатывал ни для одного label (проба: gBCR label корректны и различны, elementFromPoint
+верен, но replay-клик даёт `click` на `<div>` без mousedown). Фикс: цель события = родительский
+ЭЛЕМЕНТ инлайн-текста (`hit_result.source_node` → ближайший элемент-предок), как требует DOM;
+`target_node` используется и для диспетчера клика, и для label-проверки. Побочно это же даёт
+корректный `event.target` для кликов по инлайн-элементам (`<span>` внутри `<p>` — span, а не p;
+предки по-прежнему получают событие bubbling-ом).
+
 Остаток бага: `dir-shadow-41` (reftest, 72px diff — спор host vs flat-tree parent),
 `draw-element-image/css-backdrop-filter-and-mask` (reftest — ждёт реальную реализацию
-BUG-1798), `event-propagate-disabled-keyboard` 28/30 (key events на disabled custom-control
-из `<form>` не долетают), `proxy-modifier-click-to-associated-element` 1/4 (проксирование
-кликов label→control с модификаторами).
+BUG-1798).
 
 ## Воспроизведение
 
