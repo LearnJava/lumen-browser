@@ -129,7 +129,8 @@ pub(in crate::style) fn matches_pseudo_class(p: &PseudoClass, doc: &Document, no
         // Fullscreen API §4.2 `:fullscreen` — runtime-only: top-layer
         // элементов, поднятых через `Element.requestFullscreen()`. JS API
         // реализован (p1-fullscreen-api); sentinel — `data-lumen-fullscreen`.
-        // CSS: :fullscreen — P4: check doc.get_attr(node.id,"data-lumen-fullscreen").is_some()
+        // CSS Selectors L4 §16.5.2 — sentinel выставляется шеллом при
+        // `Element.requestFullscreen()` (p1-fullscreen-api): `data-lumen-fullscreen`.
         PseudoClass::Fullscreen => doc.get(node).get_attr("data-lumen-fullscreen").is_some(),
         // CSS Selectors L4 §16.5.2 `:modal` — `<dialog>` opened via
         // `showModal()`. JS sets `data-lumen-modal` sentinel; `show()` / author

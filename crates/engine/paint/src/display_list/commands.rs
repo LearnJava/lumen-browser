@@ -559,7 +559,7 @@ pub enum DisplayCommand {
     /// all other rects in the display list). Color is the resolved `fill`
     /// value after opacity.
     ///
-    /// CSS: fill, stroke — P4 wires once fill/stroke are in ComputedStyle.
+    /// Значения fill/stroke берутся из `ComputedStyle.svg_fill`/`svg_stroke` (P4).
     DrawSvgPath {
         /// Flat list of triangle vertices — length is always a multiple of 3.
         vertices: Vec<[f32; 2]>,

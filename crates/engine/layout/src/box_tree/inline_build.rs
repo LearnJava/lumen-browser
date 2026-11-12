@@ -1844,7 +1844,7 @@ pub(crate) fn inject_marker(
     ) else {
         return;
     };
-    // CSS: list-style-image — P4 wires image markers.
+    // CSS: list-style-image — маркеры-картинки берутся из style.list_style_image (ниже).
     let text = match &ms.content {
         Content::Items(items) => marker_content_text(items, doc, parent_id, counters, registry),
         // CSS: list-style-type (custom counter-style) — build_list_marker_text consults registry.

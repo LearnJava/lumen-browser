@@ -197,7 +197,7 @@ pub enum SvgShapeKind {
     /// `<line x1 y1 x2 y2>`. Segment from (x1,y1) to (x2,y2).
     Line { x1: f32, y1: f32, x2: f32, y2: f32 },
     /// `<path d="...">`. SVG path data string; bounding box computed by paint.
-    /// CSS: fill, stroke, stroke-width — P4 wires via ComputedStyle svg_fill/svg_stroke.
+    /// CSS: fill, stroke, stroke-width — из `ComputedStyle.svg_fill`/`svg_stroke`.
     Path { d: String },
 }
 
@@ -1917,7 +1917,7 @@ pub(super) fn svg_shape_bbox(shape: &SvgShapeKind, ox: f32, oy: f32, sx: f32, sy
         }
         SvgShapeKind::Path { .. } =>
             // Path bounding box requires full path-data parsing — deferred to paint.
-            // CSS: fill, stroke — P4 wires; P2 renders via GPU path commands.
+            // CSS: fill, stroke — из ComputedStyle.svg_fill/svg_stroke; рендер — GPU path commands.
             Rect::ZERO,
     }
 }

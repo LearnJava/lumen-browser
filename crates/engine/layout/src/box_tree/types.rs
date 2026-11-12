@@ -908,7 +908,7 @@ pub enum BoxKind {
     /// `rect` is its border-box in document coordinates (CSS width × height).
     /// `view_box` maps SVG user-unit space to this rect for shape coordinate transforms.
     /// Children are `SvgShape` and `Block` (for `<g>` groups) boxes.
-    /// CSS: width, height (from attributes as presentational hints), fill, stroke — P4 wires.
+    /// CSS: width, height (presentational hints из атрибутов), fill, stroke — из ComputedStyle.
     SvgRoot {
         /// Parsed `viewBox` attribute. `None` when attribute absent: shapes use 1:1 px mapping.
         view_box: Option<ViewBox>,
@@ -918,7 +918,7 @@ pub enum BoxKind {
     /// Individual SVG shape (`<rect>`, `<circle>`, `<ellipse>`, `<line>`, `<path>`).
     /// `LayoutBox.rect` is the bounding box in *document coordinates* (post-viewBox scaling).
     /// `shape` carries the original SVG user-unit geometry for accurate paint-side rendering.
-    /// CSS: fill, stroke, stroke-width, opacity — P4 wires via ComputedStyle SVG fields.
+    /// CSS: fill, stroke, stroke-width, opacity — из ComputedStyle SVG-полей.
     SvgShape {
         /// Geometric primitive in SVG user units (before viewBox scaling).
         shape: SvgShapeKind,
@@ -950,8 +950,8 @@ pub enum BoxKind {
     /// SVG text element (`<text>`, `<tspan>`, `<textPath>`).
     /// `LayoutBox.rect` is the text bounding box in *document coordinates*.
     /// Text content is measured via `TextMeasurer` and positioned according to SVG text attributes.
-    /// CSS: fill, stroke, font-family, font-size — P4 wires via ComputedStyle SVG fields.
-    /// // CSS: text-anchor, dominant-baseline, dx, dy
+    /// CSS: fill, stroke, font-family, font-size — из ComputedStyle.
+    /// CSS: text-anchor, dominant-baseline, dx, dy
     SvgText {
         /// Text content (concatenated from text nodes within `<text>`, `<tspan>`, `<textPath>`).
         text: String,
