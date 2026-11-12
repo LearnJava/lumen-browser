@@ -1,3 +1,6 @@
+BUGS.md:391
+BUGS.md:392
+BUGS.md:393
 BUGS.md:371
 BUGS.md:373
 BUGS.md:374
@@ -23,3 +26,4 @@ BUGS.md:389
 BUGS.md:378
 BUGS.md:380
 BUGS.md:372
+BUGS.md:394

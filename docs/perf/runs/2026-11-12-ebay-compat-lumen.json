@@ -1,0 +1,1113 @@
+{
+ "runs": "2026-11-12 три compat-прогона ebay (живое окно), маршрут прямой, детали: 2026-11-12-ebay-audit.md",
+ "sites": [
+  {
+   "slug": "ebay",
+   "url": "https://www.ebay.com/",
+   "restarted": false,
+   "spawn_s": 1.03,
+   "started_at": "2026-11-12T22:31:03",
+   "own_tab": true,
+   "nav_ack_s": 1.69,
+   "ready_s": 19.79,
+   "network_idle": true,
+   "png_size": [
+    1920,
+    945
+   ],
+   "frame_colors": 3851,
+   "frame_dominant_frac": 0.5183,
+   "frame_dominant_rgb": [
+    255,
+    255,
+    255
+   ],
+   "frame_top_dominant_frac": 0.479,
+   "frame_blank": false,
+   "png_hash": "da64eccd26e3f19fb691bf9a10528e7f",
+   "console_total": 12,
+   "console_errors": [
+    "Could not load Rive WASM file from the configured WASM URL or its fallback (https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@2.44.2/rive_fallback.wasm).\nPossible reasons:\n- Network connection is down\n- WebAssembly is not supported in this environment\n- The WASM file is corrupted or incompatible\n\nError details:\n- Type: TypeError\n- Message: console.assert is not a function\n- WebAssembly-specific error: false\n\nTo resolve, you may need to:\n1. Check your network connection\n2. Set a new WASM source via RuntimeLoader.setWasmUrl()\n3. Call RuntimeLoader.awaitInstance() again"
+   ],
+   "console_network_errors": [],
+   "console_error_sigs": {
+    "could not load rive wasm file from the configured wasm url or its fallback (https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@N.N/rive_fallback.wasm). possible reasons: - network connection is down - webassembly is not supported in this environment - the wasm file is corrupted or incompatible error details: - type: typeerror - message: console.assert is not a function - webassembly-specific error: false to resolve, you may need to: N. check your network connection N. set a new wasm source via runtimeloader.setwasmurl() N. call runtimeloader.awaitinstance() again": {
+     "count": 1,
+     "sample": "Could not load Rive WASM file from the configured WASM URL or its fallback (https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@2.44.2/rive_fallback.wasm).\nPossible reasons:\n- Network connection is down\n- WebAssembly is not supported in this environment\n- The WASM file is corrupted or incompatible\n\nError details:\n- Type: TypeError\n- Message: console.assert is not a function\n- WebAssembly-specific error: false\n\nTo resolve, you may need to:\n1. Check your network connection\n2. Set a new WASM source via RuntimeLoader.setWasmUrl()\n3. Call RuntimeLoader.awaitInstance() again"
+    }
+   },
+   "console_levels": {
+    "Warn": 9,
+    "Log": 2,
+    "Error": 1
+   },
+   "console_warnings": [
+    "[Rive: state-change-events] Subscribing to state change events at runtime is deprecated and will be removed in a future major version: use data binding (view model property observers) or state machine actions to react to changes from your graphic instead. See https://rive.app/docs/editor/state-machi",
+    "[Rive: state-machines-param] The `stateMachines` parameter is deprecated: please use `stateMachine` with a single state machine name instead.\nTo suppress this warning, set Rive.suppressDeprecationWarnings = [\"state-machines-param\"]",
+    "Failed to load WASM from https://unpkg.com/@rive-app/canvas-lite@2.44.2/rive.wasm (console.assert is not a function), trying fallback URL: https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@2.44.2/rive_fallback.wasm",
+    "Header: trk missing",
+    "Header: trk missing",
+    "Header: trk missing",
+    "Header: trk missing",
+    "PerformanceObserver: unsupported entryType first-input",
+    "PerformanceObserver: the buffered flag is ignored together with entryTypes"
+   ],
+   "page": {
+    "errors": {},
+    "title": "Electronics, Cars, Fashion, Collectibles & More | eBay",
+    "location": "https://www.ebay.com/",
+    "ready_state": "complete",
+    "compat_mode": "CSS1Compat",
+    "charset": "UTF-8",
+    "lang": "en-US",
+    "nodes": 2517,
+    "text_len": 246331,
+    "scroll_h": 1874.2861328125,
+    "scroll_w": 1920,
+    "viewport": [
+     1920,
+     945,
+     1
+    ],
+    "scripts": 30,
+    "scripts_ext": 11,
+    "scripts_module": 1,
+    "stylesheets": 3,
+    "style_tags": 1,
+    "iframes": 0,
+    "links": 507,
+    "forms": 1,
+    "inputs": 75,
+    "videos": 25,
+    "canvases": 1,
+    "svgs": 74,
+    "custom_elements": 0,
+    "shadow_hosts": 0,
+    "imgs": 73,
+    "imgs_broken": 0,
+    "imgs_pending": 47,
+    "imgs_lazy": 66,
+    "fonts_status": "loaded",
+    "fonts_n": 8,
+    "perf_resources": 65,
+    "perf_transfer_kb": 5973,
+    "nav_timing": {
+     "ttfb": 0,
+     "dcl": 8710.1616,
+     "load": 0,
+     "type": "navigate",
+     "transfer": 483149
+    },
+    "paint_timing": [
+     [
+      "first-paint",
+      12271
+     ],
+     [
+      "first-contentful-paint",
+      12271
+     ]
+    ],
+    "js_heap_mb": null,
+    "now_ms": 108744,
+    "cookie_len": 1727,
+    "local_storage_keys": 4,
+    "sw_supported": true
+   },
+   "page_probe_s": 48.04,
+   "net_requests": 56,
+   "net_bytes_mb": 0.0,
+   "net_status_hist": {
+    "2xx": 54,
+    "0": 2
+   },
+   "net_hosts": 8,
+   "net_top_hosts": {
+    "i.ebayimg.com": 24,
+    "ir.ebaystatic.com": 13,
+    "live.us.shoplive.cloud": 12,
+    "www.ebay.com": 2,
+    "cas.avalon.perfdrive.com": 2,
+    "fonts.gstatic.com": 1,
+    "rover.ebay.com": 1,
+    "www.ebayadservices.com": 1
+   },
+   "net_kinds": {
+    "webp": 24,
+    "m3u8": 10,
+    "js": 7,
+    "-": 5,
+    "ttf": 2,
+    "woff2": 2,
+    "fmp4": 2,
+    "ico": 1,
+    "svg": 1,
+    "png": 1
+   },
+   "net_failed_urls": [
+    "https://live.us.shoplive.cloud/live-p/45-5CuNjZxPZAhnwROpc-ue2_480p/audio.m3u8?preview=1&_HLS_msn=30632&_HLS_part=1",
+    "https://live.us.shoplive.cloud/live-p/45-5zbPWJnQCtisDdAoc-ue2_480p/video.m3u8?preview=1"
+   ],
+   "total_s": 125.07,
+   "net_failures": [],
+   "http_status": 200,
+   "stderr_errors": [
+    "[JS] Rive WASM load error details: [object Object]",
+    "[JS warn] Failed to load WASM from https://unpkg.com/@rive-app/canvas-lite@2.44.2/rive.wasm (console.assert is not a function), trying fallback URL: https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@2.44.2/rive_fallback.wasm",
+    "[JS error] Could not load Rive WASM file from the configured WASM URL or its fallback (https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@2.44.2/rive_fallback.wasm).",
+    "Error details:",
+    "- Type: TypeError",
+    "- WebAssembly-specific error: false",
+    "[JS warn] PerformanceObserver: unsupported entryType first-input",
+    "[JS error] Uncaught ReferenceError: status is not defined"
+   ],
+   "stderr_error_sigs": {
+    "[js] rive wasm load error details: [object object]": {
+     "count": 2,
+     "sample": "[JS] Rive WASM load error details: [object Object]"
+    },
+    "[js warn] failed to load wasm from https://unpkg.com/@rive-app/canvas-lite@N.N/rive.wasm (console.assert is not a function), trying fallback url: https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@N.N/rive_fallback.wasm": {
+     "count": 1,
+     "sample": "[JS warn] Failed to load WASM from https://unpkg.com/@rive-app/canvas-lite@2.44.2/rive.wasm (console.assert is not a function), trying fallback URL: https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@2.44.2/rive_fallback.wasm"
+    },
+    "[js error] could not load rive wasm file from the configured wasm url or its fallback (https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@N.N/rive_fallback.wasm).": {
+     "count": 1,
+     "sample": "[JS error] Could not load Rive WASM file from the configured WASM URL or its fallback (https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@2.44.2/rive_fallback.wasm)."
+    },
+    "error details:": {
+     "count": 1,
+     "sample": "Error details:"
+    },
+    "- type: typeerror": {
+     "count": 1,
+     "sample": "- Type: TypeError"
+    },
+    "- webassembly-specific error: false": {
+     "count": 1,
+     "sample": "- WebAssembly-specific error: false"
+    },
+    "[js warn] performanceobserver: unsupported entrytype first-input": {
+     "count": 1,
+     "sample": "[JS warn] PerformanceObserver: unsupported entryType first-input"
+    },
+    "[js error] uncaught referenceerror: status is not defined": {
+     "count": 1,
+     "sample": "[JS error] Uncaught ReferenceError: status is not defined"
+    }
+   },
+   "cur_mb": 1200.7,
+   "peak_mb": 1227.9,
+   "cpu_s": 165.45,
+   "os_samples": 123,
+   "os_threads_max": 53,
+   "os_handles_max": 682,
+   "os_gdi_max": 14,
+   "os_user_max": 38,
+   "os_private_mb_max": 1171.5,
+   "os_ws_mb_max": 1228.5,
+   "os_tcp_max": 8,
+   "os_children_max": 0,
+   "os_threads_end": 44,
+   "os_handles_end": 676,
+   "os_private_mb_end": 1144.2,
+   "os_pagefile_peak_mb": 1203.1,
+   "os_cpu_user_s": 161.03,
+   "os_cpu_kernel_s": 4.02,
+   "os_page_faults": 784998,
+   "os_io_read_mb": 188.03,
+   "os_io_write_mb": 6.69,
+   "os_io_other_mb": 4.97,
+   "os_io_read_ops": 2098,
+   "os_io_write_ops": 411301,
+   "os_io_other_ops": 421321,
+   "os_cpu_pct_max": 205.3,
+   "os_cpu_pct_avg": 132.3,
+   "os_cpu_pct_p50": 133.9,
+   "os_busy_s": 120.8,
+   "os_tcp_states_at_max": {
+    "ESTABLISHED": 6,
+    "FIN_WAIT1": 1,
+    "LISTEN": 1
+   },
+   "sys_cpu_pct_avg": 22.4,
+   "sys_cpu_pct_max": 41.0,
+   "sys_free_mb_min": 1808,
+   "se_lines": 38177,
+   "se_net_ok": 84,
+   "se_net_fail": 2,
+   "se_panics": 0,
+   "se_blocked": 0,
+   "se_warnings": 11,
+   "se_stack_overflow": 0,
+   "se_wgpu_adapter": "[wgpu] adapter: Intel(R) UHD Graphics (IntegratedGpu, Vulkan)",
+   "alive_after": true,
+   "proc_peak_mb_total": 1244.9,
+   "proc_cpu_s_total": 166.0,
+   "broken_render_signal": false,
+   "final_applied_s": 10.32,
+   "final_frame_s": 10.32,
+   "suspected_duplicate_frame": false,
+   "status": "DEGRADED",
+   "stderr_log": "live.stderr.ebay.0.log"
+  },
+  {
+   "slug": "ebay",
+   "url": "https://www.ebay.com/",
+   "restarted": false,
+   "spawn_s": 0.53,
+   "started_at": "2026-11-12T22:40:36",
+   "own_tab": true,
+   "nav_ack_s": 0.48,
+   "ready_s": 150.53,
+   "network_idle": true,
+   "png_size": [
+    1920,
+    945
+   ],
+   "frame_colors": 445,
+   "frame_dominant_frac": 0.487,
+   "frame_dominant_rgb": [
+    255,
+    255,
+    255
+   ],
+   "frame_top_dominant_frac": 0.4404,
+   "frame_blank": false,
+   "png_hash": "61fb1ad49d472417a6e34848d322b55d",
+   "console_total": 14,
+   "console_errors": [
+    "Could not load Rive WASM file from the configured WASM URL or its fallback (https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@2.44.2/rive_fallback.wasm).\nPossible reasons:\n- Network connection is down\n- WebAssembly is not supported in this environment\n- The WASM file is corrupted or incompatible\n\nError details:\n- Type: TypeError\n- Message: console.assert is not a function\n- WebAssembly-specific error: false\n\nTo resolve, you may need to:\n1. Check your network connection\n2. Set a new WASM source via RuntimeLoader.setWasmUrl()\n3. Call RuntimeLoader.awaitInstance() again"
+   ],
+   "console_network_errors": [],
+   "console_error_sigs": {
+    "could not load rive wasm file from the configured wasm url or its fallback (https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@N.N/rive_fallback.wasm). possible reasons: - network connection is down - webassembly is not supported in this environment - the wasm file is corrupted or incompatible error details: - type: typeerror - message: console.assert is not a function - webassembly-specific error: false to resolve, you may need to: N. check your network connection N. set a new wasm source via runtimeloader.setwasmurl() N. call runtimeloader.awaitinstance() again": {
+     "count": 1,
+     "sample": "Could not load Rive WASM file from the configured WASM URL or its fallback (https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@2.44.2/rive_fallback.wasm).\nPossible reasons:\n- Network connection is down\n- WebAssembly is not supported in this environment\n- The WASM file is corrupted or incompatible\n\nError details:\n- Type: TypeError\n- Message: console.assert is not a function\n- WebAssembly-specific error: false\n\nTo resolve, you may need to:\n1. Check your network connection\n2. Set a new WASM source via RuntimeLoader.setWasmUrl()\n3. Call RuntimeLoader.awaitInstance() again"
+    }
+   },
+   "console_levels": {
+    "Warn": 10,
+    "Log": 3,
+    "Error": 1
+   },
+   "console_warnings": [
+    "[Rive: state-change-events] Subscribing to state change events at runtime is deprecated and will be removed in a future major version: use data binding (view model property observers) or state machine actions to react to changes from your graphic instead. See https://rive.app/docs/editor/state-machi",
+    "[Rive: state-machines-param] The `stateMachines` parameter is deprecated: please use `stateMachine` with a single state machine name instead.\nTo suppress this warning, set Rive.suppressDeprecationWarnings = [\"state-machines-param\"]",
+    "Failed to load WASM from https://unpkg.com/@rive-app/canvas-lite@2.44.2/rive.wasm (console.assert is not a function), trying fallback URL: https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@2.44.2/rive_fallback.wasm",
+    "Header: trk missing",
+    "Header: trk missing",
+    "Header: trk missing",
+    "Header: trk missing",
+    "Header: trk missing",
+    "PerformanceObserver: unsupported entryType first-input",
+    "PerformanceObserver: the buffered flag is ignored together with entryTypes"
+   ],
+   "page": {
+    "errors": {},
+    "title": "Electronics, Cars, Fashion, Collectibles & More | eBay",
+    "location": "https://www.ebay.com/",
+    "ready_state": "complete",
+    "compat_mode": "CSS1Compat",
+    "charset": "UTF-8",
+    "lang": "en-US",
+    "nodes": 2643,
+    "text_len": 471260,
+    "scroll_h": 1875.2861328125,
+    "scroll_w": 1920,
+    "viewport": [
+     1920,
+     945,
+     1
+    ],
+    "scripts": 65,
+    "scripts_ext": 43,
+    "scripts_module": 1,
+    "stylesheets": 5,
+    "style_tags": 3,
+    "iframes": 2,
+    "links": 507,
+    "forms": 1,
+    "inputs": 80,
+    "videos": 25,
+    "canvases": 1,
+    "svgs": 77,
+    "custom_elements": 0,
+    "shadow_hosts": 0,
+    "imgs": 76,
+    "imgs_broken": 10,
+    "imgs_pending": 47,
+    "imgs_lazy": 66,
+    "fonts_status": "loaded",
+    "fonts_n": 8,
+    "perf_resources": 107,
+    "perf_transfer_kb": 8251,
+    "nav_timing": {
+     "ttfb": 0,
+     "dcl": 8776.5798,
+     "load": 0,
+     "type": "navigate",
+     "transfer": 483451
+    },
+    "paint_timing": [
+     [
+      "first-paint",
+      11222
+     ],
+     [
+      "first-contentful-paint",
+      11222
+     ]
+    ],
+    "js_heap_mb": null,
+    "now_ms": 239747,
+    "cookie_len": 2684,
+    "local_storage_keys": 10,
+    "sw_supported": true
+   },
+   "page_probe_s": 7.85,
+   "net_requests": 151,
+   "net_bytes_mb": 0.0,
+   "net_status_hist": {
+    "2xx": 121,
+    "0": 30
+   },
+   "net_hosts": 29,
+   "net_top_hosts": {
+    "live.us.shoplive.cloud": 44,
+    "i.ebayimg.com": 25,
+    "ir.ebaystatic.com": 15,
+    "mkttag.ebay.com": 10,
+    "www.ebay.com": 8,
+    "monitor.ebay.com": 7,
+    "www.google.com": 5,
+    "ct.pinterest.com": 5
+   },
+   "net_kinds": {
+    "-": 43,
+    "m3u8": 36,
+    "js": 29,
+    "webp": 25,
+    "fmp4": 8,
+    "woff2": 2,
+    "ttf": 2,
+    "ico": 1,
+    "svg": 1,
+    "png": 1
+   },
+   "net_failed_urls": [
+    "https://i.ebayimg.com/images/g/ticAAeSwUnJq6sNx/s-l960.webp",
+    "https://i.ebayimg.com/images/g/TEgAAeSw31xq59wm/s-l960.webp",
+    "https://i.ebayimg.com/images/g/HMEAAeSwRfxq412V/s-l960.webp",
+    "https://i.ebayimg.com/images/g/aj4AAeSww6dq9d63/s-l960.webp",
+    "https://i.ebayimg.com/images/g/VxoAAeSwHuNqzqhn/s-l960.webp",
+    "https://i.ebayimg.com/images/g/JGIAAeSws~hq6qNL/s-l960.webp",
+    "https://i.ebayimg.com/images/g/WXQAAeSw4xxq3C1q/s-l64.webp",
+    "https://i.ebayimg.com/images/g/Qc8AAOSwnm5kdmMP/s-l64.webp",
+    "https://i.ebayimg.com/images/g/IE4AAeSwpgRq38~B/s-l500.webp",
+    "https://i.ebayimg.com/images/g/UFkAAeSwondq38~B/s-l500.webp",
+    "https://live.us.shoplive.cloud/live-p/45-5PSTSROWzoMcxEfpc-ue2_480p/video.m3u8?preview=1&_HLS_msn=74594&_HLS_part=0",
+    "https://live.us.shoplive.cloud/live-p/45-5PSTSROWzoMcxEfpc-ue2_480p/video_1.fmp4?preview=1",
+    "https://live.us.shoplive.cloud/live-p/45-5PSTSROWzoMcxEfpc-ue2_480p/audio.m3u8?preview=1&_HLS_msn=74595&_HLS_part=0",
+    "https://live.us.shoplive.cloud/live-p/45-5PSTSROWzoMcxEfpc-ue2_480p/audio_1.fmp4?preview=1",
+    "https://live.us.shoplive.cloud/live-p/45-5sJEAFsCkYcIWeEkc-ue2_480p/video.m3u8?preview=1&_HLS_msn=19170&_HLS_part=1",
+    "https://live.us.shoplive.cloud/live-p/45-5sJEAFsCkYcIWeEkc-ue2_480p/video_1.fmp4?preview=1",
+    "https://live.us.shoplive.cloud/live-p/45-5sJEAFsCkYcIWeEkc-ue2_480p/audio.m3u8?preview=1&_HLS_msn=19170&_HLS_part=1",
+    "https://live.us.shoplive.cloud/live-p/45-5sJEAFsCkYcIWeEkc-ue2_480p/audio_1.fmp4?preview=1",
+    "https://live.us.shoplive.cloud/live-p/45-5CuNjZxPZAhnwROpc-ue2_480p/video.m3u8?preview=1",
+    "https://live.us.shoplive.cloud/live-p/45-5CuNjZxPZAhnwROpc-ue2_480p/audio.m3u8?preview=1",
+    "https://tr.snapchat.com/p",
+    "https://tr.snapchat.com/cm/i?pid=192d9db6-f3e3-45a3-81fb-65af3d16cc9a&u_scsid=cf8304bd-36d5-4937-b896-9d1967cd9098&u_sclid=30fc2369-ca2b-4fe9-9823-7a7fcd298d2e",
+    "https://live.us.shoplive.cloud/live-p/45-5PSTSROWzoMcxEfpc-ue2_480p/video.m3u8?preview=1&_HLS_msn=74687&_HLS_part=1",
+    "https://googleads.g.doubleclick.net/pagead/viewthroughconversion/1070599711/?random=1794512679000&cv=11&fst=1794512679000&bg=ffffff&guid=ON&async=1&en=gtag.conf",
+    "https://googleads.g.doubleclick.net/pagead/viewthroughconversion/16653549404/?random=1794512679084&cv=11&fst=1794512679084&bg=ffffff&guid=ON&async=1&en=gtag.con",
+    "https://googleads.g.doubleclick.net/pagead/viewthroughconversion/1070599711/?random=1794512679133&cv=11&fst=1794512679133&bg=ffffff&guid=ON&async=1&en=page_view",
+    "https://tr.snapchat.com/config/com/192d9db6-f3e3-45a3-81fb-65af3d16cc9a.js?v=3.65.0-2611102053",
+    "https://ad.doubleclick.net/ccm/s/collect?auid=997895525.1794512679&gtm=45be6bb0v892503511za208zd892503511xecxf1&fmt=3",
+    "https://www.facebook.com/tr/?id=775033202546050&ev=PageView&dl=https%3A%2F%2Fwww.ebay.com%2F&rl=&if=false&ts=1794512683674&iw=false&cd[_e]=-1&cd[e]=-1&cd[s]=0&c",
+    "https://tr.snapchat.com/p"
+   ],
+   "total_s": 251.39,
+   "net_failures": [],
+   "http_status": 200,
+   "stderr_errors": [
+    "[JS] Rive WASM load error details: [object Object]",
+    "[JS warn] Failed to load WASM from https://unpkg.com/@rive-app/canvas-lite@2.44.2/rive.wasm (console.assert is not a function), trying fallback URL: https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@2.44.2/rive_fallback.wasm",
+    "[JS error] Could not load Rive WASM file from the configured WASM URL or its fallback (https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@2.44.2/rive_fallback.wasm).",
+    "Error details:",
+    "- Type: TypeError",
+    "- WebAssembly-specific error: false",
+    "✗ https://i.ebayimg.com/images/g/VxoAAeSwHuNqzqhn/s-l960.webp (read: H2 connection lost: network error: no response to PING for 5000 ms)",
+    "Пропуск картинки https://i.ebayimg.com/images/g/VxoAAeSwHuNqzqhn/s-l960.webp: network error: H2 connection lost: network error: no response to PING for 5000 ms",
+    "✗ https://i.ebayimg.com/images/g/TEgAAeSw31xq59wm/s-l960.webp (read: H2 connection lost: network error: no response to PING for 5000 ms)",
+    "Пропуск картинки https://i.ebayimg.com/images/g/TEgAAeSw31xq59wm/s-l960.webp: network error: H2 connection lost: network error: no response to PING for 5000 ms",
+    "✗ https://i.ebayimg.com/images/g/WXQAAeSw4xxq3C1q/s-l64.webp (read: H2 connection lost: network error: no response to PING for 5000 ms)",
+    "✗ https://i.ebayimg.com/images/g/aj4AAeSww6dq9d63/s-l960.webp (read: H2 connection lost: network error: no response to PING for 5000 ms)",
+    "✗ https://i.ebayimg.com/images/g/JGIAAeSws~hq6qNL/s-l960.webp (read: H2 connection lost: network error: no response to PING for 5000 ms)",
+    "Пропуск картинки https://i.ebayimg.com/images/g/JGIAAeSws~hq6qNL/s-l960.webp: network error: H2 connection lost: network error: no response to PING for 5000 ms",
+    "✗ https://i.ebayimg.com/images/g/ticAAeSwUnJq6sNx/s-l960.webp (read: H2 connection lost: network error: no response to PING for 5000 ms)",
+    "Lazy: пропуск https://i.ebayimg.com/images/g/WXQAAeSw4xxq3C1q/s-l64.webp: network error: H2 connection lost: network error: no response to PING for 5000 ms",
+    "Пропуск картинки https://i.ebayimg.com/images/g/aj4AAeSww6dq9d63/s-l960.webp: network error: H2 connection lost: network error: no response to PING for 5000 ms",
+    "✗ https://i.ebayimg.com/images/g/HMEAAeSwRfxq412V/s-l960.webp (read: H2 connection lost: network error: no response to PING for 5000 ms)",
+    "Пропуск картинки https://i.ebayimg.com/images/g/ticAAeSwUnJq6sNx/s-l960.webp: network error: H2 connection lost: network error: no response to PING for 5000 ms",
+    "Пропуск картинки https://i.ebayimg.com/images/g/HMEAAeSwRfxq412V/s-l960.webp: network error: H2 connection lost: network error: no response to PING for 5000 ms",
+    "✗ https://i.ebayimg.com/images/g/Qc8AAOSwnm5kdmMP/s-l64.webp (read: H2 connection lost: network error: no response to PING for 5000 ms)",
+    "Lazy: пропуск https://i.ebayimg.com/images/g/Qc8AAOSwnm5kdmMP/s-l64.webp: network error: H2 connection lost: network error: no response to PING for 5000 ms",
+    "✗ https://i.ebayimg.com/images/g/IE4AAeSwpgRq38~B/s-l500.webp (read: H2 connection lost: network error: no response to PING for 5000 ms)",
+    "Lazy: пропуск https://i.ebayimg.com/images/g/IE4AAeSwpgRq38~B/s-l500.webp: network error: H2 connection lost: network error: no response to PING for 5000 ms",
+    "✗ https://i.ebayimg.com/images/g/UFkAAeSwondq38~B/s-l500.webp (read: H2 connection lost: network error: no response to PING for 5000 ms)",
+    "Lazy: пропуск https://i.ebayimg.com/images/g/UFkAAeSwondq38~B/s-l500.webp: network error: H2 connection lost: network error: no response to PING for 5000 ms",
+    "[JS warn] PerformanceObserver: unsupported entryType first-input",
+    "[worker] fetch: chrome-extension://fcoeoabgfenejglbffodgkkbkcdhcgfn/assets/agent-visual-indicator.js-Ct7LqXhp.js: network error: unsupported scheme: chrome-extension",
+    "[worker] fetch: chrome-extension://ghbmnnjooekpmoecnnnilnnbdlolhkhi/page_embed_script.js: network error: unsupported scheme: chrome-extension",
+    "[worker] fetch: chrome-extension://magdfpiahgilkjlfgpedjjfpomdlkan/book-ticket.html: network error: unsupported scheme: chrome-extension",
+    "[worker] fetch: chrome-extension://hehggadaopoacecdllhhajmbjkdcmajg/images/cursor-chat.png: network error: unsupported scheme: chrome-extension",
+    "[worker] fetch: chrome-extension://lfkehkpjohcoelkpembgemeipeppanef/images/cursor-chat.png: network error: unsupported scheme: chrome-extension",
+    "[worker] fetch: chrome-extension://odlomjlbamekndcpllcnffbgeohgkmjh/images/cursor-chat.png: network error: unsupported scheme: chrome-extension",
+    "[unhandled-rejection] TypeError: Cannot read properties of undefined (reading 'contentDocument')",
+    "[unhandled-rejection stack] TypeError: Cannot read properties of undefined (reading 'contentDocument')",
+    "[JS] Pinterest Tag Error: 'load' command was called multiple times.  Previously for tag id '%s', now for tag id '%s'. 2615534500061 2615534500061"
+   ],
+   "stderr_error_sigs": {
+    "[js] rive wasm load error details: [object object]": {
+     "count": 2,
+     "sample": "[JS] Rive WASM load error details: [object Object]"
+    },
+    "[js warn] failed to load wasm from https://unpkg.com/@rive-app/canvas-lite@N.N/rive.wasm (console.assert is not a function), trying fallback url: https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@N.N/rive_fallback.wasm": {
+     "count": 1,
+     "sample": "[JS warn] Failed to load WASM from https://unpkg.com/@rive-app/canvas-lite@2.44.2/rive.wasm (console.assert is not a function), trying fallback URL: https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@2.44.2/rive_fallback.wasm"
+    },
+    "[js error] could not load rive wasm file from the configured wasm url or its fallback (https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@N.N/rive_fallback.wasm).": {
+     "count": 1,
+     "sample": "[JS error] Could not load Rive WASM file from the configured WASM URL or its fallback (https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@2.44.2/rive_fallback.wasm)."
+    },
+    "error details:": {
+     "count": 1,
+     "sample": "Error details:"
+    },
+    "- type: typeerror": {
+     "count": 1,
+     "sample": "- Type: TypeError"
+    },
+    "- webassembly-specific error: false": {
+     "count": 1,
+     "sample": "- WebAssembly-specific error: false"
+    },
+    "✗ https://i.ebayimg.com/images/g/vxoaaeswhunqzqhn/s-lN.webp (read: hN connection lost: network error: no response to ping for N ms)": {
+     "count": 1,
+     "sample": "✗ https://i.ebayimg.com/images/g/VxoAAeSwHuNqzqhn/s-l960.webp (read: H2 connection lost: network error: no response to PING for 5000 ms)"
+    },
+    "пропуск картинки https://i.ebayimg.com/images/g/vxoaaeswhunqzqhn/s-lN.webp: network error: hN connection lost: network error: no response to ping for N ms": {
+     "count": 1,
+     "sample": "Пропуск картинки https://i.ebayimg.com/images/g/VxoAAeSwHuNqzqhn/s-l960.webp: network error: H2 connection lost: network error: no response to PING for 5000 ms"
+    },
+    "✗ https://i.ebayimg.com/images/g/tegaaeswNxqNwm/s-lN.webp (read: hN connection lost: network error: no response to ping for N ms)": {
+     "count": 1,
+     "sample": "✗ https://i.ebayimg.com/images/g/TEgAAeSw31xq59wm/s-l960.webp (read: H2 connection lost: network error: no response to PING for 5000 ms)"
+    },
+    "пропуск картинки https://i.ebayimg.com/images/g/tegaaeswNxqNwm/s-lN.webp: network error: hN connection lost: network error: no response to ping for N ms": {
+     "count": 1,
+     "sample": "Пропуск картинки https://i.ebayimg.com/images/g/TEgAAeSw31xq59wm/s-l960.webp: network error: H2 connection lost: network error: no response to PING for 5000 ms"
+    },
+    "✗ https://i.ebayimg.com/images/g/wxqaaeswNxxqNcNq/s-lN.webp (read: hN connection lost: network error: no response to ping for N ms)": {
+     "count": 1,
+     "sample": "✗ https://i.ebayimg.com/images/g/WXQAAeSw4xxq3C1q/s-l64.webp (read: H2 connection lost: network error: no response to PING for 5000 ms)"
+    },
+    "✗ https://i.ebayimg.com/images/g/ajNaaeswwNdqNdN/s-lN.webp (read: hN connection lost: network error: no response to ping for N ms)": {
+     "count": 1,
+     "sample": "✗ https://i.ebayimg.com/images/g/aj4AAeSww6dq9d63/s-l960.webp (read: H2 connection lost: network error: no response to PING for 5000 ms)"
+    },
+    "✗ https://i.ebayimg.com/images/g/jgiaaesws~hqNqnl/s-lN.webp (read: hN connection lost: network error: no response to ping for N ms)": {
+     "count": 1,
+     "sample": "✗ https://i.ebayimg.com/images/g/JGIAAeSws~hq6qNL/s-l960.webp (read: H2 connection lost: network error: no response to PING for 5000 ms)"
+    },
+    "пропуск картинки https://i.ebayimg.com/images/g/jgiaaesws~hqNqnl/s-lN.webp: network error: hN connection lost: network error: no response to ping for N ms": {
+     "count": 1,
+     "sample": "Пропуск картинки https://i.ebayimg.com/images/g/JGIAAeSws~hq6qNL/s-l960.webp: network error: H2 connection lost: network error: no response to PING for 5000 ms"
+    },
+    "✗ https://i.ebayimg.com/images/g/ticaaeswunjqNsnx/s-lN.webp (read: hN connection lost: network error: no response to ping for N ms)": {
+     "count": 1,
+     "sample": "✗ https://i.ebayimg.com/images/g/ticAAeSwUnJq6sNx/s-l960.webp (read: H2 connection lost: network error: no response to PING for 5000 ms)"
+    },
+    "lazy: пропуск https://i.ebayimg.com/images/g/wxqaaeswNxxqNcNq/s-lN.webp: network error: hN connection lost: network error: no response to ping for N ms": {
+     "count": 1,
+     "sample": "Lazy: пропуск https://i.ebayimg.com/images/g/WXQAAeSw4xxq3C1q/s-l64.webp: network error: H2 connection lost: network error: no response to PING for 5000 ms"
+    },
+    "пропуск картинки https://i.ebayimg.com/images/g/ajNaaeswwNdqNdN/s-lN.webp: network error: hN connection lost: network error: no response to ping for N ms": {
+     "count": 1,
+     "sample": "Пропуск картинки https://i.ebayimg.com/images/g/aj4AAeSww6dq9d63/s-l960.webp: network error: H2 connection lost: network error: no response to PING for 5000 ms"
+    },
+    "✗ https://i.ebayimg.com/images/g/hmeaaeswrfxqNv/s-lN.webp (read: hN connection lost: network error: no response to ping for N ms)": {
+     "count": 1,
+     "sample": "✗ https://i.ebayimg.com/images/g/HMEAAeSwRfxq412V/s-l960.webp (read: H2 connection lost: network error: no response to PING for 5000 ms)"
+    },
+    "пропуск картинки https://i.ebayimg.com/images/g/ticaaeswunjqNsnx/s-lN.webp: network error: hN connection lost: network error: no response to ping for N ms": {
+     "count": 1,
+     "sample": "Пропуск картинки https://i.ebayimg.com/images/g/ticAAeSwUnJq6sNx/s-l960.webp: network error: H2 connection lost: network error: no response to PING for 5000 ms"
+    },
+    "пропуск картинки https://i.ebayimg.com/images/g/hmeaaeswrfxqNv/s-lN.webp: network error: hN connection lost: network error: no response to ping for N ms": {
+     "count": 1,
+     "sample": "Пропуск картинки https://i.ebayimg.com/images/g/HMEAAeSwRfxq412V/s-l960.webp: network error: H2 connection lost: network error: no response to PING for 5000 ms"
+    },
+    "✗ https://i.ebayimg.com/images/g/qcNaaoswnmNkdmmp/s-lN.webp (read: hN connection lost: network error: no response to ping for N ms)": {
+     "count": 1,
+     "sample": "✗ https://i.ebayimg.com/images/g/Qc8AAOSwnm5kdmMP/s-l64.webp (read: H2 connection lost: network error: no response to PING for 5000 ms)"
+    },
+    "lazy: пропуск https://i.ebayimg.com/images/g/qcNaaoswnmNkdmmp/s-lN.webp: network error: hN connection lost: network error: no response to ping for N ms": {
+     "count": 1,
+     "sample": "Lazy: пропуск https://i.ebayimg.com/images/g/Qc8AAOSwnm5kdmMP/s-l64.webp: network error: H2 connection lost: network error: no response to PING for 5000 ms"
+    },
+    "✗ https://i.ebayimg.com/images/g/ieNaaeswpgrqN~b/s-lN.webp (read: hN connection lost: network error: no response to ping for N ms)": {
+     "count": 1,
+     "sample": "✗ https://i.ebayimg.com/images/g/IE4AAeSwpgRq38~B/s-l500.webp (read: H2 connection lost: network error: no response to PING for 5000 ms)"
+    },
+    "lazy: пропуск https://i.ebayimg.com/images/g/ieNaaeswpgrqN~b/s-lN.webp: network error: hN connection lost: network error: no response to ping for N ms": {
+     "count": 1,
+     "sample": "Lazy: пропуск https://i.ebayimg.com/images/g/IE4AAeSwpgRq38~B/s-l500.webp: network error: H2 connection lost: network error: no response to PING for 5000 ms"
+    },
+    "✗ https://i.ebayimg.com/images/g/ufkaaeswondqN~b/s-lN.webp (read: hN connection lost: network error: no response to ping for N ms)": {
+     "count": 1,
+     "sample": "✗ https://i.ebayimg.com/images/g/UFkAAeSwondq38~B/s-l500.webp (read: H2 connection lost: network error: no response to PING for 5000 ms)"
+    },
+    "lazy: пропуск https://i.ebayimg.com/images/g/ufkaaeswondqN~b/s-lN.webp: network error: hN connection lost: network error: no response to ping for N ms": {
+     "count": 1,
+     "sample": "Lazy: пропуск https://i.ebayimg.com/images/g/UFkAAeSwondq38~B/s-l500.webp: network error: H2 connection lost: network error: no response to PING for 5000 ms"
+    },
+    "[js warn] performanceobserver: unsupported entrytype first-input": {
+     "count": 1,
+     "sample": "[JS warn] PerformanceObserver: unsupported entryType first-input"
+    },
+    "[worker] fetch: chrome-extension://fcoeoabgfenejglbffodgkkbkcdhcgfn/assets/agent-visual-indicator.js-ctNlqxhp.js: network error: unsupported scheme: chrome-extension": {
+     "count": 1,
+     "sample": "[worker] fetch: chrome-extension://fcoeoabgfenejglbffodgkkbkcdhcgfn/assets/agent-visual-indicator.js-Ct7LqXhp.js: network error: unsupported scheme: chrome-extension"
+    },
+    "[worker] fetch: chrome-extension://ghbmnnjooekpmoecnnnilnnbdlolhkhi/page_embed_script.js: network error: unsupported scheme: chrome-extension": {
+     "count": 1,
+     "sample": "[worker] fetch: chrome-extension://ghbmnnjooekpmoecnnnilnnbdlolhkhi/page_embed_script.js: network error: unsupported scheme: chrome-extension"
+    },
+    "[worker] fetch: chrome-extension://magdfpiahgilkjlfgpedjjfpomdlkan/book-ticket.html: network error: unsupported scheme: chrome-extension": {
+     "count": 1,
+     "sample": "[worker] fetch: chrome-extension://magdfpiahgilkjlfgpedjjfpomdlkan/book-ticket.html: network error: unsupported scheme: chrome-extension"
+    },
+    "[worker] fetch: chrome-extension://hehggadaopoacecdllhhajmbjkdcmajg/images/cursor-chat.png: network error: unsupported scheme: chrome-extension": {
+     "count": 1,
+     "sample": "[worker] fetch: chrome-extension://hehggadaopoacecdllhhajmbjkdcmajg/images/cursor-chat.png: network error: unsupported scheme: chrome-extension"
+    },
+    "[worker] fetch: chrome-extension://lfkehkpjohcoelkpembgemeipeppanef/images/cursor-chat.png: network error: unsupported scheme: chrome-extension": {
+     "count": 1,
+     "sample": "[worker] fetch: chrome-extension://lfkehkpjohcoelkpembgemeipeppanef/images/cursor-chat.png: network error: unsupported scheme: chrome-extension"
+    },
+    "[worker] fetch: chrome-extension://odlomjlbamekndcpllcnffbgeohgkmjh/images/cursor-chat.png: network error: unsupported scheme: chrome-extension": {
+     "count": 1,
+     "sample": "[worker] fetch: chrome-extension://odlomjlbamekndcpllcnffbgeohgkmjh/images/cursor-chat.png: network error: unsupported scheme: chrome-extension"
+    },
+    "[unhandled-rejection] typeerror: cannot read properties of undefined (reading 'contentdocument')": {
+     "count": 1,
+     "sample": "[unhandled-rejection] TypeError: Cannot read properties of undefined (reading 'contentDocument')"
+    },
+    "[unhandled-rejection stack] typeerror: cannot read properties of undefined (reading 'contentdocument')": {
+     "count": 1,
+     "sample": "[unhandled-rejection stack] TypeError: Cannot read properties of undefined (reading 'contentDocument')"
+    },
+    "[js] pinterest tag error: 'load' command was called multiple times. previously for tag id '%s', now for tag id '%s'. N N": {
+     "count": 1,
+     "sample": "[JS] Pinterest Tag Error: 'load' command was called multiple times.  Previously for tag id '%s', now for tag id '%s'. 2615534500061 2615534500061"
+    }
+   },
+   "cur_mb": 1242.1,
+   "peak_mb": 1320.7,
+   "cpu_s": 281.4,
+   "os_samples": 249,
+   "os_threads_max": 65,
+   "os_handles_max": 742,
+   "os_gdi_max": 13,
+   "os_user_max": 39,
+   "os_private_mb_max": 1284.6,
+   "os_ws_mb_max": 1327.3,
+   "os_tcp_max": 20,
+   "os_children_max": 0,
+   "os_threads_end": 65,
+   "os_handles_end": 741,
+   "os_private_mb_end": 1195.7,
+   "os_pagefile_peak_mb": 1312.8,
+   "os_cpu_user_s": 277.03,
+   "os_cpu_kernel_s": 5.75,
+   "os_page_faults": 1708269,
+   "os_io_read_mb": 26.32,
+   "os_io_write_mb": 4.05,
+   "os_io_other_mb": 2.43,
+   "os_io_read_ops": 66,
+   "os_io_write_ops": 532576,
+   "os_io_other_ops": 567331,
+   "os_cpu_pct_max": 233.0,
+   "os_cpu_pct_avg": 112.3,
+   "os_cpu_pct_p50": 132.7,
+   "os_busy_s": 198.1,
+   "os_tcp_states_at_max": {
+    "ESTABLISHED": 19,
+    "LISTEN": 1
+   },
+   "sys_cpu_pct_avg": 17.0,
+   "sys_cpu_pct_max": 46.7,
+   "sys_free_mb_min": 6001,
+   "se_lines": 48289,
+   "se_net_ok": 151,
+   "se_net_fail": 21,
+   "se_panics": 0,
+   "se_blocked": 0,
+   "se_warnings": 12,
+   "se_stack_overflow": 0,
+   "se_wgpu_adapter": "[wgpu] adapter: Intel(R) UHD Graphics (IntegratedGpu, Vulkan)",
+   "alive_after": true,
+   "proc_peak_mb_total": 1353.4,
+   "proc_cpu_s_total": 283.47,
+   "broken_render_signal": false,
+   "final_applied_s": 10.38,
+   "final_frame_s": 10.38,
+   "suspected_duplicate_frame": false,
+   "status": "DEGRADED",
+   "stderr_log": "live.stderr.ebay.0.log"
+  },
+  {
+   "slug": "ebay",
+   "url": "https://www.ebay.com/",
+   "restarted": false,
+   "spawn_s": 0.53,
+   "started_at": "2026-11-12T22:45:34",
+   "own_tab": true,
+   "nav_ack_s": 0.43,
+   "ready_s": 84.06,
+   "network_idle": true,
+   "png_size": [
+    1920,
+    945
+   ],
+   "frame_colors": 3900,
+   "frame_dominant_frac": 0.4899,
+   "frame_dominant_rgb": [
+    255,
+    255,
+    255
+   ],
+   "frame_top_dominant_frac": 0.4391,
+   "frame_blank": false,
+   "png_hash": "fec639f43c379f3bceb3b602f35f0bfd",
+   "console_total": 14,
+   "console_errors": [
+    "Could not load Rive WASM file from the configured WASM URL or its fallback (https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@2.44.2/rive_fallback.wasm).\nPossible reasons:\n- Network connection is down\n- WebAssembly is not supported in this environment\n- The WASM file is corrupted or incompatible\n\nError details:\n- Type: TypeError\n- Message: console.assert is not a function\n- WebAssembly-specific error: false\n\nTo resolve, you may need to:\n1. Check your network connection\n2. Set a new WASM source via RuntimeLoader.setWasmUrl()\n3. Call RuntimeLoader.awaitInstance() again"
+   ],
+   "console_network_errors": [],
+   "console_error_sigs": {
+    "could not load rive wasm file from the configured wasm url or its fallback (https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@N.N/rive_fallback.wasm). possible reasons: - network connection is down - webassembly is not supported in this environment - the wasm file is corrupted or incompatible error details: - type: typeerror - message: console.assert is not a function - webassembly-specific error: false to resolve, you may need to: N. check your network connection N. set a new wasm source via runtimeloader.setwasmurl() N. call runtimeloader.awaitinstance() again": {
+     "count": 1,
+     "sample": "Could not load Rive WASM file from the configured WASM URL or its fallback (https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@2.44.2/rive_fallback.wasm).\nPossible reasons:\n- Network connection is down\n- WebAssembly is not supported in this environment\n- The WASM file is corrupted or incompatible\n\nError details:\n- Type: TypeError\n- Message: console.assert is not a function\n- WebAssembly-specific error: false\n\nTo resolve, you may need to:\n1. Check your network connection\n2. Set a new WASM source via RuntimeLoader.setWasmUrl()\n3. Call RuntimeLoader.awaitInstance() again"
+    }
+   },
+   "console_levels": {
+    "Warn": 10,
+    "Log": 3,
+    "Error": 1
+   },
+   "console_warnings": [
+    "[Rive: state-change-events] Subscribing to state change events at runtime is deprecated and will be removed in a future major version: use data binding (view model property observers) or state machine actions to react to changes from your graphic instead. See https://rive.app/docs/editor/state-machi",
+    "[Rive: state-machines-param] The `stateMachines` parameter is deprecated: please use `stateMachine` with a single state machine name instead.\nTo suppress this warning, set Rive.suppressDeprecationWarnings = [\"state-machines-param\"]",
+    "Failed to load WASM from https://unpkg.com/@rive-app/canvas-lite@2.44.2/rive.wasm (console.assert is not a function), trying fallback URL: https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@2.44.2/rive_fallback.wasm",
+    "Header: trk missing",
+    "Header: trk missing",
+    "Header: trk missing",
+    "Header: trk missing",
+    "Header: trk missing",
+    "PerformanceObserver: unsupported entryType first-input",
+    "PerformanceObserver: the buffered flag is ignored together with entryTypes"
+   ],
+   "page": {
+    "errors": {},
+    "title": "Electronics, Cars, Fashion, Collectibles & More | eBay",
+    "location": "https://www.ebay.com/",
+    "ready_state": "complete",
+    "compat_mode": "CSS1Compat",
+    "charset": "UTF-8",
+    "lang": "en-US",
+    "nodes": 2641,
+    "text_len": 471151,
+    "scroll_h": 1875.2861328125,
+    "scroll_w": 1920,
+    "viewport": [
+     1920,
+     945,
+     1
+    ],
+    "scripts": 64,
+    "scripts_ext": 42,
+    "scripts_module": 1,
+    "stylesheets": 5,
+    "style_tags": 3,
+    "iframes": 2,
+    "links": 507,
+    "forms": 1,
+    "inputs": 80,
+    "videos": 25,
+    "canvases": 1,
+    "svgs": 77,
+    "custom_elements": 0,
+    "shadow_hosts": 0,
+    "imgs": 76,
+    "imgs_broken": 0,
+    "imgs_pending": 47,
+    "imgs_lazy": 66,
+    "fonts_status": "loaded",
+    "fonts_n": 8,
+    "perf_resources": 110,
+    "perf_transfer_kb": 9272,
+    "nav_timing": {
+     "ttfb": 0,
+     "dcl": 8818.206,
+     "load": 0,
+     "type": "navigate",
+     "transfer": 483358
+    },
+    "paint_timing": [
+     [
+      "first-paint",
+      11182
+     ],
+     [
+      "first-contentful-paint",
+      11182
+     ]
+    ],
+    "js_heap_mb": null,
+    "now_ms": 174057,
+    "cookie_len": 2685,
+    "local_storage_keys": 10,
+    "sw_supported": true
+   },
+   "page_probe_s": 7.69,
+   "net_requests": 132,
+   "net_bytes_mb": 0.0,
+   "net_status_hist": {
+    "2xx": 106,
+    "0": 26
+   },
+   "net_hosts": 27,
+   "net_top_hosts": {
+    "live.us.shoplive.cloud": 35,
+    "i.ebayimg.com": 24,
+    "ir.ebaystatic.com": 14,
+    "mkttag.ebay.com": 10,
+    "www.ebay.com": 8,
+    "www.google.com": 5,
+    "ct.pinterest.com": 5,
+    "tr.snapchat.com": 4
+   },
+   "net_kinds": {
+    "-": 35,
+    "m3u8": 29,
+    "js": 28,
+    "webp": 24,
+    "fmp4": 6,
+    "ttf": 2,
+    "woff2": 2,
+    "ico": 1,
+    "svg": 1,
+    "png": 1
+   },
+   "net_failed_urls": [
+    "https://live.us.shoplive.cloud/live-p/45-5PSTSROWzoMcxEfpc-ue2_480p/video.m3u8?preview=1&_HLS_msn=74825&_HLS_part=1",
+    "https://live.us.shoplive.cloud/live-p/45-5PSTSROWzoMcxEfpc-ue2_480p/video_1.fmp4?preview=1",
+    "https://live.us.shoplive.cloud/live-p/45-5PSTSROWzoMcxEfpc-ue2_480p/audio.m3u8?preview=1&_HLS_msn=74825&_HLS_part=1",
+    "https://live.us.shoplive.cloud/live-p/45-5PSTSROWzoMcxEfpc-ue2_480p/audio_1.fmp4?preview=1",
+    "https://live.us.shoplive.cloud/live-p/45-5zbPWJnQCtisDdAoc-ue2_480p/video.m3u8?preview=1",
+    "https://live.us.shoplive.cloud/live-p/45-5zbPWJnQCtisDdAoc-ue2_480p/audio.m3u8?preview=1",
+    "https://live.us.shoplive.cloud/live-p/45-2PQCaCNfoxsWiUyHb-ue2_480p/video.m3u8?preview=1",
+    "https://live.us.shoplive.cloud/live-p/45-5oYbXDhSMbrURdHrc-ue2_480p/video.m3u8?preview=1&_HLS_msn=7782&_HLS_part=0",
+    "https://live.us.shoplive.cloud/live-p/45-5oYbXDhSMbrURdHrc-ue2_480p/video_1.fmp4?preview=1",
+    "https://live.us.shoplive.cloud/live-p/45-5oYbXDhSMbrURdHrc-ue2_480p/audio.m3u8?preview=1&_HLS_msn=7782&_HLS_part=1",
+    "https://live.us.shoplive.cloud/live-p/45-5oYbXDhSMbrURdHrc-ue2_480p/audio_1.fmp4?preview=1",
+    "https://sp.analytics.yahoo.com/spp.pl?a=10000&ea=Homepage&.yp=10061494&js=no&fmseg=-1&guid=d14b4ef41a10a88c3cc2c8fbffc4c577&product_id=undefined&bn=undefined&op",
+    "https://live.us.shoplive.cloud/live-p/45-5CuNjZxPZAhnwROpc-ue2_480p/video.m3u8?preview=1",
+    "https://live.us.shoplive.cloud/live-p/45-5CuNjZxPZAhnwROpc-ue2_480p/audio.m3u8?preview=1",
+    "https://tr.snapchat.com/p",
+    "https://tr.snapchat.com/cm/i?pid=192d9db6-f3e3-45a3-81fb-65af3d16cc9a&u_scsid=1c2da1e5-f07a-4d46-8fb0-dd70d94955cb&u_sclid=cb887b10-d148-464e-96c0-8acff6deeb97",
+    "https://live.us.shoplive.cloud/live-p/45-5PSTSROWzoMcxEfpc-ue2_480p/video_1.fmp4?preview=1",
+    "https://live.us.shoplive.cloud/live-p/45-5PSTSROWzoMcxEfpc-ue2_480p/audio_1.fmp4?preview=1",
+    "https://googleads.g.doubleclick.net/pagead/viewthroughconversion/1070599711/?random=1794512910569&cv=11&fst=1794512910569&bg=ffffff&guid=ON&async=1&en=gtag.conf",
+    "https://googleads.g.doubleclick.net/pagead/viewthroughconversion/16653549404/?random=1794512910655&cv=11&fst=1794512910655&bg=ffffff&guid=ON&async=1&en=gtag.con",
+    "https://googleads.g.doubleclick.net/pagead/viewthroughconversion/1070599711/?random=1794512910708&cv=11&fst=1794512910708&bg=ffffff&guid=ON&async=1&en=page_view",
+    "https://tr.snapchat.com/config/com/192d9db6-f3e3-45a3-81fb-65af3d16cc9a.js?v=3.65.0-2611102053",
+    "https://live.us.shoplive.cloud/live-p/45-5zbPWJnQCtisDdAoc-ue2_480p/playlist.m3u8?preview=1",
+    "https://ad.doubleclick.net/ccm/s/collect?auid=1971975188.1794512911&gtm=45be6bb0v892503511za208zd892503511xecxf1&fmt=3",
+    "https://www.facebook.com/tr/?id=775033202546050&ev=PageView&dl=https%3A%2F%2Fwww.ebay.com%2F&rl=&if=false&ts=1794512915147&iw=false&cd[_e]=-1&cd[e]=-1&cd[s]=0&c",
+    "https://tr.snapchat.com/p"
+   ],
+   "total_s": 185.85,
+   "net_failures": [],
+   "http_status": 200,
+   "stderr_errors": [
+    "[JS] Rive WASM load error details: [object Object]",
+    "[JS warn] Failed to load WASM from https://unpkg.com/@rive-app/canvas-lite@2.44.2/rive.wasm (console.assert is not a function), trying fallback URL: https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@2.44.2/rive_fallback.wasm",
+    "[JS error] Could not load Rive WASM file from the configured WASM URL or its fallback (https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@2.44.2/rive_fallback.wasm).",
+    "Error details:",
+    "- Type: TypeError",
+    "- WebAssembly-specific error: false",
+    "[JS warn] PerformanceObserver: unsupported entryType first-input",
+    "✗ https://live.us.shoplive.cloud/live-p/45-2PQCaCNfoxsWiUyHb-ue2_480p/video.m3u8?preview=1 (read: H2 connection lost: network error: no response to PING for 5000 ms)",
+    "[worker] fetch: chrome-extension://fcoeoabgfenejglbffodgkkbkcdhcgfn/assets/agent-visual-indicator.js-Ct7LqXhp.js: network error: unsupported scheme: chrome-extension",
+    "[worker] fetch: chrome-extension://ghbmnnjooekpmoecnnnilnnbdlolhkhi/page_embed_script.js: network error: unsupported scheme: chrome-extension",
+    "[worker] fetch: chrome-extension://magdfpiahgilkjlfgpedjjfpomdlkan/book-ticket.html: network error: unsupported scheme: chrome-extension",
+    "[worker] fetch: chrome-extension://hehggadaopoacecdllhhajmbjkdcmajg/images/cursor-chat.png: network error: unsupported scheme: chrome-extension",
+    "[worker] fetch: chrome-extension://lfkehkpjohcoelkpembgemeipeppanef/images/cursor-chat.png: network error: unsupported scheme: chrome-extension",
+    "[worker] fetch: chrome-extension://odlomjlbamekndcpllcnffbgeohgkmjh/images/cursor-chat.png: network error: unsupported scheme: chrome-extension",
+    "[unhandled-rejection] TypeError: Cannot read properties of undefined (reading 'contentDocument')",
+    "[unhandled-rejection stack] TypeError: Cannot read properties of undefined (reading 'contentDocument')",
+    "[JS] Pinterest Tag Error: 'load' command was called multiple times.  Previously for tag id '%s', now for tag id '%s'. 2615534500061 2615534500061",
+    "повтор после сорванного TLS-рукопожатия: https://sp.analytics.yahoo.com/spp.pl?a=10000&ea=Homepage&.yp=10061494&js=no&fmseg=-1&guid=d14b4ef41a10a88c3cc2c8fbffc4c577&product_id=undefined&bn=undefined&opid=4624852&gv=undefined&catid=undefined&purchase_order=undefined (network error: TLS handshake: Попытка установить соединение была безуспешной, т.к. от другого компьютера за требуемое время не получен нужный отклик, или было разорвано уже установленное соединение из-за неверного отклика уже подключенного компьютера. (os error 10060))"
+   ],
+   "stderr_error_sigs": {
+    "[js] rive wasm load error details: [object object]": {
+     "count": 2,
+     "sample": "[JS] Rive WASM load error details: [object Object]"
+    },
+    "[js warn] failed to load wasm from https://unpkg.com/@rive-app/canvas-lite@N.N/rive.wasm (console.assert is not a function), trying fallback url: https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@N.N/rive_fallback.wasm": {
+     "count": 1,
+     "sample": "[JS warn] Failed to load WASM from https://unpkg.com/@rive-app/canvas-lite@2.44.2/rive.wasm (console.assert is not a function), trying fallback URL: https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@2.44.2/rive_fallback.wasm"
+    },
+    "[js error] could not load rive wasm file from the configured wasm url or its fallback (https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@N.N/rive_fallback.wasm).": {
+     "count": 1,
+     "sample": "[JS error] Could not load Rive WASM file from the configured WASM URL or its fallback (https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@2.44.2/rive_fallback.wasm)."
+    },
+    "error details:": {
+     "count": 1,
+     "sample": "Error details:"
+    },
+    "- type: typeerror": {
+     "count": 1,
+     "sample": "- Type: TypeError"
+    },
+    "- webassembly-specific error: false": {
+     "count": 1,
+     "sample": "- WebAssembly-specific error: false"
+    },
+    "[js warn] performanceobserver: unsupported entrytype first-input": {
+     "count": 1,
+     "sample": "[JS warn] PerformanceObserver: unsupported entryType first-input"
+    },
+    "✗ https://live.us.shoplive.cloud/live-p/N-Npqcacnfoxswiuyhb-ueN_Np/video.mNuN?preview=N (read: hN connection lost: network error: no response to ping for N ms)": {
+     "count": 1,
+     "sample": "✗ https://live.us.shoplive.cloud/live-p/45-2PQCaCNfoxsWiUyHb-ue2_480p/video.m3u8?preview=1 (read: H2 connection lost: network error: no response to PING for 5000 ms)"
+    },
+    "[worker] fetch: chrome-extension://fcoeoabgfenejglbffodgkkbkcdhcgfn/assets/agent-visual-indicator.js-ctNlqxhp.js: network error: unsupported scheme: chrome-extension": {
+     "count": 1,
+     "sample": "[worker] fetch: chrome-extension://fcoeoabgfenejglbffodgkkbkcdhcgfn/assets/agent-visual-indicator.js-Ct7LqXhp.js: network error: unsupported scheme: chrome-extension"
+    },
+    "[worker] fetch: chrome-extension://ghbmnnjooekpmoecnnnilnnbdlolhkhi/page_embed_script.js: network error: unsupported scheme: chrome-extension": {
+     "count": 1,
+     "sample": "[worker] fetch: chrome-extension://ghbmnnjooekpmoecnnnilnnbdlolhkhi/page_embed_script.js: network error: unsupported scheme: chrome-extension"
+    },
+    "[worker] fetch: chrome-extension://magdfpiahgilkjlfgpedjjfpomdlkan/book-ticket.html: network error: unsupported scheme: chrome-extension": {
+     "count": 1,
+     "sample": "[worker] fetch: chrome-extension://magdfpiahgilkjlfgpedjjfpomdlkan/book-ticket.html: network error: unsupported scheme: chrome-extension"
+    },
+    "[worker] fetch: chrome-extension://hehggadaopoacecdllhhajmbjkdcmajg/images/cursor-chat.png: network error: unsupported scheme: chrome-extension": {
+     "count": 1,
+     "sample": "[worker] fetch: chrome-extension://hehggadaopoacecdllhhajmbjkdcmajg/images/cursor-chat.png: network error: unsupported scheme: chrome-extension"
+    },
+    "[worker] fetch: chrome-extension://lfkehkpjohcoelkpembgemeipeppanef/images/cursor-chat.png: network error: unsupported scheme: chrome-extension": {
+     "count": 1,
+     "sample": "[worker] fetch: chrome-extension://lfkehkpjohcoelkpembgemeipeppanef/images/cursor-chat.png: network error: unsupported scheme: chrome-extension"
+    },
+    "[worker] fetch: chrome-extension://odlomjlbamekndcpllcnffbgeohgkmjh/images/cursor-chat.png: network error: unsupported scheme: chrome-extension": {
+     "count": 1,
+     "sample": "[worker] fetch: chrome-extension://odlomjlbamekndcpllcnffbgeohgkmjh/images/cursor-chat.png: network error: unsupported scheme: chrome-extension"
+    },
+    "[unhandled-rejection] typeerror: cannot read properties of undefined (reading 'contentdocument')": {
+     "count": 1,
+     "sample": "[unhandled-rejection] TypeError: Cannot read properties of undefined (reading 'contentDocument')"
+    },
+    "[unhandled-rejection stack] typeerror: cannot read properties of undefined (reading 'contentdocument')": {
+     "count": 1,
+     "sample": "[unhandled-rejection stack] TypeError: Cannot read properties of undefined (reading 'contentDocument')"
+    },
+    "[js] pinterest tag error: 'load' command was called multiple times. previously for tag id '%s', now for tag id '%s'. N N": {
+     "count": 1,
+     "sample": "[JS] Pinterest Tag Error: 'load' command was called multiple times.  Previously for tag id '%s', now for tag id '%s'. 2615534500061 2615534500061"
+    },
+    "повтор после сорванного tls-рукопожатия: https://sp.analytics.yahoo.com/spp.pl?a=N&ea=homepage&.yp=N&js=no&fmseg=-N&guid=dNbNefNaNaNcNccNcNfbffcNcN&product_id=undefined&bn=undefined&opid=N&gv=undefined&catid=undefined&purchase_order=undefined (network error: tls handshake: попытка установить соединение была безуспешной, т.к. от другого компьютера за требуемое время не получен нужный отклик, или было разорвано уже установленное соединение из-за неверного отклика уже подключенного компьютера. (os error N))": {
+     "count": 1,
+     "sample": "повтор после сорванного TLS-рукопожатия: https://sp.analytics.yahoo.com/spp.pl?a=10000&ea=Homepage&.yp=10061494&js=no&fmseg=-1&guid=d14b4ef41a10a88c3cc2c8fbffc4c577&product_id=undefined&bn=undefined&opid=4624852&gv=undefined&catid=undefined&purchase_order=undefined (network error: TLS handshake: Попытка установить соединение была безуспешной, т.к. от другого компьютера за требуемое время не получен нужный отклик, или было разорвано уже установленное соединение из-за неверного отклика уже подключенного компьютера. (os error 10060))"
+    }
+   },
+   "cur_mb": 1267.4,
+   "peak_mb": 1354.5,
+   "cpu_s": 262.37,
+   "os_samples": 184,
+   "os_threads_max": 65,
+   "os_handles_max": 734,
+   "os_gdi_max": 13,
+   "os_user_max": 39,
+   "os_private_mb_max": 1315.1,
+   "os_ws_mb_max": 1352.0,
+   "os_tcp_max": 19,
+   "os_children_max": 0,
+   "os_threads_end": 63,
+   "os_handles_end": 733,
+   "os_private_mb_end": 1221.4,
+   "os_pagefile_peak_mb": 1337.2,
+   "os_cpu_user_s": 256.66,
+   "os_cpu_kernel_s": 6.2,
+   "os_page_faults": 1783308,
+   "os_io_read_mb": 26.33,
+   "os_io_write_mb": 3.95,
+   "os_io_other_mb": 3.02,
+   "os_io_read_ops": 69,
+   "os_io_write_ops": 532919,
+   "os_io_other_ops": 554947,
+   "os_cpu_pct_max": 231.6,
+   "os_cpu_pct_avg": 141.0,
+   "os_cpu_pct_p50": 137.3,
+   "os_busy_s": 182.6,
+   "os_tcp_states_at_max": {
+    "ESTABLISHED": 17,
+    "FIN_WAIT1": 1,
+    "LISTEN": 1
+   },
+   "sys_cpu_pct_avg": 21.1,
+   "sys_cpu_pct_max": 43.1,
+   "sys_free_mb_min": 6004,
+   "se_lines": 47702,
+   "se_net_ok": 136,
+   "se_net_fail": 15,
+   "se_panics": 0,
+   "se_blocked": 0,
+   "se_warnings": 12,
+   "se_stack_overflow": 0,
+   "se_wgpu_adapter": "[wgpu] adapter: Intel(R) UHD Graphics (IntegratedGpu, Vulkan)",
+   "se_frame_summary": {
+    "count": "1694",
+    "min": "0.48ms",
+    "p50": "7.56ms",
+    "p95": "129.68ms",
+    "p99": "1443.77ms",
+    "max": "1907.22ms"
+   },
+   "se_engine_summary": {
+    "count": "15",
+    "min": "1240.45ms",
+    "p50": "1463.80ms",
+    "p95": "1921.95ms",
+    "p99": "1921.95ms",
+    "max": "1921.95ms"
+   },
+   "se_mem_report": {
+    "dl_cmds": "2212",
+    "prev_styles": "2519",
+    "dl_cache": "0.0MB",
+    "img_cache": "14/15.3MB",
+    "prefetch": "26/5.0MB",
+    "web_fonts": "4/0.3MB",
+    "gifs": "0/0.0MB",
+    "js_malloc": "-0.0MB",
+    "js_used": "-0.0MB"
+   },
+   "alive_after": true,
+   "proc_peak_mb_total": 1374.0,
+   "proc_cpu_s_total": 263.55,
+   "broken_render_signal": false,
+   "final_applied_s": 10.39,
+   "final_frame_s": 10.39,
+   "suspected_duplicate_frame": false,
+   "status": "DEGRADED",
+   "stderr_log": "live.stderr.ebay.0.log"
+  },
+  {
+   "slug": "ebay",
+   "url": "https://www.ebay.com/",
+   "source": {
+    "wall_s": 1.45,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 483322,
+    "error_lines": [],
+    "error_sigs": {},
+    "peak_mb": 15.5,
+    "cpu_s": 0.08
+   },
+   "http_status": 200,
+   "layout": {
+    "wall_s": 11.54,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 554454,
+    "error_lines": [
+     "[JS] Rive WASM load error details: [object Object]",
+     "[JS warn] Failed to load WASM from https://unpkg.com/@rive-app/canvas-lite@2.44.2/rive.wasm (console.assert is not a function), trying fallback URL: https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@2.44.2/rive_fallback.wasm",
+     "[JS error] Could not load Rive WASM file from the configured WASM URL or its fallback (https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@2.44.2/rive_fallback.wasm).",
+     "Error details:",
+     "- Type: TypeError",
+     "- WebAssembly-specific error: false"
+    ],
+    "error_sigs": {
+     "[js] rive wasm load error details: [object object]": {
+      "count": 1,
+      "sample": "[JS] Rive WASM load error details: [object Object]"
+     },
+     "[js warn] failed to load wasm from https://unpkg.com/@rive-app/canvas-lite@N.N/rive.wasm (console.assert is not a function), trying fallback url: https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@N.N/rive_fallback.wasm": {
+      "count": 1,
+      "sample": "[JS warn] Failed to load WASM from https://unpkg.com/@rive-app/canvas-lite@2.44.2/rive.wasm (console.assert is not a function), trying fallback URL: https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@2.44.2/rive_fallback.wasm"
+     },
+     "[js error] could not load rive wasm file from the configured wasm url or its fallback (https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@N.N/rive_fallback.wasm).": {
+      "count": 1,
+      "sample": "[JS error] Could not load Rive WASM file from the configured WASM URL or its fallback (https://cdn.jsdelivr.net/npm/@rive-app/canvas-lite@2.44.2/rive_fallback.wasm)."
+     },
+     "error details:": {
+      "count": 1,
+      "sample": "Error details:"
+     },
+     "- type: typeerror": {
+      "count": 1,
+      "sample": "- Type: TypeError"
+     },
+     "- webassembly-specific error: false": {
+      "count": 1,
+      "sample": "- WebAssembly-specific error: false"
+     }
+    },
+    "peak_mb": 420.9,
+    "cpu_s": 11.28,
+    "profile_top": [
+     "[profile]   1366.33ms",
+     "[profile]    383.53ms",
+     "[profile]     85.56ms",
+     "[profile]    732.22ms",
+     "[profile]    164.57ms",
+     "[profile]     24.84ms",
+     "[profile]   1285.78ms",
+     "[profile]      0.05ms",
+     "[profile]      0.00ms",
+     "[profile]   1271.84ms",
+     "[profile]    658.08ms",
+     "[profile]    105.94ms"
+    ]
+   },
+   "screenshot": {
+    "wall_s": 3.19,
+    "rc": 0,
+    "timed_out": false,
+    "stdout_bytes": 0,
+    "error_lines": [],
+    "error_sigs": {},
+    "peak_mb": 198.2,
+    "cpu_s": 1.48,
+    "png_size": [
+     1024,
+     720
+    ]
+   },
+   "phases": {
+    "net_parse_s": 1.45,
+    "style_layout_s": 10.09,
+    "paint_s": 0.0
+   },
+   "status": "OK"
+  }
+ ]
+}

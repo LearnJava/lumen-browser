@@ -980,6 +980,17 @@ fn parse_and_layout_for_test(html: &str) -> crate::page_pipeline::ParsedPage {
 /// [`parse_and_layout_for_test`] for a document fetched with `Referer: referrer`.
 #[cfg(feature = "v8")]
 fn parse_and_layout_with_referrer(html: &str, referrer: Option<&str>) -> crate::page_pipeline::ParsedPage {
+    parse_and_layout_with_compat(html, referrer, crate::compat_inject::CompatInject::none())
+}
+
+/// [`parse_and_layout_with_referrer`] plus an explicit compat-pack inject
+/// (COMPAT-PACK-CSS): the only test door into the injection path.
+#[cfg(feature = "v8")]
+fn parse_and_layout_with_compat(
+    html: &str,
+    referrer: Option<&str>,
+    compat_inject: crate::compat_inject::CompatInject,
+) -> crate::page_pipeline::ParsedPage {
     parse_and_layout(
         html.as_bytes(),
         Some("text/html"),
@@ -1005,6 +1016,7 @@ fn parse_and_layout_with_referrer(html: &str, referrer: Option<&str>) -> crate::
         None,
         referrer,
         None,
+        compat_inject,
     )
     .expect("pipeline must not fail on a well-formed page")
 }
@@ -1795,6 +1807,7 @@ fn load1_parse_html(live: bool, det: deterministic::DetConfig, html: &str) -> cr
         None,
         None,
         ctx,
+        crate::compat_inject::CompatInject::none(),
     )
     .expect("pipeline must not fail on a well-formed page")
 }
@@ -2085,3 +2098,68 @@ fn load3b_fingerprint_is_chunking_independent() {
         );
     }
 }
+
+// -- COMPAT-PACK-CSS: внедрение записей пакета в документ ------------------
+
+/// Страница для проверок внедрения: авторский стиль бьёт пакет по специфичности,
+/// баннеры различаются текстом.
+const COMPAT_INJECT_HTML: &str =
+    "<style>#t{font-size:12px}</style>\
+     <div id=\"t\">x</div>\
+     <div class=\"banner\">Мы используем печенье</div>\
+     <div class=\"banner\">Обычный блок</div>";
+
+#[cfg(feature = "v8")]
+fn compat_inject_page(inject: crate::compat_inject::CompatInject) -> crate::page_pipeline::ParsedPage {
+    parse_and_layout_with_compat(COMPAT_INJECT_HTML, None, inject)
+}
+
+/// Приёмка COMPAT-PACK-CSS: запись css меняет вычисленный стиль целевого
+/// элемента — изолированная таблица пакета идёт после авторских листов.
+#[cfg(feature = "v8")]
+#[test]
+fn compat_css_overrides_authored_style_of_target_element() {
+    let inject = crate::compat_inject::CompatInject {
+        css: "#t{font-size:40px}".into(),
+        hide_banners: Vec::new(),
+    };
+    let page = compat_inject_page(inject);
+    let doc = page.document.lock().expect("document lock");
+    let snap = lumen_layout::selector_query::computed_style_by_selector(&page.layout, &doc, "#t")
+        .expect("box for #t");
+    assert_eq!(snap.font_size, 40.0);
+}
+
+/// Тот же документ без записи: авторский стиль остаётся, баннеры не тронуты.
+#[cfg(feature = "v8")]
+#[test]
+fn without_compat_entry_authored_style_stands() {
+    let page = compat_inject_page(crate::compat_inject::CompatInject::none());
+    let doc = page.document.lock().expect("document lock");
+    let snap = lumen_layout::selector_query::computed_style_by_selector(&page.layout, &doc, "#t")
+        .expect("box for #t");
+    assert_eq!(snap.font_size, 12.0);
+    let ids = lumen_layout::selector_query::query_all(&doc, "div.banner");
+    assert_eq!(ids.len(), 2);
+    assert!(ids.iter().all(|&id| doc.get(id).get_attr("style").is_none()));
+}
+
+/// Приёмка COMPAT-PACK-CSS: hide_banner скрывает элемент только при совпадении
+/// текста записи.
+#[cfg(feature = "v8")]
+#[test]
+fn compat_hide_banner_hides_only_matching_text() {
+    let inject = crate::compat_inject::CompatInject {
+        css: String::new(),
+        hide_banners: vec![(".banner".into(), "печенье".into())],
+    };
+    let page = compat_inject_page(inject);
+    let doc = page.document.lock().expect("document lock");
+    let ids = lumen_layout::selector_query::query_all(&doc, "div.banner");
+    assert_eq!(ids.len(), 2);
+    let styles: Vec<Option<String>> =
+        ids.iter().map(|&id| doc.get(id).get_attr("style").map(str::to_owned)).collect();
+    assert!(styles[0].as_deref().unwrap_or("").contains("display:none"), "с текстом — скрыт");
+    assert!(styles[1].is_none(), "без текста записи — не тронут");
+}
+

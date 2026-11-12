@@ -21,13 +21,35 @@ impl Lumen {
     /// Записи пакета, применимые к `host` с учётом выбора пользователя; в отладочной
     /// сборке пакет выключен, список пуст. Единственная точка, откуда потребители пакета
     /// (CSS, идентичность, …) берут записи.
-    #[allow(dead_code)] // потребители — COMPAT-PACK-CSS/-IDENTITY/-PROTECTION/-FLAG (этап 2)
+    #[allow(dead_code)] // потребители — COMPAT-PACK-IDENTITY/-PROTECTION/-FLAG (этап 2)
     pub(crate) fn compat_pack_active(&self, host: &str) -> Vec<lumen_update_manifest::compat_pack::CompatEntry> {
         if cfg!(debug_assertions) {
             return Vec::new();
         }
         let pack = CompatPack::base(&lumen_storage::PslProvider::new());
         pack.active_entries_for_host(host, &self.compat_policy()).into_iter().cloned().collect()
+    }
+
+    /// Данные пакета для внедрения в документ с базой `base` (COMPAT-PACK-CSS):
+    /// `css` и `hide_banner` по хосту URL. Отладочная сборка и не-http(s) базы —
+    /// пустой набор; видимость через `document.styleSheets` внедрение не получает.
+    pub(crate) fn compat_inject_for_base(&self, base: &ResourceBase) -> crate::compat_inject::CompatInject {
+        if cfg!(debug_assertions) {
+            return crate::compat_inject::CompatInject::none();
+        }
+        let entries = match base {
+            ResourceBase::Url(u) => {
+                let Some(url) = lumen_core::url::Url::parse(u).ok().filter(|u| matches!(u.scheme(), "http" | "https")) else {
+                    return crate::compat_inject::CompatInject::none();
+                };
+                let Some(host) = url.host_ascii().ok() else {
+                    return crate::compat_inject::CompatInject::none();
+                };
+                self.compat_pack_active(&host)
+            }
+            _ => Vec::new(),
+        };
+        crate::compat_inject::CompatInject::from_entries(&entries)
     }
 
     /// Пересчитать применённые к `host` записи пакета (при каждой загрузке страницы) и

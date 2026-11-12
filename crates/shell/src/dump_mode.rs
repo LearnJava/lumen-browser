@@ -210,6 +210,7 @@ pub(crate) fn render_source_to_png(
         raw.sync_xhr_permissions_policy,
         raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(),
         None,
+        crate::compat_inject::CompatInject::none(),
     )?;
 
     // VTT-RENDER-S5 (BUG-1748): cue pages need the store mirror + one timer
@@ -603,6 +604,7 @@ pub(crate) fn do_print_to_pdf(
         raw.sync_xhr_permissions_policy,
         raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(),
         None,
+        crate::compat_inject::CompatInject::none(),
     )?;
     // VTT-RENDER-S5 (BUG-1748): mirror tracks + timer drain for cue pages.
     mirror_tracks_and_settle_cues(&mut parsed, vp);
@@ -701,6 +703,7 @@ pub(crate) fn do_print_to_pdf_with_opts(
         raw.sync_xhr_permissions_policy,
         raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(),
         None,
+        crate::compat_inject::CompatInject::none(),
     )?;
     // VTT-RENDER-S5 (BUG-1748): mirror tracks + timer drain for cue pages.
     mirror_tracks_and_settle_cues(&mut parsed, vp);
@@ -919,7 +922,7 @@ pub(crate) fn run_dump(
         }
         DumpKind::Layout => {
             let vp = dump_vp;
-            let mut parsed = parse_and_layout(&raw.bytes, raw.content_type.as_deref(), &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, None, lumen_core::ColorSpace::Srgb, false, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy, raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(), None)?;
+            let mut parsed = parse_and_layout(&raw.bytes, raw.content_type.as_deref(), &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, None, lumen_core::ColorSpace::Srgb, false, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy, raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(), None, crate::compat_inject::CompatInject::none())?;
             // VTT-RENDER-S5 (BUG-1748): mirror tracks + timer drain for cue pages.
             mirror_tracks_and_settle_cues(&mut parsed, vp);
             print!("{}", lumen_layout::serialize_layout_tree(&parsed.layout));
@@ -927,7 +930,7 @@ pub(crate) fn run_dump(
         }
         DumpKind::DisplayList => {
             let vp = dump_vp;
-            let mut parsed = parse_and_layout(&raw.bytes, raw.content_type.as_deref(), &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, None, lumen_core::ColorSpace::Srgb, false, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy, raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(), None)?;
+            let mut parsed = parse_and_layout(&raw.bytes, raw.content_type.as_deref(), &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, None, lumen_core::ColorSpace::Srgb, false, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy, raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(), None, crate::compat_inject::CompatInject::none())?;
             // VTT-RENDER-S5 (BUG-1748): mirror tracks + timer drain for cue pages.
             mirror_tracks_and_settle_cues(&mut parsed, vp);
             let custom = crate::display_list_metrics::custom_highlights(parsed.js_ctx.as_deref());
