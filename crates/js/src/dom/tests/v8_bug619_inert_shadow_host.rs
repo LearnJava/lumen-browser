@@ -73,7 +73,10 @@ fn non_inert_shadow_host_allows_focus_on_shadow_child() {
              button2.id = 'button-2'; \
              sr.appendChild(button2); \
              button2.focus(); \
-             document.activeElement === button2",
+             // BUG-1777: фокус внутри shadow-дерева: `ShadowRoot.activeElement`
+             // отвечает внутренним элементом, `document.activeElement` —
+             // top-level host (HTML LS §6.6.3, как в Chrome).
+             sr.activeElement === button2 && document.activeElement === host",
         )
         .unwrap(),
         lumen_core::JsValue::Bool(true),
