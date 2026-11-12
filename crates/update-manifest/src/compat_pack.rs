@@ -38,6 +38,10 @@ pub const PACK_TRUSTED_KEYS: &[(&str, [u8; 32])] = &[];
 /// ADR-034 §4: at most this many active `js_transform` records.
 pub const MAX_JS_TRANSFORMS: usize = 20;
 
+/// The size cap of an [`Action::Css`] stylesheet — the pack must not carry a
+/// whole design system, only a cosmetic override (ADR-034 §4).
+pub const MAX_CSS_BYTES: usize = 4096;
+
 /// Upper bound on a pack document — it is network input until verified.
 pub const MAX_PACK_BYTES: usize = 1 << 20;
 const MAX_ENTRIES: usize = 2000;
@@ -516,6 +520,11 @@ fn validate_entry(e: &CompatEntry, index: usize, psl: &dyn PublicSuffixList) -> 
     }
     if e.action.payloads().iter().any(|s| s.trim().is_empty()) {
         return bad("action payload is empty");
+    }
+    if let Action::Css { css } = &e.action
+        && css.len() > MAX_CSS_BYTES
+    {
+        return bad(format!("css is {} bytes, at most {MAX_CSS_BYTES}", css.len()).as_str());
     }
     if let Action::EngineFlag { flag } = &e.action
         && !lumen_core::engine_flags::EngineFlags::is_known(flag)

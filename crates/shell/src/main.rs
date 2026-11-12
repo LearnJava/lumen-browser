@@ -137,6 +137,7 @@ mod download;
 mod external_browser;
 mod handoff_page;
 mod compat_page;
+mod compat_inject;
 mod compat_indicator;
 mod compat_panel;
 mod compat_report;

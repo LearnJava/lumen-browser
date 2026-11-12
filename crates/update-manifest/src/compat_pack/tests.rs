@@ -291,6 +291,13 @@ fn unknown_engine_flag_name_is_rejected() {
 }
 
 #[test]
+fn css_over_four_kilobytes_is_rejected() {
+    assert!(pack(vec![entry("a-css", "a.com", css(&"a{}".repeat(MAX_CSS_BYTES / 3)))]).validate(&TestPsl).is_ok());
+    let reason = rejected(vec![entry("a-css", "a.com", css(&"a{}".repeat(MAX_CSS_BYTES / 3 + 1)))]);
+    assert!(reason.contains("at most 4096"), "{reason}");
+}
+
+#[test]
 fn policy_switches_off_one_record_or_the_whole_pack() {
     let p = pack(vec![
         entry("a-css", "a.com", css("x{}")),

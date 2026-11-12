@@ -102,8 +102,10 @@ pub(crate) fn render_bytes(
     // BUG-1118: see `parse_and_layout`'s doc comment on the same parameter —
     // forwarded straight through.
     dynamic_image_hook_ctx: Option<crate::dynamic_image_hook::DynamicImageHookCtx>,
+    // COMPAT-PACK-CSS: записи пакета для хоста этого документа (пусто — не применяется).
+    compat_inject: crate::compat_inject::CompatInject,
 ) -> Result<RenderedPage, Box<dyn Error>> {
-    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, push_backend, target, false, csp_header, report_to_endpoints, sync_xhr_document_policy, sync_xhr_permissions_policy, referrer_policy_header, document_referrer, dynamic_image_hook_ctx)?;
+    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, push_backend, target, false, csp_header, report_to_endpoints, sync_xhr_document_policy, sync_xhr_permissions_policy, referrer_policy_header, document_referrer, dynamic_image_hook_ctx, compat_inject)?;
     let display_list = crate::display_list_metrics::paint_ordered_in(&parsed.layout, viewport);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
@@ -728,6 +730,8 @@ fn build_page_cascade(
     viewport: Size,
     dark_mode: bool,
     media_print: bool,
+    // COMPAT-PACK-CSS: текст изолированной таблицы пакета (пусто — записи нет).
+    compat_css: &str,
 ) -> Result<PageCascade, Box<dyn Error>> {
     let (css, dynamic_css, link_outcomes, blocked_by_style_src, blocked_inline_style_policies, blocked_style_attr_nodes, blocked_style_attr_policies) = {
         let _s = lumen_core::trace::span("fetch-css", "net");
@@ -814,6 +818,14 @@ fn build_page_cascade(
         cookie_jar.clone(),
         crate::resource_base::document_referrer_policy(doc),
     );
+
+    // COMPAT-PACK-CSS: изолированная таблица пакета — сливается ПОСЛЕ авторских
+    // листов (последним словом в каскаде при равной специфичности), в реестр
+    // `stylesheet_nodes` не попадает, поэтому через `document.styleSheets` и
+    // пересборку DynamicCssBase странице не видна.
+    if !compat_css.is_empty() {
+        sheet.merge_from(lumen_css_parser::parse(compat_css));
+    }
 
     // CSSOM-1 срез 2: параллельный per-элементный реестр — не участвует в
     // каскаде выше, читает те же `<link>`-байты из уже прогретого
@@ -1065,6 +1077,8 @@ pub(crate) fn parse_and_layout(
     // with no live `Lumen` (`dump_mode.rs`, `page_source::load`) — the hook is
     // simply not built for them, same as before this feature existed.
     mut dynamic_image_hook_ctx: Option<crate::dynamic_image_hook::DynamicImageHookCtx>,
+    // COMPAT-PACK-CSS: записи пакета для хоста этого документа (пусто — не применяется).
+    compat_inject: crate::compat_inject::CompatInject,
 ) -> Result<ParsedPage, Box<dyn Error>> {
     // LOAD-1: живое окно (есть `Lumen`, на который можно слать `ImageDecoded`) отдаёт
     // страницу, не дожидаясь картинок; `--deterministic` (graphic_tests, gdigrab-снимки)
@@ -1279,6 +1293,7 @@ pub(crate) fn parse_and_layout(
     doc.set_target(page_fragment.as_deref());
     let mut cascade = build_page_cascade(
         &doc, &effective_base(&doc, base), sink, cookie_jar.clone(), viewport, dark_mode, media_print,
+        &compat_inject.css,
     )?;
     // GAP-CSPENF срез 23: hand the decision down to `Document` before the
     // first layout below reads any `style=""` attribute — see
@@ -1458,6 +1473,7 @@ pub(crate) fn parse_and_layout(
         let mut d = doc_arc.lock().unwrap();
         cascade = build_page_cascade(
             &d, &effective_base(&d, base), sink, cookie_jar.clone(), viewport, dark_mode, media_print,
+            &compat_inject.css,
         )?;
         // GAP-CSPENF срез 23: re-derived alongside the rest of `cascade` —
         // scripts may have inserted new elements with a `style=""` attribute
@@ -1937,6 +1953,13 @@ pub(crate) fn parse_and_layout(
     }
 
     let font_provider = Arc::new(font_registry);
+
+    // COMPAT-PACK-CSS: hide_banner — после скриптов (баннеры часто вставлены ими),
+    // до финальной раскладки; правка style-атрибута попадает в неё сама.
+    if !compat_inject.hide_banners.is_empty() {
+        let mut d = doc_arc.lock().unwrap();
+        crate::compat_inject::apply_hide_banners(&mut d, &compat_inject.hide_banners);
+    }
 
     // BUG-443: same helper the pre-script layout uses, so the print-media
     // bracket (BUG-270) cannot drift between the two passes.
