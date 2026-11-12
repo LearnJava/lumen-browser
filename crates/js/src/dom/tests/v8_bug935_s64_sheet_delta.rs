@@ -163,6 +163,18 @@ const SCENARIOS: &[(&str, &str)] = &[
           function() { window.m1.textContent = '@media (min-width: 100px) { .c i { color: navy; } }'; },
           function() { window.m3.parentNode.removeChild(window.m3); }]",
     ),
+    // BUG-1800: `@container` blocks are absorbed too — the cascade never reads them, so a
+    // changed block only names the elements its inner rules select; conditions that match
+    // (the 500px `#root` container) and ones that do not are both covered, plus a rewrite
+    // in place and a removal.
+    (
+        "container_blocks",
+        "[function() { addStyle('#root { container-type: inline-size; width: 500px; }'); },
+          function() { window.c1 = addStyle('@container (min-width: 100px) { .c i { color: red; } .c b { margin-left: 5px; } }'); },
+          function() { window.c1.textContent = '@container (min-width: 900px) { .c i { color: navy; } }'; },
+          function() { addStyle('@container (max-width: 10px) { .c u { color: teal; } } .c span { font-weight: bold; }'); },
+          function() { window.c1.parentNode.removeChild(window.c1); }]",
+    ),
     // `@font-face` and `@keyframes` are read by nothing in the cascade: a sheet that only adds them
     // along with ordinary rules is absorbed.
     (
@@ -189,7 +201,10 @@ fn a_changed_stylesheet_publishes_what_the_full_cascade_publishes() {
         assert_eq!(none_used, 0, "{name}: the switch did not turn the stylesheet delta off");
         let stale = diff(&off, &delta);
         assert!(stale.is_empty(), "{name}: the stylesheet delta published something else\n{}", stale.join("\n"));
-        if matches!(*name, "media_and_supports_blocks" | "font_face_and_keyframes_ride_along") {
+        if matches!(
+            *name,
+            "media_and_supports_blocks" | "font_face_and_keyframes_ride_along" | "container_blocks"
+        ) {
             assert!(used > 0, "{name}: the sheet change was not absorbed by the incremental flush (срез 93)");
         }
         engaged += used;

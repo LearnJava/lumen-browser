@@ -63,11 +63,29 @@ fn a_difference_outside_the_style_rules_is_not_expressible() {
         "@layer base { a { color: blue } }",
         "@property --p { syntax: '<length>'; inherits: false; initial-value: 0px }",
         "@scope (.s) { a { color: blue } }",
-        "@container (min-width: 1px) { a { color: blue } }",
     ] {
         let new = parse(&format!("a {{ color: red }} {extra}"));
         assert!(old.changed_style_rules(&new).is_none(), "{extra} must not be expressible as a style-rule change");
     }
+}
+
+#[test]
+fn container_blocks_name_the_rules_inside() {
+    // BUG-1800: an `@container` change is expressible — the cascade never reads the
+    // blocks (they apply post-layout), so only the elements the inner rules select
+    // need a restyle.
+    let old = parse("a { color: red } @container (min-width: 1px) { .k { margin: 1px } }");
+    let new = parse(
+        "a { color: red } @container (min-width: 1px) { .k { margin: 1px } }          @container card (min-width: 100px) { .c { color: blue } .d { color: green } }",
+    );
+    let changed = old.changed_style_rules(&new).expect("container blocks are expressible");
+    let mut names = texts(&changed);
+    names.sort();
+    assert_eq!(names, [".c", ".d"]);
+    // An edited block is named whole: the old and the new inner rule both.
+    let edited = parse("a { color: red } @container (min-width: 2px) { .k { margin: 2px } }");
+    let changed = old.changed_style_rules(&edited).expect("only a container block differs");
+    assert_eq!(texts(&changed), [".k", ".k"]);
 }
 
 #[test]
