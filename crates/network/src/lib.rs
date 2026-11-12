@@ -185,6 +185,34 @@ fn global_adblock_filter() -> Option<Arc<dyn lumen_core::ext::RequestFilter>> {
     }
 }
 
+// ── Compat-pack protection exceptions (COMPAT-PACK-PROTECTION) ────────────────
+//
+// Host patterns (as `CompatEntry::matches`, registrable domain or deeper) of
+// active `protection` records. A request whose source tab's site is covered by
+// one of them skips the ad-block filter — per request, so two tabs behave
+// independently regardless of the process-global toggle. The shell syncs this
+// registry together with its `CompatPolicy` mirror.
+
+static PROTECTION_EXEMPT_PATTERNS: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
+
+/// Replace the set of host patterns exempt from the ad-block filter.
+pub fn install_protection_exempt_patterns(patterns: &[String]) {
+    if let Ok(mut guard) = PROTECTION_EXEMPT_PATTERNS.write() {
+        *guard = patterns.to_vec();
+    }
+}
+
+/// `true` when `site` (the source tab's top-level site) is covered by an
+/// exempt pattern: `site` equals the pattern or is a subdomain of it.
+#[must_use]
+pub fn protection_exempt_for_site(site: Option<&str>) -> bool {
+    let Some(site) = site.map(|s| s.trim_end_matches('.')) else { return false };
+    PROTECTION_EXEMPT_PATTERNS
+        .read()
+        .map(|guard| guard.iter().any(|p| site == p || site.strip_suffix(p).is_some_and(|rest| rest.ends_with('.'))))
+        .unwrap_or(false)
+}
+
 /// Process-global safe-browsing filter for **subresources** (UX-SECURITY-UI-4).
 /// Independent of the ad-block toggle: the top-level document is handled by the
 /// shell's interstitial, so this one never sees `is_top_level` requests.
@@ -2726,8 +2754,12 @@ fn fetch_with_redirect(
     // Effective filter: the per-client `with_filter`, else the process-global
     // ad-block filter (so all fetch paths honour the shell's toggle uniformly).
     let global_ad = global_adblock_filter();
+    // COMPAT-PACK-PROTECTION: active `protection` record for the source tab's
+    // site lifts the ad-block decision for this request (both the per-client
+    // and the global filter); the threat filter below stays in force.
+    let exempt = protection_exempt_for_site(top_level_site);
     let effective_filter: Option<&dyn lumen_core::ext::RequestFilter> =
-        filter.or(global_ad.as_deref());
+        if exempt { None } else { filter.or(global_ad.as_deref()) };
     // Build the request context for EasyList type/party options ($script,
     // $third-party, …). Resource type comes from the request destination;
     // third-party is host-vs-top_level_site (same suffix-test as the cookie
@@ -8415,8 +8447,7 @@ ok".to_vec());
     }
 
     #[test]
-    fn fetch_blocked_emits_request_blocked_and_skips_network() {
-        // Сетевого сервера НЕТ — фильтр обязан блокировать ДО любой попытки
+    fn fetch_blocked_emits_request_blocked_and_skips_network() {        // Сетевого сервера НЕТ — фильтр обязан блокировать ДО любой попытки
         // TCP. Если эта инвариантность сломается, тест словит «connection
         // refused», и assert reason в err это поймает.
         let sink = Arc::new(CollectingSink::new());
@@ -8443,6 +8474,53 @@ ok".to_vec());
             }
             other => panic!("expected RequestBlocked, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn protection_exempt_matches_site_and_subdomain_only() {
+        install_protection_exempt_patterns(&["exempt.example".into()]);
+        assert!(protection_exempt_for_site(Some("exempt.example")));
+        assert!(protection_exempt_for_site(Some("www.exempt.example")));
+        assert!(protection_exempt_for_site(Some("exempt.example.")));
+        assert!(!protection_exempt_for_site(Some("other.example")));
+        assert!(!protection_exempt_for_site(Some("evilexempt.example")));
+        assert!(!protection_exempt_for_site(None));
+        install_protection_exempt_patterns(&[]);
+    }
+
+    #[test]
+    fn protection_exempt_site_skips_adblock_filter_per_request() {
+        let (port, server) = mock_http_server(1, |_| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_vec()
+        });
+        let sink = Arc::new(CollectingSink::new());
+        let filter: Arc<dyn RequestFilter> = Arc::new(BlockBySubstring {
+            needle: "127.0.0.1".to_owned(),
+            reason: "easylist".to_owned(),
+        });
+        install_protection_exempt_patterns(&["exempt.example".into()]);
+        let exempt = HttpClient::new()
+            .with_sink(sink.clone())
+            .with_filter(filter.clone())
+            .with_cookie_jar(Arc::new(RecordingJar::default()), Some("exempt.example".into()));
+        assert_eq!(
+            exempt.fetch(&Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap()).unwrap(),
+            b"ok",
+            "запись protection снимает блокировку для вкладки-covered сайта"
+        );
+        // Соседняя вкладка (сайт вне записи) — тот же ресурс блокируется.
+        let other = HttpClient::new()
+            .with_sink(sink.clone())
+            .with_filter(filter)
+            .with_cookie_jar(Arc::new(RecordingJar::default()), Some("other.example".into()));
+        let err = other.fetch(&Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap()).expect_err("must stay blocked");
+        assert!(format!("{err:?}").contains("blocked"), "{err:?}");
+        assert!(
+            matches!(sink.events()[..], [Event::RequestStarted { .. }, Event::RequestCompleted { .. }, Event::RequestBlocked { .. }]),
+            "exempt: Started+Completed, other: RequestBlocked, got {:?}", sink.events()
+        );
+        install_protection_exempt_patterns(&[]);
+        server.join().unwrap();
     }
 
     #[test]

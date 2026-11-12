@@ -361,6 +361,31 @@ fn popover_compat_row_shows_only_with_applied_fixes() {
 }
 
 #[test]
+fn popover_compat_note_names_protection_exception() {
+    let node_text = |doc: &Document, id: NodeId| -> String {
+        doc.get(id)
+            .children
+            .iter()
+            .filter_map(|&c| match &doc.get(c).data {
+                NodeData::Text(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut doc = parse_asset();
+    bind_model(
+        &mut doc,
+        &ChromeModel {
+            compat_fixes: 1,
+            compat_note: Some("Действует исключение защиты из списка совместимости (p-ex)".into()),
+            ..ChromeModel::default()
+        },
+    );
+    let text = doc.find_by_id(crate::ids::COMPAT_TEXT).expect("asset has #compatText");
+    assert_eq!(node_text(&doc, text), "Действует исключение защиты из списка совместимости (p-ex)");
+}
+
+#[test]
 fn fix_panel_shows_exactly_one_block_at_a_time() {
     let node_text = |doc: &Document, id: NodeId| -> String {
         doc.get(id)

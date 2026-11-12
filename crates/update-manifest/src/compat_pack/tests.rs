@@ -105,6 +105,30 @@ fn match_by_url_only_for_http_and_https() {
 }
 
 #[test]
+fn protection_record_is_found_for_host_and_subdomain_only() {
+    let p = pack(vec![
+        entry("p-exempt", "test-site.com", Action::Protection { name: "adblock".into() }),
+        entry("a-css", "test-site.com", css("body{}")),
+    ]);
+    let policy = CompatPolicy::default();
+    assert_eq!(p.protection_for_host("test-site.com", &policy).map(|e| e.id.as_str()), Some("p-exempt"));
+    assert_eq!(p.protection_for_host("www.test-site.com", &policy).map(|e| e.id.as_str()), Some("p-exempt"));
+    assert!(p.protection_for_host("other.com", &policy).is_none());
+    // Полностью выключенный пакет и выключенная запись не дают исключения.
+    let off = CompatPolicy { pack_off: true, disabled: Vec::new() };
+    assert!(p.protection_for_host("test-site.com", &off).is_none());
+    let single = CompatPolicy { pack_off: false, disabled: vec!["p-exempt".into()] };
+    assert!(p.protection_for_host("test-site.com", &single).is_none());
+}
+
+#[test]
+fn unknown_protection_name_is_rejected() {
+    assert!(pack(vec![entry("p", "test-site.com", Action::Protection { name: "adblock".into() })]).validate(&TestPsl).is_ok());
+    let reason = rejected(vec![entry("p", "test-site.com", Action::Protection { name: "vpn".into() })]);
+    assert!(reason.contains("unknown protection"), "{reason}");
+}
+
+#[test]
 fn signed_pack_round_trips() {
     let mut p = fixture();
     let bytes = signed_bytes(&mut p);
@@ -177,7 +201,7 @@ fn patterns_broader_than_etld_plus_one_are_rejected() {
 
 #[test]
 fn bank_payment_gov_accept_only_identity_css_known_issue() {
-    let protection = Action::Protection { name: "allow-trackers".into() };
+    let protection = Action::Protection { name: "adblock".into() };
     // Declared class.
     let mut e = entry("x", "somebank.com", protection.clone());
     e.site_class = SiteClass::Bank;

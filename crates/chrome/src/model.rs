@@ -120,6 +120,11 @@ pub struct ChromeModel {
     /// (COMPAT-PACK-IND). `0` hides `#compatRow`; otherwise the row shows
     /// [`compat_fixes_label`] with its «Подробнее» / «Выключить и перезагрузить» buttons.
     pub compat_fixes: u32,
+    /// Replacement text for `#compatText` (COMPAT-PACK-PROTECTION): the shell
+    /// sets it when an applied record is a `protection` exception, so the
+    /// shields popover names the exception, not just the fix count. `None` —
+    /// the generic [`compat_fixes_label`].
+    pub compat_note: Option<String>,
     /// «Сайт работает не так?» section of `#permPopover` (COMPAT-PANEL).
     pub fix: ChromeFixPanelModel,
     /// `#cpOverlay` snapshot (CC-10) — mirrors `CommandPalette`.
@@ -2663,7 +2668,8 @@ fn bind_popover(doc: &mut Document, model: &ChromeModel) {
     if model.compat_fixes > 0
         && let Some(text) = doc.find_by_id(crate::ids::COMPAT_TEXT)
     {
-        set_text(doc, text, &compat_fixes_label(model.compat_fixes));
+        let label = model.compat_note.clone().unwrap_or_else(|| compat_fixes_label(model.compat_fixes));
+        set_text(doc, text, &label);
     }
     bind_fix_panel(doc, &model.fix);
     let rows: Vec<NodeId> =
