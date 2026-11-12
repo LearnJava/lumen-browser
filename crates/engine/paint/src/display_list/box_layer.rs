@@ -121,8 +121,7 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>, dpr: f32) -> Bo
     // CSS Overflow L3 §3.2: overflow clip to padding-box edge; unconstrained
     // axis uses a BIG sentinel so the GPU scissor doesn't cut off content in
     // that direction. CSS Containment L3 §3.5: contain:paint clips both axes.
-    // CSS: overflow — P4 wires: once overflow:scroll/auto are parsed, the
-    // PushScrollLayer branch below automatically picks them up.
+    // `overflow: scroll|auto` парсятся и попадают в PushScrollLayer ниже.
     let paint_contain = s.contain.0 & ContainFlags::PAINT.0 != 0;
     let clip_x = style_overflow_clips(s, s.overflow_x) || paint_contain;
     let clip_y = style_overflow_clips(s, s.overflow_y) || paint_contain;

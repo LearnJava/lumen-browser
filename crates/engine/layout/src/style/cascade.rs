@@ -373,10 +373,9 @@ pub(crate) fn compute_style_shareable(
     // к контролам. Так `color-scheme: light` форсирует светлый виджет даже в
     // OS-dark, а `dark` — тёмный в OS-light.
     //
-    // CSS: system-color — P4 wires `system_color()` into the color cascade
-    // (a `CssColor::System(name)` variant resolved at used-value time against
-    // the element's used color scheme) for `Canvas`/`CanvasText`/`ButtonFace`/…
-    // keyword support. The resolution table already lives in `system_color()`.
+    // `CssColor::System(name)` резолвится в used-value время против color scheme
+    // элемента через `resolve_system_colors_in_style` (ниже по файлу, `cascade.rs`).
+
     let widget_dark = inherited.color_scheme.used_dark(dark_mode);
     apply_ua_form_controls(doc, node, &mut style, widget_dark);
     // UA stylesheet: <dialog> without `open` → display:none. HTML5 §15.3.9.

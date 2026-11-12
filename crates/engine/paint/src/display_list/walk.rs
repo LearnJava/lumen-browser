@@ -1749,7 +1749,7 @@ fn dispatch<'a>(
             }));
         }
         BoxKind::SvgShape { shape, svg_mask, .. } => {
-            // CSS: fill, stroke, stroke-width — P4 wires ComputedStyle svg_fill/svg_stroke fields.
+            // CSS: fill, stroke, stroke-width — из ComputedStyle svg_fill/svg_stroke.
             // Default SVG presentation: fill=black (SVG spec §11.2), no stroke.
             let clip_layers = push_shape_clip_path(b, out);
             match svg_mask.as_deref() {
@@ -1764,8 +1764,8 @@ fn dispatch<'a>(
         }
         BoxKind::SvgText { text, text_anchor, dominant_baseline, baseline_shift, .. } => {
             // SVG text element: emit DrawText command with proper positioning.
-            // CSS: fill, stroke, font-family, font-size — P4 wires ComputedStyle fields.
-            // // CSS: text-anchor, dominant-baseline, baseline-shift
+            // CSS: fill, stroke, font-family, font-size — из ComputedStyle.
+            // CSS: text-anchor, dominant-baseline, baseline-shift
             let filtered = push_shape_filter(b, out);
             emit_svg_text(b, text, *text_anchor, *dominant_baseline, *baseline_shift, out);
             pop_shape_filter(filtered, out);

@@ -599,8 +599,9 @@ pub(in crate::style) fn swap_ua_block_box_for_vertical(style: &mut ComputedStyle
 /// - Light: border #767676 / bg white (inputs) or #efefef (button) / fg black
 /// - Dark:  border #616161 / bg #1e1e1e (inputs) or #3a3a3c (button) / fg white
 ///
-/// `// CSS: color-scheme` — P4 wires this to `ComputedStyle.color_scheme`
-/// for full system-color keyword support.
+/// Связка с `ComputedStyle.color_scheme` сделана: тёмный вариант берётся
+/// через `color_scheme.used_dark(dark_mode)` (полная поддержка ключевых слов
+/// system-color — см. `resolve_system_colors_in_style`).
 pub fn ua_form_element_colors(tag: &str, dark_mode: bool) -> (CssColor, CssColor, Color) {
     if dark_mode {
         let border = CssColor::Rgba(Color { r: 97, g: 97, b: 97, a: 255 });
