@@ -24,7 +24,8 @@
 
 Результат: `<out>/results.json` (список записей `slug`/`url`/`variant`/`status`/
 `http_status`/`wall`/…), `<out>/summary.md`. `--json PATH` копирует results.json
-в `docs/perf/runs/` под нужным именем. Нужен Python ≥ 3.10, только stdlib.
+в `docs/perf/runs/` под нужным именем. Нужен Python ≥ 3.10, stdlib + опциональный psutil
+(RAM/CPU дерева Chrome; без него метки `peak_rss_mb`/`cpu_s` не пишутся).
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
 import zipfile
@@ -49,6 +51,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bench_chromium import WS, free_port  # noqa: E402
 from header_echo_server import EchoServer  # noqa: E402
 from wall_signatures import classify_wall  # noqa: E402
+
+try:  # RAM/CPU-сэмплинг дерева процессов Chrome; без psutil метки не пишутся
+    import psutil
+except ImportError:  # pragma: no cover
+    psutil = None
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -343,14 +350,44 @@ LONGTASK_PO_SRC = (
     ".observe({type:'longtask',buffered:true})}catch(e){}"
 )
 
+def _tree_sampler(proc, stop: threading.Event, out: dict) -> None:
+    """Пик RSS и CPU-время дерева процессов Chrome (полусекундный сэмплинг)."""
+    root = psutil.Process(proc.pid)
+    first_cpu = None
+    while not stop.is_set():
+        try:
+            rss = cpu = 0.0
+            for p in [root, *root.children(recursive=True)]:
+                try:
+                    rss += p.memory_info().rss
+                    ct = p.cpu_times()
+                    cpu += ct.user + ct.system
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+            out["peak_rss"] = max(out.get("peak_rss", 0), rss)
+            if first_cpu is None:
+                first_cpu = cpu
+            # дети умирают, их cpu_times теряются: берём максимум накопленной суммы тиков
+            out["cpu"] = max(out.get("cpu", 0.0), cpu - first_cpu)
+        except psutil.Error:
+            return
+        stop.wait(0.5)
+
 def audit_site(binary: Path, chrome_ver: str, slug: str, url: str, variant: str, args, major: str, lumen_ver: str) -> dict:
     rec: dict = {"slug": slug, "url": url, "variant": variant, "chrome_version": chrome_ver, "ua": None}
     sess = None
+    stop: threading.Event | None = None
+    sampler: threading.Thread | None = None
+    sample_out: dict = {}
     t0 = time.monotonic()
     try:
         sess = ChromeSession(binary, variant, major, lumen_ver, args.visible, args.ua_major, extra_args=args.extra_arg)
         rec["ua"] = sess.ua
         sess.setup()
+        if psutil is not None:
+            stop = threading.Event()
+            sampler = threading.Thread(target=_tree_sampler, args=(sess.proc, stop, sample_out), daemon=True)
+            sampler.start()
         page = sess.page
         nav = page.call("Page.navigate", {"url": url}, timeout=30)
         rec["navigation_error"] = nav.get("errorText")
@@ -390,6 +427,13 @@ def audit_site(binary: Path, chrome_ver: str, slug: str, url: str, variant: str,
         rec["status"] = "ERROR"
         rec["error"] = f"{type(exc).__name__}: {exc}"
     finally:
+        if stop is not None:
+            stop.set()
+            if sampler is not None:
+                sampler.join(2)
+        if sample_out:
+            rec["peak_rss_mb"] = round(sample_out.get("peak_rss", 0) / 1048576, 1)
+            rec["cpu_s"] = round(sample_out.get("cpu", 0.0), 1)
         if sess:
             sess.close()
     rec["wall_s"] = round(time.monotonic() - t0, 1)
