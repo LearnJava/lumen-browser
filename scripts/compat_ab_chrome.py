@@ -161,6 +161,8 @@ class Page:
         self.docs: dict[str, dict] = {}
         self.requests = 0
         self.failed = 0
+        self.js_errors = 0
+        self.js_error_first: str | None = None
         self.loaded = False
         self.frame_id: str | None = None
         self.extra_req_headers: dict[str, dict] = {}
@@ -185,6 +187,12 @@ class Page:
             self.failed += 1
             if p["requestId"] in self.docs:
                 self.docs[p["requestId"]]["error"] = p.get("errorText")
+        elif m == "Runtime.exceptionThrown":
+            self.js_errors += 1
+            if self.js_error_first is None:
+                d = p.get("exceptionDetails", {})
+                ex = d.get("exception", {})
+                self.js_error_first = str(ex.get("description") or ex.get("value") or d.get("text"))[:160]
         elif m == "Page.loadEventFired":
             self.loaded = True
 
@@ -245,7 +253,7 @@ def page_ws_url(port: int, timeout: float = 30) -> str:
 class ChromeSession:
     """Процесс Chrome со свежим профилем и вариантом идентичности."""
 
-    def __init__(self, binary: Path, variant: str, major: str, lumen_ver: str, visible: bool, ua_major: str | None) -> None:
+    def __init__(self, binary: Path, variant: str, major: str, lumen_ver: str, visible: bool, ua_major: str | None, extra_args: list[str] | None = None) -> None:
         self.variant = variant
         self.ua = user_agent(variant, ua_major or major, lumen_ver)
         self.lumen_major = lumen_ver.split(".")[0]
@@ -259,6 +267,7 @@ class ChromeSession:
                 str(binary), f"--remote-debugging-port={self.port}", f"--user-data-dir={self.profile}",
                 "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--window-size=1366,768",
                 "--disable-blink-features=AutomationControlled", f"--lang={ACCEPT_LANGUAGE.split(',')[0]}",
+                *(extra_args or []),
                 "about:blank",
             ]
             if not visible:
@@ -276,6 +285,9 @@ class ChromeSession:
         p = self.page
         p.call("Page.enable")
         p.call("Network.enable")
+        p.call("Runtime.enable")
+        # длинные задачи главного потока (аналог [js-stall] Lumen) — во все новые документы
+        p.call("Page.addScriptToEvaluateOnNewDocument", {"source": LONGTASK_PO_SRC})
         p.frame_id = p.call("Page.getFrameTree")["frameTree"]["frame"]["id"]  # документы iframe не считаем главным
         # Бренды берём у самого бинарника (CfT: Chromium + GREASE), убираем HeadlessChrome,
         # для варианта `lumen` добавляем `Lumen` — как Lumen в Sec-CH-UA (client_hints.rs).
@@ -324,12 +336,19 @@ class ChromeSession:
 
 # ── прогон сайта ─────────────────────────────────────────────────────────────
 
+# PerformanceObserver longtask с буферизацией — ставится до навигации каждого документа
+LONGTASK_PO_SRC = (
+    "window.__lt=[];"
+    "try{new PerformanceObserver(l=>{for(const e of l.getEntries())window.__lt.push(e.duration)})"
+    ".observe({type:'longtask',buffered:true})}catch(e){}"
+)
+
 def audit_site(binary: Path, chrome_ver: str, slug: str, url: str, variant: str, args, major: str, lumen_ver: str) -> dict:
     rec: dict = {"slug": slug, "url": url, "variant": variant, "chrome_version": chrome_ver, "ua": None}
     sess = None
     t0 = time.monotonic()
     try:
-        sess = ChromeSession(binary, variant, major, lumen_ver, args.visible, args.ua_major)
+        sess = ChromeSession(binary, variant, major, lumen_ver, args.visible, args.ua_major, extra_args=args.extra_arg)
         rec["ua"] = sess.ua
         sess.setup()
         page = sess.page
@@ -359,6 +378,9 @@ def audit_site(binary: Path, chrome_ver: str, slug: str, url: str, variant: str,
             " ua: navigator.userAgent, webdriver: navigator.webdriver})"
         ) or {}
         rec.update(title=dom.get("title"), dom_nodes=dom.get("nodes"), page_ua=dom.get("ua"), requests=page.requests, failed_requests=page.failed)
+        lt = page.eval("(window.__lt||[]).reduce((a,d)=>({n:a.n+1,ms:a.ms+d,mx:Math.max(a.mx,d)}),{n:0,ms:0,mx:0})") or {}
+        rec.update(longtasks=lt.get("n"), longtask_ms=lt.get("ms"), longtask_max_ms=lt.get("mx"),
+                   js_errors=page.js_errors, js_error_first=page.js_error_first)
         wall = classify_wall(
             rec["http_status"], main.get("resp_headers"), body, net_error=rec["net_error"], visible_text=dom.get("text") or ""
         )
@@ -450,6 +472,7 @@ def main() -> int:
     ap.add_argument("--variant", action="append", choices=VARIANTS, help="вариант идентичности (по умолчанию оба)")
     ap.add_argument("--ua-major", help="мажор Chrome в UA вместо chrome_major! (проверка «устаревший UA», BUG-1113)")
     ap.add_argument("--binary", help="chrome.exe; по умолчанию CfT нужного мажора из .tmp/cft")
+    ap.add_argument("--extra-arg", action="append", default=[], metavar="FLAG", help="доп. флаг chrome.exe (повторяемый), напр. --no-proxy-server")
     ap.add_argument("--fetch-cft", action="store_true", help="скачать Chrome for Testing мажора chrome_major! и выйти")
     ap.add_argument("--timeout", type=float, default=45, help="секунд на загрузку страницы")
     ap.add_argument("--settle", type=float, default=3, help="секунд после load на поздние редиректы/заглушки")
