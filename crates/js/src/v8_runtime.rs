@@ -106,8 +106,8 @@ mod dom_touched;
 mod runtime;
 
 pub use overrides::{
-    permission_override_script, set_global_permission_override, set_global_timezone_override,
-    set_global_user_agent_override,
+    identity_override_script, permission_override_script, set_global_permission_override,
+    set_global_timezone_override, set_global_user_agent_override,
     timezone_override_script, user_agent_override_script,
 };
 pub use dom_touched::{DomChanges, DomTouched};
@@ -240,8 +240,14 @@ impl V8JsRuntime {
             self.self_doc_key
                 .store(Arc::as_ptr(&doc) as usize, Ordering::Relaxed);
         }
-        // BUG-295: session-level `navigator.userAgent` override, if any.
-        let ua_override = global_user_agent_override();
+        // BUG-295: session-level `navigator` override script, if any. A
+        // compat-pack `identity` record (COMPAT-PACK-IDENTITY) wins: its whole
+        // profile — brands included, which a UA string cannot express — must
+        // match the `HttpClient::with_identity` this document's requests carry.
+        let ua_override = match self.identity_profile {
+            Some(profile) => Some(crate::v8_runtime::identity_override_script(&profile.identity())),
+            None => global_user_agent_override().map(|ua| user_agent_override_script(&ua)),
+        };
         // BUG-295: session-level `Intl`/`Date` timezone override, if any.
         let timezone_override = global_timezone_override();
         // BUG-364: dedicated/shared Worker script fetch reuses the same fetch
@@ -980,8 +986,7 @@ impl V8JsRuntime {
             // `<script>` executes (those run after `install_dom` returns) so
             // even a synchronous top-level read of `navigator.userAgent` sees
             // the override from the very first script.
-            if let Some(ua) = ua_override {
-                let js = user_agent_override_script(&ua);
+            if let Some(js) = ua_override {
                 let js = crate::internal_globals::wrap_for_container(scope, ctx, &js).unwrap_or(js);
                 v8::tc_scope!(tc, scope);
                 let src = v8::String::new(tc, &js)

@@ -2122,6 +2122,7 @@ fn compat_css_overrides_authored_style_of_target_element() {
     let inject = crate::compat_inject::CompatInject {
         css: "#t{font-size:40px}".into(),
         hide_banners: Vec::new(),
+        identity: None,
     };
     let page = compat_inject_page(inject);
     let doc = page.document.lock().expect("document lock");
@@ -2152,6 +2153,7 @@ fn compat_hide_banner_hides_only_matching_text() {
     let inject = crate::compat_inject::CompatInject {
         css: String::new(),
         hide_banners: vec![(".banner".into(), "печенье".into())],
+        identity: None,
     };
     let page = compat_inject_page(inject);
     let doc = page.document.lock().expect("document lock");

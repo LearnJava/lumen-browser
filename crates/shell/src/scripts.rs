@@ -881,6 +881,11 @@ pub(crate) fn run_scripts_with_dom(
     // see one store. `None` (headless dump/PDF, opaque-origin frames) keeps
     // `document.cookie` empty.
     cookie_jar: Option<DocCookieJar>,
+    // COMPAT-PACK-IDENTITY: профиль записи `identity` этого документа —
+    // `navigator.*`/`userAgentData` читают его вместо процессной идентичности,
+    // согласованно с `HttpClient::with_identity` запросов документа. `None`
+    // (нет записи) — процессная идентичность / BiDi-переопределение.
+    identity_profile: Option<lumen_core::IdentityProfile>,
     // BUG-1198: связи фрейма с предками, регистрируемые до первой строки
     // его скрипта (`frame_ancestry.rs`). `None` у всех, кроме
     // `frames::spawn_frame`.
@@ -972,6 +977,9 @@ pub(crate) fn run_scripts_with_dom(
                 let origin_inherit_from = ancestry
                     .filter(|a| !a.opaque && page_url.starts_with("about:"))
                     .map(|a| a.parent_url);
+                if let Some(profile) = identity_profile {
+                    rt = rt.with_identity_profile(profile);
+                }
                 if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, sse_provider, ls_store, idb_backend, sw_backend, cache_backend, push_backend, None, cross_origin_isolated, origin_inherit_from) {
                     eprintln!("JS DOM init failed: {e}");
                 }

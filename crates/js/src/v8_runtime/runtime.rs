@@ -389,6 +389,12 @@ pub struct V8JsRuntime {
     /// BUG-1156: the referrer of the request that fetched this document —
     /// backing store of `document.referrer`. `None` = no referrer (`''`).
     pub(super) document_referrer: Option<String>,
+    /// COMPAT-PACK-IDENTITY: a compat-pack `identity` record switches this
+    /// document's whole visible identity (`navigator.*`, `userAgentData`) to
+    /// the record's profile, overriding the process-global one. Takes
+    /// precedence over the BiDi `set_global_user_agent_override`; `None`
+    /// (every document without a matching record) keeps the global.
+    pub(super) identity_profile: Option<lumen_core::IdentityProfile>,
     /// `BroadcastChannel` instances created on this page (WHATWG HTML §9.5).
     /// Mirrors [`crate::QuickJsRuntime`]'s field of the same name.
     pub(super) broadcast_channels: crate::broadcast_channel::BroadcastRegistry,
@@ -582,6 +588,7 @@ impl V8JsRuntime {
             ss_store: None,
             cookie_jar: None,
             document_referrer: None,
+            identity_profile: None,
             broadcast_channels: Arc::new(Mutex::new(Vec::new())),
             pending_notifications: Arc::new(Mutex::new(Vec::new())),
             pending_permission_requests: Arc::new(Mutex::new(Vec::new())),
@@ -875,6 +882,16 @@ impl V8JsRuntime {
     /// referrer"). Must be called before `install_dom` to take effect.
     pub fn with_document_referrer(mut self, referrer: Option<String>) -> Self {
         self.document_referrer = referrer;
+        self
+    }
+
+    /// COMPAT-PACK-IDENTITY: present the given identity profile to this
+    /// document's JS (`navigator.*`, `userAgentData`), consistent with the
+    /// `HttpClient::with_identity` the same document's requests carry. Takes
+    /// precedence over the process-global BiDi UA override. Must be called
+    /// before `install_dom` to take effect.
+    pub fn with_identity_profile(mut self, profile: lumen_core::IdentityProfile) -> Self {
+        self.identity_profile = Some(profile);
         self
     }
 

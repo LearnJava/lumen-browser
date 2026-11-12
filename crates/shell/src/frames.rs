@@ -231,6 +231,12 @@ pub(crate) fn fetch_iframe_source_with_body(
                 cookie_jar,
                 referrer_policy,
             );
+            // COMPAT-PACK-IDENTITY: HTML самого iframe — документ хоста цели,
+            // его профиль берётся по хосту `sub_url`, не по хосту родителя.
+            let client = match crate::lumen::compat::compat_identity_for_url(sub_url.as_str()) {
+                Some(p) => client.with_identity(p.identity()),
+                None => client,
+            };
             if let Some(body) = body {
                 return match client.fetch_page(&sub_url, Some(body), send_uir_header) {
                     Ok(resp) => Ok(FrameSource::Url {
@@ -370,6 +376,11 @@ pub(crate) fn fetch_embedded_source(
                 cookie_jar,
                 referrer_policy,
             );
+            // COMPAT-PACK-IDENTITY: см. fetch iframe выше — профиль хоста цели.
+            let client = match crate::lumen::compat::compat_identity_for_url(sub_url.as_str()) {
+                Some(p) => client.with_identity(p.identity()),
+                None => client,
+            };
             let (bytes, content_type) = client
                 .fetch_subresource_document_with_content_type(&sub_url, send_uir_header)
                 .map_err(|e| eprintln!("object/embed: загрузка '{url}' не удалась: {e}"))

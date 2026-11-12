@@ -467,6 +467,9 @@ pub(crate) fn spawn_frame(
         // BUG-1119: the frame's `document.cookie` uses the jar its requests
         // go through; an opaque origin has no cookies (HTML LS §3.1.3).
         env.cookie_jar.clone().filter(|_| !opaque),
+        // COMPAT-PACK-IDENTITY: iframe — документ своего хоста, его профиль
+        // согласован с `fetch_iframe_source` выше (тот же хост `child_url`).
+        crate::lumen::compat::compat_identity_for_url(&child_url),
         Some(&ancestry),
     );
     drop(_runtime_span);

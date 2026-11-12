@@ -277,10 +277,15 @@ impl PageSource {
                         crate::config::connection_site(&lumen_url),
                     ));
                 }
-                let client = crate::config::global()
+                let mut client = crate::config::global()
                     .apply_http(builder)
                     .with_connection_site(&crate::config::connection_site(&lumen_url))
                     .with_navigation_referrer(referrer.clone());
+                // COMPAT-PACK-IDENTITY: запись `identity` хоста документа —
+                // тот же профиль, что получит её JS-рантайм (ADR-034 §1).
+                if let Some(profile) = crate::lumen::compat::compat_identity_for_url(url) {
+                    client = client.with_identity(profile.identity());
+                }
                 // PERF-1: HTTP request for the main document (nested inside the
                 // `fetch-document` span); its `size` arg is the response body.
                 let mut fetch_span = lumen_core::trace::span(format!("GET {url}"), "net");
@@ -418,10 +423,14 @@ impl PageSource {
                 crate::config::connection_site(&lumen_url),
             ));
         }
-        let client = crate::config::global()
+        let mut client = crate::config::global()
             .apply_http(builder)
             .with_connection_site(&crate::config::connection_site(&lumen_url))
             .with_navigation_referrer(referrer.clone());
+        // COMPAT-PACK-IDENTITY: см. `load_bytes`.
+        if let Some(profile) = crate::lumen::compat::compat_identity_for_url(url) {
+            client = client.with_identity(profile.identity());
+        }
         let lumen_network::PageResponse { body: bytes, headers: resp_headers, final_url, status, early_hint_links, cert_info } =
             client.fetch_page_streaming(&lumen_url, on_chunk, body.as_deref(), *upgrade_insecure_requests)?;
         // BUG-640: see `load_bytes` for why this can't be an exact hop count.
