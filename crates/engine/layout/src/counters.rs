@@ -2595,8 +2595,8 @@ pub fn resolve_counter_value(def: &CounterStyleDef, n: i32, registry: &CounterSt
 /// formatting with ". " suffix. Bullet types (Disc/Circle/Square) return `""` —
 /// they are rendered as geometric shapes by the display-list emitter.
 ///
-/// CSS: list-style-type (custom counter-style) — P4 adds `ListStyleType::Custom(name)`
-/// and routes it through `format_counter_with_registry(ordinal, name, registry)`.
+/// CSS: list-style-type (custom counter-style) — `ListStyleType::Custom(name)`
+/// маршрутизируется через `format_counter_with_registry(ordinal, name, registry)`.
 pub fn build_list_marker_text(
     lst: ListStyleType,
     ordinal: i32,

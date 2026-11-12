@@ -1538,8 +1538,8 @@ pub struct TransitionScheduler {
     /// Per-node resolved auto-height (px), updated after each layout pass.
     /// Call `set_auto_height` after layout to enable `height: auto` interpolation.
     ///
-    /// # CSS: interpolate-size
-    /// P4 gates keyword-size interpolation on `ComputedStyle::interpolate_size`.
+    /// Ключевые размеры интерполируются только при `ComputedStyle::interpolate_size`
+    /// == `AllowKeywords` (CSS: interpolate-size).
     /// When `interpolate_size: AllowKeywords` is parsed, `sync()` checks this cache
     /// to resolve `height: auto` endpoints to their px equivalent at transition start.
     auto_height_cache: HashMap<NodeId, f32>,
@@ -1599,7 +1599,7 @@ impl TransitionScheduler {
             // `height: auto` (None) → Discrete("auto"); resolved to Px in the loop below when
             // auto_height_cache has a value for this node. Per CSS Sizing L4 §4.5: keyword sizes
             // only interpolate when `interpolate-size: allow-keywords` is active.
-            // CSS: interpolate-size — P4 gates this on ComputedStyle::interpolate_size.
+            // CSS: interpolate-size — гейт читается из ComputedStyle::interpolate_size.
             ("height", |s| match &s.height {
                 Some(l) => AnimValue::Length(l.clone()),
                 None => AnimValue::Discrete("auto".to_string()),

@@ -599,8 +599,9 @@ pub(in crate::style) fn swap_ua_block_box_for_vertical(style: &mut ComputedStyle
 /// - Light: border #767676 / bg white (inputs) or #efefef (button) / fg black
 /// - Dark:  border #616161 / bg #1e1e1e (inputs) or #3a3a3c (button) / fg white
 ///
-/// `// CSS: color-scheme` — P4 wires this to `ComputedStyle.color_scheme`
-/// for full system-color keyword support.
+/// Связка с `ComputedStyle.color_scheme` сделана: тёмный вариант берётся
+/// через `color_scheme.used_dark(dark_mode)` (полная поддержка ключевых слов
+/// system-color — см. `resolve_system_colors_in_style`).
 pub fn ua_form_element_colors(tag: &str, dark_mode: bool) -> (CssColor, CssColor, Color) {
     if dark_mode {
         let border = CssColor::Rgba(Color { r: 97, g: 97, b: 97, a: 255 });
@@ -837,12 +838,22 @@ pub(in crate::style) fn is_disableable_widget(doc: &Document, node: NodeId) -> b
         _ => false,
     }
 }
-/// UA stylesheet: `<dialog>` without the `open` attribute → `display: none`.
-/// HTML5 §15.3.9: "dialog:not([open]) { display: none; }"
+/// UA stylesheet (HTML5 §15.3.9): `<dialog>` renders block-level when open and
+/// `display: none` without the `open` attribute.
+///
+/// The spec's UA sheet blockifies `<dialog>` through `position: absolute`;
+/// until top-layer positioning exists in layout (BUG-1777 slice), the open
+/// case is spelled out as `display: block` — on the engine's inline default an
+/// open dialog merges into the parent's inline run and its rect keys to the
+/// parent's box, which is what broke `abspos-dialog-layout.html`.
 pub(in crate::style) fn apply_ua_dialog_display(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
     let NodeData::Element { name, .. } = &doc.get(node).data else { return; };
-    if name.local.as_str() == "dialog" && doc.get(node).get_attr("open").is_none() {
-        style.display = Display::None;
+    if name.local.as_str() == "dialog" {
+        style.display = if doc.get(node).get_attr("open").is_some() {
+            Display::Block
+        } else {
+            Display::None
+        };
     }
 }
 /// UA stylesheet (HTML Rendering §15.3.8): `td, th { padding: 1px }`.

@@ -5,8 +5,8 @@
 use crate::{box_tree, style, LayoutBox};
 
 // ─── Sticky-position algorithm ────────────────────────────────────────────────
-// CSS: position: sticky — P4 wires insets from ComputedStyle (top/right/bottom/left);
-//                         P3 wires scroll_x/scroll_y from shell scroll state.
+// CSS: position: sticky — insets читаются из ComputedStyle (top/right/bottom/left),
+//                      scroll_x/scroll_y приходят из shell scroll state.
 
 /// Snapshot of a `position: sticky` element captured after normal-flow layout.
 ///

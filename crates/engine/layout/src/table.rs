@@ -249,7 +249,7 @@ pub fn compute_table_col_widths(
     }
 
     // Separate border model: (n_cols+1) gap slots consume h_spacing each.
-    // CSS: border-spacing — P4 wires h_spacing from ComputedStyle.border_spacing_h
+    // CSS: border-spacing — h_spacing из ComputedStyle.border_spacing_h.
     let total_spacing = (ctx.col_count + 1) as f32 * h_spacing;
     let eff_width = (content_width - total_spacing).max(0.0);
 
@@ -285,7 +285,7 @@ pub fn lay_out_table(
     let col_widths = compute_table_col_widths(table, content_width, viewport, h_spacing);
 
     // First row starts after the top outer v_spacing slot.
-    // CSS: border-spacing — P4 wires v_spacing from ComputedStyle.border_spacing_v
+    // CSS: border-spacing — v_spacing из ComputedStyle.border_spacing_v.
     let mut cur_y = content_y + v_spacing;
     let mut rowspan_map: Vec<u32> = Vec::new();
 
@@ -369,7 +369,7 @@ pub fn lay_out_table(
                     .margin_bottom
                     .resolve_or_zero(table.children[i].style.font_size, content_width, viewport);
                 // Add v_spacing gap after each row (the last row still gets the outer bottom slot).
-                // CSS: border-spacing
+                // CSS: border-spacing (v_spacing из ComputedStyle.border_spacing_v)
                 cur_y = table.children[i].rect.y + table.children[i].rect.height + c_mb + v_spacing;
                 decrement_rowspan_map(&mut rowspan_map);
             }
@@ -504,7 +504,7 @@ fn lay_out_table_row(
 
     let col_widths = col_widths.unwrap_or(&[]);
     // First cell starts after the left outer h_spacing slot.
-    // CSS: border-spacing — P4 wires h_spacing from ComputedStyle.border_spacing_h
+    // CSS: border-spacing — h_spacing из ComputedStyle.border_spacing_h.
     let mut cur_x = content_x + h_spacing;
     let mut max_height = 0.0_f32;
     let mut col_pos = 0usize;

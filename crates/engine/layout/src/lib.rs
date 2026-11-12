@@ -451,8 +451,9 @@ pub trait TextMeasurer {
 
 // ---------------------------------------------------------------------------
 // Scroll container infrastructure
-// CSS: overflow — P4 wires: check style.overflow_x/overflow_y == Overflow::Scroll | Auto,
-// call collect_scroll_containers() to enumerate regions, set_scroll_position() on wheel.
+// Scroll container infrastructure. `overflow: scroll|auto` уже читается из
+// `style.overflow_x/overflow_y`; контейнеры собирает `collect_scroll_containers()`,
+// смещения на wheel обновляет шелл через `set_scroll_position()`.
 // ---------------------------------------------------------------------------
 
 /// A scrollable overflow container collected from the layout tree.
