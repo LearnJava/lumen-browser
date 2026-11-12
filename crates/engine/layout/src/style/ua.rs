@@ -838,12 +838,22 @@ pub(in crate::style) fn is_disableable_widget(doc: &Document, node: NodeId) -> b
         _ => false,
     }
 }
-/// UA stylesheet: `<dialog>` without the `open` attribute → `display: none`.
-/// HTML5 §15.3.9: "dialog:not([open]) { display: none; }"
+/// UA stylesheet (HTML5 §15.3.9): `<dialog>` renders block-level when open and
+/// `display: none` without the `open` attribute.
+///
+/// The spec's UA sheet blockifies `<dialog>` through `position: absolute`;
+/// until top-layer positioning exists in layout (BUG-1777 slice), the open
+/// case is spelled out as `display: block` — on the engine's inline default an
+/// open dialog merges into the parent's inline run and its rect keys to the
+/// parent's box, which is what broke `abspos-dialog-layout.html`.
 pub(in crate::style) fn apply_ua_dialog_display(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
     let NodeData::Element { name, .. } = &doc.get(node).data else { return; };
-    if name.local.as_str() == "dialog" && doc.get(node).get_attr("open").is_none() {
-        style.display = Display::None;
+    if name.local.as_str() == "dialog" {
+        style.display = if doc.get(node).get_attr("open").is_some() {
+            Display::Block
+        } else {
+            Display::None
+        };
     }
 }
 /// UA stylesheet (HTML Rendering §15.3.8): `td, th { padding: 1px }`.

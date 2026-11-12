@@ -4163,7 +4163,10 @@ function _lumen_gap_rule_delete(obj, key) {
 CSSStyleDeclaration.prototype.setProperty = function(prop, val, priority) {
     var nid = this;
     var key = _lumen_camel_to_kebab(String(prop));
-    var strVal = String(val);
+    // CSSOM: `value` is [LegacyNullToEmptyString] — `style.height = null` must
+    // remove the declaration, not store the literal string "null" (BUG-1777:
+    // the stored null kept the old height alive through the WPT cleanup).
+    var strVal = val === null ? '' : String(val);
     // CSSOM §6.7.4: a priority other than "" / "important" (ASCII case-insensitive) is ignored.
     var prio = priority === undefined || priority === null ? '' : String(priority).toLowerCase();
     if (prio !== '' && prio !== 'important') return;
@@ -10096,6 +10099,16 @@ var _LUMEN_WRAPPER_MEMBERS = {
         getBoundingClientRect: function() { var nid = this.__nid__;
             var r = _lumen_get_bounding_rect(nid);
             if (!r) { return new DOMRect(0, 0, 0, 0); }
+            // BUG-1777: a modal <dialog> paints in the top layer, translated to
+            // the viewport center by the shell overlay (forms::build_dialog_overlay)
+            // — report the same viewport-relative geometry (CSSOM View §3). A
+            // dialog taller than the viewport sits flush at the top, matching the
+            // overlay's clamp (HTML5 §4.11.7).
+            if (typeof _lumen_modal_dialog_nids !== 'undefined' &&
+                _lumen_modal_dialog_nids.indexOf(nid) >= 0) {
+                var vp = _lumen_get_viewport_size();
+                return new DOMRect(vp[0] / 2 - r[2] / 2, Math.max(0, vp[1] / 2 - r[3] / 2), r[2], r[3]);
+            }
             // Ancestor scroll containers (and the anchor's, for an anchor-positioned box) move the
             // box away from the document position the native answers with (BUG-1166).
             var sh = _lumen_get_scroll_shift(nid);

@@ -934,6 +934,27 @@ fn build_dialog_overlay_wraps_with_transform() {
     assert!(has_pop, "overlay must contain PopTransform");
 }
 
+#[test]
+fn build_dialog_overlay_tall_dialog_is_flush_top() {
+    // HTML spec: a dialog taller than the viewport is positioned at the top
+    // rather than centered.
+    let mut _doc = Document::new();
+    let nid = _doc.create_element(QualName::html("dialog"));
+    let lb = make_dialog_lb(nid, Rect::new(0.0, 0.0, 100.0, 20000.0));
+    let overlay = build_dialog_overlay(&lb, 0.0, 1024.0, 720.0);
+    // Find the PushTransform and verify dy == 0 (no vertical shift for tall dialog).
+    for c in &overlay {
+        if let DisplayCommand::PushTransform { matrix } = c {
+            // Mat4 is [f32; 16] column-major: index 13 = ty (translation y).
+            // For a tall dialog dy must be 0 → m43 (index 13) == 0.
+            assert_eq!(matrix.0[13], 0.0, "tall dialog should have dy=0, got dy={}", matrix.0[13]);
+            return;
+        }
+    }
+    panic!("expected PushTransform in overlay");
+}
+
+
 // ── Range input tests ─────────────────────────────────────────────────────
 
 #[test]

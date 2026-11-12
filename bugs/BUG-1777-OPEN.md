@@ -26,6 +26,41 @@
 `showModal()`/`abspos`; для `proxy-modifier-click` и `event-propagate-disabled` — события клика/
 клавиатуры на disabled/label (shell/js input). Следующий шаг — бисект по окну (≤ 4 сборки на id).
 
+## Прогресс
+
+**2026-11-12 (P3): `abspos-dialog-layout` 4/10 → 10/10.** Закрыт без бисекта — трассировочный
+probe-пейдж выявил корни, бисект по окну не понадобился:
+
+1. `CSSStyleDeclaration.setProperty` превращал `val` в `String(val)` — `style.height = null`
+   записывал литеральную строку `"null"` вместо удаления объявления (CSSOM: аргумент
+   `[LegacyNullToEmptyString]`, `null` → `""` = remove). Высота `20000px` из подтеста «tall
+   dialog» протекала через `reset()` во все последующие подтесты.
+2. Открытый `<dialog>` не имел UA `display: block` (спека блокифицирует его через UA
+   `position: absolute`, которого в движке нет) — элемент падал в inline-дефолт и его текст
+   сливался в inline-run родителя; `collect_layout_rects` публиковал под nid диалога прямоугольник
+   родителя (10000px body, top 820 родителя).
+3. Центрирование модального диалога существовало только на paint-стороне
+   (`build_dialog_overlay`) — `getBoundingClientRect` отвечал статической позицией. Теперь
+   шим для диалога из `_lumen_modal_dialog_nids` отвечает той же геометрией, что рисует оверлей
+   (`vp/2 − w/2`, по вертикали с clamp на верх вьюпорта для диалога выше него — HTML5 §4.11.7),
+   а `build_dialog_overlay` сведён к одной формуле `(vp_h/2 − h/2).max(0) − r.y + scroll_y`.
+4. Удаление диалога из документа не снимало `data-lumen-modal`/стек модальных nid — по HTML LS
+   «top layer» membership сбрасывается при отключении от документа. Обёртка `_lumen_remove_child`
+   (`web_api_shim_mid_b4.js`) снимает сентинел и pop-ает стек. `shortcut`: вложенный модальный
+   диалог в удаляемом поддереве не чистится (нативный detach из `innerHTML=""` тоже) — пока
+   ни один путь этого не требует.
+
+Попутно: удалён устаревший `tests/wpt/metadata/.../table-ua-stylesheet.html.ini` (три
+`expected: FAIL` остались от состояния до фикса `7f2b54104`; подтесты проходят 5/5), и
+схлопнуты двойные `if` в `lumen/click.rs:619` (clippy collapsible_if, висел на main после
+`4f3ad6c59`).
+
+Остаток бага: `dir-shadow-41` (reftest, 72px diff — спор host vs flat-tree parent),
+`draw-element-image/css-backdrop-filter-and-mask` (reftest — ждёт реальную реализацию
+BUG-1798), `event-propagate-disabled-keyboard` 28/30 (key events на disabled custom-control
+из `<form>` не долетают), `proxy-modifier-click-to-associated-element` 1/4 (проксирование
+кликов label→control с модификаторами).
+
 ## Воспроизведение
 
 `tests/wpt/run_smoke.py --binary <lumen.exe> <id>`; reftest — без `LUMEN_NO_PAINT`. Бинари
