@@ -7,10 +7,11 @@ default_permission_mode = ""
   max_tasks = 0
   run_without_tasks = false
   task_source = "STATUS-P1.md"
-  model = "sonnet"
+  model = "glm-5.3-flash"
   fallback_model = ""
   fallback_model_on_rate_limit = false
-  effort = "high"
+  effort = "low"
+  provider = "glm"
   permission_mode = "bypassPermissions"
   allowed_tools = []
   disallowed_tools = []
@@ -45,6 +46,7 @@ default_permission_mode = ""
   fallback_model = ""
   fallback_model_on_rate_limit = false
   effort = "high"
+  provider = ""
   permission_mode = "bypassPermissions"
   allowed_tools = []
   disallowed_tools = []
@@ -63,7 +65,11 @@ default_permission_mode = ""
   gate_rounds = 0
   ask_user_marker = false
   handoff_context_tokens = 0
+<<<<<<< Updated upstream
   runtime = ""
+=======
+  runtime = "hermes"
+>>>>>>> Stashed changes
   hermes_provider = ""
   hermes_profile = ""
   hermes_max_turns = 0
@@ -75,10 +81,11 @@ default_permission_mode = ""
   max_tasks = 0
   run_without_tasks = false
   task_source = "STATUS-P3.MD"
-  model = "sonnet"
+  model = "kimi-for-coding"
   fallback_model = ""
   fallback_model_on_rate_limit = false
   effort = "high"
+  provider = ""
   permission_mode = "bypassPermissions"
   allowed_tools = []
   disallowed_tools = []
@@ -96,8 +103,13 @@ default_permission_mode = ""
   context_handoff = false
   gate_rounds = 0
   ask_user_marker = false
+<<<<<<< Updated upstream
   handoff_context_tokens = 0
   runtime = ""
+=======
+  handoff_context_tokens = 150000
+  runtime = "hermes"
+>>>>>>> Stashed changes
   hermes_provider = ""
   hermes_profile = ""
   hermes_max_turns = 0
@@ -109,10 +121,11 @@ default_permission_mode = ""
   max_tasks = 0
   run_without_tasks = false
   task_source = ""
-  model = "opus"
+  model = "k3.1-pro"
   fallback_model = ""
   fallback_model_on_rate_limit = false
-  effort = "high"
+  effort = "max"
+  provider = ""
   permission_mode = "bypassPermissions"
   allowed_tools = []
   disallowed_tools = []
@@ -131,7 +144,11 @@ default_permission_mode = ""
   gate_rounds = 0
   ask_user_marker = false
   handoff_context_tokens = 0
+<<<<<<< Updated upstream
   runtime = ""
+=======
+  runtime = "opencode"
+>>>>>>> Stashed changes
   hermes_provider = ""
   hermes_profile = ""
   hermes_max_turns = 0
@@ -147,6 +164,7 @@ default_permission_mode = ""
   fallback_model = ""
   fallback_model_on_rate_limit = false
   effort = "high"
+  provider = ""
   permission_mode = "bypassPermissions"
   allowed_tools = []
   disallowed_tools = []
@@ -164,7 +182,11 @@ default_permission_mode = ""
   context_handoff = false
   gate_rounds = 0
   ask_user_marker = false
+<<<<<<< Updated upstream
   handoff_context_tokens = 0
+=======
+  handoff_context_tokens = 150000
+>>>>>>> Stashed changes
   runtime = ""
   hermes_provider = ""
   hermes_profile = ""
@@ -181,6 +203,7 @@ default_permission_mode = ""
   fallback_model = ""
   fallback_model_on_rate_limit = false
   effort = "high"
+  provider = ""
   permission_mode = "bypassPermissions"
   allowed_tools = []
   disallowed_tools = []
@@ -198,7 +221,11 @@ default_permission_mode = ""
   context_handoff = false
   gate_rounds = 0
   ask_user_marker = false
+<<<<<<< Updated upstream
   handoff_context_tokens = 0
+=======
+  handoff_context_tokens = 150000
+>>>>>>> Stashed changes
   runtime = ""
   hermes_provider = ""
   hermes_profile = ""
@@ -215,6 +242,7 @@ default_permission_mode = ""
   fallback_model = ""
   fallback_model_on_rate_limit = false
   effort = "high"
+  provider = ""
   permission_mode = "bypassPermissions"
   allowed_tools = []
   disallowed_tools = []
@@ -232,7 +260,11 @@ default_permission_mode = ""
   context_handoff = false
   gate_rounds = 0
   ask_user_marker = false
+<<<<<<< Updated upstream
   handoff_context_tokens = 0
+=======
+  handoff_context_tokens = 150000
+>>>>>>> Stashed changes
   runtime = ""
   hermes_provider = ""
   hermes_profile = ""
