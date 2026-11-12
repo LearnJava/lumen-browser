@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[macro_export]
 macro_rules! chrome_major {
     () => {
-        "153"
+        "157"
     };
 }
 
@@ -359,10 +359,10 @@ mod tests {
 
     #[test]
     fn grease_brand_follows_the_major() {
-        // seed 153: 153%11=10 -> "_", 154%11=0 -> " "; 153%3=0 -> "8"
+        // seed 157: 157%11=3 -> "-", 158%11=4 -> "."; 157%3=1 -> "99"
         let d = Identity::from_user_agent(CHROME_UA).ua_data.unwrap();
-        assert!(d.brands.iter().any(|(b, v)| b == "Not_A Brand" && v == "8"));
-        assert!(d.full_version_list.iter().any(|(b, v)| b == "Not_A Brand" && v == "8.0.0.0"));
+        assert!(d.brands.iter().any(|(b, v)| b == "Not-A.Brand" && v == "99"));
+        assert!(d.full_version_list.iter().any(|(b, v)| b == "Not-A.Brand" && v == "99.0.0.0"));
     }
 
     #[test]
