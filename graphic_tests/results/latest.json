@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-11-09T19:57:38",
+  "timestamp": "2026-11-12T23:11:07",
   "git": {
-    "commit": "39aedf889",
-    "branch": "main",
-    "subject": "BUG-1777: border-collapse РЅРµ РЅР°СЃР»РµРґСѓРµС‚СЃСЏ РІ computed style"
+    "commit": "7236bfa09",
+    "branch": "p1-compat-pack-flag",
+    "subject": "Конфиг менеджера: run_without_tasks вместо stop_when_no_tasks, сброс handoff-токенов"
   },
   "crop_offset": [
     8,
@@ -26,8 +26,13 @@
       "html": "00-calibration.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null,
+      "diff_pct": 0.0008,
+      "diff_region": {
+        "top": 717,
+        "left": 0,
+        "bottom": 719,
+        "right": 1023
+      },
       "capture": "gdigrab"
     },
     {
@@ -212,8 +217,13 @@
       "html": "16-outline.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null,
+      "diff_pct": 0.0008,
+      "diff_region": {
+        "top": 717,
+        "left": 0,
+        "bottom": 719,
+        "right": 1023
+      },
       "capture": "gdigrab"
     },
     {
@@ -255,12 +265,12 @@
       "html": "19-object-fit.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 9.7622,
+      "diff_pct": 9.763,
       "diff_region": {
         "top": 26,
-        "left": 26,
-        "bottom": 449,
-        "right": 805
+        "left": 0,
+        "bottom": 719,
+        "right": 1023
       },
       "capture": "gdigrab",
       "debtor": {
@@ -411,12 +421,12 @@
       "html": "30-css-filter.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3263,
+      "diff_pct": 0.3271,
       "diff_region": {
         "top": 31,
-        "left": 31,
-        "bottom": 540,
-        "right": 767
+        "left": 0,
+        "bottom": 719,
+        "right": 1023
       },
       "capture": "gdigrab"
     },
@@ -626,12 +636,12 @@
       "html": "45-multiple-backgrounds.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.3523,
+      "diff_pct": 1.3531,
       "diff_region": {
         "top": 22,
-        "left": 21,
-        "bottom": 460,
-        "right": 868
+        "left": 0,
+        "bottom": 719,
+        "right": 1023
       },
       "capture": "gdigrab",
       "debtor": {
@@ -717,12 +727,12 @@
       "html": "51-scrollbar-rendering.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.5244,
+      "diff_pct": 0.5252,
       "diff_region": {
         "top": 23,
-        "left": 21,
-        "bottom": 452,
-        "right": 402
+        "left": 0,
+        "bottom": 719,
+        "right": 1023
       },
       "capture": "gdigrab",
       "debtor": {
@@ -738,12 +748,12 @@
       "html": "52-text-shadow-blur.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.2927,
+      "diff_pct": 1.2935,
       "diff_region": {
         "top": 67,
-        "left": 112,
-        "bottom": 295,
-        "right": 911
+        "left": 0,
+        "bottom": 719,
+        "right": 1023
       },
       "capture": "gdigrab",
       "debtor": {
@@ -759,11 +769,11 @@
       "html": "53-background-origin.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.0395,
+      "diff_pct": 1.0399,
       "diff_region": {
         "top": 36,
-        "left": 33,
-        "bottom": 515,
+        "left": 0,
+        "bottom": 719,
         "right": 761
       },
       "capture": "gdigrab",
@@ -796,12 +806,12 @@
       "html": "55-video-placeholder.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3537,
+      "diff_pct": 0.3545,
       "diff_region": {
         "top": 125,
-        "left": 123,
-        "bottom": 411,
-        "right": 711
+        "left": 0,
+        "bottom": 719,
+        "right": 1023
       },
       "capture": "gdigrab"
     },
@@ -812,12 +822,12 @@
       "html": "56-mix-blend-mode.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 14.1195,
+      "diff_pct": 14.1203,
       "diff_region": {
         "top": 50,
-        "left": 60,
-        "bottom": 518,
-        "right": 821
+        "left": 0,
+        "bottom": 719,
+        "right": 1023
       },
       "capture": "gdigrab"
     },
@@ -828,12 +838,12 @@
       "html": "57-canvas-2d.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2825,
+      "diff_pct": 0.2833,
       "diff_region": {
         "top": 185,
-        "left": 96,
-        "bottom": 401,
-        "right": 701
+        "left": 0,
+        "bottom": 719,
+        "right": 1023
       },
       "capture": "gdigrab"
     },
@@ -865,12 +875,12 @@
       "html": "59-image-set-cross-fade.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 10.0224,
+      "diff_pct": 10.0232,
       "diff_region": {
         "top": 28,
-        "left": 25,
-        "bottom": 394,
-        "right": 1022
+        "left": 0,
+        "bottom": 719,
+        "right": 1023
       },
       "capture": "gdigrab",
       "debtor": {
@@ -923,12 +933,12 @@
       "html": "62-scroll-snap.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 0.337,
+      "diff_pct": 0.3379,
       "diff_region": {
         "top": 9,
-        "left": 9,
-        "bottom": 710,
-        "right": 1014
+        "left": 0,
+        "bottom": 719,
+        "right": 1023
       },
       "capture": "gdigrab",
       "debtor": {
@@ -965,7 +975,7 @@
       "html": "64-table.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 7.6691,
+      "diff_pct": 7.6251,
       "diff_region": {
         "top": 41,
         "left": 21,
@@ -1204,12 +1214,12 @@
       "html": "78-scroll-driven-animations.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.3634,
+      "diff_pct": 2.3642,
       "diff_region": {
         "top": 28,
-        "left": 25,
-        "bottom": 522,
-        "right": 904
+        "left": 0,
+        "bottom": 719,
+        "right": 1023
       },
       "capture": "gdigrab",
       "debtor": {
@@ -1225,12 +1235,12 @@
       "html": "79-text-underline-offset.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 5.6158,
+      "diff_pct": 5.6166,
       "diff_region": {
         "top": 45,
-        "left": 60,
-        "bottom": 477,
-        "right": 600
+        "left": 0,
+        "bottom": 719,
+        "right": 1023
       },
       "capture": "gdigrab",
       "debtor": {
@@ -1246,12 +1256,12 @@
       "html": "80-border-collapse.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.2552,
+      "diff_pct": 2.256,
       "diff_region": {
         "top": 22,
-        "left": 21,
-        "bottom": 483,
-        "right": 658
+        "left": 0,
+        "bottom": 719,
+        "right": 1023
       },
       "capture": "gdigrab",
       "debtor": {
@@ -1346,12 +1356,12 @@
       "html": "100-transform-overflow.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.009,
+      "diff_pct": 0.0098,
       "diff_region": {
         "top": 448,
-        "left": 700,
-        "bottom": 601,
-        "right": 1009
+        "left": 0,
+        "bottom": 719,
+        "right": 1023
       },
       "capture": "gdigrab",
       "deps": [
@@ -1518,12 +1528,12 @@
       "html": "109-clippath-transform.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.185,
+      "diff_pct": 0.1858,
       "diff_region": {
         "top": 85,
-        "left": 87,
-        "bottom": 671,
-        "right": 1001
+        "left": 0,
+        "bottom": 719,
+        "right": 1023
       },
       "capture": "gdigrab",
       "deps": [
@@ -1706,12 +1716,12 @@
       "html": "97-counter-set.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.3965,
+      "diff_pct": 1.3973,
       "diff_region": {
         "top": 55,
-        "left": 46,
-        "bottom": 632,
-        "right": 315
+        "left": 0,
+        "bottom": 719,
+        "right": 1023
       },
       "capture": "gdigrab",
       "debtor": {
@@ -1866,12 +1876,12 @@
       "html": "117-quotes.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.068,
+      "diff_pct": 1.0688,
       "diff_region": {
         "top": 58,
-        "left": 41,
-        "bottom": 277,
-        "right": 385
+        "left": 0,
+        "bottom": 719,
+        "right": 1023
       },
       "capture": "gdigrab",
       "debtor": {
@@ -2043,12 +2053,12 @@
       "html": "130-svg-dynamic-nested-transforms.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3011,
+      "diff_pct": 0.3019,
       "diff_region": {
         "top": 112,
-        "left": 202,
-        "bottom": 604,
-        "right": 945
+        "left": 0,
+        "bottom": 719,
+        "right": 1023
       },
       "capture": "gdigrab"
     },
@@ -2133,12 +2143,12 @@
       "html": "135-svg-dynamic-paint-order.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.1788,
+      "diff_pct": 1.1796,
       "diff_region": {
         "top": 101,
-        "left": 650,
-        "bottom": 623,
-        "right": 874
+        "left": 0,
+        "bottom": 719,
+        "right": 1023
       },
       "capture": "gdigrab",
       "debtor": {
@@ -2154,12 +2164,12 @@
       "html": "136-svg-dynamic-ellipse-radial.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.5016,
+      "diff_pct": 0.5024,
       "diff_region": {
         "top": 91,
-        "left": 81,
-        "bottom": 709,
-        "right": 955
+        "left": 0,
+        "bottom": 719,
+        "right": 1023
       },
       "capture": "gdigrab",
       "debtor": {
@@ -2330,12 +2340,12 @@
       "html": "147-background-repeat-space.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.9088,
+      "diff_pct": 2.9096,
       "diff_region": {
         "top": 41,
-        "left": 49,
-        "bottom": 440,
-        "right": 982
+        "left": 0,
+        "bottom": 719,
+        "right": 1023
       },
       "capture": "gdigrab",
       "debtor": {
@@ -2609,12 +2619,12 @@
       "html": "166-text-quality.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 9.112,
+      "diff_pct": 9.1135,
       "diff_region": {
         "top": 9,
-        "left": 8,
-        "bottom": 620,
-        "right": 789
+        "left": 0,
+        "bottom": 719,
+        "right": 1023
       },
       "capture": "gdigrab",
       "debtor": {
