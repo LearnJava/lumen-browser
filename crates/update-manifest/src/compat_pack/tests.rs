@@ -269,10 +269,32 @@ fn embedded_base_copy_is_valid() {
 }
 
 #[test]
+fn engine_flag_applies_only_to_matched_host_documents() {
+    let p = pack(vec![entry("a-flag", "a.com", Action::EngineFlag { flag: "window-chrome".into() })]);
+    assert!(p.validate(&TestPsl).is_ok());
+    let policy = CompatPolicy::default();
+
+    // A document of the matched host (with or without a subdomain) carries the flag…
+    assert!(p.engine_flags_for_host("a.com", &policy).is_enabled("window-chrome"));
+    assert!(p.engine_flags_for_host("www.a.com", &policy).is_enabled("window-chrome"));
+    // …an iframe or a tab of another host builds its own, empty set…
+    assert!(!p.engine_flags_for_host("b.com", &policy).is_enabled("window-chrome"));
+    // …and a record the user switched off applies nowhere.
+    let off = CompatPolicy { pack_off: false, disabled: vec!["a-flag".into()] };
+    assert!(!p.engine_flags_for_host("a.com", &off).is_enabled("window-chrome"));
+}
+
+#[test]
+fn unknown_engine_flag_name_is_rejected() {
+    let reason = rejected(vec![entry("a-flag", "a.com", Action::EngineFlag { flag: "webkit-scrollbar".into() })]);
+    assert!(reason.contains("unknown engine flag"), "{reason}");
+}
+
+#[test]
 fn policy_switches_off_one_record_or_the_whole_pack() {
     let p = pack(vec![
         entry("a-css", "a.com", css("x{}")),
-        entry("a-flag", "a.com", Action::EngineFlag { flag: "webkit-scrollbar".into() }),
+        entry("a-flag", "a.com", Action::EngineFlag { flag: "window-chrome".into() }),
         entry("b-css", "b.com", css("y{}")),
     ]);
     let ids = |policy: &CompatPolicy, host: &str| -> Vec<String> {

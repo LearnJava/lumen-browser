@@ -409,7 +409,7 @@ pub(in crate::style) fn apply_dir_presentational_hint(doc: &Document, node: Node
 
 /// Returns `Some(Direction)` if the slot has assigned nodes with strong directionality,
 /// `None` otherwise.
-fn slot_assigned_directionality(doc: &Document, slot: NodeId) -> Option<Direction> {
+pub(crate) fn slot_assigned_directionality(doc: &Document, slot: NodeId) -> Option<Direction> {
     // Find the shadow root containing this slot
     let mut cur = Some(slot);
     let mut shadow_root = None;

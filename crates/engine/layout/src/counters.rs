@@ -40,6 +40,7 @@ use lumen_dom::{Document, FlatTree, NodeData, NodeId};
 
 use crate::style::{
     compute_pseudo_element_style, Content, ComputedStyle, ContentItem, ListStyleType, ShareCache,
+    slot_assigned_directionality,
 };
 use crate::custom_flow::CustomFlow;
 use lumen_css_parser::Stylesheet;
@@ -1856,6 +1857,24 @@ fn walk(
     let child_shallow = is_shallow_root || changed_shallow;
     let child_unclean = unclean || changed_shallow;
     let mut children_clean = true;
+    // For slots with dir=auto and no assigned strong directionality, children should inherit
+    // from the slot's parent (the shadow tree parent), not the slot itself.
+    // This matches the reference rendering where assigned content renders in the shadow tree context.
+    let is_slot_auto_no_strong = {
+        let node_data = doc.get(id);
+        if let NodeData::Element { name, .. } = &node_data.data {
+            name.local == "slot"
+                && node_data.get_attr("dir").map(|v| v.trim().to_ascii_lowercase()).as_deref() == Some("auto")
+                && slot_assigned_directionality(doc, id).is_none()
+        } else {
+            false
+        }
+    };
+    let child_inherited: &ComputedStyle = if is_slot_auto_no_strong {
+        inherited
+    } else {
+        &style
+    };
     for &child_id in flat.children_of(doc, id) {
         // BUG-341 S27: nothing in the delta can reach this child's subtree, so
         // the walk's whole output for it is a restatement of its input.
@@ -1863,7 +1882,7 @@ fn walk(
             continue;
         }
         let child_clean = walk(
-            doc, sheet, child_id, &style, viewport, flat, ctx, map, dark_mode, incr, child_force, id, child_shallow,
+            doc, sheet, child_id, child_inherited, viewport, flat, ctx, map, dark_mode, incr, child_force, id, child_shallow,
             child_unclean, child_flow.as_ref(),
         );
         children_clean &= child_clean;

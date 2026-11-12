@@ -1192,7 +1192,7 @@ fn build_box_inner(
                 let par_pseudo_sites: std::sync::Mutex<
                     std::collections::HashMap<String, crate::style::PseudoCascadeStats>,
                 > = std::sync::Mutex::new(std::collections::HashMap::new());
-                children = dom_children.par_iter().filter_map(|&child_id| {
+children = dom_children.par_iter().filter_map(|&child_id| {
                     snap.install();
                     let out = if wrap_text_items && matches!(doc.get(child_id).data, NodeData::Text(_)) {
                         build_anon_text_item(
