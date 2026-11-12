@@ -807,9 +807,12 @@ pub fn build_dialog_overlay(
     // Center the dialog in the viewport.
     // dialog center in viewport-space: x stays, y adjusted for scroll.
     let dlg_cx_doc = r.x + r.width * 0.5;
-    let dlg_cy_vp = r.y + r.height * 0.5 - scroll_y;
     let dx = vp_w * 0.5 - dlg_cx_doc;
-    let dy = vp_h * 0.5 - dlg_cy_vp;
+    // Painted viewport top = max(0, vp_h/2 - h/2): centered, but a dialog
+    // taller than the viewport sits flush at the top (HTML5 §4.11.7);
+    // `+ scroll_y` converts the viewport-space target back into the
+    // document-space translation the paint transform applies.
+    let dy = (vp_h * 0.5 - r.height * 0.5).max(0.0) - r.y + scroll_y;
 
     let mut out: DisplayList = Vec::new();
 

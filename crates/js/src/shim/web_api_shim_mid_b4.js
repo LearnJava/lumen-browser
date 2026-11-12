@@ -353,6 +353,18 @@ _lumen_append_child = function(parent, child) {
 // Wrap _lumen_remove_child to intercept childList mutations
 var _orig_remove_child = _lumen_remove_child;
 _lumen_remove_child = function(parent, child) {
+    // BUG-1777 (HTML LS "top layer"): a dialog leaves the top layer when it
+    // leaves the document — drop the modal state so the shell overlay and
+    // getBoundingClientRect stop treating it as modal after re-attachment.
+    // shortcut: clears only the child itself, not a modal dialog deeper in a
+    // removed subtree (innerHTML="" detaches natively) — nothing needs that yet.
+    if (typeof _lumen_modal_dialog_nids !== 'undefined') {
+        var _mi = _lumen_modal_dialog_nids.indexOf(child);
+        if (_mi >= 0) {
+            _lumen_modal_dialog_nids.splice(_mi, 1);
+            _lumen_remove_attr(child, 'data-lumen-modal');
+        }
+    }
     // Neighbors must be read BEFORE removal — once the native call runs,
     // `child` is gone from `parent`'s child list and `_lumen_mo_siblings`
     // can no longer find it.
