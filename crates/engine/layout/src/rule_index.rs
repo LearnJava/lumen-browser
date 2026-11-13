@@ -236,6 +236,7 @@ impl RuleIndex {
             out.sort_unstable();
             out.dedup();
         }
+        crate::counters::note_candidates(out.len());
         out
     }
 }
