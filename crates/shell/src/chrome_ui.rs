@@ -935,6 +935,12 @@ impl Lumen {
             popover_domain: self.shields.current_domain.clone().unwrap_or_default(),
             site_shields_on: self.shields.enabled_for_current(),
             tab_shields_once_off: lumen_network::tab_shields_off(self.active_tab_id()),
+            // COMPAT-NOPROXY: строки правила видимы только при настроенном
+            // прокси вне Tor-профиля; кнопка отражает сайт из списка.
+            no_proxy_visible: crate::config::no_proxy_rule_available(),
+            no_proxy_site_on: self
+                .current_connection_site()
+                .is_some_and(|site| self.settings_store.no_proxy_sites().iter().any(|s| s == &site)),
             compat_fixes: u32::try_from(self.compat_applied.len()).unwrap_or(u32::MAX),
             // COMPAT-PACK-PROTECTION: the popover names the protection exception
             // instead of the generic fix count when one is applied here.
@@ -1309,6 +1315,45 @@ impl Lumen {
             self.shields.default_enabled(),
             &self.shields.site_overrides(),
         );
+    }
+
+    /// COMPAT-NOPROXY: push the persisted «этот сайт без прокси» list into the
+    /// network registry. Call at startup and after every list change — the
+    /// rule is decided per request in `fetch_single` from the request host.
+    pub(crate) fn sync_no_proxy_rules(&self) {
+        let sites = self.settings_store.no_proxy_sites();
+        lumen_network::install_no_proxy_patterns(&sites);
+    }
+
+    /// COMPAT-NOPROXY: the eTLD+1 of the active page — the key the no-proxy
+    /// rule list is stored by. `None` off http(s) (about:-pages, file: — no
+    /// site to exempt from a proxy).
+    #[must_use]
+    pub(crate) fn current_connection_site(&self) -> Option<String> {
+        let url = lumen_core::Url::parse(self.current_display_url()).ok()?;
+        if url.scheme() != "http" && url.scheme() != "https" {
+            return None;
+        }
+        let site = crate::config::connection_site(&url);
+        (!site.is_empty()).then_some(site)
+    }
+
+    /// COMPAT-NOPROXY: flip the rule for the current site and sync the
+    /// network registry.
+    pub(crate) fn toggle_site_no_proxy(&mut self) {
+        let Some(site) = self.current_connection_site() else { return };
+        let on = !self.settings_store.no_proxy_sites().iter().any(|s| s == &site);
+        let _ = self.settings_store.set_no_proxy_site(&site, on);
+        self.sync_no_proxy_rules();
+    }
+
+    /// COMPAT-NOPROXY: add the «напрямую» preset sites (банки, Госуслуги,
+    /// маркетплейсы) to the rule list in bulk; idempotent.
+    pub(crate) fn add_no_proxy_presets(&mut self) {
+        for site in crate::config::NO_PROXY_PRESETS {
+            let _ = self.settings_store.set_no_proxy_site(site, true);
+        }
+        self.sync_no_proxy_rules();
     }
 
     /// Сетевой `TabId` активной вкладки (COMPAT-PANEL-TAB-SHIELDS): навигации

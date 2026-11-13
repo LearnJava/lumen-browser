@@ -920,6 +920,9 @@ fn run_window_mode_inner(
         app.shields.set_default_enabled(on);
         app.frustration = lumen::frustration::load_frustration(&app.settings_store);
         app.sync_adblock_filter();
+        // COMPAT-NOPROXY: список «этот сайт без прокси» из хранилища — в
+        // реестр сети, чтобы правило действовало с первого запроса.
+        app.sync_no_proxy_rules();
     }
     // PH3-20: install the session-global Service Worker fetch interceptor.
     // It shares the same `sw_worker_store` + `cache_store` the page runtime uses,

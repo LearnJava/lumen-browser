@@ -596,6 +596,31 @@ pub fn connection_site(url: &lumen_core::url::Url) -> String {
         .to_owned()
 }
 
+/// Presets «напрямую» (COMPAT-NOPROXY): registrable domains of sites known to
+/// refuse foreign IPs / VPN exit nodes (банки, Госуслуги, маркетплейсы). The
+/// popover button adds them to the persisted no-proxy rule list in bulk.
+pub const NO_PROXY_PRESETS: &[&str] = &[
+    "gosuslugi.ru",
+    "nalog.ru",
+    "mos.ru",
+    "sberbank.ru",
+    "vtb.ru",
+    "tbank.ru",
+    "alfabank.ru",
+    "rzd.ru",
+    "ozon.ru",
+    "wildberries.ru",
+];
+
+/// Whether the «этот сайт без прокси» rule is meaningful in this process
+/// (COMPAT-NOPROXY): some proxy is configured and this is not the Tor profile —
+/// в Tor-профиле правило недоступно, окно не показывает ни одной из его кнопок.
+#[must_use]
+pub fn no_proxy_rule_available() -> bool {
+    let g = global();
+    g.http_profile != HttpProfile::TorBrowser && (g.proxy.is_some() || g.socks5_proxy.is_some())
+}
+
 /// Resolve the path to the portable `fingerprint.toml`.
 ///
 /// Path: `<exe_dir>/data/fingerprint.toml` via [`crate::adblock::browser_data_dir`]
