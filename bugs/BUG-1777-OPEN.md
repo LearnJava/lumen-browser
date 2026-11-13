@@ -84,9 +84,32 @@ fallback-и проходили мимо. Три корня, найдены пр�
 корректный `event.target` для кликов по инлайн-элементам (`<span>` внутри `<p>` — span, а не p;
 предки по-прежнему получают событие bubbling-ом).
 
-Остаток бага: `dir-shadow-41` (reftest, 72px diff — спор host vs flat-tree parent),
-`draw-element-image/css-backdrop-filter-and-mask` (reftest — ждёт реальную реализацию
-BUG-1798).
+**2026-11-13 (P3): `dir-shadow-41` и `dir-shadow-42` PASS.** Два корня (пробами, без бисекта;
+42 раньше не числился в баге — падал так же, 282px):
+
+1. Направленность `<slot dir=auto>` без сильных символов в assigned nodes: брали
+   directionality host'а, по HTML LS §3.2.6.1 auto directionality пуст → `ltr`
+   (`dir-shadow-42`: host `rtl`, ожидание `ltr`). Исправлено в обоих путях — `:dir()`
+   (`matching/forms.rs::slot_element_directionality`) и presentational hint
+   `direction` (`style/presentational.rs::apply_dir_presentational_hint`);
+   `slot_host_directionality`/`slot_auto_directionality` удалены как лишние.
+2. Геометрия: `display:contents` (слот) на уровне детей блока строил собственный
+   InlineRun со СВОИМ стилем, и его `direction` задавал направление строки
+   (`dispatch_box.rs::para_dir`) вместо направления блока-хозяина — пустой span
+   прилипал к левому (rtl-див) / правому (ltr-див) краю. По CSS Display L3 §3.1
+   contents прозрачен и на этом уровне: его flat-дети вливаются в inline-контекст
+   блока (`inline_build.rs::produces_inline_segments`). Исключение — UA-слот
+   `<select>`/`<details>` (`Document::ua_slot_role`): боксовый путь держит в дереве
+   Skip-боксы его display:none-контролов (`<option>` под `<select>` — тесты
+   `state_pseudo_classes` на :checked/:disabled), инлайн-прозрачность их выбрасывает.
+   Лишние `element_directionality`/`is_tel_input`/`input_type` presentational.rs
+   удалены (дубль forms.rs).
+
+Тесты `state_pseudo_classes::dir_shadow_slot_*`; полный lumen-layout — множество
+падений совпадает с чистым main (17, таблицы/BUG-1784/1785 и пр.).
+
+Остаток бага: `draw-element-image/css-backdrop-filter-and-mask` (reftest — ждёт реальную
+реализацию BUG-1798).
 
 ## Воспроизведение
 
