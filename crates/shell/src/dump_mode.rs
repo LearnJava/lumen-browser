@@ -172,7 +172,7 @@ pub(crate) fn render_source_to_png(
     // this shared path costs nothing for `--screenshot`/`--ipc-server`.
     let raw = {
         let _s = lumen_core::trace::span("fetch-document", "net");
-        source.load_bytes(event_sink.clone(), None)?
+        source.load_bytes(event_sink.clone(), None, lumen_core::event::TabId(0))?
     };
     let vp = match viewport_override {
         Some((w, h)) => Size::new(w, h),
@@ -574,7 +574,7 @@ pub(crate) fn do_print_to_pdf(
     use lumen_layout::{paginate, PaginationContext};
     use lumen_paint::{build_print_display_list, split_at_page_breaks, Renderer};
 
-    let raw = source.load_bytes(event_sink.clone(), None)?;
+    let raw = source.load_bytes(event_sink.clone(), None, lumen_core::event::TabId(0))?;
     let vp = Size::new(PDF_PAGE_W as f32, PDF_PAGE_H as f32);
     let mut parsed = parse_and_layout(
         &raw.bytes,
@@ -668,7 +668,7 @@ pub(crate) fn do_print_to_pdf_with_opts(
     };
     let PrintOptions { margin_tb, margin_lr, scale, print_backgrounds, landscape } = opts;
 
-    let raw = source.load_bytes(event_sink.clone(), None)?;
+    let raw = source.load_bytes(event_sink.clone(), None, lumen_core::event::TabId(0))?;
     let (page_w, page_h) = if landscape { (PDF_PAGE_H, PDF_PAGE_W) } else { (PDF_PAGE_W, PDF_PAGE_H) };
     // Apply scale to viewport (W-2b): 50–200% zoom
     let scale_factor = scale as f32 / 100.0;
@@ -910,7 +910,7 @@ pub(crate) fn run_dump(
     viewport_override: Option<(f32, f32)>,
 ) -> Result<(), Box<dyn Error>> {
     let cookie_jar = Arc::new(lumen_storage::CookieJar::open_in_memory()?);
-    let raw = source.load_bytes(event_sink.clone(), Some(cookie_jar))?;
+    let raw = source.load_bytes(event_sink.clone(), Some(cookie_jar), lumen_core::event::TabId(0))?;
     let dump_vp = dump_viewport(viewport_override);
     match kind {
         DumpKind::Source => {

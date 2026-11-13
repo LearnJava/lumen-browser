@@ -673,7 +673,7 @@ mod tests {
     /// `click.rs::resolve_and_upgrade_href_rewrites_when_directive_present`.
     #[test]
     fn resolve_and_upgrade_frame_href_rewrites_when_directive_present() {
-        let base = ResourceBase::Url("http://child.example/page.html".to_owned());
+        let base = ResourceBase::url_base("http://child.example/page.html".to_owned());
         let p = lumen_network::csp::parse_csp_header("upgrade-insecure-requests");
         let gate = (vec![p], "upgrade-insecure-requests".to_owned());
         assert_eq!(
@@ -686,7 +686,7 @@ mod tests {
     /// не трогается.
     #[test]
     fn resolve_and_upgrade_frame_href_no_gate_leaves_scheme_alone() {
-        let base = ResourceBase::Url("http://child.example/page.html".to_owned());
+        let base = ResourceBase::url_base("http://child.example/page.html".to_owned());
         assert_eq!(
             resolve_and_upgrade_frame_href(None, &base, "next.html"),
             "http://child.example/next.html"

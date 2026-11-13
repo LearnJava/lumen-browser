@@ -133,18 +133,18 @@ pub(crate) use http1::chunked::{BodyFraming, BodyReader, StreamDecode, detect_st
 #[cfg(test)]
 pub(crate) use js_providers::{JsSseSessionImpl, WS_RECV_POLL_INTERVAL};
 
-// ── Process-global ad-block filter ────────────────────────────────────────────
+// ── Shields decision registry (COMPAT-PANEL-TAB-SHIELDS) ─────────────────────
 //
-// A single toggle + filter consulted by EVERY request (see the filter gate in
-// `fetch_single`) when the per-client `with_filter` is unset. This makes the
-// ad-block setting apply uniformly across all fetch paths — the shell's inline
-// pipeline AND the driver's `WinitSession` — instead of having to wire each
-// `HttpClient` construction site individually. The shell flips
-// [`set_global_adblock_enabled`] from the active tab's per-tab checkbox.
+// The installed ad-block filter is consulted by EVERY request (see the filter
+// gate in `fetch_single`) when the per-client `with_filter` is unset, but
+// WHETHER it runs is decided per request from the request's own context — the
+// source tab and the site the request belongs to — not from a process-global
+// flag that followed whichever tab was active (background tabs and frames used
+// to inherit the active tab's decision). The shell pushes the whole decision
+// set ([`install_shield_decisions`]): the default plus per-host overrides;
+// [`set_tab_shields_off`] adds a per-tab one-off «без защит» that lives until
+// the shell clears it on that tab's next navigation.
 
-/// Whether the process-global ad-block filter is active. Default: off.
-static GLOBAL_ADBLOCK_ENABLED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
 /// The installed global filter (e.g. `EasyListFilter` over `DefaultFilterList`).
 ///
 /// A swappable container (not `OnceLock`) so the filter can be **hot-swapped**
@@ -154,18 +154,80 @@ static GLOBAL_ADBLOCK_ENABLED: std::sync::atomic::AtomicBool =
 static GLOBAL_ADBLOCK_FILTER: std::sync::RwLock<Option<Arc<dyn lumen_core::ext::RequestFilter>>> =
     std::sync::RwLock::new(None);
 
-/// Enable or disable the process-global ad-block filter.
-pub fn set_global_adblock_enabled(on: bool) {
-    GLOBAL_ADBLOCK_ENABLED.store(on, std::sync::atomic::Ordering::Relaxed);
+/// Whether shields (request filtering) are on for hosts without an explicit
+/// per-host choice. Default: off. Mirrors the persisted
+/// `BrowserSettings::shields_enabled`.
+static SHIELD_SITE_DEFAULT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// Per-host shields overrides of [`SHIELD_SITE_DEFAULT`], keyed by lowercase
+/// hostname (leading `www.` ignored on both sides). A `Vec` like
+/// `PROTECTION_EXEMPT_PATTERNS` — the set is tiny and pushed whole.
+static SHIELD_SITE_OVERRIDES: std::sync::RwLock<Vec<(String, bool)>> =
+    std::sync::RwLock::new(Vec::new());
+/// Tabs running the one-off «без защит для этой вкладки» mode: no ad-block
+/// filtering until the shell clears the tab on its next navigation.
+static SHIELDS_OFF_TABS: std::sync::RwLock<Vec<u32>> = std::sync::RwLock::new(Vec::new());
+
+/// Push the whole shields decision set: the default for hosts without an
+/// explicit choice plus the per-host overrides.
+pub fn install_shield_decisions(default_enabled: bool, overrides: &[(String, bool)]) {
+    SHIELD_SITE_DEFAULT.store(default_enabled, std::sync::atomic::Ordering::Relaxed);
+    if let Ok(mut guard) = SHIELD_SITE_OVERRIDES.write() {
+        *guard = overrides.to_vec();
+    }
 }
 
-/// Whether the process-global ad-block filter is currently enabled.
+/// Turn on the one-off «без защит для этой вкладки» mode for `tab_id` —
+/// no ad-block filtering for the tab's requests until
+/// [`clear_tab_shields_off`].
+pub fn set_tab_shields_off(tab_id: TabId) {
+    if let Ok(mut guard) = SHIELDS_OFF_TABS.write()
+        && !guard.contains(&tab_id.0)
+    {
+        guard.push(tab_id.0);
+    }
+}
+
+/// End `tab_id`'s one-off «без защит» mode (the shell calls this when the tab
+/// starts a new navigation).
+pub fn clear_tab_shields_off(tab_id: TabId) {
+    if let Ok(mut guard) = SHIELDS_OFF_TABS.write() {
+        guard.retain(|&t| t != tab_id.0);
+    }
+}
+
+/// Whether `tab_id` runs the one-off «без защит» mode (UI reads this to mark
+/// the popover row as active).
 #[must_use]
-pub fn global_adblock_enabled() -> bool {
-    GLOBAL_ADBLOCK_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
+pub fn tab_shields_off(tab_id: TabId) -> bool {
+    SHIELDS_OFF_TABS
+        .read()
+        .ok()
+        .is_some_and(|g| g.contains(&tab_id.0))
 }
 
-/// Install (or replace) the process-global ad-block filter.
+/// Whether shields are on for `site` — the site a request belongs to (the
+/// document host for subresources, the request host itself for a top-level
+/// navigation). Hosts compare with the leading `www.` stripped on both sides,
+/// so an override stored for `example.com` covers `www.example.com` and vice
+/// versa; anything deeper matches exactly only.
+fn shield_enabled_for_site(site: Option<&str>) -> bool {
+    let Some(site) = site else { return SHIELD_SITE_DEFAULT.load(std::sync::atomic::Ordering::Relaxed) };
+    let bare = site.trim_end_matches('.');
+    let site = bare.strip_prefix("www.").unwrap_or(bare);
+    let overrides = SHIELD_SITE_OVERRIDES.read();
+    overrides.as_ref().map_or(true, |g| {
+        for (host, on) in g.iter() {
+            let host = host.trim_end_matches('.').strip_prefix("www.").unwrap_or(host.as_str());
+            if host == site {
+                return *on;
+            }
+        }
+        SHIELD_SITE_DEFAULT.load(std::sync::atomic::Ordering::Relaxed)
+    })
+}
+
+/// Install (or replace) the global ad-block filter.
 ///
 /// Each call **replaces** the previous filter — used both for the initial
 /// install at startup and for hot-swapping a freshly reparsed ruleset after a
@@ -176,13 +238,10 @@ pub fn install_global_adblock_filter(filter: Arc<dyn lumen_core::ext::RequestFil
     }
 }
 
-/// The active global filter, or `None` when disabled or not yet installed.
+/// The installed global filter, or `None` when not yet installed (whether it
+/// runs is the shields decision, see the gate in `fetch_single`).
 fn global_adblock_filter() -> Option<Arc<dyn lumen_core::ext::RequestFilter>> {
-    if global_adblock_enabled() {
-        GLOBAL_ADBLOCK_FILTER.read().ok().and_then(|g| g.clone())
-    } else {
-        None
-    }
+    GLOBAL_ADBLOCK_FILTER.read().ok().and_then(|g| g.clone())
 }
 
 // ── Compat-pack protection exceptions (COMPAT-PACK-PROTECTION) ────────────────
@@ -2753,7 +2812,18 @@ fn fetch_with_redirect(
     // ловится.
     // Effective filter: the per-client `with_filter`, else the process-global
     // ad-block filter (so all fetch paths honour the shell's toggle uniformly).
-    let global_ad = global_adblock_filter();
+    // COMPAT-PANEL-TAB-SHIELDS: the decision comes from THIS request's context
+    // — the source tab and the site it belongs to (for a top-level navigation
+    // that is the request host itself, for a subresource the document's host,
+    // falling back to the top-level site) — so background tabs and frames no
+    // longer inherit the active tab's decision.
+    let shield_site = if is_top_level {
+        Some(host_ascii.as_str())
+    } else {
+        document_host.or(top_level_site)
+    };
+    let shields_on = !tab_shields_off(tab_id) && shield_enabled_for_site(shield_site);
+    let global_ad = if shields_on { global_adblock_filter() } else { None };
     // COMPAT-PACK-PROTECTION: active `protection` record for the source tab's
     // site lifts the ad-block decision for this request (both the per-client
     // and the global filter); the threat filter below stays in force.
@@ -8486,6 +8556,63 @@ ok".to_vec());
         assert!(!protection_exempt_for_site(Some("evilexempt.example")));
         assert!(!protection_exempt_for_site(None));
         install_protection_exempt_patterns(&[]);
+    }
+
+    /// COMPAT-PANEL-TAB-SHIELDS. Registry unit-part plus the fetch gate: the
+    /// global ad-block filter runs per request from the request's own context.
+    /// A top-level `fetch` resolves the site to the request host; the per-tab
+    /// one-off mode disables the filter for THIS tab only — the neighbour tab
+    /// stays protected — until cleared. One test fn because the registry is
+    /// process-global and parallel tests would race.
+    #[test]
+    fn shields_decide_per_site_and_per_tab() {
+        // Registry: `www.` ignored on both sides, trailing dot ignored.
+        install_shield_decisions(true, &[("off.example".to_owned(), false)]);
+        assert!(!shield_enabled_for_site(Some("off.example")));
+        assert!(!shield_enabled_for_site(Some("www.off.example")));
+        assert!(!shield_enabled_for_site(Some("off.example.")));
+        assert!(shield_enabled_for_site(Some("on.example")));
+        assert!(shield_enabled_for_site(Some("other.example")), "no override → default (on)");
+        assert!(shield_enabled_for_site(None), "no site → default (on)");
+        install_shield_decisions(false, &[]);
+        assert!(!shield_enabled_for_site(Some("on.example")), "default flipped to off");
+        // An explicit choice outranks the flipped default.
+        install_shield_decisions(false, &[("on.example".to_owned(), true)]);
+        assert!(shield_enabled_for_site(Some("on.example")));
+
+        // The fetch gate (mock server): default on → blocked…
+        let (port, server) = mock_http_server(2, |_| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_vec()
+        });
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        install_global_adblock_filter(Arc::new(BlockBySubstring {
+            needle: "127.0.0.1".to_owned(),
+            reason: "easylist".to_owned(),
+        }));
+        install_shield_decisions(true, &[]);
+        let plain = HttpClient::new().with_tab(TabId(4));
+        assert!(plain.fetch(&url).is_err(), "щиты по умолчанию включены");
+        // …an override for the site (the request host of a top-level fetch)
+        // lifts the block per request.
+        install_shield_decisions(true, &[("127.0.0.1".to_owned(), false)]);
+        assert_eq!(plain.fetch(&url).unwrap(), b"ok", "пер-сайтное выключение щитов снимает блокировку");
+        install_shield_decisions(true, &[]);
+
+        // One-off tab mode: THIS tab passes, the neighbour tab of the same
+        // site stays protected.
+        set_tab_shields_off(TabId(3));
+        let once_off = HttpClient::new().with_tab(TabId(3));
+        assert_eq!(once_off.fetch(&url).unwrap(), b"ok", "разовый режим отключает фильтр вкладки");
+        let neighbour = HttpClient::new().with_tab(TabId(4));
+        assert!(neighbour.fetch(&url).is_err(), "соседняя вкладка остаётся под защитой");
+        // Until the tab's next navigation clears the mode.
+        clear_tab_shields_off(TabId(3));
+        assert!(once_off.fetch(&url).is_err(), "после навигации фильтр вернулся");
+
+        install_shield_decisions(false, &[]);
+        // Leave no global filter behind for the other tests.
+        install_global_adblock_filter(Arc::new(AllowAll));
+        server.join().unwrap();
     }
 
     #[test]

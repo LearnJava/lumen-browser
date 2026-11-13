@@ -10,7 +10,7 @@
 use crate::compat_signals::site_of;
 use crate::external_browser::is_handoff_url;
 use crate::gate_detect::{check_id, GateLoop, Verdict};
-use crate::resource_base::ResourceBase;
+use crate::resource_base::ResourceBaseKind;
 use crate::*;
 
 use super::handoff::now_unix;
@@ -20,7 +20,7 @@ impl Lumen {
     /// панелью и обычную загрузку продолжать не нужно.
     pub(crate) fn intercept_gate(&mut self, raw: &page_source::RawPage) -> bool {
         let Some(verdict) = raw.gate else { return false };
-        let ResourceBase::Url(url) = &raw.base else { return false };
+        let ResourceBaseKind::Url(url) = &raw.base.kind else { return false };
         if !is_handoff_url(url) {
             return false;
         }

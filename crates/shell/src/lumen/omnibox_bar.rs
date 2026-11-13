@@ -249,7 +249,7 @@ impl Lumen {
             if !sidebar_url.is_empty() {
                 let sink = Arc::clone(&self.event_sink);
                 let src = PageSource::from_arg(Some(&sidebar_url));
-                match src.load_bytes(sink, Some(self.active_cookie_jar())) {
+                match src.load_bytes(sink, Some(self.active_cookie_jar()), self.active_tab_id()) {
                     Ok(raw) => {
                         self.open_sidebar_page(sidebar_url, &raw.bytes, String::new());
                     }

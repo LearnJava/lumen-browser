@@ -184,9 +184,9 @@ impl PageSource {
     /// `None` for sources without a base (`Empty`/`AboutBlank`/`Static`).
     pub(crate) fn resource_base(&self) -> Option<ResourceBase> {
         match self {
-            PageSource::File(p) => Some(ResourceBase::File(p.clone())),
-            PageSource::Url { url, .. } => Some(ResourceBase::Url(url.clone())),
-            PageSource::Snapshot { base_url, .. } => Some(ResourceBase::Url(base_url.clone())),
+            PageSource::File(p) => Some(ResourceBase::file_base(p.clone())),
+            PageSource::Url { url, .. } => Some(ResourceBase::url_base(url.clone())),
+            PageSource::Snapshot { base_url, .. } => Some(ResourceBase::url_base(base_url.clone())),
             PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => None,
         }
     }
@@ -208,12 +208,13 @@ impl PageSource {
         &self,
         sink: Arc<dyn EventSink>,
         cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+        tab: lumen_core::event::TabId,
     ) -> Result<RawPage, Box<dyn Error>> {
         match self {
             PageSource::Empty => Err("источник пуст — нечего загружать".into()),
             PageSource::AboutBlank => Ok(RawPage {
                 bytes: b"<!DOCTYPE html><html><head></head><body></body></html>".to_vec(),
-                base: ResourceBase::Url("about:blank".to_owned()),
+                base: ResourceBase::url_base("about:blank".to_owned()),
                 content_type: Some("text/html".to_owned()),
                 cross_origin_isolated: false,
                 cache_control_no_store: false,
@@ -233,7 +234,7 @@ impl PageSource {
                 let bytes = std::fs::read(path)?;
                 Ok(RawPage {
                     bytes,
-                    base: ResourceBase::File(path.clone()),
+                    base: ResourceBase::file_base(path.clone()),
                     content_type: None,
                     cross_origin_isolated: false,
                     cache_control_no_store: false,
@@ -279,6 +280,9 @@ impl PageSource {
                 }
                 let mut client = crate::config::global()
                     .apply_http(builder)
+                    // COMPAT-PANEL-TAB-SHIELDS: навигация несёт вкладку —
+                    // разовый режим «без защит» виден уже документному запросу.
+                    .with_tab(tab)
                     .with_connection_site(&crate::config::connection_site(&lumen_url))
                     .with_navigation_referrer(referrer.clone());
                 // COMPAT-PACK-IDENTITY: запись `identity` хоста документа —
@@ -316,7 +320,9 @@ impl PageSource {
                     // серверного редиректа они разные, и от базы зависят
                     // `location.*`/`document.baseURI`, разрешение
                     // относительных подресурсов и origin хранилищ.
-                    base: ResourceBase::Url(final_url.to_string()),
+                    // COMPAT-PANEL-TAB-SHIELDS: base несёт вкладку-владельца —
+                    // все подресурсы документа уйдут с её tab_id.
+                    base: ResourceBase::url_base(final_url.to_string()).with_tab(tab),
                     content_type: response_content_type(&resp_headers),
                     cross_origin_isolated,
                     cache_control_no_store: cache_control_no_store(&resp_headers),
@@ -337,7 +343,7 @@ impl PageSource {
                 // bfcache restoration: HTML already in memory, no network request.
                 Ok(RawPage {
                     bytes: html.as_bytes().to_vec(),
-                    base: ResourceBase::Url(base_url.clone()),
+                    base: ResourceBase::url_base(base_url.clone()),
                     content_type: Some("text/html".to_owned()),
                     cross_origin_isolated: false,
                     cache_control_no_store: false,
@@ -358,7 +364,7 @@ impl PageSource {
                 // Internal about: page: HTML generated in memory, no network request.
                 Ok(RawPage {
                     bytes: html.as_bytes().to_vec(),
-                    base: ResourceBase::Url(url.clone()),
+                    base: ResourceBase::url_base(url.clone()),
                     content_type: Some("text/html".to_owned()),
                     cross_origin_isolated: false,
                     cache_control_no_store: false,
@@ -395,10 +401,11 @@ impl PageSource {
         &self,
         sink: Arc<dyn EventSink>,
         cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+        tab: lumen_core::event::TabId,
         on_chunk: lumen_network::PageChunkSink<'_>,
     ) -> Result<RawPage, Box<dyn Error>> {
         let PageSource::Url { url, body, upgrade_insecure_requests, referrer } = self else {
-            return self.load_bytes(sink, cookie_jar);
+            return self.load_bytes(sink, cookie_jar, tab);
         };
         use lumen_core::url::Url;
         use lumen_network::{
@@ -425,6 +432,7 @@ impl PageSource {
         }
         let mut client = crate::config::global()
             .apply_http(builder)
+            .with_tab(tab)
             .with_connection_site(&crate::config::connection_site(&lumen_url))
             .with_navigation_referrer(referrer.clone());
         // COMPAT-PACK-IDENTITY: см. `load_bytes`.
@@ -453,7 +461,7 @@ impl PageSource {
             // BUG-757: см. `load_bytes` — база из финального URL ответа. Тот же
             // адрес приходит и в `on_chunk` (вторым аргументом), поэтому
             // preload-хинты из потока резолвятся от той же базы, что документ.
-            base: ResourceBase::Url(final_url.to_string()),
+            base: ResourceBase::url_base(final_url.to_string()).with_tab(tab),
             bytes,
             content_type: response_content_type(&resp_headers),
             cross_origin_isolated,
@@ -487,7 +495,7 @@ impl PageSource {
         if matches!(self, PageSource::Empty | PageSource::AboutBlank) {
             return Ok((LoadedPage::empty(), None, None));
         }
-        let raw = self.load_bytes(sink.clone(), None)?;
+        let raw = self.load_bytes(sink.clone(), None, lumen_core::event::TabId(0))?;
         // This fallback path (headless/tests — no GpuSession window) has no
         // access to the App's session-scoped stores, same as `cache_backend`
         // below (also always `None` here); the live-tab path is
@@ -602,7 +610,7 @@ fn emit_early_hints(early_hint_links: &[String], final_url: &lumen_core::url::Ur
     if hints.is_empty() {
         return;
     }
-    let base = ResourceBase::Url(final_url.to_string());
+    let base = ResourceBase::url_base(final_url.to_string());
     crate::page_pipeline::dispatch_preload_hints(&hints, &base, sink, &mut std::collections::HashSet::new());
 }
 
@@ -655,7 +663,7 @@ pub(crate) fn emit_link_hints(
     if hints.is_empty() {
         return;
     }
-    let base = ResourceBase::Url(base_url.to_string());
+    let base = ResourceBase::url_base(base_url.to_string());
     crate::page_pipeline::dispatch_preload_hints(&hints, &base, sink, &mut std::collections::HashSet::new());
     crate::page_pipeline::warm_preload_cache(&hints, &base, sink, cookie_jar, csp);
 }
@@ -998,7 +1006,7 @@ mod tests {
     /// extension check.
     #[test]
     fn xml_mime_wins_over_a_non_matching_extension_like_the_corpus_fixture() {
-        let base = ResourceBase::Url(
+        let base = ResourceBase::url_base(
             "http://example.test/svg/struct/reftests/support/html-resource-with-symbol-and-content-type-svg.html".to_owned(),
         );
         let headers = vec![("Content-Type".to_owned(), "image/svg+xml".to_owned())];

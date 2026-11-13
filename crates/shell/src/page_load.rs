@@ -23,11 +23,14 @@ impl Lumen {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn fetch_and_register_lazy_images(&mut self, requests: Vec<(u32, String)>) {
         let base = match &self.source {
-            PageSource::File(p) => ResourceBase::File(p.clone()),
-            PageSource::Url { url, .. } => ResourceBase::Url(url.clone()),
-            PageSource::Snapshot { base_url, .. } => ResourceBase::Url(base_url.clone()),
+            PageSource::File(p) => ResourceBase::file_base(p.clone()),
+            PageSource::Url { url, .. } => ResourceBase::url_base(url.clone()),
+            PageSource::Snapshot { base_url, .. } => ResourceBase::url_base(base_url.clone()),
             PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => return,
-        };
+        }
+        // COMPAT-PANEL-TAB-SHIELDS: отложенные lazy-картинки идут с вкладкой
+        // окна, чтобы разовый режим «без защит» покрывал и их.
+        .with_tab(self.active_tab_id());
         // GAP-CSPENF срез 9: this is the deferred `loading="lazy"` path — the
         // only image producer left with no `img-src` gate at all (the eager
         // pipeline gates in `fetch_and_decode_images`, the streaming/dynamic
@@ -937,6 +940,9 @@ impl Lumen {
         // Ctrl+F5: фиксируем режим кэша этой навигации до того, как стартуют
         // клиенты документа и подресурсов.
         crate::config::begin_navigation_cache_mode();
+        // COMPAT-PANEL-TAB-SHIELDS: разовый режим «без защит для этой вкладки»
+        // живёт до следующей навигации ЭТОЙ вкладки — гасим его здесь.
+        lumen_network::clear_tab_shields_off(lumen_core::event::TabId(tab_id as u32));
         if matches!(self.source, PageSource::Empty | PageSource::AboutBlank) {
             return;
         }
@@ -967,7 +973,7 @@ impl Lumen {
             crate::site_memory::replay(
                 remembered,
                 generation,
-                &ResourceBase::Url(url.clone()),
+                &ResourceBase::url_base(url.clone()).with_tab(lumen_core::event::TabId(tab_id as u32)),
                 &sink,
                 &cookie_jar,
             );
@@ -1022,7 +1028,7 @@ impl Lumen {
                 // редиректа они разные, и относительный `src` уходил на
                 // до-редиректный путь ещё до того, как документ получал
                 // правильную базу. Пересобираем строку только при смене hop-а.
-                let mut base = ResourceBase::Url(url.clone());
+                let mut base = ResourceBase::url_base(url.clone()).with_tab(lumen_core::event::TabId(tab_id as u32));
                 let chunk_proxy = proxy.clone();
                 // Separate clones for prefetch warm-up: `cookie_jar`/`sink` below are
                 // moved into the streaming call, so the per-chunk closure keeps its own.
@@ -1031,8 +1037,9 @@ impl Lumen {
                 // один раз на hop (у каждого ответа цепочки свои заголовки).
                 let mut header_csp: Option<(String, Vec<lumen_network::csp::CspPolicy>)> = None;
                 let mut on_chunk = |chunk: &[u8], hop_url: &lumen_core::url::Url, headers: &[(String, String)]| {
-                    if !matches!(&base, ResourceBase::Url(u) if u == hop_url.as_str()) {
-                        base = ResourceBase::Url(hop_url.to_string());
+                    if !matches!(&base.kind, ResourceBaseKind::Url(u) if u == hop_url.as_str()) {
+                        base = ResourceBase::url_base(hop_url.to_string())
+                            .with_tab(lumen_core::event::TabId(tab_id as u32));
                         // UI-поток резолвит картинки/шрифты частичного DOM от
                         // своей копии базы — сообщаем ему новую (BUG-757).
                         let _ = chunk_proxy
@@ -1059,7 +1066,7 @@ impl Lumen {
                     );
                     let _ = chunk_proxy.send_event(LoadEvent::HtmlChunk(chunk.to_vec(), tab_id, generation));
                 };
-                match source.load_bytes_streaming(Arc::clone(&sink), Some(cookie_jar), &mut on_chunk) {
+                match source.load_bytes_streaming(Arc::clone(&sink), Some(cookie_jar), lumen_core::event::TabId(tab_id as u32), &mut on_chunk) {
                     Ok(r) => r,
                     Err(e) => {
                         // A6: a TLS cert failure routes to the interstitial
@@ -1096,7 +1103,7 @@ impl Lumen {
                 }
             } else {
                 let mut warm_client = WarmClient::new(Arc::clone(&sink), Some(Arc::clone(&cookie_jar)));
-                let raw = match source.load_bytes(Arc::clone(&sink), Some(cookie_jar)) {
+                let raw = match source.load_bytes(Arc::clone(&sink), Some(cookie_jar), lumen_core::event::TabId(tab_id as u32)) {
                     Ok(r) => r,
                     Err(e) => {
                         let code = crate::net_probe::refine(
@@ -2523,9 +2530,9 @@ impl WarmClient {
         base: &ResourceBase,
         policy: lumen_network::ReferrerPolicy,
     ) -> Arc<lumen_network::HttpClient> {
-        let base_key = match base {
-            ResourceBase::Url(u) => u.clone(),
-            ResourceBase::File(p) => p.to_string_lossy().into_owned(),
+        let base_key = match &base.kind {
+            ResourceBaseKind::Url(u) => u.clone(),
+            ResourceBaseKind::File(p) => p.to_string_lossy().into_owned(),
         };
         if let Some(shared) = &self.shared
             && shared.base == base_key

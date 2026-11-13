@@ -19,7 +19,7 @@ fn dispatch_preload_hints_emits_events() {
 
     let sink: Arc<dyn EventSink> =
         Arc::new(CollectingSink(Mutex::new(Vec::new())));
-    let base = ResourceBase::Url("https://example.com/".to_owned());
+    let base = ResourceBase::url_base("https://example.com/".to_owned());
     let hints = vec![
         PreloadHint::Stylesheet { url: "reset.css".into(), media: None, fetch_priority: None, nonce: None },
         PreloadHint::Script { url: "https://cdn.example.com/lib.js".into(), fetch_priority: None, nonce: None, integrity: None },
@@ -62,7 +62,7 @@ fn dispatch_preload_hints_deduplicates_same_url() {
 
     let sink: Arc<dyn EventSink> =
         Arc::new(CollectingSink(Mutex::new(Vec::new())));
-    let base = ResourceBase::Url("https://example.com/".to_owned());
+    let base = ResourceBase::url_base("https://example.com/".to_owned());
     // rel="preload stylesheet" создаёт два хинта на один href
     let hints = vec![
         PreloadHint::Preload { url: "style.css".into(), as_kind: Some("style".into()), fetch_priority: None, nonce: None },
@@ -101,7 +101,7 @@ fn dispatch_preload_hints_cross_call_dedup() {
     }
 
     let sink: Arc<dyn EventSink> = Arc::new(CollectingSink(Mutex::new(Vec::new())));
-    let base = ResourceBase::Url("https://example.com/".to_owned());
+    let base = ResourceBase::url_base("https://example.com/".to_owned());
     let mut seen = std::collections::HashSet::new();
 
     // Первый вызов — ранний скан (streaming chunk)
@@ -143,7 +143,7 @@ fn dispatch_preload_hints_sorts_by_priority() {
     }
 
     let sink: Arc<dyn EventSink> = Arc::new(CollectingSink(Mutex::new(Vec::new())));
-    let base = ResourceBase::Url("https://example.com/".to_owned());
+    let base = ResourceBase::url_base("https://example.com/".to_owned());
     // Source-order: img (Low) → script (Medium) → css (High)
     let hints = vec![
         PreloadHint::Image { url: Some("hero.png".into()), srcset: None, sizes: None, fetch_priority: None },
@@ -186,7 +186,7 @@ fn dispatch_preload_hints_fetchpriority_overrides_heuristic() {
     }
 
     let sink: Arc<dyn EventSink> = Arc::new(CollectingSink(Mutex::new(Vec::new())));
-    let base = ResourceBase::Url("https://example.com/".to_owned());
+    let base = ResourceBase::url_base("https://example.com/".to_owned());
     let hints = vec![
         PreloadHint::Image {
             url: Some("hero.png".into()),
@@ -278,7 +278,7 @@ fn load_linked_stylesheets_reports_one_outcome_per_element() {
                  <link rel="stylesheet" href="b804-no-such-b.css">
                </head><body></body></html>"#,
     );
-    let base = ResourceBase::File(PathBuf::from("samples/page.html"));
+    let base = ResourceBase::file_base(PathBuf::from("samples/page.html"));
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
     let (css, outcomes, _blocked) = load_linked_stylesheets(&doc, &base, &sink, None, &ctx);
@@ -324,7 +324,7 @@ fn frame_subresources_fetch_links_and_imgs_with_outcomes() {
     impl EventSink for NullSink {
         fn emit(&self, _event: &Event) {}
     }
-    let base = ResourceBase::File(dir.join("index.html"));
+    let base = ResourceBase::file_base(dir.join("index.html"));
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     let mut doc = doc;
     let out = fetch_frame_subresources(
@@ -410,7 +410,7 @@ fn frame_subresources_reports_csp_blocked_img_and_style_src() {
     impl EventSink for NullSink {
         fn emit(&self, _event: &Event) {}
     }
-    let base = ResourceBase::Url("https://example.com/frame/index.html".to_owned());
+    let base = ResourceBase::url_base("https://example.com/frame/index.html".to_owned());
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     let mut doc = doc;
     let out = fetch_frame_subresources(
@@ -450,7 +450,7 @@ fn frame_subresources_reports_csp_blocked_inline_style() {
     impl EventSink for NullSink {
         fn emit(&self, _event: &Event) {}
     }
-    let base = ResourceBase::Url("https://example.com/frame/index.html".to_owned());
+    let base = ResourceBase::url_base("https://example.com/frame/index.html".to_owned());
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     let mut doc = doc;
     let out = fetch_frame_subresources(
@@ -479,7 +479,7 @@ fn frame_subresources_no_policy_keeps_inline_style() {
     impl EventSink for NullSink {
         fn emit(&self, _event: &Event) {}
     }
-    let base = ResourceBase::Url("https://example.com/frame/index.html".to_owned());
+    let base = ResourceBase::url_base("https://example.com/frame/index.html".to_owned());
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     let mut doc = doc;
     let out = fetch_frame_subresources(
@@ -513,7 +513,7 @@ fn frame_subresources_reports_csp_blocked_style_attr() {
     impl EventSink for NullSink {
         fn emit(&self, _event: &Event) {}
     }
-    let base = ResourceBase::Url("https://example.com/frame/index.html".to_owned());
+    let base = ResourceBase::url_base("https://example.com/frame/index.html".to_owned());
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     let mut doc = doc;
     let out = fetch_frame_subresources(
@@ -547,7 +547,7 @@ fn frame_subresources_no_policy_keeps_style_attr() {
     impl EventSink for NullSink {
         fn emit(&self, _event: &Event) {}
     }
-    let base = ResourceBase::Url("https://example.com/frame/index.html".to_owned());
+    let base = ResourceBase::url_base("https://example.com/frame/index.html".to_owned());
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     let mut doc = doc;
     let out = fetch_frame_subresources(
@@ -581,7 +581,7 @@ fn frame_subresources_reports_frame_ancestors_blocked() {
     impl EventSink for NullSink {
         fn emit(&self, _event: &Event) {}
     }
-    let base = ResourceBase::Url("https://example.com/frame/index.html".to_owned());
+    let base = ResourceBase::url_base("https://example.com/frame/index.html".to_owned());
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     let mut doc = doc;
     let ancestor = lumen_network::Origin::new("https", "parent.example", 443);
@@ -614,7 +614,7 @@ fn frame_subresources_frame_ancestors_allows_matching_embedder() {
     impl EventSink for NullSink {
         fn emit(&self, _event: &Event) {}
     }
-    let base = ResourceBase::Url("https://example.com/frame/index.html".to_owned());
+    let base = ResourceBase::url_base("https://example.com/frame/index.html".to_owned());
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     let mut doc = doc;
     let ancestor = lumen_network::Origin::new("https", "parent.example", 443);
@@ -646,7 +646,7 @@ fn frame_fonts_reports_csp_blocked_font_src() {
     impl EventSink for NullSink {
         fn emit(&self, _event: &Event) {}
     }
-    let base = ResourceBase::Url("https://example.com/frame/index.html".to_owned());
+    let base = ResourceBase::url_base("https://example.com/frame/index.html".to_owned());
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     let policy = lumen_network::csp::parse_csp_header("font-src 'none'");
     let csp_gate = Some((vec![policy], "font-src 'none'".to_owned()));
@@ -679,7 +679,7 @@ fn frame_fonts_no_policy_does_not_report_blocked() {
     impl EventSink for NullSink {
         fn emit(&self, _event: &Event) {}
     }
-    let base = ResourceBase::Url("https://example.com/frame/index.html".to_owned());
+    let base = ResourceBase::url_base("https://example.com/frame/index.html".to_owned());
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     let self_origin = base.origin();
     let (_registry, _web_fonts, blocked) = load_frame_fonts(
@@ -718,7 +718,7 @@ fn frame_background_images_reports_csp_blocked_img_src() {
     impl EventSink for NullSink {
         fn emit(&self, _event: &Event) {}
     }
-    let base = ResourceBase::Url("https://example.com/frame/index.html".to_owned());
+    let base = ResourceBase::url_base("https://example.com/frame/index.html".to_owned());
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     let policy = lumen_network::csp::parse_csp_header("img-src 'none'");
     let csp_gate = Some((vec![policy], "img-src 'none'".to_owned()));
@@ -758,7 +758,7 @@ fn frame_background_images_no_policy_does_not_report_blocked() {
     impl EventSink for NullSink {
         fn emit(&self, _event: &Event) {}
     }
-    let base = ResourceBase::Url("https://example.com/frame/index.html".to_owned());
+    let base = ResourceBase::url_base("https://example.com/frame/index.html".to_owned());
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     let self_origin = base.origin();
 
@@ -816,7 +816,7 @@ fn inline_css_imports_prepends_imported_content() {
     let dir = import_fixture_dir("prepend");
     std::fs::write(dir.join("b.css"), "b { color: blue; }").unwrap();
     let entry = dir.join("a.css");
-    let base = ResourceBase::File(entry.clone());
+    let base = ResourceBase::file_base(entry.clone());
     let text = "@import url(\"b.css\");\na { color: red; }";
     let (out, blocked) = inline_css_imports(
         text, &base, &null_sink(), None,
@@ -839,7 +839,7 @@ fn inline_css_imports_prepends_imported_content() {
 fn inline_css_imports_result_ends_with_source_text() {
     let dir = import_fixture_dir("suffix");
     std::fs::write(dir.join("b.css"), "b { color: blue; }").unwrap();
-    let base = ResourceBase::File(dir.join("a.css"));
+    let base = ResourceBase::file_base(dir.join("a.css"));
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
     for text in ["@import url(\"b.css\");\na { color: red; }", "a { color: red; }", ""] {
         let (out, _blocked) = inline_css_imports(
@@ -906,7 +906,7 @@ fn page_sheets_follow_document_order() {
     let doc = lumen_html_parser::parse(
         r#"<html><head><style>.first{}</style><link rel="stylesheet" href="o.css"><style>.last{}</style></head></html>"#,
     );
-    let base = ResourceBase::File(dir.join("page.html"));
+    let base = ResourceBase::file_base(dir.join("page.html"));
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
     let (inline, _) = extract_style_chunks(&doc, None);
     let (linked, _, _) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
@@ -925,7 +925,7 @@ fn style_after_link_wins_at_equal_specificity() {
     let doc = lumen_html_parser::parse(
         r#"<html><head><link rel="stylesheet" href="o.css"><style>.a{background-color:blue}</style></head><body><div class="a">x</div></body></html>"#,
     );
-    let base = ResourceBase::File(dir.join("page.html"));
+    let base = ResourceBase::file_base(dir.join("page.html"));
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
     let (inline, _) = extract_style_chunks(&doc, None);
     let (linked, _, _) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
@@ -950,7 +950,7 @@ fn inline_style_imports_stay_with_their_own_style() {
     let doc = lumen_html_parser::parse(
         r#"<html><head><link rel="stylesheet" href="o.css"><style>@import url(imp.css);.own{}</style></head></html>"#,
     );
-    let base = ResourceBase::File(dir.join("page.html"));
+    let base = ResourceBase::file_base(dir.join("page.html"));
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
     let (inline, _) = extract_style_chunks(&doc, None);
     let (resolved, prefixes, _) = resolve_inline_style_imports(
@@ -973,7 +973,7 @@ fn inline_css_imports_nested_order() {
     let dir = import_fixture_dir("nested");
     std::fs::write(dir.join("c.css"), ".c{}").unwrap();
     std::fs::write(dir.join("b.css"), "@import url(c.css);\n.b{}").unwrap();
-    let base = ResourceBase::File(dir.join("a.css"));
+    let base = ResourceBase::file_base(dir.join("a.css"));
     let (out, _blocked) = inline_css_imports(
         "@import url(b.css);\n.a{}", &base, &null_sink(), None,
         &screen_media_context(Size::new(1024.0, 720.0), false),
@@ -994,7 +994,7 @@ fn inline_css_imports_cycle_guard() {
     let dir = import_fixture_dir("cycle");
     std::fs::write(dir.join("a.css"), "@import url(b.css);\n.a{}").unwrap();
     std::fs::write(dir.join("b.css"), "@import url(a.css);\n.b{}").unwrap();
-    let base = ResourceBase::File(dir.join("a.css"));
+    let base = ResourceBase::file_base(dir.join("a.css"));
     // Начинаем с содержимого a.css — тот же файл будет импортирован из b.
     let (out, _blocked) = inline_css_imports(
         "@import url(b.css);\n.a{}", &base, &null_sink(), None,
@@ -1013,7 +1013,7 @@ fn inline_css_imports_cycle_guard() {
 fn inline_css_imports_media_gate() {
     let dir = import_fixture_dir("media");
     std::fs::write(dir.join("p.css"), ".print-only{}").unwrap();
-    let base = ResourceBase::File(dir.join("a.css"));
+    let base = ResourceBase::file_base(dir.join("a.css"));
     let (out, _blocked) = inline_css_imports(
         "@import url(p.css) print;\n.a{}", &base, &null_sink(), None,
         &screen_media_context(Size::new(1024.0, 720.0), false),
@@ -1036,7 +1036,7 @@ fn inline_css_imports_wraps_sheet_in_named_layer() {
         "p { color: red; } @font-face { font-family: Imp; src: url(i.woff2); }",
     )
     .unwrap();
-    let base = ResourceBase::File(dir.join("a.css"));
+    let base = ResourceBase::file_base(dir.join("a.css"));
     let (out, _blocked) = inline_css_imports(
         "@import url(b.css) layer(lib);\np { color: blue; }", &base, &null_sink(), None,
         &screen_media_context(Size::new(1024.0, 720.0), false),
@@ -1060,7 +1060,7 @@ fn inline_css_imports_wraps_sheet_in_named_layer() {
 fn inline_css_imports_wraps_sheet_in_anonymous_layer() {
     let dir = import_fixture_dir("layer_anon");
     std::fs::write(dir.join("b.css"), "p { color: red; }").unwrap();
-    let base = ResourceBase::File(dir.join("a.css"));
+    let base = ResourceBase::file_base(dir.join("a.css"));
     let (out, _blocked) = inline_css_imports(
         "@import url(b.css) layer;", &base, &null_sink(), None,
         &screen_media_context(Size::new(1024.0, 720.0), false),
@@ -1080,7 +1080,7 @@ fn inline_css_imports_wraps_sheet_in_anonymous_layer() {
 fn inline_css_imports_supports_gate() {
     let dir = import_fixture_dir("supports");
     std::fs::write(dir.join("b.css"), ".gated{}").unwrap();
-    let base = ResourceBase::File(dir.join("a.css"));
+    let base = ResourceBase::file_base(dir.join("a.css"));
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
     let run = |text: &str| {
         inline_css_imports(
@@ -1102,7 +1102,7 @@ fn inline_css_imports_supports_gate() {
 fn inline_css_imports_layer_loses_to_unlayered_in_cascade() {
     let dir = import_fixture_dir("layer_cascade");
     std::fs::write(dir.join("b.css"), "#x { color: red; }").unwrap();
-    let base = ResourceBase::File(dir.join("a.css"));
+    let base = ResourceBase::file_base(dir.join("a.css"));
     let (out, _blocked) = inline_css_imports(
         "@import url(b.css) layer(lib);\np { color: blue; }", &base, &null_sink(), None,
         &screen_media_context(Size::new(1024.0, 720.0), false),
@@ -1125,7 +1125,7 @@ fn inline_css_imports_layer_loses_to_unlayered_in_cascade() {
 #[test]
 fn inline_css_imports_missing_file_is_skipped() {
     let dir = import_fixture_dir("missing");
-    let base = ResourceBase::File(dir.join("a.css"));
+    let base = ResourceBase::file_base(dir.join("a.css"));
     let (out, _blocked) = inline_css_imports(
         "@import url(nope.css);\n.a{}", &base, &null_sink(), None,
         &screen_media_context(Size::new(1024.0, 720.0), false),
@@ -1150,7 +1150,7 @@ fn inline_css_imports_missing_file_is_skipped() {
 /// `fetch_stylesheet_text`, поэтому тест безопасен без доступа к сети.
 #[test]
 fn inline_css_imports_style_src_blocks_cross_origin_import() {
-    let base = ResourceBase::Url("https://good.example/a.css".to_owned());
+    let base = ResourceBase::url_base("https://good.example/a.css".to_owned());
     let policy = lumen_network::csp::parse_csp_header("style-src https://good.example");
     let text = "@import url(\"https://evil.example/b.css\");\n.a{color:red}";
     let (out, blocked) = inline_css_imports(
@@ -1172,12 +1172,12 @@ fn inline_css_imports_style_src_blocks_cross_origin_import() {
 /// Тот же origin, что `style-src`, разрешает `@import` (через сам
 /// `style_src_blocked`, без реального сетевого похода — unit-тесты этого
 /// файла не бьют по сети, см. [`inline_css_imports_missing_file_is_skipped`]
-/// и соседи, все на `ResourceBase::File`). `'self'` относительно
+/// и соседи, все на `ResourceBaseKind::File`). `'self'` относительно
 /// `self_origin` документа должен матчить тот же `https://good.example`,
 /// что несёт сам `base`.
 #[test]
 fn inline_css_imports_style_src_self_allows_same_origin_target() {
-    let base = ResourceBase::Url("https://good.example/a.css".to_owned());
+    let base = ResourceBase::url_base("https://good.example/a.css".to_owned());
     let policy = lumen_network::csp::parse_csp_header("style-src 'self'");
     let self_origin = base.origin();
     assert!(!crate::csp_enforce::style_src_blocked(
@@ -1193,7 +1193,7 @@ fn inline_css_imports_style_src_self_allows_same_origin_target() {
 }
 
 /// `style-src 'none'` blocks a `@import` even when the whole document is
-/// loaded from disk (`ResourceBase::File`): `base.resolve_str` turns the
+/// loaded from disk (`ResourceBaseKind::File`): `base.resolve_str` turns the
 /// relative `"b.css"` into an absolute filesystem path, which the WHATWG URL
 /// parser still accepts as a `file:`-scheme URL (Windows drive letters parse
 /// as a special-case), so `style_src_blocked` sees a normal URL, not an
@@ -1204,7 +1204,7 @@ fn inline_css_imports_style_src_self_allows_same_origin_target() {
 fn inline_css_imports_style_src_none_blocks_file_import() {
     let dir = import_fixture_dir("csp_none_file");
     std::fs::write(dir.join("b.css"), "b { color: blue; }").unwrap();
-    let base = ResourceBase::File(dir.join("a.css"));
+    let base = ResourceBase::file_base(dir.join("a.css"));
     let policy = lumen_network::csp::parse_csp_header("style-src 'none'");
     let (out, blocked) = inline_css_imports(
         "@import url(\"b.css\");\na { color: red; }",
@@ -1226,7 +1226,7 @@ fn inline_css_imports_style_src_none_blocks_file_import() {
 /// Текст без `@import` возвращается без изменений (быстрый путь).
 #[test]
 fn inline_css_imports_no_import_passthrough() {
-    let base = ResourceBase::File(std::path::PathBuf::from("x/a.css"));
+    let base = ResourceBase::file_base(std::path::PathBuf::from("x/a.css"));
     let text = ".a { color: red; }";
     let (out, _blocked) = inline_css_imports(
         text, &base, &null_sink(), None,
@@ -1339,7 +1339,7 @@ fn stylesheet_node_registry_preserves_document_order_across_tags() {
                 <style>c { color: green; }</style>
             </head><body></body></html>"#,
     );
-    let base = ResourceBase::File(dir.join("page.html"));
+    let base = ResourceBase::file_base(dir.join("page.html"));
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
 
     let entries = build_stylesheet_node_registry(&doc, &base, &sink, None);
@@ -1369,7 +1369,7 @@ fn stylesheet_node_registry_drops_unfetchable_link() {
                 <link rel="stylesheet" href="cssom1-slice2-no-such-file.css">
             </head><body></body></html>"#,
     );
-    let base = ResourceBase::File(PathBuf::from("samples/page.html"));
+    let base = ResourceBase::file_base(PathBuf::from("samples/page.html"));
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
 
     let entries = build_stylesheet_node_registry(&doc, &base, &sink, None);
@@ -1392,7 +1392,7 @@ fn stylesheet_node_registry_skips_style_src_blocked_link() {
                 <link rel="stylesheet" href="a.css">
             </head><body></body></html>"#,
     );
-    let base = ResourceBase::File(dir.join("page.html"));
+    let base = ResourceBase::file_base(dir.join("page.html"));
 
     let entries = build_stylesheet_node_registry(&doc, &base, &null_sink(), None);
 
@@ -1413,7 +1413,7 @@ fn nonced_link_stylesheet_passes_style_src_nonce_policy() {
             </head><body></body></html>"#,
     );
     // URL-база: файловый путь гейт не судит вовсе; порт 9 отказывает сразу.
-    let base = ResourceBase::Url("http://127.0.0.1:9/page.html".to_owned());
+    let base = ResourceBase::url_base("http://127.0.0.1:9/page.html".to_owned());
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
 
     let (_css, _outcomes, blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
@@ -1447,7 +1447,7 @@ fn load_linked_stylesheets_falls_back_to_document_encoding() {
         r#"<html><head><link rel="stylesheet" href="a.css"></head><body></body></html>"#,
     );
     doc.set_character_set("windows-1251".to_owned());
-    let base = ResourceBase::File(dir.join("page.html"));
+    let base = ResourceBase::file_base(dir.join("page.html"));
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
 
     let (css, outcomes, _blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
@@ -1476,7 +1476,7 @@ fn load_linked_stylesheets_uses_link_charset_attribute() {
     let doc = lumen_html_parser::parse(
         r#"<html><head><link rel="stylesheet" href="a.css" charset="windows-1251"></head><body></body></html>"#,
     );
-    let base = ResourceBase::File(dir.join("page.html"));
+    let base = ResourceBase::file_base(dir.join("page.html"));
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
 
     let (css, _, _blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
@@ -1506,7 +1506,7 @@ fn load_linked_stylesheets_bom_wins_over_document_encoding() {
     // If the BOM were ignored, this would drive a windows-1251 decode of
     // UTF-8 bytes instead — garbage, not `И`.
     doc.set_character_set("windows-1251".to_owned());
-    let base = ResourceBase::File(dir.join("page.html"));
+    let base = ResourceBase::file_base(dir.join("page.html"));
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
 
     let (css, _, _blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
@@ -1837,7 +1837,7 @@ fn warm_preload_cache_sends_no_request_forbidden_by_csp() {
         }
     });
 
-    let base = ResourceBase::Url(format!("http://127.0.0.1:{port}/"));
+    let base = ResourceBase::url_base(format!("http://127.0.0.1:{port}/"));
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     let preload = |url: &str, as_kind: &str| PreloadHint::Preload {
         url: url.into(),

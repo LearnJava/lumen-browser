@@ -856,6 +856,13 @@ impl Lumen {
                 self.sync_adblock_filter();
                 self.relayout_chrome_host();
             }
+            // COMPAT-PANEL-TAB-SHIELDS: разовый режим «без защит для этой
+            // вкладки» — до следующей навигации вкладки (`start_streaming_load`
+            // гасит его). Соседние вкладки остаются под фильтрацией.
+            ChromeAction::TabShieldsOnce => {
+                lumen_network::set_tab_shields_off(self.active_tab_id());
+                self.relayout_chrome_host();
+            }
             // COMPAT-PACK-IND: кнопки строки «К сайту применено N исправлений».
             ChromeAction::CompatDetails => {
                 self.shields.visible = false;

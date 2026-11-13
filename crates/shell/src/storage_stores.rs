@@ -60,12 +60,12 @@ pub(crate) fn ss_store_for_base(
 ///
 /// `None` for a `file:` base — an opaque origin gets no storage at all.
 pub(crate) fn storage_origin_for_base(base: &ResourceBase) -> Option<String> {
-    match base {
-        ResourceBase::Url(u) => lumen_core::url::Url::parse(u).ok().map(|parsed| {
+    match &base.kind {
+        ResourceBaseKind::Url(u) => lumen_core::url::Url::parse(u).ok().map(|parsed| {
             let port = parsed.port().map(|p| format!(":{p}")).unwrap_or_default();
             format!("{}://{}{}", parsed.scheme(), parsed.host(), port)
         }),
-        ResourceBase::File(_) => None,
+        ResourceBaseKind::File(_) => None,
     }
 }
 
@@ -79,9 +79,9 @@ pub(crate) fn idb_store_for_base(
     base: &ResourceBase,
     idb_dir: Option<&std::path::Path>,
 ) -> Option<Arc<dyn lumen_core::ext::IdbBackend>> {
-    let url = match base {
-        ResourceBase::Url(u) => u.as_str(),
-        ResourceBase::File(_) => return None,
+    let url = match &base.kind {
+        ResourceBaseKind::Url(u) => u.as_str(),
+        ResourceBaseKind::File(_) => return None,
     };
     idb_store_for_url(url, idb_dir)
 }
@@ -125,12 +125,12 @@ pub(crate) fn sw_store_for_base(
     backend: &Arc<std::sync::Mutex<dyn lumen_core::ext::StorageBackend>>,
     registry: Option<&Arc<lumen_storage::ServiceWorkers>>,
 ) -> Option<Arc<dyn lumen_core::ext::SwBackend>> {
-    let origin = match base {
-        ResourceBase::Url(u) => lumen_core::url::Url::parse(u).ok().map(|parsed| {
+    let origin = match &base.kind {
+        ResourceBaseKind::Url(u) => lumen_core::url::Url::parse(u).ok().map(|parsed| {
             let port = parsed.port().map(|p| format!(":{p}")).unwrap_or_default();
             format!("{}://{}{}", parsed.scheme(), parsed.host(), port)
         })?,
-        ResourceBase::File(_) => return None,
+        ResourceBaseKind::File(_) => return None,
     };
     let store = lumen_storage::SwStore::new(Arc::clone(backend), origin.clone());
     Some(match registry {

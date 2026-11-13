@@ -954,7 +954,7 @@ impl EventSink for NullSink {
 /// полями [`spawn_frame`] строит error-документ вместо пустого хэндла.
 #[test]
 fn fetch_iframe_source_reports_reason_and_url_for_unsupported_schemes() {
-    let base = ResourceBase::File(PathBuf::from("samples/page.html"));
+    let base = ResourceBase::file_base(PathBuf::from("samples/page.html"));
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     let err = fetch_iframe_source("javascript:alert(1)", &base, &sink, None, false, lumen_network::ReferrerPolicy::default_policy())
         .err()
@@ -978,7 +978,7 @@ fn fetch_iframe_source_reports_reason_and_url_for_unsupported_schemes() {
 /// был пуст — то есть форма записи меняла результат.
 #[test]
 fn fetch_iframe_source_treats_about_blank_as_an_empty_document() {
-    let base = ResourceBase::File(PathBuf::from("samples/page.html"));
+    let base = ResourceBase::file_base(PathBuf::from("samples/page.html"));
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     for src in ["about:blank", "ABOUT:BLANK", "about:blank?x=1", "about:blank#frag"] {
         match fetch_iframe_source(src, &base, &sink, None, false, lumen_network::ReferrerPolicy::default_policy()) {
@@ -1006,7 +1006,7 @@ fn fetch_iframe_source_treats_about_blank_as_an_empty_document() {
 /// в error-документе.
 #[test]
 fn fetch_iframe_source_reports_missing_file() {
-    let base = ResourceBase::File(PathBuf::from("samples/page.html"));
+    let base = ResourceBase::file_base(PathBuf::from("samples/page.html"));
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     let err = fetch_iframe_source("frame4-does-not-exist.html", &base, &sink, None, false, lumen_network::ReferrerPolicy::default_policy())
         .err()
@@ -1136,16 +1136,16 @@ fn tor_mode_empty_args() {
 fn resource_base_maps_url_and_file_sources() {
     assert!(matches!(
         PageSource::url("https://example.com/").resource_base(),
-        Some(ResourceBase::Url(_))
+        Some(ResourceBase { kind: ResourceBaseKind::Url(_), .. })
     ));
     assert!(matches!(
         PageSource::File(PathBuf::from("/tmp/page.html")).resource_base(),
-        Some(ResourceBase::File(_))
+        Some(ResourceBase { kind: ResourceBaseKind::File(_), .. })
     ));
     assert!(matches!(
         PageSource::Snapshot { html: String::new(), base_url: "https://x/".to_owned() }
             .resource_base(),
-        Some(ResourceBase::Url(_))
+        Some(ResourceBase { kind: ResourceBaseKind::Url(_), .. })
     ));
 }
 
@@ -1223,7 +1223,7 @@ fn fetch_frame_lazy_images_fetches_decodes_and_folds_into_frame() {
     std::fs::write(dir.join("lazy.png"), super::page_resources::tiny_png(4, 2)).unwrap();
 
     let mut handle = splice_handle("child.html", Rect::new(0.0, 0.0, 300.0, 150.0), Vec::new());
-    handle.base = crate::ResourceBase::File(dir.join("index.html"));
+    handle.base = crate::ResourceBase::file_base(dir.join("index.html"));
     // `has_explicit_*: true` — не задевает intrinsic-size-путь (лочит
     // `handle.doc`, отдельная забота, а не эта); фикстура проверяет ровно
     // фетч+декод+регистрацию.
@@ -1513,7 +1513,7 @@ fn fetch_embedded_source_yields_document_only_for_document_resources() {
     std::fs::write(dir.join("note.txt"), "a < b").unwrap();
     std::fs::write(dir.join("logo.svg"), "<svg xmlns='http://www.w3.org/2000/svg'/>").unwrap();
     std::fs::write(dir.join("pixel.png"), b"\x89PNG\r\n\x1a\n").unwrap();
-    let base = ResourceBase::File(dir.join("page.html"));
+    let base = ResourceBase::file_base(dir.join("page.html"));
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     let fetch = |src: &str| {
         crate::frames::fetch_embedded_source(

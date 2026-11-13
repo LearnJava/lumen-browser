@@ -116,6 +116,9 @@ pub struct ChromeModel {
     /// `ShieldsPanel::enabled_for_current`, which is also what the shell
     /// pushes into `lumen_network::set_global_adblock_enabled`.
     pub site_shields_on: bool,
+    /// COMPAT-PANEL-TAB-SHIELDS: the active tab runs the one-off «без защит»
+    /// mode — the popover row marks its button «Действует до навигации».
+    pub tab_shields_once_off: bool,
     /// Number of compatibility-list records applied to [`Self::popover_domain`]
     /// (COMPAT-PACK-IND). `0` hides `#compatRow`; otherwise the row shows
     /// [`compat_fixes_label`] with its «Подробнее» / «Выключить и перезагрузить» buttons.
@@ -2661,6 +2664,18 @@ fn bind_popover(doc: &mut Document, model: &ChromeModel) {
     }
     if let Some(state) = doc.find_by_id(crate::ids::SHIELD_SITE_STATE) {
         set_text(doc, state, if model.site_shields_on { "Вкл" } else { "Выкл" });
+    }
+    // COMPAT-PANEL-TAB-SHIELDS: разовый «без защит для этой вкладки» показываем
+    // только когда фильтрация для сайта вообще действует; при выключенном
+    // блокировщике (умолчание, без исключения) пункта нет — отключать нечего.
+    if let Some(row) = doc.find_by_id(crate::ids::SHIELD_TAB_ONCE_ROW) {
+        set_class_token(doc, row, "show", model.site_shields_on);
+    }
+    if model.site_shields_on
+        && let Some(btn) = doc.find_by_id(crate::ids::SHIELD_TAB_ONCE_BTN)
+        && model.tab_shields_once_off
+    {
+        set_text(doc, btn, "Действует до навигации");
     }
     if let Some(row) = doc.find_by_id(crate::ids::COMPAT_ROW) {
         set_class_token(doc, row, "show", model.compat_fixes > 0);

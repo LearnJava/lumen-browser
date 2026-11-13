@@ -934,6 +934,7 @@ impl Lumen {
             // legacy panels that used to show them.
             popover_domain: self.shields.current_domain.clone().unwrap_or_default(),
             site_shields_on: self.shields.enabled_for_current(),
+            tab_shields_once_off: lumen_network::tab_shields_off(self.active_tab_id()),
             compat_fixes: u32::try_from(self.compat_applied.len()).unwrap_or(u32::MAX),
             // COMPAT-PACK-PROTECTION: the popover names the protection exception
             // instead of the generic fix count when one is applied here.
@@ -1292,17 +1293,29 @@ impl Lumen {
         let _ = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| j.eval_js(&script));
     }
 
-    /// BUG-411: push the shields state of the current host into the
-    /// process-global ad-block toggle, so `#permPopover`'s switch is the real
-    /// control rather than an indicator.
+    /// BUG-411 / COMPAT-PANEL-TAB-SHIELDS: push the whole shields decision set
+    /// (default + per-host overrides) into the network layer, so `fetch_single`
+    /// decides per request from its own context — the source tab and the site
+    /// it belongs to — instead of a process-global flag that followed the
+    /// active tab.
     ///
     /// The filter itself stays installed either way (`config::init_adblock`);
-    /// this only flips whether `fetch_single`'s gate consults it. Call after
-    /// anything that can change the answer of
-    /// [`shields_panel::ShieldsPanel::enabled_for_current`]: a navigation
-    /// (new host), the popover switch, the settings toggle, a tab switch.
+    /// this only updates what `fetch_single`'s gate consults. Call after
+    /// anything that can change the answers of
+    /// [`shields_panel::ShieldsPanel::default_enabled`]/[`shields_panel::ShieldsPanel::site_overrides`]:
+    /// the settings toggle, the popover switch, a tab switch, a navigation.
     pub(crate) fn sync_adblock_filter(&self) {
-        lumen_network::set_global_adblock_enabled(self.shields.enabled_for_current());
+        lumen_network::install_shield_decisions(
+            self.shields.default_enabled(),
+            &self.shields.site_overrides(),
+        );
+    }
+
+    /// Сетевой `TabId` активной вкладки (COMPAT-PANEL-TAB-SHIELDS): навигации
+    /// UI-потока (view-source, sidebar:) и разовый режим «без защит»
+    /// привязываются к вкладке, на которой пользователь действует.
+    pub(crate) fn active_tab_id(&self) -> lumen_core::event::TabId {
+        lumen_core::event::TabId(self.tab_strip.tabs[self.tab_strip.active].id as u32)
     }
 
     /// Snapshot the tab strip, toolbar, and omnibox for the synthetic chrome

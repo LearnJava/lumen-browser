@@ -277,10 +277,12 @@ pub(crate) fn spawn_frame(
         Some(Ok(FrameSource::Inline(html))) => (html, base.clone(), "about:blank".to_owned(), false),
         Some(Ok(FrameSource::File { html, path })) => {
             let url = path_to_file_url(&path);
-            (html, ResourceBase::File(path), url, false)
+            // Фрейм живёт во вкладке родителя: её разовый режим «без защит»
+            // покрывает и его подресурсы (COMPAT-PANEL-TAB-SHIELDS).
+            (html, ResourceBase::file_base(path).with_tab(base.tab), url, false)
         }
         Some(Ok(FrameSource::Url { html, url })) => {
-            (html, ResourceBase::Url(url.clone()), url, false)
+            (html, ResourceBase::url_base(url.clone()).with_tab(base.tab), url, false)
         }
         Some(Err(e)) => (
             frame_error_document(&e.attempted_url, &e.reason),
@@ -315,7 +317,7 @@ pub(crate) fn spawn_frame(
     if !load_failed
         && child_url != "about:blank"
         && child_url != "about:srcdoc"
-        && let ResourceBase::Url(parent_url) = base
+        && let ResourceBaseKind::Url(parent_url) = &base.kind
         && let Ok(parent_parsed) = lumen_core::url::Url::parse(parent_url)
         && let Ok(child_parsed) = lumen_core::url::Url::parse(&child_url)
     {

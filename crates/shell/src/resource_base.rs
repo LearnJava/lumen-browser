@@ -14,8 +14,20 @@
 use crate::*;
 
 /// Откуда загружена страница — нужно для разрешения относительных URL в `<link>`.
+///
+/// Несёт и вкладку-владельца документа (`tab`, COMPAT-PANEL-TAB-SHIELDS):
+/// `http_client_for_subresource*` штампует её на каждый клиент подресурсов,
+/// чтобы разовый режим «без защит для этой вкладки» в `lumen_network` видел
+/// СВОЮ вкладку в каждом запросе, а не дефолтную `TabId(0)`.
 #[derive(Clone)]
-pub(crate) enum ResourceBase {
+pub(crate) struct ResourceBase {
+    pub(crate) kind: ResourceBaseKind,
+    pub(crate) tab: lumen_core::event::TabId,
+}
+
+/// Адрес базы — файл или URL (бывший enum `ResourceBase`).
+#[derive(Clone)]
+pub(crate) enum ResourceBaseKind {
     /// Страница загружена из файла. `href` разрешается относительно директории файла.
     File(PathBuf),
     /// Страница загружена по URL. `href` разрешается относительно этого URL.
@@ -27,12 +39,28 @@ pub(crate) enum ResourceBase {
 const BASE_HREF_DIR_SENTINEL: &str = "_lumen_base_href_sentinel";
 
 impl ResourceBase {
+    /// База-файл без вкладки (тесты, tab-less пути).
+    pub(crate) fn file_base(path: PathBuf) -> Self {
+        Self { kind: ResourceBaseKind::File(path), tab: lumen_core::event::TabId(0) }
+    }
+
+    /// База-URL без вкладки (тесты, tab-less пути).
+    pub(crate) fn url_base(base_url: String) -> Self {
+        Self { kind: ResourceBaseKind::Url(base_url), tab: lumen_core::event::TabId(0) }
+    }
+
+    /// Пометить базу вкладкой-владельцем документа (COMPAT-PANEL-TAB-SHIELDS).
+    pub(crate) fn with_tab(mut self, tab: lumen_core::event::TabId) -> Self {
+        self.tab = tab;
+        self
+    }
+
     pub(crate) fn resolve(&self, href: &str) -> ResolvedResource {
         if href.starts_with("http://") || href.starts_with("https://") {
             return ResolvedResource::Url(href.to_owned());
         }
-        match self {
-            ResourceBase::File(base_path) => {
+        match &self.kind {
+            ResourceBaseKind::File(base_path) => {
                 // BUG-440: `href` may carry its own scheme (`about:`, `data:`,
                 // `mailto:`, `file:`, ...) — that addresses a resource outside
                 // this file's directory, not a path relative to it, so it must
@@ -57,7 +85,7 @@ impl ResourceBase {
                 // with are decoded (a URL reference names `my file.html` as
                 // `my%20file.html`). An empty remainder (`"?q=1"`, `"#sec"`)
                 // means "this same file" (RFC 3986 §5.3's empty-reference
-                // case), which `ResourceBase::File` cannot express any other
+                // case), which `ResourceBaseKind::File` cannot express any other
                 // way since it carries no query/fragment of its own.
                 let path_part = url_path_component(href);
                 if path_part.is_empty() {
@@ -66,7 +94,7 @@ impl ResourceBase {
                     ResolvedResource::File(dir.join(path_part))
                 }
             }
-            ResourceBase::Url(base_url) => {
+            ResourceBaseKind::Url(base_url) => {
                 // Resolve через структурированный Url из lumen-core; при сбое
                 // base (не должно случаться — base сами и положили в загрузке
                 // страницы) откатываемся на raw href, чтобы из-за одного
@@ -89,7 +117,7 @@ impl ResourceBase {
         match self.resolve(href) {
             ResolvedResource::File(p) => {
                 // `<base href>` typically names a *directory* (`<base
-                // href="/other/">`), but `ResourceBase::File` always treats
+                // href="/other/">`), but `ResourceBaseKind::File` always treats
                 // its stored path as a *file* and resolves further hrefs
                 // against `.parent()` — same convention the page's own path
                 // uses. `Path::parent()` does not know a trailing `/` means
@@ -100,12 +128,20 @@ impl ResourceBase {
                 // `.parent()` call reads it.
                 let href_path = href.split(['?', '#']).next().unwrap_or(href);
                 if href_path.ends_with('/') {
-                    ResourceBase::File(p.join(BASE_HREF_DIR_SENTINEL))
+                    let mut out = Self::file_base(p.join(BASE_HREF_DIR_SENTINEL));
+                    out.tab = self.tab;
+                    out
                 } else {
-                    ResourceBase::File(p)
+                    let mut out = Self::file_base(p);
+                    out.tab = self.tab;
+                    out
                 }
             }
-            ResolvedResource::Url(u) => ResourceBase::Url(u),
+            ResolvedResource::Url(u) => {
+                let mut out = Self::url_base(u);
+                out.tab = self.tab;
+                out
+            }
         }
     }
 
@@ -121,7 +157,7 @@ impl ResourceBase {
 
     /// Извлечь Origin страницы, если base — URL (не файл).
     pub(crate) fn origin(&self) -> Option<lumen_network::Origin> {
-        if let ResourceBase::Url(base_url) = self
+        if let ResourceBaseKind::Url(base_url) = &self.kind
             && let Ok(url) = lumen_core::url::Url::parse(base_url)
         {
             return lumen_network::Origin::from_url(&url).ok();
@@ -136,7 +172,7 @@ impl ResourceBase {
     /// `file:` не несёт tuple origin, поэтому реферер спецификацией не
     /// предусмотрен для таких документов.
     pub(crate) fn url(&self) -> Option<lumen_core::url::Url> {
-        if let ResourceBase::Url(base_url) = self {
+        if let ResourceBaseKind::Url(base_url) = &self.kind {
             return lumen_core::url::Url::parse(base_url).ok();
         }
         None
@@ -191,6 +227,10 @@ impl ResourceBase {
         };
         let mut builder = HttpClient::new()
             .with_sink(sink)
+            // COMPAT-PANEL-TAB-SHIELDS: requests carry the owning tab so the
+            // per-tab one-off «без защит» mode applies to this tab's requests
+            // (and only them).
+            .with_tab(self.tab)
             .with_content_decoder(Arc::new(BrotliContentDecoder::new()))
             .with_content_decoder(Arc::new(GzipContentDecoder::new()))
             .with_content_decoder(Arc::new(DeflateContentDecoder::new()))
