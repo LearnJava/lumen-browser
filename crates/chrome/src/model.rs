@@ -119,6 +119,12 @@ pub struct ChromeModel {
     /// COMPAT-PANEL-TAB-SHIELDS: the active tab runs the one-off «без защит»
     /// mode — the popover row marks its button «Действует до навигации».
     pub tab_shields_once_off: bool,
+    /// COMPAT-NOPROXY: a proxy is configured and this is not the Tor profile —
+    /// the «этот сайт без прокси» rows of `#permPopover` are shown at all.
+    pub no_proxy_visible: bool,
+    /// COMPAT-NOPROXY: the current site (eTLD+1) is in the persisted no-proxy
+    /// rule list — `#noProxyBtn` shows the enabled state.
+    pub no_proxy_site_on: bool,
     /// Number of compatibility-list records applied to [`Self::popover_domain`]
     /// (COMPAT-PACK-IND). `0` hides `#compatRow`; otherwise the row shows
     /// [`compat_fixes_label`] with its «Подробнее» / «Выключить и перезагрузить» buttons.
@@ -2676,6 +2682,20 @@ fn bind_popover(doc: &mut Document, model: &ChromeModel) {
         && model.tab_shields_once_off
     {
         set_text(doc, btn, "Действует до навигации");
+    }
+    // COMPAT-NOPROXY: строки «этот сайт без прокси» видимы только когда прокси
+    // вообще настроен и это не Tor-профиль; кнопка отражает состояние текущего
+    // сайта, кнопка пресетов — разовое массовое добавление.
+    if let Some(row) = doc.find_by_id(crate::ids::NO_PROXY_ROW) {
+        set_class_token(doc, row, "show", model.no_proxy_visible);
+    }
+    if let Some(row) = doc.find_by_id(crate::ids::NO_PROXY_PRESET_ROW) {
+        set_class_token(doc, row, "show", model.no_proxy_visible);
+    }
+    if model.no_proxy_visible
+        && let Some(btn) = doc.find_by_id(crate::ids::NO_PROXY_BTN)
+    {
+        set_text(doc, btn, if model.no_proxy_site_on { "Напрямую: вкл" } else { "Напрямую" });
     }
     if let Some(row) = doc.find_by_id(crate::ids::COMPAT_ROW) {
         set_class_token(doc, row, "show", model.compat_fixes > 0);
