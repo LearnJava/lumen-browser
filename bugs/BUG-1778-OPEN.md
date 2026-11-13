@@ -38,6 +38,7 @@ crates\shell\src\app\about_to_wait.rs:290:13 for 25.2 s)`. Строка 290 — 
 - **discord-com** (вес 3) — headless завершается за 23 с (краска есть), живое окно: run0 «engine busy» + перезапуск, run1 `wait timeout: DocumentReady` 2/2 при text=0. Зависание только живого окна — стадия тика/рестайла.
 - **magnit-ru** (вес 3) — `engine thread busy: … about_to_wait.rs:295 for 13,4–13,6 с` 2/2, видимый текст 0 при 10 тыс. у Chrome; готова 19–20 с, но eval не проходит.
 - **ebay-com** (вес 3) — разовый `about_to_wait.rs:295 for 1,4 с` (run1); переход из TIMEOUT базового прогона в DEGRADED — улика та же, вклад мал.
+- **vc-ru** (2026-11-13, A/B BUG-1800) — TIMEOUT 240 с 2/2 (ready нет), CPU сайта 360–370 с, DOM 2244, 990 флошей за сессию; на ON и OFF одинаково — не каскад.
 - Хвост SITES-TRIAGE-2 (2026-11-13, `.tmp/handoff5-rerun`): **tutu-ru** — текст 0 2/2 при ~9,8 тыс. у Chrome, busy `about_to_wait.rs:295`; **elpais-com** — run0 200, busy + `null (reading 'postMessage')`, run1 уже 403 (стена поверх); **film-ru/bild-de** — из зависаний ушли, но во второй попытке тот же busy-флап text=0. **dailymail-com** — TIMEOUT 2/2 без busy-улики (`DocumentReady` после 301, Chrome сам флапает) — в баг не дописан.
 
 Из базового списка зависаний при этом ушли 22 из 30 сайтов (эффект фиксов после 2026-10-28, прежде всего BUG-1676).
