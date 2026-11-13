@@ -8518,6 +8518,21 @@ Object.defineProperty(window, 'origin', {
     configurable: true,
 });
 
+// BUG-1801: `Window.status` (HTML LS, the window's status text) — page
+// scripts read it as the bare `status` identifier (ebay.com), and without
+// this property the identifier throws `ReferenceError: status is not
+// defined`. Modern browsers render no status bar, so the value is only
+// stored and read back; the initial value is the empty string.
+(function() {
+    var statusText = '';
+    Object.defineProperty(window, 'status', {
+        get: function() { return statusText; },
+        set: function(v) { statusText = String(v); },
+        enumerable: true,
+        configurable: true,
+    });
+})();
+
 // BUG-589: `window` must be a proper WebIDL exotic object — instanceof
 // `EventTarget`, `Object.prototype.toString.call(window) === "[object
 // Window]"`, and a "global scope polluter" object in its prototype chain
