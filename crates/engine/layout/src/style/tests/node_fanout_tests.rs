@@ -154,9 +154,15 @@
         // `#a` keeps `item`; only `foo` came off, which no `:has()` argument names.
         assert!(!has_ul(&from("class", "item foo")), "an unrelated class token write must not reach the `ul`");
         assert!(has_ul(&from("class", "")), "gaining `item` can flip `ul:has(.item)`");
-        // A plain `class` write without the old value, and attributes read through pseudo-classes, stay wide.
+        // A plain `class` write without the old value stays wide. An attribute a
+        // pseudo-class reads stays wide *when a `:has()` argument carries that
+        // pseudo-class* (BUG-1800 срез 3): `ul:has(.item)` has none, so its
+        // reach stays silent about a `disabled` write.
         assert!(has_ul(&roots(&doc, &sheet, a, "class")));
+        assert!(!has_ul(&roots(&doc, &sheet, a, "disabled")));
+        let sheet = parse_css("ul:has(li:disabled) { color: green; }");
         assert!(has_ul(&roots(&doc, &sheet, a, "disabled")));
+        assert!(!has_ul(&roots(&doc, &sheet, a, "tabindex")));
     }
 
     #[test]
@@ -377,4 +383,73 @@
                 "{text} / readers",
             );
         }
+    }
+
+    // ─── BUG-1800 срез 3: the fanout question for a named write is per attribute ──
+
+    /// ebay: `img:Attr("width")` / `a:Attr("tabindex")` under a sheet full of
+    /// sibling rules took the node's following siblings and the parent's whole
+    /// subtree per write, because every sibling-source compound (`img`,
+    /// `.card`) *matched* the node regardless of the write. A write of an
+    /// attribute nothing reads — no `[attr]` selector, no pseudo-class — can
+    /// flip nothing: the node alone is the root-set.
+    #[test]
+    fn an_attribute_nothing_reads_no_longer_widens_past_the_node() {
+        let doc = fixture();
+        let sheet = parse_css(".item + .item { color: green; } li:hover + .item { color: red; }");
+        let a = doc.find_by_id("a").expect("#a");
+        assert_eq!(roots(&doc, &sheet, a, "tabindex"), [a].into_iter().collect::<HashSet<_>>());
+        assert_eq!(roots(&doc, &sheet, a, "width"), [a].into_iter().collect::<HashSet<_>>());
+    }
+
+    /// The flip test must not over-narrow: an attribute a sibling rule keys on
+    /// (here through a nested `:is()`) still widens, as does one a sibling-rule
+    /// pseudo-class reads, while one the pseudo-class ignores does not.
+    #[test]
+    fn the_flip_test_keeps_the_writes_a_sibling_rule_can_react_to() {
+        let doc = fixture();
+        let a = doc.find_by_id("a").expect("#a");
+        let menu = doc.find_by_id("menu").expect("#menu");
+        let sheet = parse_css(":is([data-x]) + .item { color: green; }");
+        assert_eq!(roots(&doc, &sheet, a, "data-x"), [menu].into_iter().collect::<HashSet<_>>());
+        assert_eq!(roots(&doc, &sheet, a, "tabindex"), [a].into_iter().collect::<HashSet<_>>());
+        let sheet = parse_css("li:disabled + .item { color: green; }");
+        assert_eq!(roots(&doc, &sheet, a, "disabled"), [menu].into_iter().collect::<HashSet<_>>());
+        assert_eq!(roots(&doc, &sheet, a, "tabindex"), [a].into_iter().collect::<HashSet<_>>());
+    }
+
+    /// `ul:has(p)` — the sheet has `:has()`, so every change used to add the
+    /// matching ancestors as roots whatever the write was. A `tabindex` write
+    /// can flip no argument of `ul:has(p)` (a bare `p` reads nothing), so the
+    /// reach must stay silent; one the argument does read still reaches.
+    #[test]
+    fn a_has_reach_ignores_writes_no_argument_can_observe() {
+        let doc = fixture();
+        let a = doc.find_by_id("a").expect("#a");
+        let sheet = parse_css("ul:has(p) { color: green; }");
+        assert_eq!(roots(&doc, &sheet, a, "tabindex"), [a].into_iter().collect::<HashSet<_>>());
+        let sheet = parse_css("ul:has(li[data-x]) { color: green; }");
+        let menu = doc.find_by_id("menu").expect("#menu");
+        assert!(roots(&doc, &sheet, a, "data-x").contains(&menu), "the argument reads `data-x`");
+    }
+
+    /// A size write on an image feeds the image's own box (presentational
+    /// hints, applied at its own recompute) and `[width]` selectors — which
+    /// only ever style what they match, not the image's siblings. Even under a
+    /// sibling rule the img alone is the root, and a shallow one at that.
+    #[test]
+    fn a_size_write_on_an_image_stays_local_even_with_sibling_rules() {
+        let doc = parse_html(
+            r#"<div id="row"><img id="a" src="x.png" width="10"><div id="b">b</div><div id="c">c</div></div>"#,
+        );
+        let sheet = parse_css("img + div { color: green; }");
+        let index = restyle_node_index(&doc, &sheet);
+        let a = doc.find_by_id("a").expect("#a");
+        let got = restyle_roots_for_node_changes(
+            &doc,
+            [(a, NodeChange::AttrFrom { name: "width", old: "10" })],
+            &index,
+        );
+        assert!(got.deep.is_empty(), "{got:?}");
+        assert!(got.shallow.contains(&a), "{got:?}");
     }

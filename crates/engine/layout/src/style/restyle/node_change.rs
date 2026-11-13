@@ -318,8 +318,12 @@ fn root_set_impl<'a>(
             }
             other => {
                 let written = change_written(&other);
+                // BUG-1800 срез 3 — the fanout question for a named write is
+                // per attribute (`attr_write_needs_fanout`): a write of
+                // `tabindex`/`width`/`height` reaches a sibling only through a
+                // compound the write can flip, not merely one that matches.
                 let needs_fanout = match other {
-                    NodeChange::Attr(attr) => index.attr_change_needs_fanout(doc, n, attr),
+                    NodeChange::Attr(attr) => index.attr_write_needs_fanout(doc, n, attr),
                     NodeChange::AttrFrom { name, old } => index.attr_change_needs_fanout_from(doc, n, name, Some(old)),
                     NodeChange::Unattributed | NodeChange::ChildList | NodeChange::ChildListEnds { .. } => true,
                 };
