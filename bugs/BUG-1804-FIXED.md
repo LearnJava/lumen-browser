@@ -1,7 +1,8 @@
 # BUG-1804 — 16 unit-тестов lumen-layout красные на чистом main: семья border-collapse / border-spacing / табличных гридов
 
-**Статус:** OPEN
+**Статус:** FIXED
 **Открыт:** 2026-11-13 (P3, попутно к гейту BUG-1800 срез 2)
+**Исправлен:** 2026-11-13 (P3)
 **Компонент:** layout (`crates/engine/layout/src` — стили таблиц; виновный merge не бисектился)
 
 ## Симптом
@@ -58,3 +59,46 @@ cargo test -p lumen-layout --lib
 Бисект по merge-коммитам main до последнего зелёного гейта → виновник → фикс или откат
 куска. До починки гейт `scoped-test.sh` по layout-цепочке не бывает полностью зелёным —
 сравнивать множества красных с baseline, а не требовать ноль (см. срез 2 BUG-1800).
+
+## Исправление
+
+**Диагноз.** Бисект по merge-границам не нужен: коммиты виновника стоят прямо на
+first-parent цепочке main (потому «merge не бисектился»). Все 16 красных — два
+последствия BUG-1777:
+
+1. **Реальная регрессия каскада** (`ebf06fb24`, «исправления для таблиц,
+   shadow-cascade, label-click») — три красных `shadow_dom_selectors`:
+   - encapsulation-context sort перевёрнут («inner wins для normal, outer для
+     `!important`») против CSS Scoping L1 / Cascade L5 §6.1 — нормальные
+     декларации выигрывает ВНЕШНЕЕ дерево, `!important` — внутреннее; мотивация
+     коммита «должно помочь disabled keyboard» — спекулятивная, тестовых
+     ожиданий под перевёрнутый порядок никто не заводил;
+   - удалён `matched.clear()` для узлов shadow-дерева — document-правила стали
+     течь внутрь shadow-дерева; это scoping-запрет (CSS Scoping L1 §3.1), а не
+     каскадный вопрос, ключом сортировки он не выражается. UA-фаза (единственное
+     верное наблюдение коммита — UA-правила применяются к shadow-деревьям) и до
+     отката шила отдельно от `matched`.
+2. **Устаревшие ожидания тестов** к осознанно изменившемуся поведению
+   (`7f2b54104` UA-стили `<table>`: `border-spacing: 2px` — паритет с Chrome;
+   `39aedf889` border-collapse/table-layout не наследуются — CSS 2.1 §17.6):
+   13 тестов табличной геометрии/стилей писались под spacing 0 и наследуемый
+   border-collapse; сообщения («первая строка y=0, got 2», «x=80, got 84»,
+   «height 70, got 72») — ровно сдвиг 2px UA-дефолта.
+
+**Правки.** `style/cascade.rs`: возвращены оба куска (sort `cx` и `matched.clear()`
+с исходным комментарием). Тесты: `table_grid_presentational.rs` — в общую фикстуру
+добавлен авторский `border-spacing:0` (2 варианта replaceAll, грид-математика
+BUG-006 сохранена); `table_anon.rs` — `border-spacing:0` в sheet обоих хелперов
+(`lay`, `measured_cell_width`); `separate_mode_keeps_full_cell_borders` —
+`border-spacing:0` в фикстуру (старый строгий gap=0); `border_spacing_zero_by_default`
+→ `border_spacing_ua_default_2px_and_zero_overridable` — гвард нового дефолта
+(bare `<table>` gap=2) и его перекрытия авторским 0; `cellspacing_hint_negative_ignored`
+— проигнорированный hint оставляет UA-дефолт 2.0 (сработавший дал бы −5);
+`p4_border_collapse_inherited_by_cells` → `p4_border_collapse_not_inherited_by_cells`
+— ассерт перевёрнут по спецификации: td держит initial Separate, модель схлопнутых
+границ гонится border-collapse самой таблицы при раскладке.
+
+**Гейт:** `cargo test -p lumen-layout --lib` 6005 passed / 0 failed (было 16 failed);
+clippy `-p lumen-layout --all-targets -D warnings` чистый; graphic-тесты — см. строку
+в BUGS-FIXED.md. Попутные дефекты карточки (несборка `lumen-js --lib`,
+driver/paint/media-native, флака deep_chain) — не часть этого бага, оставлены.
