@@ -124,7 +124,7 @@ impl Lumen {
         let source = PageSource::from_arg(Some(url));
         let sink = Arc::clone(&self.event_sink);
         let jar = self.active_cookie_jar();
-        match source.load_bytes(sink, Some(jar)) {
+        match source.load_bytes(sink, Some(jar), self.active_tab_id()) {
             Ok(raw) => {
                 let html_str = String::from_utf8_lossy(&raw.bytes).into_owned();
                 let source_html = source_view::build_view_source_html(url, &html_str);

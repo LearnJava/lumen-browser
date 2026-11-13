@@ -980,9 +980,9 @@ pub(crate) fn is_xml_flavoured_document(content_type: Option<&str>, base: &Resou
             return true;
         }
     }
-    let path = match base {
-        ResourceBase::File(p) => p.to_string_lossy().to_ascii_lowercase(),
-        ResourceBase::Url(u) => u.to_ascii_lowercase(),
+    let path = match &base.kind {
+        ResourceBaseKind::File(p) => p.to_string_lossy().to_ascii_lowercase(),
+        ResourceBaseKind::Url(u) => u.to_ascii_lowercase(),
     };
     path.ends_with(".xhtml") || path.ends_with(".xht") || path.ends_with(".svg")
 }
@@ -1148,8 +1148,8 @@ pub(crate) fn parse_and_layout(
     // QuickJS + install_dom дают скриптам полный доступ к DOM-дереву.
     // fetch_provider пробрасывается в window.fetch(); ws_provider — в new WebSocket();
     // sse_provider — в new EventSource(). Все три используют один HttpClient.
-    let (fetch_provider, ws_provider, sse_provider) = match base {
-        ResourceBase::Url(_) => {
+    let (fetch_provider, ws_provider, sse_provider) = match &base.kind {
+        ResourceBaseKind::Url(_) => {
             // GAP-REFERRER срез 3: this client's `Referer` respects the
             // document's own `<meta name=referrer>`/`Referrer-Policy` header
             // instead of always the project default — see
@@ -1214,7 +1214,7 @@ pub(crate) fn parse_and_layout(
                 Some(arc_client as Arc<dyn lumen_core::ext::JsSseProvider>);
             (fp, wp, sp)
         }
-        ResourceBase::File(_) => (None, None, None),
+        ResourceBaseKind::File(_) => (None, None, None),
     };
     // URL страницы для инициализации window.location в JS.
     let page_url = base_url_string(base);
@@ -1282,7 +1282,7 @@ pub(crate) fn parse_and_layout(
     // STTF-1: a `:~:text=...` scroll-to-text directive is not part of the
     // element-id fragment — `text_fragment::parse_fragment` strips it so
     // `:target` never tries to match a raw directive string against an `id`.
-    let page_fragment = if let ResourceBase::Url(u) = base {
+    let page_fragment = if let ResourceBaseKind::Url(u) = &base.kind {
         lumen_core::url::Url::parse(u)
             .ok()
             .and_then(|u| u.fragment().map(str::to_owned))

@@ -294,7 +294,7 @@ fn fetch_stylesheet_text(
                 );
                 Some((
                     lumen_encoding::decode(encoding, &bytes),
-                    ResourceBase::File(path),
+                    ResourceBase::file_base(path),
                     encoding,
                 ))
             }
@@ -359,7 +359,7 @@ fn fetch_stylesheet_text(
                     );
                     Some((
                         lumen_encoding::decode(encoding, &resource.body),
-                        ResourceBase::Url(url),
+                        ResourceBase::url_base(url),
                         encoding,
                     ))
                 }

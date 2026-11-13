@@ -495,9 +495,9 @@ fn url_origin_str(url: &str) -> Option<String> {
 /// же, что у `page_url` в `parse_and_layout`: сетевая база берётся как есть,
 /// файловая получает схему `file://`.
 pub(crate) fn base_url_string(base: &ResourceBase) -> String {
-    match base {
-        ResourceBase::Url(u) => u.clone(),
-        ResourceBase::File(p) => path_to_file_url(p),
+    match &base.kind {
+        ResourceBaseKind::Url(u) => u.clone(),
+        ResourceBaseKind::File(p) => path_to_file_url(p),
     }
 }
 
@@ -507,15 +507,15 @@ pub(crate) fn frame_access_allowed(parent_base: &ResourceBase, child_url: &str, 
     if child_url.starts_with("about:") {
         return true;
     }
-    match parent_base {
-        ResourceBase::Url(parent) => match (url_origin_str(parent), url_origin_str(child_url)) {
+    match &parent_base.kind {
+        ResourceBaseKind::Url(parent) => match (url_origin_str(parent), url_origin_str(child_url)) {
             (Some(p), Some(c)) => p == c,
             // Хотя бы одна сторона opaque: взаимно доступны только два файла.
             _ => parent.starts_with("file:") && child_url.starts_with("file:"),
         },
         // У родителя-файла origin opaque: доступен только ребёнок-файл
         // (у сетевого ребёнка есть хост — он никогда не равен opaque).
-        ResourceBase::File(_) => child_url.starts_with("file:"),
+        ResourceBaseKind::File(_) => child_url.starts_with("file:"),
     }
 }
 

@@ -90,8 +90,8 @@ impl Lumen {
         if cfg!(debug_assertions) {
             return crate::compat_inject::CompatInject::none();
         }
-        let entries = match base {
-            ResourceBase::Url(u) => {
+        let entries = match &base.kind {
+            ResourceBaseKind::Url(u) => {
                 let Some(url) = lumen_core::url::Url::parse(u).ok().filter(|u| matches!(u.scheme(), "http" | "https")) else {
                     return crate::compat_inject::CompatInject::none();
                 };

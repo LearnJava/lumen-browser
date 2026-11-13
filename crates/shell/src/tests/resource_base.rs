@@ -8,7 +8,7 @@
 use super::*;
 
 fn expect_resolved_url(base: &str, href: &str) -> String {
-    match ResourceBase::Url(base.to_owned()).resolve(href) {
+    match ResourceBase::url_base(base.to_owned()).resolve(href) {
         ResolvedResource::Url(u) => u,
         ResolvedResource::File(_) => panic!("expected Url"),
     }
@@ -59,7 +59,7 @@ fn resource_base_url_absolute_href_passthrough() {
     // Абсолютный href с http/https-схемой ловится в начале ResourceBase::resolve
     // до Url::resolve — это позволяет href с другим scheme быть видимым как Url,
     // даже если base — File.
-    let base = ResourceBase::Url("https://example.com/".to_owned());
+    let base = ResourceBase::url_base("https://example.com/".to_owned());
     let res = base.resolve("https://cdn.example.com/style.css");
     match res {
         ResolvedResource::Url(u) => assert_eq!(u, "https://cdn.example.com/style.css"),
@@ -69,7 +69,7 @@ fn resource_base_url_absolute_href_passthrough() {
 
 #[test]
 fn resource_base_file_resolves_relative() {
-    let base = ResourceBase::File(PathBuf::from("samples/page.html"));
+    let base = ResourceBase::file_base(PathBuf::from("samples/page.html"));
     let res = base.resolve("style.css");
     match res {
         ResolvedResource::File(p) => {
@@ -81,7 +81,7 @@ fn resource_base_file_resolves_relative() {
 
 #[test]
 fn resource_base_file_absolute_url_passthrough() {
-    let base = ResourceBase::File(PathBuf::from("samples/page.html"));
+    let base = ResourceBase::file_base(PathBuf::from("samples/page.html"));
     let res = base.resolve("https://cdn.example.com/style.css");
     match res {
         ResolvedResource::Url(u) => assert_eq!(u, "https://cdn.example.com/style.css"),
@@ -91,7 +91,7 @@ fn resource_base_file_absolute_url_passthrough() {
 
 #[test]
 fn resolve_str_url_base_relative() {
-    let base = ResourceBase::Url("https://example.com/path/page.html".to_owned());
+    let base = ResourceBase::url_base("https://example.com/path/page.html".to_owned());
     assert_eq!(
         base.resolve_str("style.css"),
         "https://example.com/path/style.css"
@@ -100,7 +100,7 @@ fn resolve_str_url_base_relative() {
 
 #[test]
 fn resolve_str_url_base_absolute_passthrough() {
-    let base = ResourceBase::Url("https://example.com/page.html".to_owned());
+    let base = ResourceBase::url_base("https://example.com/page.html".to_owned());
     assert_eq!(
         base.resolve_str("https://cdn.example.com/lib.js"),
         "https://cdn.example.com/lib.js"
@@ -109,7 +109,7 @@ fn resolve_str_url_base_absolute_passthrough() {
 
 #[test]
 fn resolve_str_file_base_yields_path_string() {
-    let base = ResourceBase::File(PathBuf::from("/home/user/page.html"));
+    let base = ResourceBase::file_base(PathBuf::from("/home/user/page.html"));
     let result = base.resolve_str("style.css");
     assert!(result.ends_with("style.css"), "got: {result}");
 }
@@ -119,7 +119,7 @@ fn resolve_str_file_base_yields_path_string() {
 
 #[test]
 fn resolve_file_base_get_query_is_not_part_of_filename() {
-    let base = ResourceBase::File(PathBuf::from("D:/tmp/form.html"));
+    let base = ResourceBase::file_base(PathBuf::from("D:/tmp/form.html"));
     match base.resolve("target.html?q=hello") {
         ResolvedResource::File(p) => assert_eq!(p, PathBuf::from("D:/tmp/target.html")),
         other => panic!("expected File, got {other:?}"),
@@ -128,7 +128,7 @@ fn resolve_file_base_get_query_is_not_part_of_filename() {
 
 #[test]
 fn resolve_file_base_strips_fragment() {
-    let base = ResourceBase::File(PathBuf::from("D:/tmp/form.html"));
+    let base = ResourceBase::file_base(PathBuf::from("D:/tmp/form.html"));
     match base.resolve("target.html#sec") {
         ResolvedResource::File(p) => assert_eq!(p, PathBuf::from("D:/tmp/target.html")),
         other => panic!("expected File, got {other:?}"),
@@ -137,7 +137,7 @@ fn resolve_file_base_strips_fragment() {
 
 #[test]
 fn resolve_file_base_query_only_href_reloads_same_file() {
-    let base = ResourceBase::File(PathBuf::from("D:/tmp/form.html"));
+    let base = ResourceBase::file_base(PathBuf::from("D:/tmp/form.html"));
     match base.resolve("?q=hello") {
         ResolvedResource::File(p) => assert_eq!(p, PathBuf::from("D:/tmp/form.html")),
         other => panic!("expected File, got {other:?}"),
@@ -146,7 +146,7 @@ fn resolve_file_base_query_only_href_reloads_same_file() {
 
 #[test]
 fn resolve_file_base_fragment_only_href_reloads_same_file() {
-    let base = ResourceBase::File(PathBuf::from("D:/tmp/form.html"));
+    let base = ResourceBase::file_base(PathBuf::from("D:/tmp/form.html"));
     match base.resolve("#sec") {
         ResolvedResource::File(p) => assert_eq!(p, PathBuf::from("D:/tmp/form.html")),
         other => panic!("expected File, got {other:?}"),
@@ -155,7 +155,7 @@ fn resolve_file_base_fragment_only_href_reloads_same_file() {
 
 #[test]
 fn resolve_file_base_about_blank_is_a_url_not_a_path() {
-    let base = ResourceBase::File(PathBuf::from("D:/tmp/form.html"));
+    let base = ResourceBase::file_base(PathBuf::from("D:/tmp/form.html"));
     match base.resolve("about:blank") {
         ResolvedResource::Url(u) => assert_eq!(u, "about:blank"),
         other => panic!("expected Url, got {other:?}"),
@@ -164,7 +164,7 @@ fn resolve_file_base_about_blank_is_a_url_not_a_path() {
 
 #[test]
 fn resolve_file_base_data_url_is_a_url_not_a_path() {
-    let base = ResourceBase::File(PathBuf::from("D:/tmp/form.html"));
+    let base = ResourceBase::file_base(PathBuf::from("D:/tmp/form.html"));
     match base.resolve("data:text/html,x") {
         ResolvedResource::Url(u) => assert_eq!(u, "data:text/html,x"),
         other => panic!("expected Url, got {other:?}"),
@@ -173,7 +173,7 @@ fn resolve_file_base_data_url_is_a_url_not_a_path() {
 
 #[test]
 fn resolve_file_base_plain_relative_href_unaffected() {
-    let base = ResourceBase::File(PathBuf::from("D:/tmp/form.html"));
+    let base = ResourceBase::file_base(PathBuf::from("D:/tmp/form.html"));
     match base.resolve("sub/../target.html") {
         ResolvedResource::File(p) => assert_eq!(p, PathBuf::from("D:/tmp/sub/../target.html")),
         other => panic!("expected File, got {other:?}"),
@@ -185,7 +185,7 @@ fn resolve_file_base_plain_relative_href_unaffected() {
 /// field `q=hello`, page opened as `file://`).
 #[test]
 fn bug440_get_form_submission_resolves_to_the_target_file() {
-    let base = ResourceBase::File(PathBuf::from("D:/tmp/form437target.html"));
+    let base = ResourceBase::file_base(PathBuf::from("D:/tmp/form437target.html"));
     let get_url = forms::make_get_url("target.html", "q=hello");
     assert_eq!(base.resolve_str(&get_url), "D:/tmp\\target.html");
 }
@@ -195,7 +195,7 @@ fn bug440_get_form_submission_resolves_to_the_target_file() {
 /// not a path like `"D:/tmp\about:blank"`.
 #[test]
 fn bug440_get_form_submission_with_scheme_action_resolves_to_url() {
-    let base = ResourceBase::File(PathBuf::from("D:/tmp/form437target.html"));
+    let base = ResourceBase::file_base(PathBuf::from("D:/tmp/form437target.html"));
     let get_url = forms::make_get_url("about:blank", "");
     assert_eq!(base.resolve_str(&get_url), "about:blank");
 }
@@ -205,7 +205,7 @@ fn bug440_get_form_submission_with_scheme_action_resolves_to_url() {
 /// the whole `file://...` string verbatim (the BUG-651 shape).
 #[test]
 fn resolve_file_base_file_scheme_href_yields_a_path() {
-    let base = ResourceBase::File(PathBuf::from("D:/tmp/form.html"));
+    let base = ResourceBase::file_base(PathBuf::from("D:/tmp/form.html"));
     match base.resolve("file:///D:/other/x.html") {
         ResolvedResource::File(p) => assert_eq!(p, PathBuf::from("D:/other/x.html")),
         other => panic!("expected File, got {other:?}"),
@@ -217,7 +217,7 @@ fn resolve_file_base_file_scheme_href_yields_a_path() {
 /// filesystem is asked for it.
 #[test]
 fn resolve_file_base_decodes_percent_escapes() {
-    let base = ResourceBase::File(PathBuf::from("D:/tmp/form.html"));
+    let base = ResourceBase::file_base(PathBuf::from("D:/tmp/form.html"));
     match base.resolve("my%20file.html") {
         ResolvedResource::File(p) => assert_eq!(p, PathBuf::from("D:/tmp/my file.html")),
         other => panic!("expected File, got {other:?}"),
@@ -228,7 +228,7 @@ fn resolve_file_base_decodes_percent_escapes() {
 /// survive verbatim — decoding it away would name a different file.
 #[test]
 fn resolve_file_base_keeps_a_lone_percent() {
-    let base = ResourceBase::File(PathBuf::from("D:/tmp/form.html"));
+    let base = ResourceBase::file_base(PathBuf::from("D:/tmp/form.html"));
     match base.resolve("100%done.html") {
         ResolvedResource::File(p) => assert_eq!(p, PathBuf::from("D:/tmp/100%done.html")),
         other => panic!("expected File, got {other:?}"),
@@ -240,7 +240,7 @@ fn resolve_file_base_keeps_a_lone_percent() {
 /// local href to the network layer instead of to disk.
 #[test]
 fn resolve_file_base_drive_letter_is_not_a_scheme() {
-    let base = ResourceBase::File(PathBuf::from("D:/tmp/form.html"));
+    let base = ResourceBase::file_base(PathBuf::from("D:/tmp/form.html"));
     match base.resolve("D:/docs/x.html") {
         ResolvedResource::File(p) => assert_eq!(p, PathBuf::from("D:/docs/x.html")),
         other => panic!("expected File, got {other:?}"),
@@ -251,7 +251,7 @@ fn resolve_file_base_drive_letter_is_not_a_scheme() {
 
 #[test]
 fn resolve_as_base_url_relative_href_becomes_new_base() {
-    let page = ResourceBase::Url("https://example.com/a/page.html".to_owned());
+    let page = ResourceBase::url_base("https://example.com/a/page.html".to_owned());
     let based = page.resolve_as_base("/other/");
     assert_eq!(
         based.resolve_str("pic.png"),
@@ -262,14 +262,14 @@ fn resolve_as_base_url_relative_href_becomes_new_base() {
 
 #[test]
 fn resolve_as_base_url_absolute_href_switches_origin() {
-    let page = ResourceBase::Url("https://example.com/a/page.html".to_owned());
+    let page = ResourceBase::url_base("https://example.com/a/page.html".to_owned());
     let based = page.resolve_as_base("https://cdn.example/assets/");
     assert_eq!(based.resolve_str("pic.png"), "https://cdn.example/assets/pic.png");
 }
 
 #[test]
 fn resolve_as_base_file_relative_href_moves_directory() {
-    let page = ResourceBase::File(PathBuf::from("D:/site/a/page.html"));
+    let page = ResourceBase::file_base(PathBuf::from("D:/site/a/page.html"));
     let based = page.resolve_as_base("other/");
     match based.resolve("pic.png") {
         ResolvedResource::File(p) => assert_eq!(p, PathBuf::from("D:/site/a/other/pic.png")),
@@ -280,7 +280,7 @@ fn resolve_as_base_file_relative_href_moves_directory() {
 #[test]
 fn effective_base_falls_back_to_page_base_without_a_base_element() {
     let doc = lumen_html_parser::parse("<html><body></body></html>");
-    let page = ResourceBase::Url("https://example.com/a/page.html".to_owned());
+    let page = ResourceBase::url_base("https://example.com/a/page.html".to_owned());
     let eff = effective_base(&doc, &page);
     assert_eq!(eff.resolve_str("pic.png"), "https://example.com/a/pic.png");
 }
@@ -290,7 +290,7 @@ fn effective_base_reads_base_href_from_the_document() {
     let doc = lumen_html_parser::parse(
         "<html><head><base href=\"/other/\"></head><body></body></html>",
     );
-    let page = ResourceBase::Url("https://example.com/a/page.html".to_owned());
+    let page = ResourceBase::url_base("https://example.com/a/page.html".to_owned());
     let eff = effective_base(&doc, &page);
     assert_eq!(eff.resolve_str("pic.png"), "https://example.com/other/pic.png");
 }
@@ -304,7 +304,7 @@ fn effective_base_does_not_change_page_origin() {
     let doc = lumen_html_parser::parse(
         "<html><head><base href=\"https://cdn.example/\"></head><body></body></html>",
     );
-    let page = ResourceBase::Url("https://example.com/a/page.html".to_owned());
+    let page = ResourceBase::url_base("https://example.com/a/page.html".to_owned());
     let eff = effective_base(&doc, &page);
     assert_eq!(eff.resolve_str("pic.png"), "https://cdn.example/pic.png");
     assert_ne!(

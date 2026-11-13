@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 use lumen_core::ext::EventSink;
 use lumen_dom::Document;
 
-use crate::{DocCookieJar, PersistentJs, ResourceBase};
+use crate::{DocCookieJar, PersistentJs, ResourceBase, ResourceBaseKind};
 
 /// Rebuild a [`crate::ResourceBase`] from a persisted page URL string.
 ///
@@ -31,16 +31,16 @@ use crate::{DocCookieJar, PersistentJs, ResourceBase};
 /// resolution base for `window.location`, sub-resource fetches and origin-keyed
 /// storage must be reconstructed from that string.
 ///
-/// `file://` URLs map to [`ResourceBase::File`] with the decoded filesystem
+/// `file://` URLs map to [`ResourceBaseKind::File`] with the decoded filesystem
 /// path; everything else (http/https and the empty string) maps to
-/// [`ResourceBase::Url`].  The empty string yields `ResourceBase::Url("")`,
+/// [`ResourceBaseKind::Url`].  The empty string yields `ResourceBase::url_base("")`,
 /// for which all origin-keyed helpers return `None` (no storage, no network),
 /// matching the behaviour of a script-less `about:blank`-style page.
 pub(crate) fn resource_base_from_url(url: &str) -> ResourceBase {
     if let Some(rest) = url.strip_prefix("file://") {
-        ResourceBase::File(PathBuf::from(rest))
+        ResourceBase::file_base(PathBuf::from(rest))
     } else {
-        ResourceBase::Url(url.to_owned())
+        ResourceBase::url_base(url.to_owned())
     }
 }
 
@@ -130,8 +130,8 @@ pub(crate) fn restore_js_context(
             },
         )
     });
-    let (fetch_provider, ws_provider, sse_provider) = match &base {
-        ResourceBase::Url(_) => {
+    let (fetch_provider, ws_provider, sse_provider) = match &base.kind {
+        ResourceBaseKind::Url(_) => {
             // GAP-REFERRER срез 3: same reasoning as `page_pipeline.rs`'s
             // top-level client — this document's resolved policy, not always
             // the project default.
@@ -149,7 +149,7 @@ pub(crate) fn restore_js_context(
                 Some(arc_client as Arc<dyn lumen_core::ext::JsSseProvider>);
             (fp, wp, sp)
         }
-        ResourceBase::File(_) => (None, None, None),
+        ResourceBaseKind::File(_) => (None, None, None),
     };
 
     let ext_registry = crate::extensions::ExtensionRegistry::load();
@@ -212,18 +212,18 @@ mod tests {
     #[test]
     fn http_url_maps_to_url_base() {
         let base = resource_base_from_url("https://example.com/page");
-        match base {
-            ResourceBase::Url(u) => assert_eq!(u, "https://example.com/page"),
-            ResourceBase::File(_) => panic!("expected Url base"),
+        match &base.kind {
+            ResourceBaseKind::Url(u) => assert_eq!(u, "https://example.com/page"),
+            ResourceBaseKind::File(_) => panic!("expected Url base"),
         }
     }
 
     #[test]
     fn file_url_maps_to_file_base() {
         let base = resource_base_from_url("file:///C:/tmp/page.html");
-        match base {
-            ResourceBase::File(p) => assert_eq!(p, PathBuf::from("/C:/tmp/page.html")),
-            ResourceBase::Url(_) => panic!("expected File base"),
+        match &base.kind {
+            ResourceBaseKind::File(p) => assert_eq!(p, &PathBuf::from("/C:/tmp/page.html")),
+            ResourceBaseKind::Url(_) => panic!("expected File base"),
         }
     }
 
@@ -231,9 +231,9 @@ mod tests {
     fn empty_url_maps_to_empty_url_base() {
         // about:blank-style hibernated tab: no origin, no providers.
         let base = resource_base_from_url("");
-        match base {
-            ResourceBase::Url(u) => assert!(u.is_empty()),
-            ResourceBase::File(_) => panic!("expected Url base"),
+        match &base.kind {
+            ResourceBaseKind::Url(u) => assert!(u.is_empty()),
+            ResourceBaseKind::File(_) => panic!("expected Url base"),
         }
     }
 }

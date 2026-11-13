@@ -515,6 +515,33 @@ fn popover_binds_domain_and_site_shields_row() {
     assert_eq!(text_of(&doc, state), "Вкл");
 }
 
+/// COMPAT-PANEL-TAB-SHIELDS: the one-off «без защит для этой вкладки» row is
+/// visible only while per-site filtering is actually on (nothing to switch off
+/// otherwise), and marks its button once the mode is active.
+#[test]
+fn popover_shows_tab_once_row_only_when_shields_on() {
+    let mut doc = parse_asset();
+    let row = doc
+        .find_by_id(crate::ids::SHIELD_TAB_ONCE_ROW)
+        .expect("asset has #shieldTabOnceRow");
+    // Adblock disabled by default — the item is hidden.
+    bind_model(&mut doc, &ChromeModel { popover_open: true, site_shields_on: false, ..ChromeModel::default() });
+    assert!(!has_class(&doc, row, "show"));
+    // Shields on for the site — the item is offered.
+    bind_model(&mut doc, &ChromeModel { popover_open: true, site_shields_on: true, ..ChromeModel::default() });
+    assert!(has_class(&doc, row, "show"));
+    let btn = doc.find_by_id(crate::ids::SHIELD_TAB_ONCE_BTN).expect("asset has #shieldTabOnceBtn");
+    assert_eq!(text_of(&doc, btn), "Отключить");
+    // The mode is active — the button says so until the tab navigates.
+    bind_model(&mut doc, &ChromeModel {
+        popover_open: true,
+        site_shields_on: true,
+        tab_shields_once_off: true,
+        ..ChromeModel::default()
+    });
+    assert_eq!(text_of(&doc, btn), "Действует до навигации");
+}
+
 /// UX-USER-ACTIVATION: `#popupBtn` shows the number of blocked popups and
 /// hides again when there are none.
 #[test]

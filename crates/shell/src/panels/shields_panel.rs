@@ -5,9 +5,10 @@
 //! chrome (default since CC-14) the popover is `#permPopover`. `BUG-411`
 //! restored the domain readout and the shields switch there and, at the same
 //! time, turned the switch from a pure indicator into the real control: the
-//! per-site state below is what the shell pushes into
-//! `lumen_network::set_global_adblock_enabled`, so flipping it actually stops
-//! (or resumes) request filtering. Clicks come from the chrome hit-test
+//! per-site state below is what the shell pushes into the network layer's
+//! shields decision registry (`lumen_network::install_shield_decisions`), so
+//! flipping it actually stops (or resumes) request filtering for that site.
+//! Clicks come from the chrome hit-test
 //! (`data-action="toggle-site-shields"`).
 //!
 //! Toggled with `Ctrl+Shift+S`.
@@ -154,9 +155,10 @@ impl ShieldsPanel {
     /// per-site override if the host has one, otherwise
     /// [`Self::default_enabled`] ([BUG-411](../../../../bugs/BUG-411-FIXED.md)).
     ///
-    /// This is the single value the shell mirrors into
-    /// `lumen_network::set_global_adblock_enabled`, so it decides whether the
-    /// installed filter actually runs.
+    /// This is the single value the shell mirrors into the network decision
+    /// registry (`install_shield_decisions`) together with the other
+    /// overrides, so it decides whether the installed filter runs for this
+    /// host — on every tab showing it, not just the active one.
     #[must_use]
     pub fn enabled_for_current(&self) -> bool {
         match &self.current_domain {
@@ -182,11 +184,27 @@ impl ShieldsPanel {
         next
     }
 
+    /// The fallback used by hosts with no per-site choice (COMPAT-PANEL-TAB-SHIELDS):
+    /// the shell pushes it into the network decision registry together with
+    /// [`Self::site_overrides`].
+    #[must_use]
+    pub fn default_enabled(&self) -> bool {
+        self.default_enabled
+    }
+
+    /// Snapshot of all per-host overrides (COMPAT-PANEL-TAB-SHIELDS): the
+    /// shell pushes them into the network decision registry together with
+    /// [`Self::default_enabled`], so `fetch_single` decides per request from
+    /// the request's site — not from whichever tab is active.
+    #[must_use]
+    pub fn site_overrides(&self) -> Vec<(String, bool)> {
+        self.site_overrides.iter().map(|(h, on)| (h.clone(), *on)).collect()
+    }
+
     /// Flip panel visibility.
     pub fn toggle(&mut self) {
         self.visible = !self.visible;
     }
-
     /// Update `current_domain` and refresh blocked counts.
     pub fn set_domain(&mut self, domain: Option<String>) {
         self.current_domain = domain;
@@ -294,6 +312,20 @@ mod tests {
         assert!(!p.toggle_current_site());
         // With no host, `enabled_for_current` *is* the default.
         assert!(!p.enabled_for_current());
+    }
+
+    // ── Decision export (COMPAT-PANEL-TAB-SHIELDS) ───────────────────────────
+
+    #[test]
+    fn decisions_export_default_and_overrides() {
+        let mut p = make_panel_visible(true, Some("example.org"));
+        p.toggle_current_site();
+        assert!(p.default_enabled());
+        assert_eq!(
+            p.site_overrides(),
+            vec![("example.org".to_owned(), false)],
+            "the shell pushes default + overrides into the network registry"
+        );
     }
 
     // ── BlockedLog ───────────────────────────────────────────────────────────

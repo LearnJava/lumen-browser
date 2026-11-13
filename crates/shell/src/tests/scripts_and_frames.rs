@@ -44,7 +44,7 @@ fn resolve_script_sources_keeps_a_failed_external_for_its_error_event() {
     let mut classic = Vec::new();
     let mut modules = Vec::new();
     collect_scripts_ordered(&doc, doc.root(), &mut classic, &mut modules);
-    let base = ResourceBase::File(PathBuf::from("samples/page.html"));
+    let base = ResourceBase::file_base(PathBuf::from("samples/page.html"));
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     let resolved = resolve_script_sources(&classic, &base, &sink, None, &doc);
     assert_eq!(resolved.len(), 2, "the failed script keeps its slot");
@@ -78,7 +78,7 @@ fn resolve_script_sources_lets_a_nonced_external_script_through_csp() {
         // URL-база: файловый путь не разбирается как URL, и гейт его не
         // судит вовсе. Порт 9 (discard) на loopback отказывает в соединении
         // сразу — пропущенному скрипту незачем ходить в настоящую сеть.
-        let base = ResourceBase::Url("http://127.0.0.1:9/page.html".to_owned());
+        let base = ResourceBase::url_base("http://127.0.0.1:9/page.html".to_owned());
         let sink: Arc<dyn EventSink> = Arc::new(NullSink);
         let resolved = resolve_script_sources(&classic, &base, &sink, None, &doc);
         assert_eq!(resolved.len(), 3);
@@ -280,7 +280,7 @@ fn resolve_script_sources_passes_inline_through() {
     let mut items: Vec<ScriptSource> = Vec::new();
     let mut modules: Vec<ScriptSource> = Vec::new();
     collect_scripts_ordered(&doc, doc.root(), &mut items, &mut modules);
-    let base = ResourceBase::Url("https://example.com/".to_owned());
+    let base = ResourceBase::url_base("https://example.com/".to_owned());
     let sink: Arc<dyn EventSink> = Arc::new(StdoutEventSink);
     let out = resolve_script_sources(&items, &base, &sink, None, &doc);
     let bodies: Vec<&str> = out.iter().map(|r| r.source.as_str()).collect();
@@ -412,21 +412,21 @@ fn iframe_sandbox_srcdoc_no_sandbox_attr_no_blocking() {
 
 #[test]
 fn frame_access_about_urls_inherit_parent_origin() {
-    let base = ResourceBase::Url("https://a.example/x/y.html".to_owned());
+    let base = ResourceBase::url_base("https://a.example/x/y.html".to_owned());
     assert!(frame_access_allowed(&base, "about:srcdoc", false));
     assert!(frame_access_allowed(&base, "about:blank", false));
 }
 
 #[test]
 fn frame_access_opaque_sandbox_denies_everything() {
-    let base = ResourceBase::Url("https://a.example/".to_owned());
+    let base = ResourceBase::url_base("https://a.example/".to_owned());
     assert!(!frame_access_allowed(&base, "about:srcdoc", true));
     assert!(!frame_access_allowed(&base, "https://a.example/child.html", true));
 }
 
 #[test]
 fn frame_access_same_origin_allowed_cross_origin_denied() {
-    let a = ResourceBase::Url("https://a.example/x.html".to_owned());
+    let a = ResourceBase::url_base("https://a.example/x.html".to_owned());
     assert!(frame_access_allowed(
         &a,
         "https://a.example/child.html",
@@ -452,7 +452,7 @@ fn frame_access_same_origin_allowed_cross_origin_denied() {
 
 #[test]
 fn frame_access_file_parent_talks_only_to_files() {
-    let f = ResourceBase::File(std::path::PathBuf::from("D:/pages/index.html"));
+    let f = ResourceBase::file_base(std::path::PathBuf::from("D:/pages/index.html"));
     assert!(frame_access_allowed(&f, "file://D:/pages/child.html", false));
     assert!(!frame_access_allowed(&f, "https://a.example/", false));
 }
@@ -460,7 +460,7 @@ fn frame_access_file_parent_talks_only_to_files() {
 #[test]
 fn frame_access_url_parent_to_file_child_denied() {
     // У file://-ребёнка opaque origin — сетевой родитель его не читает.
-    let u = ResourceBase::Url("https://a.example/".to_owned());
+    let u = ResourceBase::url_base("https://a.example/".to_owned());
     assert!(!frame_access_allowed(&u, "file://D:/x.html", false));
 }
 
@@ -523,7 +523,7 @@ pub(super) fn splice_handle(src: &str, host_rect: Rect, content_dl: DisplayList)
         host: NodeId::from_index(0),
         url: "about:blank".to_owned(),
         load_failed: false,
-        base: crate::ResourceBase::Url("about:blank".to_owned()),
+        base: crate::ResourceBase::url_base("about:blank".to_owned()),
         doc: Arc::new(Mutex::new(lumen_html_parser::parse("<html></html>"))),
         js: None,
         depth: 0,

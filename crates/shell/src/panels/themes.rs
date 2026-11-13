@@ -111,7 +111,7 @@ impl ShellTheme {
     /// `os_dark` is the current OS preference; it is used only when `base` is
     /// `ThemeBase::System`.
     pub fn is_dark(self, os_dark: bool) -> bool {
-        match self.base {
+        match &self.base {
             ThemeBase::Dark   => true,
             ThemeBase::Light  => false,
             ThemeBase::System => os_dark,
@@ -134,7 +134,7 @@ impl ShellTheme {
 
     /// Serialise to the compact settings string.
     pub fn to_settings_str(self) -> String {
-        let base = match self.base {
+        let base = match &self.base {
             ThemeBase::Dark   => "dark",
             ThemeBase::Light  => "light",
             ThemeBase::System => "system",

@@ -914,7 +914,7 @@ fn effective_base_ignores_base_href_blocked_by_base_uri() {
         "<base href=\"https://other.example/\">",
         "</head><body></body></html>",
     ));
-    let page = ResourceBase::Url("https://example.com/a/page.html".to_owned());
+    let page = ResourceBase::url_base("https://example.com/a/page.html".to_owned());
     let eff = effective_base(&doc, &page);
     assert_eq!(
         eff.resolve_str("pic.png"), "https://example.com/a/pic.png",
@@ -930,7 +930,7 @@ fn effective_base_allows_base_href_matching_base_uri() {
         "<base href=\"/other/\">",
         "</head><body></body></html>",
     ));
-    let page = ResourceBase::Url("https://example.com/a/page.html".to_owned());
+    let page = ResourceBase::url_base("https://example.com/a/page.html".to_owned());
     let eff = effective_base(&doc, &page);
     assert_eq!(eff.resolve_str("pic.png"), "https://example.com/other/pic.png");
 }
@@ -943,7 +943,7 @@ fn effective_base_ignores_base_href_when_base_uri_is_none() {
         "<base href=\"/other/\">",
         "</head><body></body></html>",
     ));
-    let page = ResourceBase::Url("https://example.com/a/page.html".to_owned());
+    let page = ResourceBase::url_base("https://example.com/a/page.html".to_owned());
     let eff = effective_base(&doc, &page);
     assert_eq!(eff.resolve_str("pic.png"), "https://example.com/a/pic.png");
 }
@@ -994,7 +994,7 @@ fn parse_and_layout_with_compat(
     parse_and_layout(
         html.as_bytes(),
         Some("text/html"),
-        &ResourceBase::File(std::env::temp_dir().join("bug443.html")),
+        &ResourceBase::file_base(std::env::temp_dir().join("bug443.html")),
         &(Arc::new(StdoutEventSink) as Arc<dyn EventSink>),
         Size::new(1024.0, 720.0),
         &mut std::collections::HashSet::new(),
@@ -1599,7 +1599,7 @@ fn fontload5_unresolvable_local_only_face_stays_unloaded() {
 
 #[test]
 fn xml_flavoured_detects_xhtml_mime() {
-    let base = ResourceBase::Url("https://example.com/page".to_owned());
+    let base = ResourceBase::url_base("https://example.com/page".to_owned());
     assert!(is_xml_flavoured_document(Some("application/xhtml+xml"), &base));
     assert!(is_xml_flavoured_document(
         Some("application/xhtml+xml; charset=utf-8"),
@@ -1609,7 +1609,7 @@ fn xml_flavoured_detects_xhtml_mime() {
 
 #[test]
 fn xml_flavoured_detects_svg_mime() {
-    let base = ResourceBase::Url("https://example.com/page".to_owned());
+    let base = ResourceBase::url_base("https://example.com/page".to_owned());
     assert!(is_xml_flavoured_document(Some("image/svg+xml"), &base));
 }
 
@@ -1617,15 +1617,15 @@ fn xml_flavoured_detects_svg_mime() {
 fn xml_flavoured_falls_back_to_extension_when_content_type_absent() {
     assert!(is_xml_flavoured_document(
         None,
-        &ResourceBase::File(PathBuf::from("/tmp/reference/foo.xht"))
+        &ResourceBase::file_base(PathBuf::from("/tmp/reference/foo.xht"))
     ));
     assert!(is_xml_flavoured_document(
         None,
-        &ResourceBase::Url("https://example.com/test.xhtml".to_owned())
+        &ResourceBase::url_base("https://example.com/test.xhtml".to_owned())
     ));
     assert!(is_xml_flavoured_document(
         None,
-        &ResourceBase::Url("https://example.com/icon.svg".to_owned())
+        &ResourceBase::url_base("https://example.com/icon.svg".to_owned())
     ));
 }
 
@@ -1633,11 +1633,11 @@ fn xml_flavoured_falls_back_to_extension_when_content_type_absent() {
 fn xml_flavoured_false_for_plain_html() {
     assert!(!is_xml_flavoured_document(
         Some("text/html; charset=utf-8"),
-        &ResourceBase::Url("https://example.com/page.html".to_owned())
+        &ResourceBase::url_base("https://example.com/page.html".to_owned())
     ));
     assert!(!is_xml_flavoured_document(
         None,
-        &ResourceBase::Url("https://example.com/page".to_owned())
+        &ResourceBase::url_base("https://example.com/page".to_owned())
     ));
 }
 
@@ -1785,7 +1785,7 @@ fn load1_parse_html(live: bool, det: deterministic::DetConfig, html: &str) -> cr
     parse_and_layout(
         html.as_bytes(),
         Some("text/html"),
-        &ResourceBase::File(std::env::temp_dir().join("load1.html")),
+        &ResourceBase::file_base(std::env::temp_dir().join("load1.html")),
         &(Arc::new(StdoutEventSink) as Arc<dyn EventSink>),
         Size::new(1024.0, 720.0),
         &mut std::collections::HashSet::new(),
@@ -1892,7 +1892,7 @@ fn load1b_live_page_is_returned_before_iframes_load() {
 /// Cross-origin пиксели без CORS заражают canvas и на пути, который конвейер не ждал.
 #[test]
 fn load1_cross_origin_url_is_tainted_same_origin_is_not() {
-    let base = ResourceBase::Url("https://site.example/dir/page.html".to_owned());
+    let base = ResourceBase::url_base("https://site.example/dir/page.html".to_owned());
     assert!(crate::subresources::is_cross_origin_url(&base, "https://cdn.example/a.png"));
     assert!(!crate::subresources::is_cross_origin_url(&base, "https://site.example/a.png"));
     assert!(!crate::subresources::is_cross_origin_url(&base, "a.png"));
@@ -1907,7 +1907,7 @@ fn load1_live_only_image_is_decodable() {
     let sink = Arc::new(StdoutEventSink) as Arc<dyn EventSink>;
     let decoded = crate::subresources::decode_image(
         LOAD1_LIVE_ONLY,
-        &ResourceBase::File(std::env::temp_dir().join("load1.html")),
+        &ResourceBase::file_base(std::env::temp_dir().join("load1.html")),
         &sink,
         None,
         lumen_core::ColorSpace::Srgb,

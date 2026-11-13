@@ -173,7 +173,7 @@ fn build_http_cache(private: bool) -> Option<Arc<dyn HttpCacheBackend>> {
 /// thread (see `main.rs`) which performs conditional GETs and hot-swaps the
 /// filter when a list changes. The filter is consulted by every `HttpClient`
 /// request on every fetch path; the per-tab checkbox flips it via
-/// `lumen_network::set_global_adblock_enabled`. Left disabled here to match
+/// `lumen_network::install_shield_decisions`. Left disabled here to match
 /// the default `TabEntry::adblock = false` of the initial tab — subscriptions
 /// are still loaded and installed so the filter is ready the moment the user
 /// opts in.
@@ -198,7 +198,7 @@ pub fn init_adblock() -> std::sync::Arc<lumen_storage::adblock::AdblockStore> {
     }
     let count = crate::adblock::load_and_install(&store);
     eprintln!("adblock: filter installed ({count} rules)");
-    lumen_network::set_global_adblock_enabled(false);
+    lumen_network::install_shield_decisions(false, &[]);
     store
 }
 

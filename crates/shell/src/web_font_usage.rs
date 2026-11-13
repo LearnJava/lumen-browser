@@ -262,7 +262,7 @@ xxxx",
         impl lumen_core::ext::EventSink for NullSink {
             fn emit(&self, _event: &lumen_core::event::Event) {}
         }
-        let base = crate::ResourceBase::Url(format!("http://127.0.0.1:{port}/index.html"));
+        let base = crate::ResourceBase::url_base(format!("http://127.0.0.1:{port}/index.html"));
         let sink: std::sync::Arc<dyn lumen_core::ext::EventSink> = std::sync::Arc::new(NullSink);
         let (_registry, pending) = crate::subresources::load_font_faces(&sheet.font_faces, &base, &sink, None);
         assert_eq!(pending.len(), 4);

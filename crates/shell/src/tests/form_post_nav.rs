@@ -39,7 +39,10 @@ fn post_source_behaves_like_a_url_source() {
     // `matches!`, а не через `assert_eq!`.
     assert!(matches!(
         src.resource_base(),
-        Some(ResourceBase::Url(ref u)) if u == "https://example.com/login"
+        Some(ResourceBase {
+            kind: ResourceBaseKind::Url(ref u),
+            ..
+        }) if u == "https://example.com/login"
     ));
     // И тело при этом на месте — иначе тест выше проверял бы пустоту.
     let body = src.nav_body().expect("body");

@@ -11,7 +11,7 @@ use std::time::Instant;
 use crate::compat_panel::Step;
 use crate::compat_signals::site_of;
 use crate::external_browser::{find_by_id, enumerate, is_handoff_url, HandoffReason};
-use crate::resource_base::ResourceBase;
+use crate::resource_base::ResourceBaseKind;
 use crate::*;
 
 use super::handoff::now_unix;
@@ -144,7 +144,7 @@ impl Lumen {
     /// Страница `raw` загружена: если на нём ждали результата шага, начинается
     /// отсчёт 3 с до вопроса «Заработало?».
     pub(crate) fn fix_panel_load_done(&mut self, raw: &page_source::RawPage) {
-        if let ResourceBase::Url(url) = &raw.base {
+        if let ResourceBaseKind::Url(url) = &raw.base.kind {
             self.fix_panel.load_done(&site_of(url), Instant::now());
         }
     }

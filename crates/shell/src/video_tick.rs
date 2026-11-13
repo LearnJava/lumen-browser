@@ -134,11 +134,13 @@ impl Lumen {
             });
         }
         let base = match &self.source {
-            PageSource::File(p) => ResourceBase::File(p.clone()),
-            PageSource::Url { url, .. } => ResourceBase::Url(url.clone()),
-            PageSource::Snapshot { base_url, .. } => ResourceBase::Url(base_url.clone()),
+            PageSource::File(p) => ResourceBase::file_base(p.clone()),
+            PageSource::Url { url, .. } => ResourceBase::url_base(url.clone()),
+            PageSource::Snapshot { base_url, .. } => ResourceBase::url_base(base_url.clone()),
             PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => return None,
-        };
+        }
+        // COMPAT-PANEL-TAB-SHIELDS: медиа-запросы тика — с вкладкой владельца.
+        .with_tab(self.active_tab_id());
         let base = self
             .layout_source
             .as_ref()
