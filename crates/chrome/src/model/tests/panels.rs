@@ -542,6 +542,36 @@ fn popover_shows_tab_once_row_only_when_shields_on() {
     assert_eq!(text_of(&doc, btn), "Действует до навигации");
 }
 
+/// COMPAT-NOPROXY: the «этот сайт без прокси» rows show only when a proxy is
+/// configured outside the Tor profile (the shell decides via
+/// `config::no_proxy_rule_available`), and the site button reflects the rule
+/// state.
+#[test]
+fn popover_shows_no_proxy_rows_only_when_rule_available() {
+    let mut doc = parse_asset();
+    let row = doc.find_by_id(crate::ids::NO_PROXY_ROW).expect("asset has #noProxyRow");
+    let preset = doc
+        .find_by_id(crate::ids::NO_PROXY_PRESET_ROW)
+        .expect("asset has #noProxyPresetRow");
+    // No proxy (or Tor profile) — no rows at all.
+    bind_model(&mut doc, &ChromeModel { popover_open: true, no_proxy_visible: false, ..ChromeModel::default() });
+    assert!(!has_class(&doc, row, "show"));
+    assert!(!has_class(&doc, preset, "show"));
+    // Proxy configured — both rows show; the button names the rule state.
+    bind_model(&mut doc, &ChromeModel { popover_open: true, no_proxy_visible: true, ..ChromeModel::default() });
+    assert!(has_class(&doc, row, "show"));
+    assert!(has_class(&doc, preset, "show"));
+    let btn = doc.find_by_id(crate::ids::NO_PROXY_BTN).expect("asset has #noProxyBtn");
+    assert_eq!(text_of(&doc, btn), "Напрямую");
+    bind_model(&mut doc, &ChromeModel {
+        popover_open: true,
+        no_proxy_visible: true,
+        no_proxy_site_on: true,
+        ..ChromeModel::default()
+    });
+    assert_eq!(text_of(&doc, btn), "Напрямую: вкл");
+}
+
 /// UX-USER-ACTIVATION: `#popupBtn` shows the number of blocked popups and
 /// hides again when there are none.
 #[test]

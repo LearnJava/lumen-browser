@@ -863,6 +863,18 @@ impl Lumen {
                 lumen_network::set_tab_shields_off(self.active_tab_id());
                 self.relayout_chrome_host();
             }
+            // COMPAT-NOPROXY: правило «этот сайт без прокси» — eTLD+1 текущей
+            // страницы добавляется в персистентный список прямых соединений.
+            ChromeAction::ToggleSiteNoProxy => {
+                self.toggle_site_no_proxy();
+                self.relayout_chrome_host();
+            }
+            // COMPAT-NOPROXY: пресеты «напрямую» (банки, Госуслуги,
+            // маркетплейсы) — массовое добавление в тот же список.
+            ChromeAction::NoProxyPresets => {
+                self.add_no_proxy_presets();
+                self.relayout_chrome_host();
+            }
             // COMPAT-PACK-IND: кнопки строки «К сайту применено N исправлений».
             ChromeAction::CompatDetails => {
                 self.shields.visible = false;

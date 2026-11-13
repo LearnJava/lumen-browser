@@ -272,6 +272,35 @@ pub fn protection_exempt_for_site(site: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
+// ── Per-site «без прокси» (COMPAT-NOPROXY) ────────────────────────────────────
+//
+// Host patterns (registrable domains) the shell installs from the persisted
+// user rule list. A request whose target host is covered by one of them goes
+// out **direct** — both the HTTP proxy and the SOCKS5 tunnel (Tor) are
+// skipped — decided per request at the single `fetch_single` chokepoint, so
+// subresources of a covered document behave like its navigation.
+
+static NO_PROXY_PATTERNS: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
+
+/// Replace the set of «этот сайт без прокси» host patterns.
+pub fn install_no_proxy_patterns(patterns: &[String]) {
+    if let Ok(mut guard) = NO_PROXY_PATTERNS.write() {
+        *guard = patterns.to_vec();
+    }
+}
+
+/// `true` when `host` is covered by a no-proxy pattern: `host` equals the
+/// pattern or is a subdomain of it. Same matching semantics as
+/// [`protection_exempt_for_site`].
+#[must_use]
+pub fn no_proxy_for_host(host: Option<&str>) -> bool {
+    let Some(host) = host.map(|h| h.trim_end_matches('.')) else { return false };
+    NO_PROXY_PATTERNS
+        .read()
+        .map(|guard| guard.iter().any(|p| host == p || host.strip_suffix(p).is_some_and(|rest| rest.ends_with('.'))))
+        .unwrap_or(false)
+}
+
 /// Process-global safe-browsing filter for **subresources** (UX-SECURITY-UI-4).
 /// Independent of the ad-block toggle: the top-level document is handled by the
 /// shell's interstitial, so this one never sees `is_top_level` requests.
@@ -1852,7 +1881,11 @@ fn fetch_single(
     // With SOCKS5 the tunnel is established by the proxy itself, so we
     // connect to the target host:port directly (the pool key uses the
     // real target, not the SOCKS5 server).
-    let effective_proxy = if socks5_proxy.is_some() { None } else { proxy };
+    // COMPAT-NOPROXY: правило «этот сайт без прокси» сильнее обоих — и
+    // HTTP-прокси, и SOCKS5-туннель (Tor) пропускаются, соединение прямое.
+    let direct = no_proxy_for_host(Some(host));
+    let socks5_proxy = if direct { None } else { socks5_proxy };
+    let effective_proxy = if socks5_proxy.is_some() || direct { None } else { proxy };
 
     // HTTP/3 dispatch (RFC 7838, RFC 9114): before any TCP work, a TLS origin
     // with a fresh cached `h3` alternative is tried over QUIC. Proxies don't
@@ -8648,6 +8681,28 @@ ok".to_vec());
         );
         install_protection_exempt_patterns(&[]);
         server.join().unwrap();
+    }
+
+    /// COMPAT-NOPROXY: правило «этот сайт без прокси». Без правила plain-HTTP
+    /// запрос уходит на HTTP-прокси (абсолютный URI — тело отвечает сам макет
+    /// прокси); с правилом на хост запроса соединение прямое — тело отвечает
+    /// макет origin-а, прокси не получает ни одного соединения.
+    #[test]
+    fn no_proxy_rule_sends_covered_site_direct_others_via_proxy() {
+        let (origin_port, origin) = mock_http_server(1, |_| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_vec()
+        });
+        let (proxy_port, proxy_srv) = mock_http_server(1, |_| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\nConnection: close\r\n\r\nvia-proxy".to_vec()
+        });
+        let client = HttpClient::new().with_proxy(Arc::new(HttpProxy::new("127.0.0.1".to_string(), proxy_port)));
+        let url = Url::parse(&format!("http://127.0.0.1:{origin_port}/")).unwrap();
+        assert_eq!(client.fetch(&url).unwrap(), b"via-proxy", "без правила соединение идёт через прокси");
+        install_no_proxy_patterns(&["127.0.0.1".into()]);
+        assert_eq!(client.fetch(&url).unwrap(), b"ok", "сайт из правила идёт напрямую");
+        install_no_proxy_patterns(&[]);
+        origin.join().unwrap();
+        proxy_srv.join().unwrap();
     }
 
     #[test]

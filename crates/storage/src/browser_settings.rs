@@ -44,6 +44,7 @@ const KEY_COMPAT_JOURNAL: &str = "compat_journal";
 const KEY_COMPAT_CHIP: &str = "compat_chip_limiter";
 const KEY_COMPAT_REPORTED: &str = "compat_reported_sites";
 const KEY_NUC_CONSENT: &str = "nuc_consent_hosts";
+const KEY_NO_PROXY_SITES: &str = "no_proxy_sites";
 
 /// The compat-pack change journal keeps only the newest this-many lines.
 pub const COMPAT_JOURNAL_MAX: usize = 50;
@@ -409,6 +410,34 @@ impl BrowserSettings {
         self.set_str(KEY_NUC_CONSENT, text)
     }
 
+    /// Sites with the «этот сайт без прокси» rule (COMPAT-NOPROXY), one
+    /// lowercase registrable domain each, comma-joined. A covered site's
+    /// connections go out direct, past the HTTP/SOCKS5 proxy.
+    pub fn no_proxy_sites(&self) -> Vec<String> {
+        self.get_str(KEY_NO_PROXY_SITES, "")
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// Add `site` to (or remove it from) the no-proxy rule list. `site` must be
+    /// a lowercase hostname (the shell stores the eTLD+1); anything else is
+    /// refused so the comma-joined list stays unambiguous.
+    pub fn set_no_proxy_site(&self, site: &str, enabled: bool) -> Result<()> {
+        if site.is_empty()
+            || !site.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.' || b == b'-')
+        {
+            return Err(Error::Storage(format!("no-proxy site {site:?} is not a lowercase hostname")));
+        }
+        let mut sites = self.no_proxy_sites();
+        sites.retain(|s| s != site);
+        if enabled {
+            sites.push(site.to_owned());
+        }
+        self.set_str(KEY_NO_PROXY_SITES, &sites.join(","))
+    }
+
     /// Read all settings into a snapshot value.
     pub fn snapshot(&self) -> BrowserSettingsSnapshot {
         BrowserSettingsSnapshot {
@@ -466,6 +495,24 @@ mod tests {
         assert_eq!(s.compat_disabled_ids(), ["a-css"]);
         assert!(s.set_compat_entry_disabled("a,b", true).is_err());
         assert!(s.set_compat_entry_disabled("", true).is_err());
+    }
+
+    #[test]
+    fn no_proxy_sites_add_remove_validate() {
+        let s = store();
+        assert!(s.no_proxy_sites().is_empty());
+        s.set_no_proxy_site("sberbank.ru", true).unwrap();
+        s.set_no_proxy_site("gosuslugi.ru", true).unwrap();
+        assert_eq!(s.no_proxy_sites(), ["sberbank.ru", "gosuslugi.ru"]);
+        // Повторное добавление не дублирует.
+        s.set_no_proxy_site("sberbank.ru", true).unwrap();
+        assert_eq!(s.no_proxy_sites().len(), 2);
+        s.set_no_proxy_site("sberbank.ru", false).unwrap();
+        assert_eq!(s.no_proxy_sites(), ["gosuslugi.ru"]);
+        // Не-имя хоста (URL, верхний регистр) отвергается.
+        assert!(s.set_no_proxy_site("https://x.ru", true).is_err());
+        assert!(s.set_no_proxy_site("Example.RU", true).is_err());
+        assert!(s.set_no_proxy_site("", true).is_err());
     }
 
     #[test]
