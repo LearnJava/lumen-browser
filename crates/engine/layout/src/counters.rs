@@ -1457,6 +1457,11 @@ pub struct CascadeStats {
     /// but the prefix chain (ancestor/sibling walk) failed. A large share here
     /// is the lever for an ancestor filter; see BUG-1800.
     pub match_prefix_fail: u32,
+    /// BUG-1800 срез 5 — candidate-обходы [`Combinator::Descendant`], отменённые
+    /// ancestor-bloom'ом (`style::ancestor_filter`): ни один предк пути не может
+    /// матчить компаунд-префикс. С ростом числа при неизменных результатах —
+    /// экономия пройденных предков.
+    pub prefix_refuted: u32,
 }
 
 thread_local! {
@@ -1483,6 +1488,7 @@ thread_local! {
             match_calls: 0,
             match_first_fail: 0,
             match_prefix_fail: 0,
+            prefix_refuted: 0,
         })
     };
 }
@@ -1532,6 +1538,16 @@ pub fn note_match_outcome(first_fail: bool, prefix_fail: bool) {
         v.match_calls += 1;
         v.match_first_fail += u32::from(first_fail);
         v.match_prefix_fail += u32::from(prefix_fail);
+        s.set(v);
+    });
+}
+
+/// BUG-1800 срез 5 — один отменённый ancestor-bloom'ом candidate-обход
+/// [`Combinator::Descendant`] (см. [`CascadeStats::prefix_refuted`]).
+pub(crate) fn note_prefix_refuted() {
+    CASCADE_STATS.with(|s| {
+        let mut v = s.get();
+        v.prefix_refuted += 1;
         s.set(v);
     });
 }
@@ -1734,6 +1750,11 @@ fn walk(
 
         NodeData::Element { .. } => {} // handled below
     }
+
+    // BUG-1800 срез 5: ключи элемента — в ancestor-bloom на всю рекурсию в
+    // поддерево (потомки матчят префиксы против него как предка); снятие —
+    // по Drop в конце ветки. Звук консультаций — см. `style::ancestor_filter`.
+    let _ancestor_frame = crate::style::ancestor_filter::push_frame(doc, id, parent);
 
     // BUG-341 S9: a refcount bump, not a `ComputedStyle` deep copy — this is
     // the reuse path, taken for every node outside the dirty root set.

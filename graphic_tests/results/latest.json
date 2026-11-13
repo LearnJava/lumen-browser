@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-11-13T15:27:26",
+  "timestamp": "2026-11-13T18:50:51",
   "git": {
-    "commit": "a984be243",
+    "commit": "90c757e81",
     "branch": "p3-bug-1800",
-    "subject": "BUG-1800 срез 2: перепись матчинга каскада — cs_match 88 %, отсев откачен"
+    "subject": "BUG-1800 срез 4: childlist-:has()-reach — рычаг мёртв на ebay, откат"
   },
   "crop_offset": [
     8,
