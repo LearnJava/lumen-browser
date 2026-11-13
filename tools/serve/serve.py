@@ -16,6 +16,30 @@ import time
 import traceback
 import urllib
 import uuid
+
+# Python 3.12+ removed `ssl.wrap_socket`, which the installed `pywebsocket3`
+# still calls when starting the wss server (spawn-multiprocessing child, so a
+# shim in the runner entry point never reaches it). Shim it here, once per
+# server process, via SSLContext (see tests/wpt/run_smoke.py `_load_wptrunner`
+# for the parent-side twin).
+import ssl as _ssl
+if not hasattr(_ssl, "wrap_socket"):
+    def _wrap_socket(sock, keyfile=None, certfile=None, server_side=False,
+                     cert_reqs=_ssl.CERT_NONE, ca_certs=None, **_ignored):
+        ctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_SERVER if server_side
+                              else _ssl.PROTOCOL_TLS_CLIENT)
+        if certfile:
+            ctx.load_cert_chain(certfile, keyfile)
+        if ca_certs:
+            ctx.load_verify_locations(ca_certs)
+        ctx.verify_mode = cert_reqs if server_side else _ssl.CERT_REQUIRED
+        if not server_side:
+            # pywebsocket3 wraps its accept-loop socket without server_side=True;
+            # loopback test server — hostname checking has nothing to check.
+            ctx.check_hostname = False
+        return ctx.wrap_socket(sock, server_side=server_side)
+    _ssl.wrap_socket = _wrap_socket
+
 from collections import defaultdict, OrderedDict
 from io import IOBase
 from itertools import chain, product
