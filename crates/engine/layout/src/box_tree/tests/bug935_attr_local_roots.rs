@@ -823,7 +823,9 @@ fn a_has_argument_on_class_makes_the_ancestor_a_root_only_when_the_match_flips()
 
 /// BUG-1651: a `:has()` in the key position of its rule (`html:has(.open)`) styles only the element it
 /// is on, so a flip of its result recascades that element and its children — not the whole subtree the
-/// way an ancestor-position `:has()` (`html:has(.open) p`) must (`drive` checks both against a full cascade).
+/// way an ancestor-position `:has()` (`html:has(.open) p`) must (BUG-1800 срез 6: the ancestor-position
+/// flip now names the rule's subject matches as point roots instead of deep-rooting the subtree —
+/// `drive` checks both against a full cascade).
 #[test]
 fn a_key_position_has_flip_does_not_recascade_the_subtree() {
     let ps: String = (0..40).map(|i| format!("<section><p>para {i} <b>bold</b></p></section>")).collect();
@@ -848,8 +850,36 @@ fn a_key_position_has_flip_does_not_recascade_the_subtree() {
     }
     let ancestor = drive(&html, "#top:has(.open) p { margin: 2px } p { color: blue }", steps());
     for (i, s) in ancestor.iter().enumerate() {
-        assert!(s.deep >= 1, "step {i}: an ancestor-position `:has()` keeps the subtree: {}", s.deep);
+        // BUG-1800 срез 6: the flip names the 40 `p` subjects as point roots instead of the
+        // whole `#top` subtree (the 40 `b` children follow as point-root style descent).
+        assert!(s.deep == 0 && s.point >= 1, "step {i}: an ancestor-position `:has()` names its subjects: {} {} {}", s.deep, s.shallow, s.point);
         assert!(s.recomputed > key[i].recomputed, "step {i}: {} vs {}", s.recomputed, key[i].recomputed);
+        assert!(s.recomputed < s.elements as u32, "step {i}: recascaded {} of {}", s.recomputed, s.elements);
+    }
+}
+
+/// BUG-1800 срез 6: a `:has()` rule whose subject matches about as wide as the subtree is
+/// no narrowing — the deep root stays (the enumeration cap), and `drive` still checks the
+/// result against a full cascade.
+#[test]
+fn a_has_subject_set_as_wide_as_the_subtree_keeps_the_deep_root() {
+    let ps: String = (0..40).map(|i| format!("<section><p>para {i} <b>bold</b></p></section>")).collect();
+    let html = format!("<div id=\"top\"><div id=\"w\" class=\"wrap\"></div>{ps}</div>");
+    let steps = || -> Vec<Mutation> {
+        vec![
+            Box::new(|d| {
+                let w = by_id(d, "w");
+                set(d, w, "class", "wrap open");
+            }),
+            Box::new(|d| {
+                let w = by_id(d, "w");
+                set(d, w, "class", "wrap");
+            }),
+        ]
+    };
+    let r = drive(&html, "#top:has(.open) * { margin: 2px } p { color: blue }", steps());
+    for (i, s) in r.iter().enumerate() {
+        assert!(s.deep >= 1, "step {i}: a whole-subtree subject set is no narrowing: deep={} point={}", s.deep, s.point);
     }
 }
 
