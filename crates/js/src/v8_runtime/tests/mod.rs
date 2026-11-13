@@ -1815,3 +1815,33 @@ fn dom_event_listener_timing_entry_carries_source_location() {
         JsValue::Bool(true)
     ));
 }
+
+/// COMPAT-HANG этап 2: `eval_detached` исполняет скрипт на JS-потоке, не
+/// блокируя вызывающего: возврат из вызова раньше результата, но побочный
+/// эффект виден последующему блокирующему чтению. `wake_shell` без
+/// установленного `set_wake` — безопасный no-op (здесь он и проверяется).
+#[test]
+fn eval_detached_runs_without_blocking_caller() {
+    let rt = rt();
+    rt.eval_detached("globalThis.__detached_seen = 42;".into());
+    // Задача обязана исполниться, пусть и после возврата: ждём с дедлайном,
+    // а не спим фиксированно.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match rt.eval("globalThis.__detached_seen ?? 0") {
+            Ok(JsValue::Number(42.0)) => break,
+            _ if std::time::Instant::now() >= deadline => {
+                panic!("eval_detached: script never ran within the deadline");
+            }
+            _ => std::thread::sleep(std::time::Duration::from_millis(10)),
+        }
+    }
+    // Блокирующий eval, поставленный ПОСЛЕ detached-задачи, исполняется после
+    // неё — очередь команд FIFO.
+    rt.eval_detached("globalThis.__detached_order = 1;".into());
+    assert_eq!(
+        rt.eval("globalThis.__detached_order ?? 0").unwrap(),
+        JsValue::Number(1.0),
+        "блокирующий eval, отправленный следом, видит эффект detached-задачи"
+    );
+}

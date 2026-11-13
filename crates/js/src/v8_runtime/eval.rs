@@ -39,36 +39,44 @@ macro_rules! with_tc {
     }};
 }
 
+/// Тело `eval` без диспетчеризации: компиляция и исполнение скрипта в текущем
+/// контексте. Общая для блокирующего [`JsRuntime::eval`] и
+/// [`V8JsRuntime::eval_detached`].
+#[allow(clippy::unwrap_used)] // tc.exception().unwrap() — унаследовано, docs/lint-policy.md §10
+pub(super) fn eval_script(inner: &mut V8Inner, script: &str) -> JsResult<JsValue> {
+    // `tc.exception().unwrap()` — унаследовано от прежнего тела `eval`
+    // (docs/lint-policy.md §10); атрибут на функции: внутри макроса allow не применить.
+    with_tc!(inner, |tc, ctx| {
+        // BUG-753 срез 2: internal evals see the internal container.
+        let wrapped = crate::internal_globals::wrap_for_container(tc, ctx, script);
+        let script = wrapped.as_deref().unwrap_or(script);
+        let src = v8::String::new(tc, script)
+            .ok_or_else(|| JsError::Runtime("OOM: script string".into()))?;
+
+        let compiled = compile_cached!(tc, script, src);
+        if tc.has_caught() {
+            let exc = tc.exception().unwrap();
+            return Err(v8_err(tc, exc));
+        }
+        let compiled = compiled
+            .ok_or_else(|| JsError::Runtime("script compile returned None".into()))?;
+
+        let result = compiled.run(tc);
+        if tc.has_caught() {
+            let exc = tc.exception().unwrap();
+            return Err(v8_err(tc, exc));
+        }
+        match result {
+            Some(val) => from_v8(tc, val),
+            None => Err(JsError::Runtime("script returned no value".into())),
+        }
+    })
+}
+
 impl JsRuntime for V8JsRuntime {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn eval(&self, script: &str) -> JsResult<JsValue> {
-        self.run(|inner| {
-            with_tc!(inner, |tc, ctx| {
-                // BUG-753 срез 2: internal evals see the internal container.
-                let wrapped = crate::internal_globals::wrap_for_container(tc, ctx, script);
-                let script = wrapped.as_deref().unwrap_or(script);
-                let src = v8::String::new(tc, script)
-                    .ok_or_else(|| JsError::Runtime("OOM: script string".into()))?;
-
-                let compiled = compile_cached!(tc, script, src);
-                if tc.has_caught() {
-                    let exc = tc.exception().unwrap();
-                    return Err(v8_err(tc, exc));
-                }
-                let compiled = compiled
-                    .ok_or_else(|| JsError::Runtime("script compile returned None".into()))?;
-
-                let result = compiled.run(tc);
-                if tc.has_caught() {
-                    let exc = tc.exception().unwrap();
-                    return Err(v8_err(tc, exc));
-                }
-                match result {
-                    Some(val) => from_v8(tc, val),
-                    None => Err(JsError::Runtime("script returned no value".into())),
-                }
-            })
-        })
+        self.run(|inner| eval_script(inner, script))
     }
 
     /// Evaluate `source` as an ES module (HTML LS §8.1.3 `<script type=module>`).
@@ -368,6 +376,26 @@ macro_rules! report_exception_via {
 }
 
 impl V8JsRuntime {
+    /// COMPAT-HANG этап 2: fire-and-forget `eval` — задача уходит в очередь
+    /// JS-потока, вызывающий НЕ ждёт её окончания. Для помп фоновых вкладок и
+    /// фреймов: их таймерные колбэки исполняются в чужом изоляте, и
+    /// блокирующий `eval` с зависшим скриптом навсегда замораживал бы
+    /// UI-поток в `rx.recv()` (плашка показывать некому — цикл событий стоит).
+    ///
+    /// Ответ не посылается вовсе, поэтому `sync_channel`-очередь не блокирует
+    /// отправителя (`try_send`); переполнение очереди за зависшим рантаймом
+    /// отсечено гейтом `stall_handle().is_busy()` на вызывающей стороне.
+    /// Окончание задачи будит цикл событий оболочки
+    /// ([`lumen_core::script_stall::wake_shell`]), чтобы отложенные чтения
+    /// (`take_timer_wakeup` и др.) увидели свежее состояние на следующем пассе.
+    pub fn eval_detached(&self, script: String) {
+        let job = move |inner: &mut V8Inner| {
+            let _ = eval_script(inner, &script);
+            lumen_core::script_stall::wake_shell();
+        };
+        let _ = self.cmd_tx.try_send(V8Command::Run(Box::new(job)));
+    }
+
     /// Evaluate a classic top-level `<script>` body exactly like
     /// [`JsRuntime::eval`], except that an uncaught exception (compile *or*
     /// runtime) is additionally reported through the shim's window `error`

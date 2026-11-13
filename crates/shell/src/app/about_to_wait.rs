@@ -172,15 +172,11 @@ impl Lumen {
         // дренаж моста выше).
         let mut frame_dirty: Vec<usize> = Vec::new();
         for (idx, fjs) in &frame_js_handles {
-            fjs.tick_timers();
-            fjs.pump_websockets();
-            fjs.pump_sse();
-            fjs.pump_media();
-            fjs.pump_workers();
-            fjs.pump_broadcast_channels();
-            fjs.pump_shared_workers();
-            // BUG-480 срез 4: доставка кросс-фреймовых postMessage во фрейм.
-            fjs.pump_frame_messages();
+            // COMPAT-HANG этап 2: помпы фрейма — detached (см. `PersistentJs::pump_detached`):
+            // зависший таймер фрейма больше не замораживает UI-поток в блокирующем
+            // eval; отложенные результаты (nav-запросы, скроллы, dom_dirty) этого
+            // фрейма доедут на следующем пассе — задача о своём окончании будит цикл.
+            fjs.pump_detached(true);
             // Навигация из фрейма отклоняется (срез 1) — дреним, чтобы запрос
             // не копился и не сработал позже из другого места.
             //
@@ -1327,13 +1323,10 @@ impl Lumen {
         // not on screen — `switch_tab` picks up `take_dom_dirty()` on restore.
         for snap in self.bg_tabs.values() {
             if let Some(js) = snap.js_ctx.as_ref() {
-                js.tick_timers();
-                js.pump_websockets();
-                js.pump_sse();
-                js.pump_media();
-                js.pump_workers();
-                js.pump_broadcast_channels();
-                js.pump_shared_workers();
+                // COMPAT-HANG этап 2: помпы фоновой вкладки — detached; раньше
+                // `tick_timers` исполнял её таймеры синхронно на UI-потоке, и
+                // зависший `while(1)` в setInterval замораживал весь браузер.
+                js.pump_detached(false);
                 if let Some(wakeup_epoch_ms) = js.take_timer_wakeup() {
                     let now_epoch_ms = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
