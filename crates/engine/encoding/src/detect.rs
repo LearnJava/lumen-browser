@@ -1,9 +1,9 @@
-//! Определение кодировки: BOM → meta-sniff → content-type hint → UTF-8 → эвристика.
+﻿//! Определение кодировки: BOM → meta-sniff → content-type hint → UTF-8 → эвристика.
 //!
 //! Каждый шаг — отдельная функция, общий `detect` склеивает приоритеты.
 
 use crate::Encoding;
-use crate::tables::{CP866, KOI8_R, WIN1251};
+use crate::tables::{IBM866, KOI8_R, WINDOWS_1251};
 
 /// Сколько байт смотрим при meta-sniff и при частотном анализе.
 /// HTML5 spec для meta-sniff требует 1024, реальные браузеры так и делают.
@@ -363,9 +363,9 @@ fn heuristic_pick(bytes: &[u8]) -> Encoding {
     let prefix = &bytes[..prefix_len];
 
     let scores = [
-        (Encoding::Windows1251, score_for_table(prefix, &WIN1251)),
+        (Encoding::Windows1251, score_for_table(prefix, &WINDOWS_1251)),
         (Encoding::Koi8R, score_for_table(prefix, &KOI8_R)),
-        (Encoding::Cp866, score_for_table(prefix, &CP866)),
+        (Encoding::Ibm866, score_for_table(prefix, &IBM866)),
     ];
 
     scores
@@ -453,7 +453,7 @@ mod tests {
         // Несколько <meta>, charset не в первом.
         let html = b"<html><head><meta name=viewport content=\"width=device-width\">\
             <meta charset=\"cp866\"></head>";
-        assert_eq!(sniff_meta_charset(html), Some(Encoding::Cp866));
+        assert_eq!(sniff_meta_charset(html), Some(Encoding::Ibm866));
     }
 
     #[test]
@@ -529,7 +529,7 @@ mod tests {
         let bytes: &[u8] = &[
             0x8F, 0xE0, 0xA8, 0xA2, 0xA5, 0xE2, b',', b' ', 0xAC, 0xA8, 0xE0,
         ];
-        assert_eq!(detect(bytes, None), Encoding::Cp866);
+        assert_eq!(detect(bytes, None), Encoding::Ibm866);
     }
 
     #[test]

@@ -61,6 +61,24 @@ sys.path[:0] = [
 
 def _load_wptrunner():
     """Import wptrunner (and its `localpaths` bootstrap) on first use."""
+    # Python 3.12+ removed `ssl.wrap_socket`, which the vendored-in-site-packages
+    # `pywebsocket3` still calls for the wss server; shim it via SSLContext so
+    # the wptrunner test environment can start (same class of local patch as
+    # the pre-3.14 `.venv` note in docs/roadmap — kept in our runner, not in
+    # site-packages, per the write-boundary).
+    import ssl  # noqa: PLC0415
+    if not hasattr(ssl, "wrap_socket"):
+        def _wrap_socket(sock, keyfile=None, certfile=None, server_side=False,
+                         cert_reqs=ssl.CERT_NONE, ca_certs=None, **_ignored):
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER if server_side
+                                 else ssl.PROTOCOL_TLS_CLIENT)
+            if certfile:
+                ctx.load_cert_chain(certfile, keyfile)
+            if ca_certs:
+                ctx.load_verify_locations(ca_certs)
+            ctx.verify_mode = cert_reqs if server_side else ssl.CERT_REQUIRED
+            return ctx.wrap_socket(sock, server_side=server_side)
+        ssl.wrap_socket = _wrap_socket
     import localpaths  # noqa: PLC0415,F401  (repo_root bootstrap wptrunner expects)
     from wptrunner import wptcommandline, wptrunner  # noqa: PLC0415
     return wptcommandline, wptrunner

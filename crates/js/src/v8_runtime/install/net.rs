@@ -1698,16 +1698,20 @@ pub(crate) fn install_text_decoder(
     // ── TextDecoder (WHATWG Encoding Standard §8–9) ───────────────────────────
     // BUG-357: label canonicalization/RangeError, real multi-encoding decode,
     // fatal-mode error detection and BOM handling are bridged to
-    // `lumen_encoding` — the same decoder the shell already runs for
-    // `<meta charset>` documents — rather than a new dependency (tech-stack.md
+    // `lumen_encoding` - the same decoder the shell already runs for
+    // `<meta charset>` documents - rather than a new dependency (tech-stack.md
     // explicitly rejects `encoding_rs` in favor of this crate's own tables).
+    // Since ENC-SINGLEBYTE the label table is the full WHATWG §4.2 set
+    // (UTF-8/16/32 + every single-byte encoding); only the multi-byte legacy
+    // families (Shift_JIS, GBK, EUC-*, Big5) remain unsupported.
     // Its decode is a stateless whole-buffer function (no incremental decoder
     // object), so streaming (`{stream:true}`) chunk-boundary handling — and
     // the one-BOM-check-per-stream rule for `ignoreBOM` — lives JS-side in the
     // WEB_API_SHIM `TextDecoder` wrapper; these natives are plain functions.
     // _lumen_text_encoding_for_label(label) → canonical name (lowercase) or
     //   undefined if the label is unknown (including the encodings this
-    //   browser doesn't implement, e.g. Shift_JIS/GBK/windows-1252 — see the
+    //   browser doesn't implement (the multi-byte legacy families —
+    //   Shift_JIS/GBK/EUC-*/Big5) — see the
     //   dependency-policy note above; this is a deliberate scope decision,
     //   not a bug).
     // _lumen_text_decode(canonical, bytes, ignoreBOM, fatal) → decoded string,

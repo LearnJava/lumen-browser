@@ -1,12 +1,18 @@
-//! Декодеры: байты → `String` для выбранной кодировки.
+﻿//! Декодеры: байты → `String` для выбранной кодировки.
 //!
 //! Для всех вариантов гарантия: вызов не паникует и всегда возвращает валидный
-//! `String`. Битые UTF-8 sequence заменяются на U+FFFD (как `from_utf8_lossy`),
-//! у однобайтовых нелегальных байтов нет — каждое значение определено в
-//! таблице (U+FFFD только на 0x98 в cp1251).
+//! `String`. Битые UTF-8 sequence заменяются на U+FFFD (как `from_utf8_lossy`).
+//! У однобайтовых кодировок «нелегальных» байтов нет: каждая позиция таблицы
+//! определена, неопределённые по спецификации декодируются в U+FFFD (наличие
+//! U+FFFD — сигнал fatal-режима `TextDecoder`).
 
 use crate::Encoding;
-use crate::tables::{CP866, KOI8_R, WIN1251, WIN1252};
+use crate::tables::{
+    IBM866, ISO_8859_10, ISO_8859_13, ISO_8859_14, ISO_8859_15, ISO_8859_16, ISO_8859_2,
+    ISO_8859_3, ISO_8859_4, ISO_8859_5, ISO_8859_6, ISO_8859_7, ISO_8859_8, KOI8_R, KOI8_U,
+    MACINTOSH, WINDOWS_1250, WINDOWS_1251, WINDOWS_1252, WINDOWS_1253, WINDOWS_1254,
+    WINDOWS_1255, WINDOWS_1256, WINDOWS_1257, WINDOWS_1258, WINDOWS_874, X_MAC_CYRILLIC,
+};
 
 /// Декодирует байты в строку. Алиас для [`decode_to_string`], короткий и
 /// привычный по аналогии с `encoding_rs::Encoding::decode`.
@@ -36,10 +42,33 @@ pub fn decode_to_string_opts(encoding: Encoding, bytes: &[u8], ignore_bom: bool)
         Encoding::Utf16Be => decode_utf16(bytes, /*little_endian=*/ false, ignore_bom),
         Encoding::Utf32Le => decode_utf32(bytes, /*little_endian=*/ true, ignore_bom),
         Encoding::Utf32Be => decode_utf32(bytes, /*little_endian=*/ false, ignore_bom),
-        Encoding::Windows1251 => decode_single_byte(bytes, &WIN1251),
-        Encoding::Windows1252 => decode_single_byte(bytes, &WIN1252),
+        Encoding::Ibm866 => decode_single_byte(bytes, &IBM866),
+        Encoding::Iso8859_2 => decode_single_byte(bytes, &ISO_8859_2),
+        Encoding::Iso8859_3 => decode_single_byte(bytes, &ISO_8859_3),
+        Encoding::Iso8859_4 => decode_single_byte(bytes, &ISO_8859_4),
+        Encoding::Iso8859_5 => decode_single_byte(bytes, &ISO_8859_5),
+        Encoding::Iso8859_6 => decode_single_byte(bytes, &ISO_8859_6),
+        Encoding::Iso8859_7 => decode_single_byte(bytes, &ISO_8859_7),
+        Encoding::Iso8859_8 | Encoding::Iso8859_8I => decode_single_byte(bytes, &ISO_8859_8),
+        Encoding::Iso8859_10 => decode_single_byte(bytes, &ISO_8859_10),
+        Encoding::Iso8859_13 => decode_single_byte(bytes, &ISO_8859_13),
+        Encoding::Iso8859_14 => decode_single_byte(bytes, &ISO_8859_14),
+        Encoding::Iso8859_15 => decode_single_byte(bytes, &ISO_8859_15),
+        Encoding::Iso8859_16 => decode_single_byte(bytes, &ISO_8859_16),
         Encoding::Koi8R => decode_single_byte(bytes, &KOI8_R),
-        Encoding::Cp866 => decode_single_byte(bytes, &CP866),
+        Encoding::Koi8U => decode_single_byte(bytes, &KOI8_U),
+        Encoding::Macintosh => decode_single_byte(bytes, &MACINTOSH),
+        Encoding::Windows874 => decode_single_byte(bytes, &WINDOWS_874),
+        Encoding::Windows1250 => decode_single_byte(bytes, &WINDOWS_1250),
+        Encoding::Windows1251 => decode_single_byte(bytes, &WINDOWS_1251),
+        Encoding::Windows1252 => decode_single_byte(bytes, &WINDOWS_1252),
+        Encoding::Windows1253 => decode_single_byte(bytes, &WINDOWS_1253),
+        Encoding::Windows1254 => decode_single_byte(bytes, &WINDOWS_1254),
+        Encoding::Windows1255 => decode_single_byte(bytes, &WINDOWS_1255),
+        Encoding::Windows1256 => decode_single_byte(bytes, &WINDOWS_1256),
+        Encoding::Windows1257 => decode_single_byte(bytes, &WINDOWS_1257),
+        Encoding::Windows1258 => decode_single_byte(bytes, &WINDOWS_1258),
+        Encoding::MacCyrillic => decode_single_byte(bytes, &X_MAC_CYRILLIC),
     }
 }
 
@@ -194,7 +223,7 @@ mod tests {
             Encoding::Utf8,
             Encoding::Windows1251,
             Encoding::Koi8R,
-            Encoding::Cp866,
+            Encoding::Ibm866,
         ] {
             assert_eq!(decode(enc, bytes), "<html><body>hello</body></html>");
         }
@@ -270,7 +299,7 @@ mod tests {
     #[test]
     fn cp866_decodes_privet() {
         let bytes = &[0x8F, 0xE0, 0xA8, 0xA2, 0xA5, 0xE2];
-        assert_eq!(decode(Encoding::Cp866, bytes), "Привет");
+        assert_eq!(decode(Encoding::Ibm866, bytes), "Привет");
     }
 
     #[test]

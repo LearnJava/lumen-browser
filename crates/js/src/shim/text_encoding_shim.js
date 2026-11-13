@@ -9,15 +9,16 @@
 // chunk boundary split mid-character) and the only-strip-a-BOM-on-the-first-
 // chunk-of-a-stream rule for `ignoreBOM` are handled here in JS.
 //
-// Supported encodings match `lumen_encoding::Encoding` — UTF-8/16/32,
-// windows-1251, windows-1252 (ascii/latin1/iso-8859-1 labels, BUG-1713),
-// KOI8-R, IBM866 — the Cyrillic-web + Latin-1 + Unicode set this browser
-// actually implements (`docs/plan/tech-stack.md` deliberately rejects
-// `encoding_rs`/hand-porting the full ~40-encoding WHATWG set in favor of
-// this crate's own tables). A label for any other real-but-unimplemented
-// encoding (Shift_JIS, GBK, …) is treated the same as an
-// unknown label: `_lumen_text_encoding_for_label` returns undefined and the
-// constructor throws `RangeError` — a deliberate scope decision, not a bug.
+// Supported encodings match `lumen_encoding::Encoding` — UTF-8/16/32 plus
+// every WHATWG single-byte encoding with the full §4.2 label table
+// (ENC-SINGLEBYTE: ISO-8859-2..16, windows-874/1250..1258, macintosh,
+// x-mac-cyrillic, KOI8-R/U, IBM866; windows-1252 carries the
+// ascii/latin1/iso-8859-1 labels, BUG-1713). Multi-byte legacy encodings
+// (Shift_JIS, GBK, …) are still unimplemented (`docs/plan/tech-stack.md`
+// rejects `encoding_rs`; own generated tables, ADR-027): a label for an
+// unsupported encoding behaves like an unknown label —
+// `_lumen_text_encoding_for_label` returns undefined and the constructor
+// throws `RangeError` — a deliberate scope decision, not a bug.
 
 function TextEncoder() {}
 Object.defineProperty(TextEncoder.prototype, 'encoding', {

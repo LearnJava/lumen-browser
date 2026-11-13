@@ -1,4 +1,4 @@
-//! Round-trip тесты: задаём ожидаемый русский текст, генерируем байты в каждой
+﻿//! Round-trip тесты: задаём ожидаемый русский текст, генерируем байты в каждой
 //! из трёх однобайтовых кодировок, проверяем что детектор узнаёт кодировку и
 //! декодер восстанавливает исходный текст.
 //!
@@ -61,9 +61,9 @@ fn koi8r_round_trip() {
 
 #[test]
 fn cp866_round_trip() {
-    let bytes = encode_single_byte(SAMPLE, Encoding::Cp866).expect("encode cp866");
-    assert_eq!(detect(&bytes, None), Encoding::Cp866);
-    assert_eq!(decode(Encoding::Cp866, &bytes), SAMPLE);
+    let bytes = encode_single_byte(SAMPLE, Encoding::Ibm866).expect("encode cp866");
+    assert_eq!(detect(&bytes, None), Encoding::Ibm866);
+    assert_eq!(decode(Encoding::Ibm866, &bytes), SAMPLE);
 }
 
 #[test]
