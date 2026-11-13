@@ -2,7 +2,7 @@
 //! и журнал. Чистая часть — `crate::compat_page`; выбор лежит в `settings_store`
 //! (`compat_pack_off`, `compat_disabled_ids`, `compat_journal`), сам пакет — базовая копия сборки.
 
-use lumen_update_manifest::compat_pack::{CompatPack, CompatPolicy};
+use lumen_update_manifest::compat_pack::CompatPolicy;
 
 use crate::compat_indicator;
 use crate::compat_page::{self, CompatAction, CompatView, PackSource};
@@ -28,7 +28,7 @@ fn protection_exempt_patterns(policy: &CompatPolicy) -> Vec<String> {
     if cfg!(debug_assertions) {
         return Vec::new();
     }
-    let pack = CompatPack::base(&lumen_storage::PslProvider::new());
+    let pack = crate::compat_pack_remote::current_pack();
     pack.entries
         .iter()
         .filter(|e| matches!(e.action, lumen_update_manifest::compat_pack::Action::Protection { .. }) && policy.is_entry_on(&e.id))
@@ -55,7 +55,7 @@ pub(crate) fn compat_identity_for_url(url: &str) -> Option<lumen_core::IdentityP
         .ok()
         .and_then(|g| g.clone())
         .unwrap_or_default();
-    CompatPack::base(&lumen_storage::PslProvider::new()).identity_for_host(&host, &policy)
+    crate::compat_pack_remote::current_pack().identity_for_host(&host, &policy)
 }
 
 impl Lumen {
@@ -79,7 +79,7 @@ impl Lumen {
         if cfg!(debug_assertions) {
             return Vec::new();
         }
-        let pack = CompatPack::base(&lumen_storage::PslProvider::new());
+        let pack = crate::compat_pack_remote::current_pack();
         pack.active_entries_for_host(host, &self.compat_policy()).into_iter().cloned().collect()
     }
 
@@ -111,7 +111,7 @@ impl Lumen {
     pub(crate) fn refresh_compat_applied(&mut self, host: Option<&str>) {
         self.compat_applied = match host {
             Some(host) if !cfg!(debug_assertions) => {
-                let pack = CompatPack::base(&lumen_storage::PslProvider::new());
+                let pack = crate::compat_pack_remote::current_pack();
                 compat_indicator::applied_fixes(&pack, host, &self.compat_policy())
             }
             _ => Vec::new(),
@@ -141,12 +141,12 @@ impl Lumen {
 
     /// Страница `about:compat`.
     pub(crate) fn build_compat_source(&self) -> PageSource {
-        let pack = CompatPack::base(&lumen_storage::PslProvider::new());
+        let pack = crate::compat_pack_remote::current_pack();
         let policy = self.compat_policy();
         let journal = self.settings_store.compat_journal();
         let view = CompatView {
             pack: &pack,
-            source: PackSource::Base,
+            source: if pack.key_id.is_empty() { PackSource::Base } else { PackSource::Fetched },
             policy: &policy,
             debug_build: cfg!(debug_assertions),
             journal: &journal,

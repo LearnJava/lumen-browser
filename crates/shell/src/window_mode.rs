@@ -308,6 +308,10 @@ fn run_window_mode_inner(
             .ok();
     }
 
+    // COMPAT-PACK-REMOTE: опрос удалённой доставки пакета совместимости —
+    // первый сразу на старте, дальше раз в 6 ч внутри потока.
+    crate::compat_pack_remote::spawn_poll_thread();
+
     // SDC-1b/SDC-2: automation command channel for BiDi/MCP/graphic_tests control.
     // Created by main() (not here) so front-ends spawned before the window
     // exists (bidi_spawn) already hold a valid handle — see call site.
