@@ -505,6 +505,12 @@ fn complex_selector_has_nth_of(c: &ComplexSelector) -> bool {
 /// its result reaches outside the matched element's own subtree.
 struct HasSubject<'a> {
     compound: CompoundRef<'a>,
+    /// The rule's subject compound (the rightmost one of its selector): a flip of
+    /// this `:has()` result restyles exactly the elements matching it through the
+    /// rest of the selector — under the matched element for a descendant/child
+    /// continuation, among its following siblings' subtrees for `fanout` (BUG-1800
+    /// срез 6).
+    subject: CompoundRef<'a>,
     /// A sibling combinator follows the compound in its selector (`E:has(x) + F`),
     /// or the `:has()` sits inside a nested selector list whose own combinators
     /// are not analysed: a flip then restyles the parent's subtree, not only `E`'s.
@@ -580,7 +586,13 @@ fn complex_has_sibling_reach(complex: &ComplexSelector) -> bool {
 }
 
 /// Registers every compound of `complex` that carries a `:has()` — see [`HasSubject`].
-fn collect_has_subjects<'s>(complex: &'s ComplexSelector, out: &mut Vec<(&'s CompoundSelector, bool, bool, bool)>) {
+/// Also carries the rule's subject compound (the rightmost one): the elements a flip
+/// of this `:has()` result can restyle are exactly the subject's matches reachable
+/// through the rest of the selector (BUG-1800 срез 6 probe).
+fn collect_has_subjects<'s>(
+    complex: &'s ComplexSelector,
+    out: &mut Vec<(&'s CompoundSelector, bool, bool, bool, &'s CompoundSelector)>,
+) {
     let mut compounds: Vec<&CompoundSelector> = Vec::with_capacity(1 + complex.tail.len());
     compounds.push(&complex.head);
     let mut combinators: Vec<Combinator> = Vec::with_capacity(complex.tail.len());
@@ -602,7 +614,8 @@ fn collect_has_subjects<'s>(complex: &'s ComplexSelector, out: &mut Vec<(&'s Com
         });
         if has_any {
             let fanout = nested_any || combinators[i..].iter().copied().any(is_sibling_combinator);
-            out.push((*compound, fanout, sibling_any, !fanout && i + 1 == compounds.len()));
+            let subject = complex.tail.last().map_or(&complex.head, |(_, c)| c);
+            out.push((*compound, fanout, sibling_any, !fanout && i + 1 == compounds.len(), subject));
         }
     }
 }
@@ -1390,6 +1403,14 @@ impl<'a> NodeRestyleIndex<'a> {
         }
     }
 
+    /// BUG-1800 срез 6 — `LUMEN_NO_HASREACH_NARROW=1` returns every non-local `:has()`
+    /// candidate to a deep root (the pre-срез-6 behavior) — A/B switch for a live
+    /// measurement and the way back if a page shows a stale style. Read once per process.
+    fn has_reach_narrow_disabled() -> bool {
+        static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *OFF.get_or_init(|| std::env::var_os("LUMEN_NO_HASREACH_NARROW").is_some_and(|v| v != "0"))
+    }
+
     /// BUG-935 срез 58 — the elements whose `:has()` result a change on `node` can
     /// flip, as restyle roots, added to `out`.
     ///
@@ -1399,12 +1420,27 @@ impl<'a> NodeRestyleIndex<'a> {
     /// one of those. Of those, only an element that could match a compound carrying
     /// a `:has()` can have a result to flip, which is decided structurally: its other
     /// parts must match, while every pseudo-class is taken as possible.
+    ///
+    /// BUG-1800 срез 6 — a non-local candidate (a `:has()` compound a selector reads
+    /// from an ancestor position) no longer deep-roots its subtree: a flip of the
+    /// result can restyle only the rule's subject matches — under the candidate, or
+    /// under its parent for `fanout` — and those are enumerated (`SubjectIndex`,
+    /// point roots; see `HasSubject::subject`). Local subjects keep the shallow root;
+    /// `conservative`/unmodelled sheets and a hit set as wide as the subtree (the cap)
+    /// keep the deep roots.
     fn has_reach_roots(&self, doc: &Document, node: NodeId, roots: &mut RestyleRoots, shallow_ok: bool) {
+        let narrow = shallow_ok && self.attr_narrowing && !self.has_deps.unmodelled && !Self::has_reach_narrow_disabled();
+        // Candidates the flip-question narrowing took over: (candidate, rule subject,
+        // fanout). Their deep roots are inserted only if the enumeration gives back no
+        // narrowing (the cap below).
+        let mut narrowed: Vec<(NodeId, &HasSubject<'_>)> = Vec::new();
         let mut consider = |a: NodeId, sibling: bool| {
             for subject in &self.has_subjects {
                 if (!sibling || subject.sibling_reach) && compound_could_match_after_attr_change(&subject.compound, doc, a, "") {
                     if subject.local && shallow_ok && self.attr_narrowing {
                         roots.shallow.insert(a);
+                    } else if narrow {
+                        narrowed.push((a, subject));
                     } else {
                         roots.deep.insert(if subject.fanout { doc.get(a).parent.unwrap_or(a) } else { a });
                     }
@@ -1423,6 +1459,76 @@ impl<'a> NodeRestyleIndex<'a> {
                 }
             }
             cur = parent;
+        }
+        if !narrowed.is_empty() {
+            // The elements a flip can restyle are the rule subjects' matches reachable
+            // through the rest of the selector: under the candidate for a
+            // descendant/child continuation, under its parent for `fanout` (a sibling
+            // combinator follows the compound — the affected elements sit among the
+            // candidate's following siblings). Enumerating under an outermost root with
+            // the union subject index covers every nested candidate's share: a hit for a
+            // lower candidate's subject lies under that lower candidate, hence under the
+            // outermost one, and a hit that no flip can actually reach is a harmless
+            // extra point root (the recompute answers it exactly).
+            let mut enum_roots: Vec<NodeId> = Vec::new();
+            let mut seen_roots = std::collections::HashSet::new();
+            for &(a, subject) in &narrowed {
+                let r = if subject.fanout { doc.get(a).parent.unwrap_or(a) } else { a };
+                if seen_roots.insert(r) {
+                    enum_roots.push(r);
+                }
+            }
+            // An outermost root's scan answers every root inside it, so only roots with
+            // no other root above them are scanned.
+            let mut outermost: Vec<NodeId> = Vec::new();
+            'roots: for &r in &enum_roots {
+                for &other in &enum_roots {
+                    if other != r {
+                        let mut above = doc.get(r).parent;
+                        while let Some(a) = above {
+                            if a == other {
+                                continue 'roots;
+                            }
+                            above = doc.get(a).parent;
+                        }
+                    }
+                }
+                outermost.push(r);
+            }
+            let enum_roots = outermost;
+            let mut index = SubjectIndex::default();
+            for (_, subject) in &narrowed {
+                index.insert(&subject.subject);
+            }
+            let mut hits: Vec<NodeId> = Vec::new();
+            let mut capped = false;
+            for root in &enum_roots {
+                let (mut scanned, mut root_hits) = (0usize, Vec::new());
+                let mut stack = vec![*root];
+                while let Some(id) = stack.pop() {
+                    if let NodeData::Element { name, attrs } = &doc.get(id).data {
+                        scanned += 1;
+                        if index.could_match(doc, id, &name.local, attrs) {
+                            root_hits.push(id);
+                        }
+                    }
+                    stack.extend(doc.get(id).children.iter().copied());
+                }
+                // A narrowing that names about as many elements as the deep root it
+                // replaces is no narrowing: fall back to the deep roots wholesale.
+                if root_hits.len() * 2 >= scanned && scanned > 0 {
+                    capped = true;
+                    break;
+                }
+                hits.extend(root_hits);
+            }
+            if capped {
+                for &(a, subject) in &narrowed {
+                    roots.deep.insert(if subject.fanout { doc.get(a).parent.unwrap_or(a) } else { a });
+                }
+            } else {
+                roots.point.extend(hits);
+            }
         }
     }
 
@@ -1796,7 +1902,7 @@ fn build_node_index<'a, 's>(
     let mut has_dependent = false;
     let mut has_sibling_reach = false;
     let mut sibling_sources: Vec<&CompoundSelector> = Vec::new();
-    let mut has_subjects: Vec<(&CompoundSelector, bool, bool, bool)> = Vec::new();
+    let mut has_subjects: Vec<(&CompoundSelector, bool, bool, bool, &CompoundSelector)> = Vec::new();
     let mut structure_sensitive: Vec<(&CompoundSelector, &CompoundSelector)> = Vec::new();
     let mut structure_ends: Vec<(&CompoundSelector, &CompoundSelector)> = Vec::new();
     let mut ancestor_deps =
@@ -1863,7 +1969,13 @@ fn build_node_index<'a, 's>(
         has_dependent,
         has_subjects: has_subjects
             .into_iter()
-            .map(|(compound, fanout, sibling_reach, local)| HasSubject { compound: wrap(compound), fanout, sibling_reach, local })
+            .map(|(compound, fanout, sibling_reach, local, subject)| HasSubject {
+                compound: wrap(compound),
+                subject: wrap(subject),
+                fanout,
+                sibling_reach,
+                local,
+            })
             .collect(),
         has_sibling_reach,
         has_deps,

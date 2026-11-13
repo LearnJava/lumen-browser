@@ -253,6 +253,23 @@ fn a_new_node_still_flips_has_on_an_existing_ancestor() {
     );
 }
 
+/// BUG-1800 срез 6: `E:has(x) + F` — the flip restyles the following sibling's subject
+/// match, enumerated under the parent (`fanout` narrowing instead of a deep root there);
+/// `drive` checks the result against a full cascade.
+#[test]
+fn a_has_flip_with_a_following_sibling_combinator_reaches_the_next_sibling() {
+    drive(
+        "<div id=\"root\"><section id=\"e\"><i>x</i></section><p id=\"f\">f</p><section><p>other</p></section></div>",
+        "p { color: blue } #e:has(i.open) + p { margin: 3px }",
+        vec![Box::new(|d| {
+            let e = by_id(d, "e");
+            let i = el(d, "i", Some("open"));
+            d.append_child(e, i);
+            vec![(i, Chg::Class("")), (e, Chg::ChildList)]
+        })],
+    );
+}
+
 /// An existing node moved into a new wrapper: the wrapper's `class` write is dropped, the
 /// moved node's descendants are still matched against the new ancestor chain (`.wrap p`).
 #[test]

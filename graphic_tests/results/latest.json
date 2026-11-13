@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-11-13T22:32:54",
+  "timestamp": "2026-11-14T00:52:09",
   "git": {
-    "commit": "00e37eb7e",
-    "branch": "p3-bug-1804",
-    "subject": "Влить ветку p3-bug-1801: шим window.status, bare status резолвится"
+    "commit": "5e3daec4a",
+    "branch": "p3-bug-1800",
+    "subject": "Влить ветку p3-bug-1800: живой A/B среза 5 на RU-свидетелях (ebay 403, регресса нет)"
   },
   "crop_offset": [
     8,
@@ -13,9 +13,9 @@
   "summary": {
     "total": 172,
     "passed": 119,
-    "failed": 9,
+    "failed": 7,
     "errors": 0,
-    "debtors": 44,
+    "debtors": 46,
     "skipped": 0
   },
   "tests": [
@@ -26,9 +26,9 @@
       "html": "00-calibration.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0008,
+      "diff_pct": 0.0113,
       "diff_region": {
-        "top": 717,
+        "top": 489,
         "left": 0,
         "bottom": 719,
         "right": 1023
@@ -217,9 +217,9 @@
       "html": "16-outline.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0008,
+      "diff_pct": 0.0202,
       "diff_region": {
-        "top": 717,
+        "top": 487,
         "left": 0,
         "bottom": 719,
         "right": 1023
@@ -243,8 +243,8 @@
       "label": "images",
       "html": "18-images.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 6.0928,
+      "status": "DEBTOR",
+      "diff_pct": 2.0829,
       "diff_region": {
         "top": 28,
         "left": 28,
@@ -255,7 +255,7 @@
       "debtor": {
         "bug": "BUG-219",
         "baseline": 2.08,
-        "verdict": "REGRESS"
+        "verdict": "OK"
       }
     },
     {
@@ -265,7 +265,7 @@
       "html": "19-object-fit.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 9.763,
+      "diff_pct": 9.78,
       "diff_region": {
         "top": 26,
         "left": 0,
@@ -421,7 +421,7 @@
       "html": "30-css-filter.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3271,
+      "diff_pct": 0.3441,
       "diff_region": {
         "top": 31,
         "left": 0,
@@ -490,7 +490,7 @@
       "html": "34-forms.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.082,
+      "diff_pct": 3.0821,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -636,7 +636,7 @@
       "html": "45-multiple-backgrounds.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.3531,
+      "diff_pct": 1.37,
       "diff_region": {
         "top": 22,
         "left": 0,
@@ -727,7 +727,7 @@
       "html": "51-scrollbar-rendering.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.5252,
+      "diff_pct": 0.5421,
       "diff_region": {
         "top": 23,
         "left": 0,
@@ -748,7 +748,7 @@
       "html": "52-text-shadow-blur.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.2935,
+      "diff_pct": 1.3036,
       "diff_region": {
         "top": 67,
         "left": 0,
@@ -769,12 +769,12 @@
       "html": "53-background-origin.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.0396,
+      "diff_pct": 1.0569,
       "diff_region": {
         "top": 36,
         "left": 0,
         "bottom": 719,
-        "right": 761
+        "right": 956
       },
       "capture": "gdigrab",
       "debtor": {
@@ -806,7 +806,7 @@
       "html": "55-video-placeholder.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3545,
+      "diff_pct": 0.3715,
       "diff_region": {
         "top": 125,
         "left": 0,
@@ -822,7 +822,7 @@
       "html": "56-mix-blend-mode.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 14.1203,
+      "diff_pct": 14.1303,
       "diff_region": {
         "top": 50,
         "left": 0,
@@ -838,7 +838,7 @@
       "html": "57-canvas-2d.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2833,
+      "diff_pct": 0.3002,
       "diff_region": {
         "top": 185,
         "left": 0,
@@ -875,7 +875,7 @@
       "html": "59-image-set-cross-fade.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 10.0232,
+      "diff_pct": 10.0401,
       "diff_region": {
         "top": 28,
         "left": 0,
@@ -911,8 +911,8 @@
       "label": "View Transitions API: document.startViewTransition(cb) — JS API, ViewTransition object, Begin/End events, 300 ms cross-fade",
       "html": "61-view-transitions.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 10.8241,
+      "status": "DEBTOR",
+      "diff_pct": 3.3782,
       "diff_region": {
         "top": 32,
         "left": 40,
@@ -923,7 +923,7 @@
       "debtor": {
         "bug": "BUG-103",
         "baseline": 3.26,
-        "verdict": "REGRESS"
+        "verdict": "OK"
       }
     },
     {
@@ -933,7 +933,7 @@
       "html": "62-scroll-snap.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 0.3379,
+      "diff_pct": 0.3571,
       "diff_region": {
         "top": 9,
         "left": 0,
@@ -954,7 +954,7 @@
       "html": "63-masonry.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.4034,
+      "diff_pct": 1.4041,
       "diff_region": {
         "top": 31,
         "left": 11,
@@ -996,7 +996,7 @@
       "html": "65-flex-align-content.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.4978,
+      "diff_pct": 0.4979,
       "diff_region": {
         "top": 30,
         "left": 2,
@@ -1214,7 +1214,7 @@
       "html": "78-scroll-driven-animations.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.3777,
+      "diff_pct": 2.3812,
       "diff_region": {
         "top": 28,
         "left": 0,
@@ -1235,7 +1235,7 @@
       "html": "79-text-underline-offset.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 5.6166,
+      "diff_pct": 5.6335,
       "diff_region": {
         "top": 45,
         "left": 0,
@@ -1256,7 +1256,7 @@
       "html": "80-border-collapse.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.256,
+      "diff_pct": 2.2664,
       "diff_region": {
         "top": 22,
         "left": 0,
@@ -1314,7 +1314,7 @@
       "html": "83-scroll-behavior.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 8.3023,
+      "diff_pct": 8.3016,
       "diff_region": {
         "top": 31,
         "left": 51,
@@ -1356,7 +1356,7 @@
       "html": "100-transform-overflow.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0098,
+      "diff_pct": 0.0267,
       "diff_region": {
         "top": 448,
         "left": 0,
@@ -1528,7 +1528,7 @@
       "html": "109-clippath-transform.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.1858,
+      "diff_pct": 0.2053,
       "diff_region": {
         "top": 85,
         "left": 0,
@@ -1716,7 +1716,7 @@
       "html": "97-counter-set.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.3973,
+      "diff_pct": 1.416,
       "diff_region": {
         "top": 55,
         "left": 0,
@@ -1801,12 +1801,12 @@
       "html": "112-clip-path-fill-rule.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0003,
+      "diff_pct": 0.2262,
       "diff_region": {
-        "top": 137,
-        "left": 280,
+        "top": 90,
+        "left": 256,
         "bottom": 137,
-        "right": 281
+        "right": 305
       },
       "capture": "ipc"
     },
@@ -1876,7 +1876,7 @@
       "html": "117-quotes.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.0688,
+      "diff_pct": 1.0788,
       "diff_region": {
         "top": 58,
         "left": 0,
@@ -1951,7 +1951,7 @@
       "html": "122-line-height-step.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 9.584,
+      "diff_pct": 9.5839,
       "diff_region": {
         "top": 32,
         "left": 41,
@@ -2053,7 +2053,7 @@
       "html": "130-svg-dynamic-nested-transforms.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3019,
+      "diff_pct": 0.3124,
       "diff_region": {
         "top": 112,
         "left": 0,
@@ -2143,7 +2143,7 @@
       "html": "135-svg-dynamic-paint-order.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.1796,
+      "diff_pct": 1.19,
       "diff_region": {
         "top": 101,
         "left": 0,
@@ -2164,7 +2164,7 @@
       "html": "136-svg-dynamic-ellipse-radial.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.5024,
+      "diff_pct": 0.5216,
       "diff_region": {
         "top": 91,
         "left": 0,
@@ -2233,7 +2233,7 @@
       "html": "140-placeholder-pseudo.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.288,
+      "diff_pct": 1.2877,
       "diff_region": {
         "top": 41,
         "left": 41,
@@ -2340,7 +2340,7 @@
       "html": "147-background-repeat-space.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.9096,
+      "diff_pct": 2.9233,
       "diff_region": {
         "top": 41,
         "left": 0,
@@ -2393,7 +2393,7 @@
       "html": "150-font-variant-caps.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 7.49,
+      "diff_pct": 7.4896,
       "diff_region": {
         "top": 46,
         "left": 37,
@@ -2532,7 +2532,7 @@
       "html": "159-background-clip-text.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 2.5064,
+      "diff_pct": 2.5065,
       "diff_region": {
         "top": 34,
         "left": 41,
@@ -2619,7 +2619,7 @@
       "html": "166-text-quality.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 9.1135,
+      "diff_pct": 9.1305,
       "diff_region": {
         "top": 9,
         "left": 0,
