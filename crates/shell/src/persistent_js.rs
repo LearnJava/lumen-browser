@@ -575,6 +575,30 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// pump_broadcast_channels — и у страницы, и у хэндлов фреймов.
     #[allow(dead_code)]
     fn pump_frame_messages(&self) {}
+    /// COMPAT-HANG этап 2: тот же набор помп, что `tick_timers` + `pump_*`
+    /// выше, но без блокировки вызывающего потока на чужом рантайме. Для
+    /// фоновых вкладок и фреймов: их таймерные колбэки живут в собственном
+    /// изоляте на собственном потоке, и синхронный `eval` с зависшим скриптом
+    /// навсегда замораживал бы UI-поток — плашке «страница не отвечает»
+    /// некому показаться. `frame_messages` включает `pump_frame_messages`
+    /// (фреймам нужен, фоновым вкладкам — нет, как и раньше).
+    ///
+    /// Отложенные результаты помп (таймерные пробуждения, nav-запросы фреймов)
+    /// читаются на СЛЕДУЮЩЕМ пассе цикла событий — задача о своём окончании
+    /// будит оболочку. Default — прежний блокирующий порядок вызовов.
+    #[allow(dead_code)]
+    fn pump_detached(&self, frame_messages: bool) {
+        self.tick_timers();
+        self.pump_websockets();
+        self.pump_sse();
+        self.pump_media();
+        self.pump_workers();
+        self.pump_broadcast_channels();
+        self.pump_shared_workers();
+        if frame_messages {
+            self.pump_frame_messages();
+        }
+    }
     /// Drain OS notification requests queued by `new Notification(...)` in JS.
     ///
     /// Shell calls this in `about_to_wait` and forwards each entry to
@@ -1400,6 +1424,30 @@ impl PersistentJs for V8PersistentJs {
     }
     fn pump_frame_messages(&self) {
         self.eval_js("if(typeof _lumen_frame_pump_messages==='function')_lumen_frame_pump_messages();");
+    }
+    fn pump_detached(&self, frame_messages: bool) {
+        // Зависший (или просто занятой) рантайм не наращиваем: задачи и так
+        // стоят за его работой, а очередь команды ограничена.
+        if self.stall_handle().is_some_and(|h| h.is_busy()) {
+            return;
+        }
+        // Помпы на очередях ящиков (воркеры, broad­cast, shared) дренируются
+        // синхронно и без скрипта страницы не зависают; дренаж ДО detached-задачи,
+        // чтобы их eval не встал в очередь за возможным долгим тиком таймеров.
+        self.pump_workers();
+        self.pump_broadcast_channels();
+        self.pump_shared_workers();
+        let mut script =
+            String::from("if(typeof _lumen_tick_timers==='function')_lumen_tick_timers();\
+                          if(typeof _lumen_pump_websockets==='function')_lumen_pump_websockets();\
+                          if(typeof _lumen_pump_sse==='function')_lumen_pump_sse();\
+                          if(typeof _lumen_pump_media==='function')_lumen_pump_media();");
+        if frame_messages {
+            script.push_str(
+                "if(typeof _lumen_frame_pump_messages==='function')_lumen_frame_pump_messages();",
+            );
+        }
+        self.rt.eval_detached(script);
     }
     fn take_notification_requests(&self) -> Vec<(String, String)> {
         self.rt

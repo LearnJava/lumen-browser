@@ -114,7 +114,11 @@ pub fn set_wake(f: impl Fn() + Send + Sync + 'static) {
     let _ = WAKE.set(Box::new(f));
 }
 
-fn wake() {
+/// Разбудить цикл событий оболочки ([`set_wake`]), если он задан. Публично и
+/// для отсоединённых задач (`V8JsRuntime::eval_detached`): задача сообщает о
+/// своём окончании, чтобы оболочка на следующем пассе прочла отложенные
+/// результаты (таймерные пробуждения и др.).
+pub fn wake_shell() {
     if let Some(f) = WAKE.get() {
         f();
     }
@@ -182,7 +186,7 @@ impl StallHandle {
         }
         self.0.clear_hung();
         if self.0.reported.swap(false, Ordering::AcqRel) {
-            wake();
+            wake_shell();
         }
     }
 
@@ -282,7 +286,7 @@ fn watchdog_loop() {
             .filter(|s| s.stalled_ms(now).is_some() && !s.reported.swap(true, Ordering::AcqRel))
             .collect();
         if !newly.is_empty() {
-            wake();
+            wake_shell();
         }
     }
 }
