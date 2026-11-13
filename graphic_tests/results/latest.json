@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-11-12T23:11:07",
+  "timestamp": "2026-11-13T12:59:30",
   "git": {
-    "commit": "7236bfa09",
-    "branch": "p1-compat-pack-flag",
-    "subject": "Конфиг менеджера: run_without_tasks вместо stop_when_no_tasks, сброс handoff-токенов"
+    "commit": "82457927e",
+    "branch": "p3-bug-1777",
+    "subject": "Влить ветку p1-compat-pack-protection: действие protection пакета — исключение блокировщика по сайту вкладки"
   },
   "crop_offset": [
     8,

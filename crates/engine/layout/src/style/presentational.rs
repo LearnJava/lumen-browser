@@ -18,16 +18,6 @@ use crate::style::{
     TextAlign, UnicodeBidi,
 };
 
-/// `<input type=tel>` без валидного `dir` — `ltr` (HTML LS §3.2.6.1).
-fn is_tel_input(doc: &Document, n: NodeId) -> bool {
-    doc.get(n).element_name().is_some_and(|name| name.local.eq_ignore_ascii_case("input"))
-        && input_type(doc, n) == "tel"
-}
-
-fn input_type(doc: &Document, n: NodeId) -> String {
-    doc.get(n).get_attr("type").unwrap_or("").trim().to_ascii_lowercase()
-}
-
 /// Применяет HTML presentational hints для `<img>`, `<video>`, `<iframe>`,
 /// `<object>`, `<embed>`:
 /// `width`/`height`, `hspace`/`vspace` (→ margin), `border` для `<img>`.
@@ -375,8 +365,8 @@ pub(in crate::style) fn apply_font_element_presentational_hints(
 /// пусто → `ltr`) + `isolate`. Hint применяется ДО CSS-каскада — author
 /// `direction`/`unicode-bidi` перекроет. Неизвестное значение `dir` игнорируется.
 /// Для `<slot dir=auto>` направление определяется по assigned nodes (HTML LS §3.2.6.1):
-/// если есть assigned nodes с сильной направленностью — используем её;
-/// иначе используем направление host'а (не flat-tree parent).
+/// есть assigned nodes с сильной направленностью — она; иначе auto directionality
+/// пуст → `ltr` (НЕ направление host'а: его `dir` может быть любым, dir-shadow-42).
 pub(in crate::style) fn apply_dir_presentational_hint(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
     let NodeData::Element { name, .. } = &doc.get(node).data else {
         return;
@@ -388,13 +378,9 @@ pub(in crate::style) fn apply_dir_presentational_hint(doc: &Document, node: Node
         Some("rtl") => Direction::Rtl,
         Some("auto") => {
             if is_slot {
-                // For slot[dir=auto]: use assigned nodes' directionality if any have strong direction;
-                // otherwise use host's directionality (HTML LS §3.2.6.1).
-                if let Some(assigned_dir) = slot_assigned_directionality(doc, node) {
-                    assigned_dir
-                } else {
-                    slot_host_directionality(doc, node).unwrap_or(Direction::Ltr)
-                }
+                // HTML LS §3.2.6.1: slot[dir=auto] берёт направленность assigned
+                // nodes; нет сильных символов → auto directionality = null → 'ltr'.
+                slot_assigned_directionality(doc, node).unwrap_or(Direction::Ltr)
             } else {
                 first_strong_direction(doc, node).unwrap_or(Direction::Ltr)
             }
@@ -436,92 +422,6 @@ pub(crate) fn slot_assigned_directionality(doc: &Document, slot: NodeId) -> Opti
         }
     }
     None
-}
-
-/// Returns the host's directionality for a slot element.
-fn slot_host_directionality(doc: &Document, slot: NodeId) -> Option<Direction> {
-    let mut cur = Some(slot);
-    let mut shadow_root = None;
-    while let Some(n) = cur {
-        if matches!(doc.get(n).data, NodeData::ShadowRoot { .. }) {
-            shadow_root = Some(n);
-            break;
-        }
-        cur = doc.get(n).parent;
-    }
-    let sr = shadow_root?;
-    let host = doc.shadow_host_of(sr)?;
-    Some(element_directionality(doc, host))
-}
-
-/// HTML LS §3.2.6.1: для `<slot dir=auto>` направление определяется по
-/// assigned nodes. Если assigned nodes нет или в них нет сильных символов,
-/// используется направление хоста.
-fn slot_auto_directionality(doc: &Document, slot: NodeId) -> Direction {
-    // Find the shadow root containing this slot
-    let mut cur = Some(slot);
-    let mut shadow_root = None;
-    while let Some(n) = cur {
-        if matches!(doc.get(n).data, NodeData::ShadowRoot { .. }) {
-            shadow_root = Some(n);
-            break;
-        }
-        cur = doc.get(n).parent;
-    }
-    let Some(sr) = shadow_root else {
-        return Direction::Ltr;
-    };
-    // Find the host of the shadow root
-    let Some(host) = doc.shadow_host_of(sr) else {
-        return Direction::Ltr;
-    };
-    // Get the slot's name
-    let slot_name = doc.get(slot).get_attr("name").unwrap_or("").to_string();
-    // Find assigned nodes: light DOM children of host with matching slot attribute
-    for &child in &doc.get(host).children {
-        let child_slot = doc.get(child).get_attr("slot").unwrap_or("").to_string();
-        if child_slot == slot_name {
-            // Check this assigned node for strong directionality
-            if let Some(dir) = first_strong_direction(doc, child) {
-                return dir;
-            }
-        }
-    }
-    // No assigned nodes with strong directionality -> use host's directionality
-    element_directionality(doc, host)
-}
-
-/// Directionality элемента (HTML LS §3.2.6.1, BUG-1450):
-/// - `dir=ltr|rtl` (без учёта регистра) — это значение;
-/// - `dir=auto`, а также `<bdi>` без валидного `dir` — направление первого
-///   сильного символа (UAX #9 P2/P3): у `<textarea>` и текстового `<input>` в
-///   их значении, у остальных в тексте поддерева; нет сильных → `ltr`;
-/// - `<input type=tel>` без валидного `dir` — `ltr`, предка не спрашиваем;
-/// - иначе (нет `dir` или значение невалидно) — directionality родителя,
-///   у корня `ltr`.
-fn element_directionality(doc: &Document, node: NodeId) -> Direction {
-    let mut cur = Some(node);
-    while let Some(n) = cur {
-        let node_ref = doc.get(n);
-        if let NodeData::Element { name, .. } = &node_ref.data {
-            let tag = name.local.as_str();
-            match node_ref.get_attr("dir").map(|v| v.trim().to_ascii_lowercase()).as_deref() {
-                Some("ltr") => return Direction::Ltr,
-                Some("rtl") => return Direction::Rtl,
-                Some("auto") => {
-                    if tag == "slot" {
-                        return slot_auto_directionality(doc, n);
-                    }
-                    return first_strong_direction(doc, n).unwrap_or(Direction::Ltr);
-                }
-                _ if tag.eq_ignore_ascii_case("bdi") => return first_strong_direction(doc, n).unwrap_or(Direction::Ltr),
-                _ if is_tel_input(doc, n) => return Direction::Ltr,
-                _ => {}
-            }
-        }
-        cur = node_ref.parent;
-    }
-    Direction::Ltr
 }
 
 /// HTML LS §3.2.6.1 «auto directionality»: направление первого символа с

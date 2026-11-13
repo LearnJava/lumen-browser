@@ -957,6 +957,68 @@ use super::*;
         assert_eq!(dir_of("<textarea dir=auto>שלום</textarea>", "textarea"), "rtl");
     }
 
+    // ── BUG-1777 (WPT dir-shadow-41/42): `<slot dir=auto>` в shadow-дереве ──
+
+    /// WPT-структура dir-shadow-41/42: `<div id=host dir=Y><span slot=x1></span>`,
+    /// в тени `<div dir=X><slot dir=auto name=x1></slot></div>`. Назначенный span
+    /// пуст — сильных символов нет. Возвращает (doc, host, slot).
+    fn slot_auto_doc(host_dir: &str, shadow_div_dir: &str)
+        -> (lumen_dom::Document, lumen_dom::NodeId, lumen_dom::NodeId)
+    {
+        let mut doc = lumen_html_parser::parse(&format!(
+            "<body><div id=host {host_dir}><span slot=x1></span></div></body>"
+        ));
+        let host = (0..doc.len())
+            .map(lumen_dom::NodeId::from_index)
+            .find(|&n| doc.get(n).get_attr("id") == Some("host"))
+            .expect("host div");
+        let sr = doc.attach_shadow(host, lumen_dom::ShadowRootMode::Open);
+        let mut shadow_el = |parent: lumen_dom::NodeId, tag: &str, attrs: &[(&str, &str)]| {
+            let id = doc.create_element(lumen_dom::QualName::html(tag));
+            if let lumen_dom::NodeData::Element { attrs: list, .. } = &mut doc.get_mut(id).data {
+                for (k, v) in attrs {
+                    list.push(lumen_dom::Attribute { name: lumen_dom::QualName::html(*k), value: (*v).to_string() });
+                }
+            }
+            doc.append_child(parent, id);
+            id
+        };
+        let div = shadow_el(sr, "div", &[("dir", shadow_div_dir)]);
+        let slot = shadow_el(div, "slot", &[("dir", "auto"), ("name", "x1")]);
+        (doc, host, slot)
+    }
+
+    #[test]
+    fn dir_shadow_slot_auto_without_strong_text_is_ltr_not_host() {
+        // HTML LS §3.2.6.1: auto directionality слота без сильных символов пуст →
+        // 'ltr' — независимо от dir host'а (dir-shadow-42: host rtl, ожидание ltr).
+        let (doc, _, slot) = slot_auto_doc("dir=ltr", "rtl");
+        assert!(crate::element_matches_dir(&doc, slot, "ltr"));
+        assert!(!crate::element_matches_dir(&doc, slot, "rtl"));
+        let (doc, _, slot) = slot_auto_doc("dir=rtl", "ltr");
+        assert!(crate::element_matches_dir(&doc, slot, "ltr"));
+        assert!(!crate::element_matches_dir(&doc, slot, "rtl"));
+    }
+
+    #[test]
+    fn dir_shadow_slot_inline_content_joins_block_run() {
+        // CSS Display L3 §3.1: display:contents прозрачен и на уровне детей блока —
+        // InlineRun наследует направление БЛОКА (rtl), а не слота, поэтому фрагмент
+        // пустого span прижимается к правому краю строки (как в ref-рендеринге).
+        let (doc, host, _slot) = slot_auto_doc("dir=ltr", "rtl");
+        let sheet = lumen_css_parser::parse("div { display: block; } span { border: 1px solid; }");
+        let root = body_layout_box(layout(&doc, &sheet, Size::new(800.0, 600.0)));
+        let host_box = walk_layout(&root)
+            .into_iter()
+            .find(|b| b.node == host)
+            .expect("host box");
+        let run = walk_layout(host_box)
+            .into_iter()
+            .find(|b| matches!(b.kind, BoxKind::InlineRun { .. }))
+            .expect("inline run under host");
+        assert_eq!(run.style.direction, crate::style::Direction::Rtl);
+    }
+
     // ──────────────── :link / :visited / :any-link (CSS Selectors L4 §6.2) ────────────────
 
     /// Computes color для первого element-child указанного тега в DOM (без

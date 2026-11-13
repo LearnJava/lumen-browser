@@ -106,26 +106,19 @@ fn produces_inline_segments(doc: &Document, id: NodeId, display: Display) -> boo
     {
         return false;
     }
-    display == Display::Inline
-}
-
-/// То же для потомка inline-элемента: `display: contents` дополнительно
-/// прозрачен — бокса он не порождает вовсе (CSS Display L3 §3.1), его дети
-/// участвуют в inline-контексте родителя напрямую, поэтому уплощать надо
-/// сквозь него. Собственный бокс достанется уже его не-inline потомкам.
-///
-/// На уровне сиблингов блочного контейнера `contents` этой поблажки не имеет
-/// ([`is_inline_content`]) — там он и до [BUG-728] получал отдельный бокс.
-fn produces_inline_segments_nested(doc: &Document, id: NodeId, display: Display) -> bool {
-    if display == Display::Contents {
-        // На replaced-элементе `contents` вычисляется в `inline` (§3.1), то
-        // есть бокс у него остаётся — и высота, ради которой всё это.
-        return !is_image_element(doc, id)
-            && !is_inline_replaced_media_element(doc, id)
-            && !is_form_control_element(doc, id)
-            && !is_ruby_element(doc, id);
-    }
-    produces_inline_segments(doc, id, display)
+    // CSS Display L3 §3.1: `display: contents` прозрачен на ЛЮБОМ уровне — бокса
+    // он не порождает вовсе, его flat-дети (у `<slot>` — assigned nodes)
+    // участвуют в inline-контексте контейнера напрямую, поэтому уплощать надо
+    // сквозь него. Собственный бокс достанется уже его не-inline потомкам
+    // (InlineEscape, BUG-728). BUG-1777: на уровне детей блока `contents` раньше
+    // получал отдельный InlineRun со своим стилем, и его `direction` (у
+    // `<slot dir=auto>` — своя направленность) задавал направление строки
+    // вместо направления блока-хозяина. Исключение — UA-слот `<select>`/`<details>`
+    // (`Document::ua_slot_role`): старый боксовый путь держит в дереве Skip-боксы
+    // его display:none-контролов (`<option>` под `<select>`), инлайн-прозрачность
+    // их выбрасывает. На replaced-элементе `contents` вычисляется в `inline`
+    // (§3.1), то есть бокс у него остаётся.
+    display == Display::Inline || (display == Display::Contents && doc.ua_slot_role(id).is_none())
 }
 
 /// `<img>` — не inline-**контент**, хотя и inline-уровневый: он порождает
@@ -1231,7 +1224,7 @@ pub(crate) fn collect_inline_segments(
             // Уплощение в сегмент стоило бы такому потомку высоты: у сегмента
             // её нет, вертикальный размер строки считается по метрикам шрифта,
             // и `<img width=50 height=50>` внутри `<a>` рисовался 50×16.8.
-            if !produces_inline_segments_nested(doc, id, s.display) {
+            if !produces_inline_segments(doc, id, s.display) {
                 escapes.push(InlineEscape { at: out.len(), node: id, inherited: inherited.clone(), effects: Vec::new() });
                 return;
             }

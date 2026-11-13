@@ -20,7 +20,7 @@ use lumen_css_parser::{Combinator, ComplexSelector, DirArg, PseudoClass};
 use lumen_dom::{Document, NodeData, NodeId};
 
 use crate::style::env::{ACTIVE_NID, FOCUS_NID, HOVER_NID};
-use crate::style::presentational::{first_strong_direction, first_strong_in_text};
+use crate::style::presentational::{first_strong_direction, first_strong_in_text, slot_assigned_directionality};
 use crate::style::{Direction, SHADOW_HOST_SCOPE};
 
 use super::{matches_complex, matches_complex_anchored};
@@ -900,7 +900,7 @@ fn matches_dir(doc: &Document, node: NodeId, want: DirArg) -> bool {
 /// - иначе (нет `dir` или значение невалидно) — directionality родителя,
 ///   у корня `ltr`.
 ///
-/// Для `<slot>` используется assigned nodes или host (HTML LS §3.2.6.1).
+/// Для `<slot>` — assigned nodes, иначе `ltr` (HTML LS §3.2.6.1).
 fn element_directionality(doc: &Document, node: NodeId) -> DirArg {
     let mut cur = Some(node);
     while let Some(n) = cur {
@@ -926,43 +926,15 @@ fn element_directionality(doc: &Document, node: NodeId) -> DirArg {
     DirArg::Ltr
 }
  
-/// Directionality for a slot element with dir=auto.
-/// Uses assigned nodes' directionality or host's directionality.
+/// Directionality for a slot element with dir=auto (HTML LS §3.2.6.1):
+/// assigned nodes' strong direction, else the auto directionality is null
+/// and the answer is 'ltr' — NOT the host's, whose dir may differ (BUG-1777,
+/// dir-shadow-42).
 fn slot_element_directionality(doc: &Document, slot: NodeId) -> DirArg {
-    // Find the shadow root containing this slot
-    let mut cur = Some(slot);
-    let mut shadow_root = None;
-    while let Some(n) = cur {
-        if matches!(doc.get(n).data, NodeData::ShadowRoot { .. }) {
-            shadow_root = Some(n);
-            break;
-        }
-        cur = doc.get(n).parent;
+    match slot_assigned_directionality(doc, slot) {
+        Some(Direction::Rtl) => DirArg::Rtl,
+        _ => DirArg::Ltr,
     }
-    let Some(sr) = shadow_root else {
-        return DirArg::Ltr;
-    };
-    // Find the host of the shadow root
-    let Some(host) = doc.shadow_host_of(sr) else {
-        return DirArg::Ltr;
-    };
-    // Get the slot's name
-    let slot_name = doc.get(slot).get_attr("name").unwrap_or("").to_string();
-    // Find assigned nodes: light DOM children of host with matching slot attribute
-    for &child in &doc.get(host).children {
-        let child_slot = doc.get(child).get_attr("slot").unwrap_or("").to_string();
-        if child_slot == slot_name {
-            // Check this assigned node for strong directionality
-            if let Some(dir) = first_strong_direction(doc, child) {
-                return match dir {
-                    Direction::Ltr => DirArg::Ltr,
-                    Direction::Rtl => DirArg::Rtl,
-                };
-            }
-        }
-    }
-    // No assigned nodes with strong directionality -> use host's directionality
-    element_directionality(doc, host)
 }
  
 /// Check if element matches `:dir(ltr|rtl)` pseudo-class.
