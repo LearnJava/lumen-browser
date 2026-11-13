@@ -40,6 +40,7 @@ use lumen_dom::NodeId;
 // `matching` — матчинг селекторов (SPLIT-ST12): `matches_complex`/`matches_slotted_complex`
 // вызываются отсюда, поэтому реэкспорт/импорт ниже, в блоке ST-12.
 mod adjust;
+pub(crate) mod ancestor_filter;
 mod apply;
 mod calc;
 mod cascade;

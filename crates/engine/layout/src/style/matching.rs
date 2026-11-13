@@ -99,24 +99,30 @@ fn matches_chain(
 
     let ok = match comb {
         Combinator::Descendant => {
-            // Перебираем всех предков как кандидатов.
-            let mut cur = doc.get(node).parent;
-            let mut top = None;
-            let mut hit = false;
-            while let Some(p) = cur {
-                if is_element(doc, p) && matches_chain(complex, n - 1, doc, p, leftmost_ok) {
-                    hit = true;
-                    break;
+            // BUG-1800 срез 5: bloom предков пути каскадного walk. `false` — ни один
+            // DOM-предк не может матчить компаунд-префикс, перебор отменён целиком.
+            if !crate::style::ancestor_filter::prefix_may_match_descendant(compound_at(complex, n - 2), node) {
+                false
+            } else {
+                // Перебираем всех предков как кандидатов.
+                let mut cur = doc.get(node).parent;
+                let mut top = None;
+                let mut hit = false;
+                while let Some(p) = cur {
+                    if is_element(doc, p) && matches_chain(complex, n - 1, doc, p, leftmost_ok) {
+                        hit = true;
+                        break;
+                    }
+                    top = Some(p);
+                    cur = doc.get(p).parent;
                 }
-                top = Some(p);
-                cur = doc.get(p).parent;
+                // Цепочка упёрлась в корень теневого дерева: хост — последний кандидат.
+                hit
+                    || match top.and_then(|t| scoped_shadow_host(doc, t)) {
+                        Some(host) => matches_chain(complex, n - 1, doc, host, leftmost_ok),
+                        None => false,
+                    }
             }
-            // Цепочка упёрлась в корень теневого дерева: хост — последний кандидат.
-            hit
-                || match top.and_then(|t| scoped_shadow_host(doc, t)) {
-                    Some(host) => matches_chain(complex, n - 1, doc, host, leftmost_ok),
-                    None => false,
-                }
         }
         Combinator::Child => match doc.get(node).parent {
             // Один кандидат: parent.
