@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-11-13T12:59:30",
+  "timestamp": "2026-11-13T15:27:26",
   "git": {
-    "commit": "82457927e",
-    "branch": "p3-bug-1777",
-    "subject": "Влить ветку p1-compat-pack-protection: действие protection пакета — исключение блокировщика по сайту вкладки"
+    "commit": "a984be243",
+    "branch": "p3-bug-1800",
+    "subject": "BUG-1800 срез 2: перепись матчинга каскада — cs_match 88 %, отсев откачен"
   },
   "crop_offset": [
     8,

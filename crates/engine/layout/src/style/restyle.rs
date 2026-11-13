@@ -765,6 +765,19 @@ fn resource_attr_is_inert(doc: &Document, node: NodeId, attr: &str) -> bool {
             tag_is(doc, node, &["img", "source", "iframe", "video", "audio", "track", "embed"])
         }
         "rel" | "target" | "download" | "hreflang" | "ping" => tag_is(doc, node, &["a", "area"]),
+        // BUG-1800 срез 3 — `tabindex` shifts focusability, and a focus *move*
+        // is its own restyle trigger (the flush's focus diff, BUG-341 S3); no
+        // pseudo-class reads the attribute itself, so the write reaches below
+        // the element only through an `[tabindex]` selector in an ancestor
+        // position, which the caller's `AncestorDeps::attrs` check covers.
+        "tabindex" => true,
+        // Size attributes feed only the element's own box (presentational
+        // hints, applied at the element's own recompute) and `[width]`/
+        // `[height]` selectors — the caller's check again. No pseudo-class
+        // reads them (`style/matching/forms.rs`).
+        "width" | "height" => {
+            tag_is(doc, node, &["img", "input", "object", "iframe", "embed", "video", "canvas"])
+        }
         "title" => true,
         _ => false,
     }
@@ -809,6 +822,118 @@ fn compound_could_match_after_attr_change(
         p if simple_selector_keys_on_attr(p, attr) => true,
         other => matches_simple(other, doc, node, &name.local, attrs),
     })
+}
+
+/// BUG-1800 срез 3 — the attribute names a write can flip `pc`'s *own* result
+/// through, i.e. what the matcher (`style/matching/forms.rs`) reads on the
+/// element. Empty for the structural (`:first-child`, `:nth-child` without
+/// `of`), interactive (`:hover`/`:focus`) and runtime-constant (`:visited`)
+/// pseudo-classes: no attribute write changes them. The list carriers
+/// (`:is()`, `:not()`, `:where()`, `:nth-child(… of S)`, `:host()`) are
+/// recursed into by [`pseudo_class_reads_attr`] and return an empty list
+/// here; `:state()`'s attribute is a runtime `data-lumen-state-<name>`
+/// prefix no fixed list expresses, which [`AncestorDeps`] treats as
+/// unmodelled.
+fn pseudo_class_read_attr_names(pc: &PseudoClass) -> &'static [&'static str] {
+    match pc {
+        PseudoClass::PlaceholderShown => &["placeholder", "value"],
+        PseudoClass::Required | PseudoClass::Optional => &["required", "type"],
+        PseudoClass::ReadOnly | PseudoClass::ReadWrite => &["readonly", "disabled", "contenteditable", "type"],
+        PseudoClass::Disabled | PseudoClass::Enabled => &["disabled"],
+        PseudoClass::Checked => &["checked", "selected", "type"],
+        PseudoClass::Indeterminate => &["type", "name", "checked", "value"],
+        PseudoClass::Default => &["selected", "checked", "type"],
+        PseudoClass::Lang(_) => &["lang", "xml:lang"],
+        PseudoClass::Dir(_) | PseudoClass::DirOther(_) => &["dir"],
+        PseudoClass::Link | PseudoClass::AnyLink => &["href"],
+        PseudoClass::InRange | PseudoClass::OutOfRange | PseudoClass::Valid | PseudoClass::Invalid => {
+            &["type", "disabled", "required", "value", "checked", "min", "max", "maxlength", "minlength"]
+        }
+        PseudoClass::Heading(_) => &["headingoffset", "headingreset"],
+        PseudoClass::Target | PseudoClass::TargetWithin => &["id"],
+        PseudoClass::Fullscreen => &["data-lumen-fullscreen"],
+        PseudoClass::Modal => &["data-lumen-modal"],
+        PseudoClass::PopoverOpen => &["data-lumen-popover-open"],
+        PseudoClass::InterestSource | PseudoClass::InterestTarget => {
+            &["data-lumen-interest-source", "data-lumen-interest-target"]
+        }
+        _ => &[],
+    }
+}
+
+/// BUG-1800 срез 3 — can a write of `attr` on the element `pc` is matched
+/// against change whether `pc` matches? True for a named attribute the
+/// pseudo's matcher reads ([`pseudo_class_read_attr_names`]) or — for the
+/// list carriers — that any selector nested inside them is keyed on, and for
+/// `:has()` always (its arguments match other elements, whose attributes no
+/// compound of *this* node enumerates). Exhaustive over the named variants so
+/// a future one must be classified here, not silently read as inert.
+fn pseudo_class_reads_attr(pc: &PseudoClass, attr: &str) -> bool {
+    let complex_flips = |list: &[ComplexSelector]| {
+        list.iter().any(|c| {
+            let compound = |comp: &CompoundSelector| {
+                comp.parts.iter().any(|p| match p {
+                    SimpleSelector::PseudoClass(inner) => pseudo_class_reads_attr(inner, attr),
+                    p => simple_selector_keys_on_attr(p, attr),
+                })
+            };
+            compound(&c.head) || c.tail.iter().any(|(_, comp)| compound(comp))
+        })
+    };
+    match pc {
+        PseudoClass::Not(list)
+        | PseudoClass::Is(list)
+        | PseudoClass::Where(list)
+        | PseudoClass::NthChild(_, Some(list))
+        | PseudoClass::NthLastChild(_, Some(list))
+        | PseudoClass::Host(Some(list)) => complex_flips(list),
+        // The argument matches descendants/following siblings: a write below
+        // or after `pc`'s element can flip it, whatever its selectors name.
+        PseudoClass::Has(_) => true,
+        PseudoClass::State(_) => attr.starts_with("data-lumen-state-"),
+        pc => pseudo_class_read_attr_names(pc).iter().any(|n| attr.eq_ignore_ascii_case(n)),
+    }
+}
+
+/// BUG-1800 срез 3 — can a write of `attr` on `node` change whether
+/// `compound` matches `node` at all? Only a part keyed on the attribute — an
+/// `[attr]` selector, `class`/`id` for those names, or a pseudo-class that
+/// reads it ([`pseudo_class_reads_attr`]) — can flip; every other part
+/// decides *now* ([`matches_simple`], pseudo-classes counted as matching: a
+/// fixed pseudo-class keeps whatever truth it has, and counting it as
+/// matching only ever widens).
+///
+/// This is the flip-shaped twin of [`compound_could_match_after_attr_change`],
+/// which takes every pseudo-class as possible. On a real sheet, where a
+/// sibling-source compound like `img` or `.card` matches the changed node
+/// regardless of the write, that widened every write of an attribute no
+/// selector reads to the node's following siblings and the parent's whole
+/// subtree — ebay's `tabindex`/`width`/`height` churn recascaded ~1500
+/// byte-identical styles per flush (BUG-1800 срез 3). Over-approximates in
+/// one direction only — a compound reported as flippable costs narrowing,
+/// never correctness.
+fn compound_flip_possible_on_attr_change(
+    compound: &CompoundSelector,
+    doc: &Document,
+    node: NodeId,
+    attr: &str,
+) -> bool {
+    let NodeData::Element { name, attrs } = &doc.get(node).data else {
+        return false;
+    };
+    let mut flippable = false;
+    for part in &compound.parts {
+        if simple_selector_keys_on_attr(part, attr) {
+            flippable = true;
+        } else if let SimpleSelector::PseudoClass(pc) = part {
+            flippable |= pseudo_class_reads_attr(pc, attr);
+        } else if !matches_simple(part, doc, node, &name.local, attrs) {
+            // A fixed structural part that does not match keeps the compound
+            // false no matter what the write does to the other parts.
+            return false;
+        }
+    }
+    flippable
 }
 
 /// BUG-935 срез 73 — for every class token, `id` and attribute name that some selector reads
@@ -999,7 +1124,8 @@ impl AncestorDeps {
             }
             // Match on the element's own `href` (and, for `:current`/`:past`/`:future`, on
             // the document's links): only a compound that is *not* the subject can pass
-            // that to a descendant.
+            // that to a descendant. BUG-1800 срез 3 — `href` lands in `attrs` too, so
+            // `change_can_flip_has` (which reads `attrs`, not `link_state`) sees it.
             PseudoClass::Link
             | PseudoClass::Visited
             | PseudoClass::AnyLink
@@ -1009,6 +1135,19 @@ impl AncestorDeps {
                 if !subject =>
             {
                 self.link_state = true;
+                self.attrs.insert("href".to_string());
+            }
+            // BUG-1800 срез 3 — the attributes a write can flip this pseudo-class
+            // through ([`pseudo_class_read_attr_names`]). Together with the
+            // `[attr]`-selector names above this is the whole set a write can
+            // reach the compound through, which is what `change_can_flip_has`
+            // asks of a `:has()` argument. `:state()`'s attribute is a runtime
+            // prefix no name enumerates — stay unmodelled there.
+            PseudoClass::State(_) if !subject => self.unmodelled = true,
+            pc if !subject => {
+                for name in pseudo_class_read_attr_names(pc) {
+                    self.attrs.insert(name.to_ascii_lowercase());
+                }
             }
             _ => {}
         }
@@ -1221,8 +1360,13 @@ impl<'a> NodeRestyleIndex<'a> {
     /// an attribute no argument names cannot flip it: `data-*`/`aria-*` by name, `style`
     /// (the declarations are not matched by a selector), `class`/`id` by the tokens that
     /// changed — the same attributes [`Self::attr_change_stays_local`] narrows, for the
-    /// same reason. Anything else (`lang`, `disabled`, … read through pseudo-classes) and
-    /// a write whose old value is unknown for `class`/`id` stay on the wide path.
+    /// same reason. Anything else (`lang`, `disabled`, … read through pseudo-classes)
+    /// and a write whose old value is unknown for `class`/`id` stay on the wide path.
+    /// BUG-1800 срез 3 — «reads through pseudo-classes» is now a computed set:
+    /// [`AncestorDeps`] also records the attributes each pseudo-class's matcher
+    /// actually reads (`style/matching/forms.rs`), so a write of an attribute no
+    /// argument names and no argument pseudo-class reads (`tabindex`, `width`,
+    /// `height`) is a `false`, not the old blanket `true`.
     fn change_can_flip_has(&self, doc: &Document, node: NodeId, written: Option<(&str, Option<&str>)>) -> bool {
         let deps = &self.has_deps;
         let Some((attr, old)) = written else { return true };
@@ -1242,8 +1386,7 @@ impl<'a> NodeRestyleIndex<'a> {
         match name.as_str() {
             "class" => old.is_none_or(|old| deps.class_write_hits(old, current("class"))),
             "id" => old.is_none_or(|old| deps.id_write_hits(old, current("id"))),
-            "style" => false,
-            n => !(n.starts_with("data-") || n.starts_with("aria-")),
+            _ => false,
         }
     }
 
@@ -1369,7 +1512,7 @@ impl<'a> NodeRestyleIndex<'a> {
         }
     }
 
-    /// BUG-935 срез 68 — [`Self::attr_change_needs_fanout`] for a write whose old value may be
+    /// BUG-935 срез 68 — [`Self::attr_write_needs_fanout`] for a write whose old value may be
     /// known. A `class`/`id` write that moved only tokens no sibling-combinator selector
     /// mentions cannot flip any such selector's match on `node`, so it reaches no sibling
     /// (`.side + .card` is silent about a `loaded` class); the structural question is asked
@@ -1396,7 +1539,7 @@ impl<'a> NodeRestyleIndex<'a> {
                 return false;
             }
         }
-        self.attr_change_needs_fanout(doc, node, attr)
+        self.attr_write_needs_fanout(doc, node, attr)
     }
 
     /// BUG-935 срез 68 — can a write to `node`'s `attr` change the style of anything
@@ -1542,6 +1685,29 @@ impl<'a> NodeRestyleIndex<'a> {
         }
         self.sibling_sources.iter().any(|c| compound_could_match_after_attr_change(c, doc, node, attr))
             && !(self.attr_narrowing && has_no_following_element_sibling(doc, node))
+    }
+
+    /// BUG-1800 срез 3 — [`Self::attr_change_needs_fanout`] for a *named*
+    /// attribute write, answered per attribute: the write can reach a sibling
+    /// only through a sibling-source compound a part of which the write can
+    /// flip ([`compound_flip_possible_on_attr_change`]) — an `[attr]`
+    /// selector, `class`/`id`, or a pseudo-class reading the attribute. The
+    /// S68 test above (every pseudo-class possible) additionally demanded that
+    /// the compound match the node *now*, which on a real sheet compounds like
+    /// `img` or `.card` do regardless of the write — every `tabindex`/`width`/
+    /// `height` write then took the following siblings and the parent's whole
+    /// subtree, and ebay's lazy-loader recascaded a carousel per image
+    /// (BUG-1800 срез 3). With narrowing off this is the S68 answer, so the
+    /// A/B baseline keeps its old shape.
+    pub fn attr_write_needs_fanout(&self, doc: &Document, node: NodeId, attr: &str) -> bool {
+        if self.conservative {
+            return true;
+        }
+        if !self.attr_narrowing {
+            return self.attr_change_needs_fanout(doc, node, attr);
+        }
+        self.sibling_sources.iter().any(|c| compound_flip_possible_on_attr_change(c, doc, node, attr))
+            && !has_no_following_element_sibling(doc, node)
     }
 }
 
