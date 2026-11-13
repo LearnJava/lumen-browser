@@ -8,7 +8,7 @@
 //! запоминается на диск).
 
 use lumen_core::ext::ClipboardProvider;
-use lumen_update_manifest::compat_pack::{Action, CompatPack};
+use lumen_update_manifest::compat_pack::Action;
 
 use crate::compat_page::ymd;
 use crate::compat_report::{
@@ -69,7 +69,7 @@ impl Lumen {
     fn collect_report_fields(&mut self, site: &str, host: &str) -> (AutoFields, Vec<String>) {
         self.shields.refresh();
         let crowd = self.active_profile_is_crowd();
-        let pack = CompatPack::base(&lumen_storage::PslProvider::new());
+        let pack = crate::compat_pack_remote::current_pack();
         let profile_kind = self.profile_menu.active_entry().map_or_else(
             || "unknown".to_owned(),
             |e| panels::profile_menu::slug_for_profile(&e.name).unwrap_or("custom").to_owned(),
@@ -133,7 +133,7 @@ impl Lumen {
                 let site = site_of(&current);
                 let host = host_of(&current);
                 let (auto, blocked_hosts) = self.collect_report_fields(&site, &host);
-                let pack = CompatPack::base(&lumen_storage::PslProvider::new());
+                let pack = crate::compat_pack_remote::current_pack();
                 ReportSession {
                     known: known_issue_text(&pack.entries_for_host(&host)),
                     url: current.clone(),
@@ -262,7 +262,7 @@ impl Lumen {
                 }
             },
         };
-        let revision = CompatPack::base(&lumen_storage::PslProvider::new()).revision;
+        let revision = crate::compat_pack_remote::current_pack().revision;
         self.remember_reported(&site, revision);
         let remembered = !self.active_profile_is_anonymous();
         self.navigate_to(PageSource::Static {
@@ -281,7 +281,7 @@ impl Lumen {
         if log.is_empty() {
             return;
         }
-        let pack = CompatPack::base(&lumen_storage::PslProvider::new());
+        let pack = crate::compat_pack_remote::current_pack();
         let fixed = log.take_newly_fixed(pack.revision, |site| {
             pack.entries_for_host(site)
                 .iter()

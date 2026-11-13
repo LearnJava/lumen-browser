@@ -51,6 +51,8 @@ fn action_link(key: &str, value: &str) -> String {
 pub enum PackSource {
     /// Базовая копия, вшитая в сборку.
     Base,
+    /// Привезённая удалённой доставкой копия (COMPAT-PACK-REMOTE).
+    Fetched,
 }
 
 /// Всё, что нужно странице: пакет и выбор пользователя.
@@ -133,6 +135,7 @@ fn journal_html(journal: &[(i64, String)]) -> String {
 pub fn build_compat_html(view: &CompatView<'_>) -> String {
     let source = match view.source {
         PackSource::Base => "базовая копия сборки",
+        PackSource::Fetched => "привезённая удалённой доставкой копия",
     };
     let signed = if view.pack.key_id.is_empty() {
         String::new()
