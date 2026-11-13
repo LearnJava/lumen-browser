@@ -6,7 +6,7 @@
 
 ## Источник: сайты
 
-mirtesen-ru (вес 3, `text_len` 2 при 9812 у Chrome), aviasales-ru (вес 2, 1 при 9026) — **2 сайта, вес кластера 5**. Отчёт: [`docs/perf/runs/2026-10-20-compat-triage.md`](../docs/perf/runs/2026-10-20-compat-triage.md) §Разбор blank. Прогон — `compat_crawl.py` живым окном, `LUMEN_NO_ADBLOCK=1`, без прокси, 2026-10-28.
+mirtesen-ru (вес 3, `text_len` 2 при 9812 у Chrome), aviasales-ru (вес 2, 1 при 9026), smi2-ru (вес 3, SITES-TRIAGE-3 2026-11-13: обе попытки DEGRADED, текст 102 при 9443–9448 у Chrome, stderr `SyntaxError: [object Object] is not a valid selector` + `adfox#checkContainer`) — **3 сайта, вес кластера 8**. Отчёт: [`docs/perf/runs/2026-10-20-compat-triage.md`](../docs/perf/runs/2026-10-20-compat-triage.md) §Разбор blank и §Разбор зависаний. Прогон — `compat_crawl.py` живым окном, `LUMEN_NO_ADBLOCK=1`, без прокси.
 
 Живой стек mirtesen: `_lumen_sel` ← `HTMLDocument.querySelectorAll` ← `Fc` (tippy.js, `packages-B_Rt485v.js:12`) ← `initTooltip` ← `componentDidMount` → `SyntaxError: [object Object] is not a valid selector`, React-приложение не монтируется, страница пуста.
 

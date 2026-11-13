@@ -368,3 +368,65 @@
 | [BUG-1783](../../../bugs/BUG-1783-OPEN.md) | 2 | ea-com | падение V8 `bad_optional_access` |
 
 Передано дальше: зависания/таймауты (cnn, tutu, dailymail, elpais, film, bild) — SITES-TRIAGE-3; вёрстка google-com и полнота roblox — SITES-TRIAGE-4. Без бага остались: cbr-ru, eldorado-ru, dailymotion-com, samsung-com (причина не изолирована), eapteka-ru, fiverr-com (антибот), bspb-ru (политика НУЦ).
+
+## Разбор зависаний (SITES-TRIAGE-3)
+
+Срез 2026-11-13: топ-30 из 168 TIMEOUT/HUNG базового прогона abroad (31 сайт веса 3, взяты первые 30 по алфавиту). Базовый прогон 2026-10-20 старше фикса [BUG-1676](../../../bugs/BUG-1676-FIXED.md) (2026-10-28), поэтому сначала перепрогон всех 30 свежей сборкой `dev-release` от HEAD main живым окном (`compat_crawl.py --corpus .tmp/hang30.txt --env LUMEN_NO_ADBLOCK=1 --restart-every 1 --timeout 40 --chrome-arg=--no-proxy-server`, `.tmp/hang30-rerun/results.jsonl`), затем для оставшихся зависаний — стадия по `--trace-nav` (headless, 60–90 с).
+
+**Главный вывод.** 22 из 30 зависаний на свежей сборке ушли (эффект фиксов после 2026-10-28, прежде всего BUG-1676; 13 сайтов теперь OK/DEGRADED с контентом). Осталось 8 TIMEOUT; «наших» среди них три: cnn (зависание движка, BUG-1778), discord (зависание живого окна при исправном headless, BUG-1778), rutube (нет `navigator.serviceWorker.startMessages`, новый [BUG-1805](../../../bugs/BUG-1805-OPEN.md)). intuit — медленная загрузка на границе порога (headless завершается за 45 с при лимите 40 с); qq/imgsrc — «не наши» (Chrome в той же точке падает/зависает); bbc/t-online — флап TLS-рукопожатия без прокси (os error 10060, `unexpected end of file`), по одной попытке из двух загружаются.
+
+| сайт | вес | было | стало | причина (стадия) | пояснение |
+|---|---|---|---|---|---|
+| cnn-com | 3 | TIMEOUT | TIMEOUT | движок занят: [BUG-1778](../../../bugs/BUG-1778-OPEN.md) | живое окно 2/2 `wait timeout: DocumentReady` после 301; headless `--trace-nav` не завершается за 90 с |
+| discord-com | 3 | TIMEOUT | TIMEOUT | зависание живого окна: [BUG-1778](../../../bugs/BUG-1778-OPEN.md) | headless завершается за 23 с (краска есть), живое окно — «engine busy»/DocumentReady-таймаут 2/2, текст 0 |
+| rutube-ru | 3 | TIMEOUT | TIMEOUT | нет API: [BUG-1805](../../../bugs/BUG-1805-OPEN.md) | `navigator.serviceWorker.startMessages is not a function` убивает инициализацию; headless красится за 34 с, текст в окне 0 |
+| intuit-com | 3 | TIMEOUT | TIMEOUT | медленная загрузка, порог | headless завершается за 45 с (run-scripts 17 с, paint 2,4 с) при лимите 40 с; в базе 2002× `TransactionInactiveError` (IDB, см. BUG-914) |
+| bbc-com | 3 | HUNG | TIMEOUT | сеть: TLS-флап | run1 `Navigate error` на старте; в базе TLS handshake os error 10060; одна попытка из двух грузится (18,9 с) |
+| t-online-de | 3 | TIMEOUT | TIMEOUT | сеть: TLS-флап | run0 OK за 20,8 с (6467 знаков), run1 навигация не стартовала; результат нестабилен |
+| qq-com | 3 | TIMEOUT | TIMEOUT | не наш: сеть CN | Chrome в той же точке: run0 таймаут 40 с, run1 http=None; у Lumen ошибки fetch к beacon-хостам CN |
+| imgsrc-ru | 3 | TIMEOUT | TIMEOUT | не наш | Chrome тоже не грузится (http=None, ready_s=None) — сайт/сеть, не Lumen |
+| adobe-com | 3 | HUNG | BROKEN_RENDER | частичная загрузка, сеть к aem.live | run0 OK (6459 знаков), run1 текст 29: `resolve main--mas--adobecom.aem.live: network error` — модуль коммерции не резолвится, страница без контента |
+| ebay-com | 3 | HUNG | DEGRADED | ушёл из зависаний; разовый engine-busy | run0 OK за 26,8 с (3836 знаков); run1 `about_to_wait.rs:295 for 1,4 с` — дописан в BUG-1778 |
+| github-com | 3 | HUNG | NET_FAIL | не наш: сеть | `TLS handshake: unexpected end of file` у обоих (Chrome тоже ok=False) |
+| nytimes-com | 3 | TIMEOUT | NET_FAIL | сеть: TLS-флап | run0 hang 42 с (дописан к BUG-1778-семье ниже не идёт — статус ушёл), run1 TLS EOF у Lumen при рабочем Chrome; нестабильно |
+| medium-com | 3 | HUNG | SITE_REFUSED | антибот Turnstile: [BUG-1790](../../../bugs/BUG-1790-OPEN.md) | run1 403 + `Turnstile … null (reading 'eval')`; Chrome челлендж решает |
+| vimeo-com | 3 | TIMEOUT | SITE_REFUSED | не наш: Turnstile 403 | Chrome получает тот же 403 (114 знаков) |
+| magnit-ru | 3 | HUNG | DEGRADED | движок занят: [BUG-1778](../../../bugs/BUG-1778-OPEN.md) | `about_to_wait.rs:295 for 13,4–13,6 с` 2/2, текст 0 при 10 тыс. у Chrome |
+| smi2-ru | 3 | HUNG | DEGRADED | JS-исключение: [BUG-1779](../../../bugs/BUG-1779-OPEN.md) | `[object Object] is not a valid selector` + adfox, текст 102 при 9443 у Chrome |
+| snapchat-com | 3 | TIMEOUT | DEGRADED | ушёл из зависаний | OK за 8 с, 1567 знаков; Chrome сам в челлендже (284) |
+| soundcloud-com | 3 | TIMEOUT | DEGRADED | движок занят (не изолировано) | текст 0 при 3980 у Chrome; `engine thread busy … smil.rs:28 for 0,0 с` — похож на ложный busy, стены нет |
+| tumblr-com | 3 | HUNG | OK | ушёл из зависаний | OK за 11–19 с |
+| x-com | 3 | TIMEOUT | OK | ушёл из зависаний | OK за 2–4 с |
+| x5-ru | 3 | TIMEOUT | OK | ушёл из зависаний | OK за 8,5–18 с, 5093 знака |
+| yandex-ru | 3 | TIMEOUT | OK | ушёл из зависаний | OK за 1,5 с (в базе `engine thread busy … smil.rs:28`) |
+| youtube-com | 3 | TIMEOUT | OK | ушёл из зависаний | OK за 4,6–16,5 с |
+| mangabuff-ru | 3 | TIMEOUT | OK | ушёл из зависаний | OK за 16–19,5 с, 11229 знаков |
+| hh-ru | 3 | HUNG | OK | ушёл из зависаний | OK за 29–31,5 с (долгая, но готова) |
+| pikabu-ru | 3 | HUNG | DEGRADED | ушёл из зависаний | OK-контент (8021 знаков) за 29 с; IDB-ошибки `TransactionInactiveError` (см. BUG-914) |
+| microsoft-com | 3 | TIMEOUT | DEGRADED | ушёл из зависаний | контент 583 знака за 38,8 с против 3432 у Chrome — полнота в SITES-TRIAGE-4 |
+| godaddy-com | 3 | TIMEOUT | DEGRADED | ушёл из зависаний | OK за 12–16 с, 4760–5355 знаков; JS-ошибки компонент (в SITES-TRIAGE-4) |
+| linkedin-com | 3 | TIMEOUT | DEGRADED | ушёл из зависаний | OK за 6–10 с, 3588 знаков; в run1 серия `fetch: network error` к static.licdn.com |
+| ivi-ru | 3 | TIMEOUT | DEGRADED | ушёл из зависаний | OK за 7–10 с; `window.stop is not a function`, `SyntaxError: Invalid or unexpected token` (в SITES-TRIAGE-4) |
+
+### Сводка по причинам (8 оставшихся TIMEOUT)
+
+| причина | сайтов | сайты |
+|---|---|---|
+| зависание движка / живого окна (BUG-1778) | 2 | cnn-com, discord-com |
+| нет API (BUG-1805) | 1 | rutube-ru |
+| медленная загрузка, порог 40 с | 1 | intuit-com |
+| сеть: TLS-флап без прокси | 2 | bbc-com, t-online-de |
+| не наш: сеть/сайт | 2 | qq-com, imgsrc-ru |
+
+### Баги
+
+| баг | действие | сайты | суть |
+|---|---|---|---|
+| [BUG-1805](../../../bugs/BUG-1805-OPEN.md) | заведён (P2) | rutube-ru | нет `navigator.serviceWorker.startMessages` |
+| [BUG-1778](../../../bugs/BUG-1778-OPEN.md) | дополнен | cnn-com (подтверждён headless), discord-com, magnit-ru, ebay-com (разовый) | поток движка занят тиком `about_to_wait.rs` |
+| [BUG-1779](../../../bugs/BUG-1779-OPEN.md) | дополнен | smi2-ru | `[object Object] is not a valid selector` |
+| [BUG-1790](../../../bugs/BUG-1790-OPEN.md) | дополнен | medium-com | Turnstile не выдаёт токен → 403 |
+
+Без бага остались: intuit-com (медленная загрузка 45 с на границе порога; IDB-ошибки — см. BUG-914), soundcloud-com (текст 0, busy-улика из `smil.rs`, не изолировано), bbc/t-online/nytimes (TLS-флап сети без прокси — перепроверить при повторном прогоне с прокси), qq/imgsrc/github/vimeo (не наши: Chrome падает так же или получает тот же отказ), adobe (частичная загрузка: не резолвится `aem.live`), microsoft/godaddy/ivi (полнота контента — SITES-TRIAGE-4).
+
+Хвост от SITES-TRIAGE-2 (те же условия, `.tmp/handoff5-rerun/results.jsonl`): **film-ru** и **bild-de** из зависаний ушли — контент 8734 и 19942 знаков (Chrome 8054/20216) за 16–28 с, во второй попытке флап text=0 с `engine thread busy about_to_wait.rs:295`. **tutu-ru** — текст 0 2/2 при 9759–9937 у Chrome, busy-улика та же (BUG-1778). **elpais-com** — SITE_REFUSED: run1 403 при рабочем Chrome; в run0 200, но busy + `null (reading 'postMessage')` — BUG-1778-семья плюс стена. **dailymail-com** — TIMEOUT 2/2 (`DocumentReady` после 301), Chrome сам флапает (0/912 знаков) — CMP+реклама, не изолировано.
