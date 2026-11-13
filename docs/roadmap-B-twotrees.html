@@ -75,12 +75,12 @@
 {
  "generated": "2026-11-13",
  "counts": {
-  "open": 334,
+  "open": 335,
   "fixed": 1402,
   "inprogress": 0,
   "wontfix": 4
  },
- "total_bugs": 1740,
+ "total_bugs": 1741,
  "phases": [
   {
    "id": "P0",
@@ -12101,6 +12101,13 @@
    "date": null,
    "debtor": false
   },
+  "BUG-1805": {
+   "status": "open",
+   "title": "SITES-TRIAGE-3: нет `navigator.serviceWorker.startMessages()` (нестандартный Chrome-API контейнера) → `TypeError` убивает инициализацию rutube-ru, TIMEOUT 2/2 п…",
+   "component": "js (`web_api_shim_mid_b.js` — `_sw_container`)",
+   "date": null,
+   "debtor": false
+  },
   "BUG-001": {
    "status": "fixed",
    "title": "display:none on inline elements not working",
@@ -23303,6 +23310,9 @@
   ],
   "js (`web_api_shim_mid_b.js` `_sw_make_event_target`)": [
    "BUG-1638"
+  ],
+  "js (`web_api_shim_mid_b.js` — `_sw_container`)": [
+   "BUG-1805"
   ],
   "js (`web_api_shim_tail_b.js::_wa_motion_read` — чтение-время оверлей CSS-переходов и анимаций BUG-1293)": [
    "BUG-1648"

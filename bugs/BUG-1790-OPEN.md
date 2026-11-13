@@ -35,3 +35,7 @@
 
 - Родитель: [BUG-1595](BUG-1595-FIXED.md) — iframe в shadow root.
 - Смежно: [BUG-754](BUG-754-FIXED.md) (`window.chrome`), UX-ANTIBOT-дорожка.
+
+## Источник: сайты (дополнение SITES-TRIAGE-3, 2026-11-13)
+
+medium-com (вес 3): базовый прогон — HUNG, перепрогон 2026-11-13 — run1 403 + `[Cloudflare Turnstile] Unhandled error: Cannot read properties of null (reading 'eval')`, SITE_REFUSED; Chrome проходит (229 знаков — челлендж, который Chrome решает). Тот же debug-info `IQ4G/PW4hbx…`, что в симптоме выше. vimeo-com тоже ловит Turnstile-ошибку, но Chrome там получает тот же 403 — не наш.
