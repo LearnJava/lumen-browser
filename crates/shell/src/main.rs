@@ -34,6 +34,7 @@ mod browser_thread;
 mod animation_scheduler;
 mod automation_server;
 mod click_log;
+mod compat_pack_remote;
 mod compat_signals;
 mod health_log;
 mod backend_factory;
