@@ -79,62 +79,82 @@ fn matches_chain(
     node: NodeId,
     leftmost_ok: &impl Fn(NodeId) -> bool,
 ) -> bool {
+    let is_entry = n == 1 + complex.tail.len();
     if !matches_compound(compound_at(complex, n - 1), doc, node) {
+        if is_entry {
+            crate::counters::note_match_outcome(true, false);
+        }
         return false;
     }
     if n == 1 {
-        return leftmost_ok(node);
+        let ok = leftmost_ok(node);
+        if is_entry {
+            crate::counters::note_match_outcome(false, false);
+        }
+        return ok;
     }
 
     // Combinator между compound-ами `n - 2` и `n - 1`.
     let comb = complex.tail[n - 2].0;
 
-    match comb {
+    let ok = match comb {
         Combinator::Descendant => {
             // Перебираем всех предков как кандидатов.
             let mut cur = doc.get(node).parent;
             let mut top = None;
+            let mut hit = false;
             while let Some(p) = cur {
                 if is_element(doc, p) && matches_chain(complex, n - 1, doc, p, leftmost_ok) {
-                    return true;
+                    hit = true;
+                    break;
                 }
                 top = Some(p);
                 cur = doc.get(p).parent;
             }
             // Цепочка упёрлась в корень теневого дерева: хост — последний кандидат.
-            match top.and_then(|t| scoped_shadow_host(doc, t)) {
-                Some(host) => matches_chain(complex, n - 1, doc, host, leftmost_ok),
-                None => false,
-            }
-        }
-        Combinator::Child => {
-            // Один кандидат: parent.
-            let Some(parent) = doc.get(node).parent else { return false; };
-            if !is_element(doc, parent) {
-                return match scoped_shadow_host(doc, parent) {
+            hit
+                || match top.and_then(|t| scoped_shadow_host(doc, t)) {
                     Some(host) => matches_chain(complex, n - 1, doc, host, leftmost_ok),
                     None => false,
-                };
-            }
-            matches_chain(complex, n - 1, doc, parent, leftmost_ok)
+                }
         }
+        Combinator::Child => match doc.get(node).parent {
+            // Один кандидат: parent.
+            None => false,
+            Some(parent) if !is_element(doc, parent) => {
+                // Родитель — корень теневого дерева: хост — единственный кандидат.
+                match scoped_shadow_host(doc, parent) {
+                    Some(host) => matches_chain(complex, n - 1, doc, host, leftmost_ok),
+                    None => false,
+                }
+            }
+            Some(parent) => matches_chain(complex, n - 1, doc, parent, leftmost_ok),
+        },
         Combinator::NextSibling => {
             // Один кандидат: предыдущий element-sibling.
-            let Some(prev) = previous_element_sibling(doc, node) else { return false; };
-            matches_chain(complex, n - 1, doc, prev, leftmost_ok)
+            match previous_element_sibling(doc, node) {
+                Some(prev) => matches_chain(complex, n - 1, doc, prev, leftmost_ok),
+                None => false,
+            }
         }
         Combinator::LaterSibling => {
             // Перебираем все earlier-siblings как кандидатов.
             let mut sib = previous_element_sibling(doc, node);
+            let mut hit = false;
             while let Some(s) = sib {
                 if matches_chain(complex, n - 1, doc, s, leftmost_ok) {
-                    return true;
+                    hit = true;
+                    break;
                 }
                 sib = previous_element_sibling(doc, s);
             }
-            false
+            hit
         }
+    };
+    if is_entry {
+        crate::counters::note_match_outcome(false, !ok);
     }
+    ok
 }
 
 /// BUG-935 срез 66: прежняя реализация `matches_complex` (префикс — срезы двух `Vec`,

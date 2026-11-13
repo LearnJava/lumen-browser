@@ -1440,6 +1440,23 @@ pub struct CascadeStats {
     /// BUG-935 срез 98 — elements whose style was the previous one with a parent's changed
     /// custom properties, with no cascade ([`crate::custom_flow`]).
     pub inherited: u32,
+    /// BUG-1800 срез 2 — candidate rules [`crate::rule_index::RuleIndex::candidates`]
+    /// returned across the flush (all buckets, all call sites). The census that
+    /// decides whether the matching cost is "too many candidates" or "each
+    /// candidate too dear": `candidates / recomputed` is the per-element
+    /// candidate load, `match_calls` how many got a full `matches_complex`.
+    pub candidates: u32,
+    /// BUG-1800 срез 2 — `matches_complex` entries (author matching only; the
+    /// pseudo-element matcher has its own entry point and is not counted).
+    pub match_calls: u32,
+    /// BUG-1800 срез 2 — of [`Self::match_calls`], those that died on the
+    /// subject compound. When this is ~all of them the cost is per-candidate
+    /// compound testing (class re-splits), not ancestor walking.
+    pub match_first_fail: u32,
+    /// BUG-1800 срез 2 — of [`Self::match_calls`], those whose subject matched
+    /// but the prefix chain (ancestor/sibling walk) failed. A large share here
+    /// is the lever for an ancestor filter; see BUG-1800.
+    pub match_prefix_fail: u32,
 }
 
 thread_local! {
@@ -1462,6 +1479,10 @@ thread_local! {
             forced: 0,
             forced_same: 0,
             inherited: 0,
+            candidates: 0,
+            match_calls: 0,
+            match_first_fail: 0,
+            match_prefix_fail: 0,
         })
     };
 }
@@ -1475,8 +1496,7 @@ fn note_cascade(recomputed: bool) {
     CASCADE_STATS.with(|s| {
         let mut v = s.get();
         if recomputed {
-            v.recomputed += 1;
-        } else {
+            v.recomputed += 1;        } else {
             v.reused += 1;
         }
         s.set(v);
@@ -1499,6 +1519,28 @@ fn note_inherited() {
     CASCADE_STATS.with(|s| {
         let mut v = s.get();
         v.inherited += 1;
+        s.set(v);
+    });
+}
+
+/// BUG-1800 срез 2 — one author `matches_complex` entry: died on the subject
+/// compound (`first_fail`), or passed it and died in the prefix chain
+/// (`prefix_fail`). Neither flag set = the selector matched.
+pub fn note_match_outcome(first_fail: bool, prefix_fail: bool) {
+    CASCADE_STATS.with(|s| {
+        let mut v = s.get();
+        v.match_calls += 1;
+        v.match_first_fail += u32::from(first_fail);
+        v.match_prefix_fail += u32::from(prefix_fail);
+        s.set(v);
+    });
+}
+
+/// BUG-1800 срез 2 — one [`crate::rule_index::RuleIndex::candidates`] result.
+pub fn note_candidates(n: usize) {
+    CASCADE_STATS.with(|s| {
+        let mut v = s.get();
+        v.candidates += n as u32;
         s.set(v);
     });
 }
