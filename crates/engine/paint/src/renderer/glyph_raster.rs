@@ -306,6 +306,9 @@ impl TextSubStats {
 /// для всякого глифа, кроме сверхкрупного, поэтому углы квада лежат на целых
 /// device px и выборка из атласа идёт 1:1. В вершины уходят CSS px —
 /// деление на `dpr`.
+/// TEXTQ-6: `synth_bold_dev` — device-сдвиг второго квада (0 = нет синтеза),
+/// `synth_italic_shear` — тангенс наклона вершин (0 = нет).
+#[allow(clippy::too_many_arguments)] // сигнатура квад-а унаследована, синтез — два скаляра
 fn push_glyph_quad(
     out: &mut Vec<TextVertex>,
     g: &CachedGlyph,
@@ -314,24 +317,42 @@ fn push_glyph_quad(
     bitmap_scale: f32,
     dpr: f32,
     color: [f32; 4],
+    synth_bold_dev: f32,
+    synth_italic_shear: f32,
 ) {
-    let x0d = pen_dev + g.left * bitmap_scale;
-    let y0d = baseline_dev - g.top * bitmap_scale;
-    let x1d = x0d + g.entry.width as f32 * bitmap_scale;
-    let y1d = y0d + g.entry.height as f32 * bitmap_scale;
-    let (x0, y0, x1, y1) = (x0d / dpr, y0d / dpr, x1d / dpr, y1d / dpr);
-    let u0 = g.entry.atlas_x as f32 / ATLAS_DIM as f32;
-    let v0 = g.entry.atlas_y as f32 / ATLAS_DIM as f32;
-    let u1 = (g.entry.atlas_x + g.entry.width) as f32 / ATLAS_DIM as f32;
-    let v1 = (g.entry.atlas_y + g.entry.height) as f32 / ATLAS_DIM as f32;
-    out.extend_from_slice(&[
-        TextVertex { pos: [x0, y0], z: 0.0, uv: [u0, v0], color },
-        TextVertex { pos: [x1, y0], z: 0.0, uv: [u1, v0], color },
-        TextVertex { pos: [x1, y1], z: 0.0, uv: [u1, v1], color },
-        TextVertex { pos: [x0, y0], z: 0.0, uv: [u0, v0], color },
-        TextVertex { pos: [x1, y1], z: 0.0, uv: [u1, v1], color },
-        TextVertex { pos: [x0, y1], z: 0.0, uv: [u0, v1], color },
-    ]);
+    // TEXTQ-6: синтетический курсив — наклон вершин квада относительно
+    // baseline (`x += (baseline − y) × tan(14°)`, CSS Fonts L4 §5.5, как
+    // CPU-путь `shear_glyph`); жирный — второй квад того же глифа со сдвигом
+    // вправо. Атлас не трогается — это тот же глиф.
+    let emit = |out: &mut Vec<TextVertex>, shift_dev: f32| {
+        let x0d = pen_dev + shift_dev + g.left * bitmap_scale;
+        let y0d = baseline_dev - g.top * bitmap_scale;
+        let x1d = x0d + g.entry.width as f32 * bitmap_scale;
+        let y1d = y0d + g.entry.height as f32 * bitmap_scale;
+        let (s0, s1) = (
+            (baseline_dev - y0d) * synth_italic_shear,
+            (baseline_dev - y1d) * synth_italic_shear,
+        );
+        let (x0, y0, x1, y1) =
+            ((x0d + s0) / dpr, y0d / dpr, (x1d + s0) / dpr, y1d / dpr);
+        let (bx0, bx1) = ((x0d + s1) / dpr, (x1d + s1) / dpr);
+        let u0 = g.entry.atlas_x as f32 / ATLAS_DIM as f32;
+        let v0 = g.entry.atlas_y as f32 / ATLAS_DIM as f32;
+        let u1 = (g.entry.atlas_x + g.entry.width) as f32 / ATLAS_DIM as f32;
+        let v1 = (g.entry.atlas_y + g.entry.height) as f32 / ATLAS_DIM as f32;
+        out.extend_from_slice(&[
+            TextVertex { pos: [x0, y0], z: 0.0, uv: [u0, v0], color },
+            TextVertex { pos: [x1, y0], z: 0.0, uv: [u1, v0], color },
+            TextVertex { pos: [bx1, y1], z: 0.0, uv: [u1, v1], color },
+            TextVertex { pos: [x0, y0], z: 0.0, uv: [u0, v0], color },
+            TextVertex { pos: [bx1, y1], z: 0.0, uv: [u1, v1], color },
+            TextVertex { pos: [bx0, y1], z: 0.0, uv: [u0, v1], color },
+        ]);
+    };
+    emit(out, 0.0);
+    if synth_bold_dev > 0.0 {
+        emit(out, synth_bold_dev);
+    }
 }
 
 /// Шаг укладки текстового run-а — то, что цикл по символам делает с пером.
@@ -364,6 +385,12 @@ enum TextRunStep {
         /// `pick_face_for_codepoint` внутри одного run-а может выбирать разные
         /// face-ы для разных символов (fallback на несовпадающий unicode-range).
         bitmap_scale: f32,
+        /// TEXTQ-6: синтетический жирный (второй квад) и курсив (наклон
+        /// вершин) для ЭТОГО глифа — зависит от face-а под-run-а, поэтому в
+        /// шаге, а не в команде. Условия (вес/наклон команды и face-а, кегль,
+        /// dpr) входят в ключ плана.
+        synth_bold: bool,
+        synth_italic: bool,
     },
     /// Сдвинуть перо, ничего не кладя (табуляция или неотрисовавшийся глиф).
     Advance(f32),
@@ -483,6 +510,7 @@ impl TextRunCache {
 /// `u32`, и упаковка съедала заметную долю выигрыша от кэша — тот же класс,
 /// что и ключ среза 12: строка хранится и сравнивается как есть, а в хэш идёт
 /// побайтово.
+#[allow(clippy::too_many_arguments)] // ключ обязан покрывать весь вход команды
 fn build_text_run_key(
     out: &mut Vec<u32>,
     font_size: f32,
@@ -491,6 +519,7 @@ fn build_text_run_key(
     primary_face_id: usize,
     (axes, features): (&[VariationAxis], &[FontFeature]),
     (dpr, frac0): (f32, f32),
+    synth: (u16, u8),
 ) {
     out.clear();
     out.push(dpr.to_bits());
@@ -511,6 +540,10 @@ fn build_text_run_key(
         out.push(u32::from_be_bytes(*tag));
         out.push(*value);
     }
+    // TEXTQ-6: вес и стиль команды — гейт синтетического жирного/курсива
+    // (в шаге плана); сдвиг и наклон из них выводятся на попадании.
+    out.push(u32::from(synth.0));
+    out.push(u32::from(synth.1));
 }
 
 /// FNV-1a по численной части ключа и байтам строки — та же дешёвая свёртка,
@@ -555,6 +588,8 @@ pub(crate) fn push_text_glyphs(
     (letter_spacing, word_spacing): (f32, f32),
     font_palette: Option<&FontPaletteSelection>,
     dpr: f32,
+    font_weight: u16,
+    font_style: lumen_layout::FontStyle,
 ) -> f32 {
     // BUG-405 срез 13: разбивка команды текста (`text-sub`, уровень 3).
     let log = crate::frame_log_level() >= 3;
@@ -599,6 +634,20 @@ pub(crate) fn push_text_glyphs(
     let base_dev = rect.x * dpr;
     let base_floor = base_dev.floor();
     let frac0 = base_dev - base_floor;
+    // TEXTQ-6: параметры синтеза команды. Порог 600 и сдвиг `font_size/24`
+    // клампом — как в CPU-пути (`cpu_raster.rs`); наклон — 14°. Гейт по
+    // СОБСТВЕННОМУ весу/наклону face-а (CSS Fonts L4 §5.5) — на под-run.
+    let synth_bold_dev = if font_weight >= 600 {
+        (((font_size / 24.0).clamp(0.5, 2.0)) * dpr).round().max(1.0)
+    } else {
+        0.0
+    };
+    let synth_italic_shear = if font_style != lumen_layout::FontStyle::Normal {
+        // tan 12° — тот же наклон, что у CPU-пути (`ITALIC_SKEW`) и femtovg.
+        0.2126
+    } else {
+        0.0
+    };
 
     // Per-char cache на длительность одного DrawText: одни и те же символы
     // в строке («the the the») не нужно пробовать через все face-ы каждый раз.
@@ -627,6 +676,14 @@ pub(crate) fn push_text_glyphs(
             primary_face_id,
             (font_variation_axes, font_features),
             (dpr, frac0),
+            (
+                font_weight,
+                match font_style {
+                    lumen_layout::FontStyle::Normal => 0,
+                    lumen_layout::FontStyle::Italic => 1,
+                    lumen_layout::FontStyle::Oblique => 2,
+                },
+            ),
         );
         let (found, h) = runs.get(&key, text);
         key_hash = h;
@@ -646,10 +703,20 @@ pub(crate) fn push_text_glyphs(
         let mut cursor_x = rect.x;
         for step in plan.iter() {
             match step {
-                TextRunStep::Glyph { g, advance, pen_dev, y_off_dev, bitmap_scale } => {
+                TextRunStep::Glyph { g, advance, pen_dev, y_off_dev, bitmap_scale, synth_bold, synth_italic } => {
                     let t_quad = log.then(std::time::Instant::now);
                     let pen = base_floor + *pen_dev as f32;
-                    push_glyph_quad(out, g, pen, baseline_dev - y_off_dev, *bitmap_scale, dpr, color);
+                    push_glyph_quad(
+                        out,
+                        g,
+                        pen,
+                        baseline_dev - y_off_dev,
+                        *bitmap_scale,
+                        dpr,
+                        color,
+                        if *synth_bold { synth_bold_dev } else { 0.0 },
+                        if *synth_italic { synth_italic_shear } else { 0.0 },
+                    );
                     cursor_x += advance;
                     if let Some(t0) = t_quad {
                         sub_add(&TEXT_SUB.quad, t0);
@@ -721,6 +788,10 @@ pub(crate) fn push_text_glyphs(
             // намеренно общий на весь run — см. выше).
             let adjusted_font_size = font_size * face.size_adjust.unwrap_or(1.0);
             let advance_scale = adjusted_font_size / metrics.units_per_em as f32;
+            // TEXTQ-6: синтез только когда выбранный face сам не жирный/не
+            // курсивный (CSS Fonts L4 §5.5).
+            let face_synth_bold = synth_bold_dev > 0.0 && face.weight < 600;
+            let face_synth_italic = synth_italic_shear != 0.0 && !face.italic;
             // TEXTQ-1: глиф растрируется в точном размере в device px; перо
             // привязано к сетке — целая часть + фаза из 4 четвертей пикселя.
             let (glyph_size_q, bitmap_scale) = glyph_raster_size(adjusted_font_size, dpr);
@@ -827,6 +898,10 @@ pub(crate) fn push_text_glyphs(
                             bitmap_scale,
                             dpr,
                             layer_color(palette, layer.palette_index, color),
+                            // TEXTQ-6: цветной глиф (COLR) не синтезируется —
+                            // слои полностью замещают глиф, как на CPU-пути.
+                            0.0,
+                            0.0,
                         );
                         if let Some(t0) = t_quad {
                             sub_add(&TEXT_SUB.quad, t0);
@@ -853,7 +928,17 @@ pub(crate) fn push_text_glyphs(
 
                 if let Some(g) = cached_glyph {
                     let t_quad = log.then(std::time::Instant::now);
-                    push_glyph_quad(out, &g, pen_dev, glyph_baseline, bitmap_scale, dpr, color);
+                    push_glyph_quad(
+                        out,
+                        &g,
+                        pen_dev,
+                        glyph_baseline,
+                        bitmap_scale,
+                        dpr,
+                        color,
+                        if face_synth_bold { synth_bold_dev } else { 0.0 },
+                        if face_synth_italic { synth_italic_shear } else { 0.0 },
+                    );
                     cursor_x += advance;
                     if let Some(plan) = plan.as_mut() {
                         plan.push(TextRunStep::Glyph {
@@ -862,6 +947,8 @@ pub(crate) fn push_text_glyphs(
                             pen_dev: pen_int,
                             y_off_dev,
                             bitmap_scale,
+                            synth_bold: face_synth_bold,
+                            synth_italic: face_synth_italic,
                         });
                     }
                     if let Some(t0) = t_quad {
@@ -964,7 +1051,7 @@ pub(crate) fn push_text_glyphs_mixed(
             let end_x = push_text_glyphs(
                 out, seg_rect, &seg_text, font_size, color, primary_face_id, lazy, atlas,
                 cached, runs, runs_enabled, font_variation_axes, font_features, tab_size, (0.0, 0.0),
-                font_palette, dpr,
+                font_palette, dpr, 400, lumen_layout::FontStyle::Normal,
             );
             y_cursor += end_x - dest.x;
         } else {
@@ -973,7 +1060,7 @@ pub(crate) fn push_text_glyphs_mixed(
             let end_x = push_text_glyphs(
                 out, local_rect, &seg_text, font_size, color, primary_face_id, lazy, atlas,
                 cached, runs, runs_enabled, font_variation_axes, font_features, tab_size, (0.0, 0.0),
-                font_palette, dpr,
+                font_palette, dpr, 400, lumen_layout::FontStyle::Normal,
             );
             rotate_text_vertices_cw(&mut out[v_start..], dest);
             y_cursor = end_x;
@@ -1176,6 +1263,8 @@ mod pick_face_for_codepoint_tests {
             descent_override: None,
             size_adjust: None,
             variation_settings: Vec::new(),
+                weight: 400,
+        italic: false,
         }
     }
 

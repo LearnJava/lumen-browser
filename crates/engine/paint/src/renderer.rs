@@ -1233,8 +1233,10 @@ impl Renderer {
                     font_size,
                     color,
                     font_family: _,
-                    font_weight: _,
-                    font_style: _,
+                    // TEXTQ-6: идут в `push_text_glyphs` — гейт синтетического
+                    // жирного/курсива (CSS Fonts L4 §5.5).
+                    font_weight,
+                    font_style,
                     // Уже учтён при резолве face_id в пре-проходе выше —
                     // здесь берём готовый id из `text_face_ids`.
                     font_stretch: _,
@@ -1322,6 +1324,8 @@ impl Renderer {
                                 (crate::display_list::spacing_px(*letter_spacing), crate::display_list::spacing_px(*word_spacing)),
                                 font_palette.as_ref(),
                                 dpr_f32,
+                                font_weight.0,
+                                *font_style,
                             );
                             rotate_text_vertices_cw(&mut text_vertices[v_start as usize..], dest_rect);
                         }
@@ -1364,6 +1368,8 @@ impl Renderer {
                                 (crate::display_list::spacing_px(*letter_spacing), crate::display_list::spacing_px(*word_spacing)),
                                 font_palette.as_ref(),
                                 dpr_f32,
+                                font_weight.0,
+                                *font_style,
                             );
                         }
                     }
@@ -1562,6 +1568,8 @@ impl Renderer {
                                 (0.0, 0.0),
                                 None,
                                 dpr_f32,
+                                400,
+                                lumen_layout::FontStyle::Normal,
                             );
                             if let Some(m) = transform_stack.last() {
                                 apply_affine_to_verts(

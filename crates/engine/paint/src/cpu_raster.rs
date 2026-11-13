@@ -3596,9 +3596,33 @@ struct FaceCandidate<'a> {
     /// a candidate never wins the cascade (mirrors `pick_face_for_codepoint`'s
     /// `metrics.as_ref()?` requirement on the wgpu side).
     cmap: Option<lumen_font::Cmap<'a>>,
+    /// TEXTQ-6: собственный вес face-а — из `FaceRecord` (@font-face/система)
+    /// или `os2().weight_class` для bundled. Гейтит синтетический жирный
+    /// (CSS Fonts L4 §5.5): `font-weight >= 600` синтезируется только когда
+    /// face сам не жирный.
+    weight: u16,
+    /// TEXTQ-6: у face-а есть собственный наклон (`post`/`fsSelection`) —
+    /// гейтит синтетический курсив.
+    italic: bool,
 }
 
 impl<'a> FaceCandidate<'a> {
+    /// Собственные вес/наклон face-а: из `FaceRecord`, если он есть, иначе —
+    /// из OS/2 (`usWeightClass`, `fsSelection`) и `post` (italic angle)
+    /// распарсенного шрифта.
+    fn own_weight_style(font: &lumen_font::Font<'_>, record: &Option<lumen_core::FaceRecord>) -> (u16, bool) {
+        if let Some(r) = record {
+            return (r.weight, r.style != lumen_core::FontStyle::Normal);
+        }
+        let weight = font
+            .os2()
+            .map(|o| if o.weight_class == 0 { 400 } else { o.weight_class.min(1000) })
+            .unwrap_or(400);
+        let italic = font.post().map(|p| p.is_italic()).unwrap_or(false)
+            || font.os2().map(|o| o.is_italic()).unwrap_or(false);
+        (weight, italic)
+    }
+
     fn from_parts(bytes: &'a [u8], record: &Option<lumen_core::FaceRecord>) -> Option<Self> {
         let mut face = build_face(bytes)?;
         if let Some(r) = record {
@@ -3608,7 +3632,8 @@ impl<'a> FaceCandidate<'a> {
         }
         let ranges = record.as_ref().map(|r| r.unicode_ranges.clone()).unwrap_or_default();
         let cmap = face.font.cmap().ok();
-        Some(Self { bytes, face, ranges, cmap })
+        let (weight, italic) = Self::own_weight_style(&face.font, record);
+        Some(Self { bytes, face, ranges, cmap, weight, italic })
     }
 }
 
@@ -3995,8 +4020,6 @@ fn rasterize_text(
     let primary_adjusted_font_size = font_size * primary.face.size_adjust.unwrap_or(1.0);
     let baseline_y = rect.y + primary_adjusted_font_size * ascent_ratio;
     let bold_offset = (font_size / 24.0).clamp(0.5, 2.0);
-    let synth_bold = font_weight >= 600;
-    let synth_italic = !matches!(font_style, lumen_layout::FontStyle::Normal);
 
     let width = pixmap.width();
     let height = pixmap.height();
@@ -4052,6 +4075,11 @@ fn rasterize_text(
             // already applies per-glyph on the wgpu side).
             let adjusted_font_size = font_size * candidate.face.size_adjust.unwrap_or(1.0);
             let advance_scale = adjusted_font_size / f32::from(candidate.face.units_per_em);
+            // TEXTQ-6 (CSS Fonts L4 §5.5): синтез — только когда выбранный
+            // face сам не жирный/не курсивный (а не только по свойству текста).
+            let synth_bold = font_weight >= 600 && candidate.weight < 600;
+            let synth_italic = !matches!(font_style, lumen_layout::FontStyle::Normal)
+                && !candidate.italic;
             let rasterizer =
                 lumen_font::Rasterizer::new(adjusted_font_size, candidate.face.units_per_em);
             // Shape via `lumen_font::active_text_shaper()` (LIB-1/LIB-2/LIB-3):

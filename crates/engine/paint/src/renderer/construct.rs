@@ -1035,6 +1035,8 @@ impl Renderer {
             descent_override: None,
             size_adjust: None,
             variation_settings: Vec::new(),
+            weight: 400,
+            italic: false,
         }];
         let push_chrome_face = |faces: &mut Vec<LoadedFace>, bytes: &'static [u8]| {
             build_face_metrics(bytes).map(|metrics| {
@@ -1047,6 +1049,8 @@ impl Renderer {
                     descent_override: None,
                     size_adjust: None,
                     variation_settings: Vec::new(),
+                    weight: 400,
+                    italic: false,
                 });
                 id
             })

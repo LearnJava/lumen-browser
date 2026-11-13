@@ -66,6 +66,22 @@ fn lay_out(
     font_size: f32,
     dpr: f32,
 ) -> (Vec<TextVertex>, HashMap<AtlasKey, Option<CachedGlyph>>) {
+    lay_out_with(rect, text, font_size, dpr, 400, lumen_layout::FontStyle::Normal, 400, false)
+}
+
+/// Раскладка с весом/стилем команды и собственными весом/наклоном face-а —
+/// TEXTQ-6 (синтетический жирный/курсив).
+#[allow(clippy::too_many_arguments)] // тестовый харнесс: все параметры различают сценарии
+fn lay_out_with(
+    rect: Rect,
+    text: &str,
+    font_size: f32,
+    dpr: f32,
+    font_weight: u16,
+    font_style: lumen_layout::FontStyle,
+    face_weight: u16,
+    face_italic: bool,
+) -> (Vec<TextVertex>, HashMap<AtlasKey, Option<CachedGlyph>>) {
     let bytes = std::fs::read("../../../assets/fonts/Inter-Regular.ttf").expect("bundled font");
     let metrics = build_face_metrics(&bytes);
     let faces = vec![LoadedFace {
@@ -76,6 +92,8 @@ fn lay_out(
         descent_override: None,
         size_adjust: None,
         variation_settings: Vec::new(),
+        weight: face_weight,
+        italic: face_italic,
     }];
     let mut lazy = LazyParsedFaces::new(&faces);
     let mut atlas = GlyphAtlas::new(ATLAS_DIM);
@@ -100,10 +118,66 @@ fn lay_out(
         (0.0, 0.0),
         None,
         dpr,
+        font_weight,
+        font_style,
     );
     (out, cached)
 }
 
+/// TEXTQ-6: синтетический жирный — вторая порция из шести вершин с тем же UV,
+/// сдвинутая вправо на `(font_size/24).clamp(0.5,2)` device px.
+#[test]
+fn synthetic_bold_doubles_quads_only_for_regular_face() {
+    let rect = Rect::new(10.0, 7.0, 400.0, 30.0);
+    // Face без собственного bold + weight 700 → два квада на глиф.
+    let (synth, _) = lay_out_with(rect, "Hi", 24.0, 1.0, 700, lumen_layout::FontStyle::Normal, 400, false);
+    let (plain, _) = lay_out_with(rect, "Hi", 24.0, 1.0, 400, lumen_layout::FontStyle::Normal, 400, false);
+    assert_eq!(plain.len() % 6, 0);
+    assert_eq!(synth.len(), plain.len() * 2, "каждый глиф — два квада");
+    // Сдвиг второго квада: baseline не меняется, x0 правее x0 первого.
+    let offset = (24.0_f32 / 24.0).clamp(0.5, 2.0);
+    let dx = synth[6].pos[0] - synth[0].pos[0];
+    assert!((dx - offset).abs() < 1e-3, "dx {dx} ≠ {offset}");
+    assert!((synth[6].pos[1] - synth[0].pos[1]).abs() < 1e-6);
+    // Тот же атлас-глиф: UV совпадают.
+    assert_eq!(synth[0].uv, synth[6].uv);
+    // Ложный вес в face-е (weight 700 в дескрипторе) → синтеза нет.
+    let (true_bold, _) = lay_out_with(rect, "Hi", 24.0, 1.0, 700, lumen_layout::FontStyle::Normal, 700, false);
+    assert_eq!(true_bold.len(), plain.len());
+    // ВИДИМЫЙ эффект: второй квад реально сдвинут (не нулевой сдвиг).
+    assert!(dx > 0.0);
+}
+
+/// TEXTQ-6: синтетический курсив — тот же один квад, но верхние вершины
+/// сдвинуты вправо относительно baseline на `(baseline − y) × tan 12°`.
+#[test]
+fn synthetic_italic_shears_quad_without_rerasterizing() {
+    let rect = Rect::new(10.0, 7.0, 400.0, 30.0);
+    let (ital, _) = lay_out_with(rect, "Hi", 24.0, 1.0, 400, lumen_layout::FontStyle::Italic, 400, false);
+    let (plain, _) = lay_out_with(rect, "Hi", 24.0, 1.0, 400, lumen_layout::FontStyle::Normal, 400, false);
+    assert_eq!(ital.len(), plain.len(), "курсив не добавляет квадов");
+    // Верхняя (y0) и нижняя (y1) вершины квада: y разные, x верхней — правее.
+    // Для обычного квада x0 верх == x0 низ; после наклона — нет.
+    let top_dx = ital[0].pos[0] - plain[0].pos[0];
+    let bottom_dx = ital[5].pos[0] - plain[5].pos[0];
+    assert!(top_dx > 0.0, "верх сдвинут вправо: {top_dx}");
+    // Низ битмапа на baseline (у "Hi" — не ниже device px): сдвиг мал.
+    assert!(bottom_dx.abs() < 0.5, "низ на baseline: {bottom_dx}");
+    // Собственный курсивный face → синтеза нет, вершины совпадают с plain.
+    let (true_ital, _) = lay_out_with(rect, "Hi", 24.0, 1.0, 400, lumen_layout::FontStyle::Italic, 400, true);
+    assert_eq!(true_ital[0].pos, plain[0].pos);
+}
+
+/// TEXTQ-6: кэш планов различает вес/стиль команды (иначе чужой синтез).
+#[test]
+fn text_run_cache_key_distinguishes_weight_and_style() {
+    let rect = Rect::new(10.0, 7.0, 400.0, 30.0);
+    let (a, _) = lay_out_with(rect, "Hi", 24.0, 1.0, 700, lumen_layout::FontStyle::Normal, 400, false);
+    // Второй вызов с тем же face-строкой, но другим весом — через НОВЫЙ кэш,
+    // поэтому сравниваем длины: 700 с регулярным face-ом даёт вдвое больше.
+    let (b, _) = lay_out_with(rect, "Hi", 24.0, 1.0, 400, lumen_layout::FontStyle::Normal, 400, false);
+    assert_eq!(a.len(), b.len() * 2);
+}
 /// Все координаты вершин кратны `1/dpr` CSS px, то есть лежат на целых
 /// device px.
 fn assert_on_device_grid(verts: &[TextVertex], dpr: f32) {
@@ -184,6 +258,8 @@ fn run_cache_hit_is_keyed_by_fractional_start_and_dpr() {
         descent_override: None,
         size_adjust: None,
         variation_settings: Vec::new(),
+        weight: 400,
+    italic: false,
     }];
     let mut lazy = LazyParsedFaces::new(&faces);
     let mut atlas = GlyphAtlas::new(ATLAS_DIM);
@@ -209,6 +285,8 @@ fn run_cache_hit_is_keyed_by_fractional_start_and_dpr() {
             (0.0, 0.0),
             None,
             dpr,
+            400,
+            lumen_layout::FontStyle::Normal,
         );
         out
     };

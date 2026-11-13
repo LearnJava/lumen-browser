@@ -1031,7 +1031,7 @@ fn itemize_by_cascade_splits_on_declared_unicode_range() {
     let candidate = |ranges: Vec<(u32, u32)>| {
         let face = build_face(bundled).expect("bundled Inter must parse");
         let cmap = face.font.cmap().ok();
-        FaceCandidate { bytes: bundled, face, ranges, cmap }
+        FaceCandidate { bytes: bundled, face, ranges, cmap, weight: 400, italic: false }
     };
     let cascade = vec![
         candidate(vec![(0x41, 0x5A)]), // A-Z
@@ -1050,7 +1050,7 @@ fn itemize_by_cascade_single_candidate_is_one_run() {
     let bundled = include_bytes!("../../../../../assets/fonts/Inter-Regular.ttf");
     let face = build_face(bundled).expect("bundled Inter must parse");
     let cmap = face.font.cmap().ok();
-    let cascade = vec![FaceCandidate { bytes: bundled, face, ranges: Vec::new(), cmap }];
+    let cascade = vec![FaceCandidate { bytes: bundled, face, ranges: Vec::new(), cmap, weight: 400, italic: false }];
     let runs = itemize_by_cascade("Hello, world!", &cascade);
     assert_eq!(runs, vec![(0, "Hello, world!")]);
 }
@@ -1065,7 +1065,7 @@ fn itemize_by_cascade_falls_back_to_primary_outside_every_range() {
     let candidate = |ranges: Vec<(u32, u32)>| {
         let face = build_face(bundled).expect("bundled Inter must parse");
         let cmap = face.font.cmap().ok();
-        FaceCandidate { bytes: bundled, face, ranges, cmap }
+        FaceCandidate { bytes: bundled, face, ranges, cmap, weight: 400, italic: false }
     };
     let cascade = vec![candidate(vec![(0x41, 0x5A)]), candidate(vec![(0x61, 0x7A)])];
     let runs = itemize_by_cascade("!", &cascade);
