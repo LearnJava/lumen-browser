@@ -1065,8 +1065,10 @@ fn collect_rows(b: &super::super::LayoutBox) -> Vec<&super::super::LayoutBox> {
 }
 
 #[test]
-fn border_spacing_zero_by_default() {
-    // Without border-spacing, gap between adjacent cells should be 0.
+fn border_spacing_ua_default_2px_and_zero_overridable() {
+    // BUG-1804/BUG-1777: UA stylesheet gives a bare <table> border-spacing: 2px
+    // (HTML Rendering §15.3.2, Chrome parity); the initial value 0 is one author
+    // declaration away.
     let t = layout_table(
         "table { width: 200px; } td { width: 80px; }",
         "<table><tr><td></td><td></td></tr></table>",
@@ -1077,9 +1079,20 @@ fn border_spacing_zero_by_default() {
         .filter(|c| !matches!(c.kind, super::super::BoxKind::Skip))
         .collect();
     assert!(cells.len() >= 2, "expected >= 2 cells");
-    // With 0 spacing the second cell starts right after the first.
     let gap = cells[1].rect.x - (cells[0].rect.x + cells[0].rect.width);
-    assert!(gap.abs() < 1.0, "expected gap=0, got {gap}");
+    assert!((gap - 2.0).abs() < 1.0, "expected UA default gap=2, got {gap}");
+
+    let t = layout_table(
+        "table { width: 200px; border-spacing: 0; } td { width: 80px; }",
+        "<table><tr><td></td><td></td></tr></table>",
+        800.0, 600.0,
+    );
+    let row = find_first_row(&t).expect("row not found");
+    let cells: Vec<_> = row.children.iter()
+        .filter(|c| !matches!(c.kind, super::super::BoxKind::Skip))
+        .collect();
+    let gap = cells[1].rect.x - (cells[0].rect.x + cells[0].rect.width);
+    assert!(gap.abs() < 1.0, "author border-spacing:0 must collapse the gap, got {gap}");
 }
 
 #[test]
@@ -1229,7 +1242,7 @@ fn collapse_overlaps_rows_vertically() {
 fn separate_mode_keeps_full_cell_borders() {
     // Regression guard: border-collapse: separate (default) must NOT overlap cells.
     let t = layout_table(
-        "table { border-collapse: separate; } td { width: 96px; border: 2px solid #000; }",
+        "table { border-collapse: separate; border-spacing: 0; } td { width: 96px; border: 2px solid #000; }",
         "<table><tr><td></td><td></td></tr></table>",
         800.0, 600.0,
     );

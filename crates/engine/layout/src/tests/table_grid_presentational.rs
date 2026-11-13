@@ -312,7 +312,7 @@ fn table_cells_layout_horizontally() {
            <td style=\"width:100px;height:50px\"></td>\
            <td style=\"width:200px;height:50px\"></td>\
          </tr></table></body>",
-        "body,table,tr,td { margin:0; padding:0; border:0 }",
+        "body,table,tr,td { margin:0; padding:0; border:0; border-spacing:0 }",
     );
     let body = &root;
     let table = first_element_child(body);
@@ -345,7 +345,7 @@ fn table_rows_stack_vertically() {
     let root = lay(
         "<body><table><tr><td style=\"width:100px;height:40px\"></td></tr>\
                      <tr><td style=\"width:100px;height:60px\"></td></tr></table></body>",
-        "body,table,tr,td { margin:0; padding:0; border:0 }",
+        "body,table,tr,td { margin:0; padding:0; border:0; border-spacing:0 }",
     );
     let body = &root;
     let table = first_element_child(body);
@@ -375,7 +375,7 @@ fn table_global_column_widths_aligned() {
            <td style=\"width:80px;height:20px\"></td>\
            <td style=\"width:250px;height:20px\"></td>\
          </tr></table></body>",
-        "body,table,tr,td { margin:0; padding:0; border:0 }",
+        "body,table,tr,td { margin:0; padding:0; border:0; border-spacing:0 }",
     );
     let body = &root;
     let table = first_element_child(body);
@@ -427,7 +427,7 @@ fn table_with_tbody_rows_stack_vertically() {
            <tr><td style=\"width:100px;height:40px\"></td></tr>\
            <tr><td style=\"width:100px;height:60px\"></td></tr>\
          </tbody></table></body>",
-        "body,table,tbody,tr,td { margin:0; padding:0; border:0 }",
+        "body,table,tbody,tr,td { margin:0; padding:0; border:0; border-spacing:0 }",
     );
     let body = &root;
     let table = first_element_child(body);
@@ -467,7 +467,7 @@ fn table_tbody_global_col_widths() {
            <td style=\"width:60px;height:20px\"></td>\
            <td style=\"width:150px;height:20px\"></td>\
          </tr></tbody></table></body>",
-        "body,table,tbody,tr,td { margin:0; padding:0; border:0 }",
+        "body,table,tbody,tr,td { margin:0; padding:0; border:0; border-spacing:0 }",
     );
     let body = &root;
     let table = first_element_child(body);
@@ -494,7 +494,7 @@ fn table_cell_col_span_row_span_stored() {
         "<body><table><tbody><tr>\
            <td colspan=\"3\" rowspan=\"2\"></td>\
          </tr></tbody></table></body>",
-        "body,table,tbody,tr,td { margin:0; padding:0; border:0 }",
+        "body,table,tbody,tr,td { margin:0; padding:0; border:0; border-spacing:0 }",
     );
     let table = find_box(&root, |k| matches!(k, BoxKind::Table)).unwrap();
     let tbody = find_box(table, |k| matches!(k, BoxKind::TableRowGroup)).unwrap();
@@ -526,7 +526,7 @@ fn table_colspan2_cell_width() {
                <td style=\"width:100px;height:20px\"></td></tr>\
            <tr><td colspan=\"2\" style=\"height:30px\"></td></tr>\
          </tbody></table></body>",
-        "body,table,tbody,tr,td { margin:0; padding:0; border:0 }",
+        "body,table,tbody,tr,td { margin:0; padding:0; border:0; border-spacing:0 }",
     );
     let table = find_box(&root, |k| matches!(k, BoxKind::Table)).unwrap();
     let tbody = find_box(table, |k| matches!(k, BoxKind::TableRowGroup)).unwrap();
@@ -567,7 +567,7 @@ fn table_cell_after_colspan2_x_position() {
            <tr><td colspan=\"2\" style=\"height:20px\"></td>\
                <td style=\"height:20px\"></td></tr>\
          </tbody></table></body>",
-        "body,table,tbody,tr,td { margin:0; padding:0; border:0 }",
+        "body,table,tbody,tr,td { margin:0; padding:0; border:0; border-spacing:0 }",
     );
     let table = find_box(&root, |k| matches!(k, BoxKind::Table)).unwrap();
     let tbody = find_box(table, |k| matches!(k, BoxKind::TableRowGroup)).unwrap();
@@ -614,7 +614,7 @@ fn table_colspan_distributes_width_hint() {
                <td style=\"height:20px\"></td></tr>\
            <tr><td colspan=\"2\" style=\"width:200px;height:20px\"></td></tr>\
          </tbody></table></body>",
-        "body,table,tbody,tr,td { margin:0; padding:0; border:0 }",
+        "body,table,tbody,tr,td { margin:0; padding:0; border:0; border-spacing:0 }",
     );
     let table = find_box(&root, |k| matches!(k, BoxKind::Table)).unwrap();
     let tbody = find_box(table, |k| matches!(k, BoxKind::TableRowGroup)).unwrap();
@@ -651,7 +651,7 @@ fn table_rowspan2_second_row_skips_occupied_column() {
                <td style=\"width:60px;height:20px\"></td></tr>\
            <tr><td style=\"width:60px;height:20px\"></td></tr>\
          </tbody></table></body>",
-        "body,table,tbody,tr,td { margin:0; padding:0; border:0 }",
+        "body,table,tbody,tr,td { margin:0; padding:0; border:0; border-spacing:0 }",
     );
     let table = find_box(&root, |k| matches!(k, BoxKind::Table)).unwrap();
     let tbody = find_box(table, |k| matches!(k, BoxKind::TableRowGroup)).unwrap();
@@ -690,7 +690,7 @@ fn table_rowspan2_cell_height_spans_two_rows() {
                <td style=\"width:50px;height:30px\"></td></tr>\
            <tr><td style=\"width:50px;height:40px\"></td></tr>\
          </tbody></table></body>",
-        "body,table,tbody,tr,td { margin:0; padding:0; border:0 }",
+        "body,table,tbody,tr,td { margin:0; padding:0; border:0; border-spacing:0 }",
     );
     let table = find_box(&root, |k| matches!(k, BoxKind::Table)).unwrap();
     let tbody = find_box(table, |k| matches!(k, BoxKind::TableRowGroup)).unwrap();

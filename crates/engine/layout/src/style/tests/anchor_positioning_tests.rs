@@ -577,8 +577,10 @@
     }
 
     #[test]
-    fn p4_border_collapse_inherited_by_cells() {
-        // border-collapse is inherited: td should see the table's collapse value.
+    fn p4_border_collapse_not_inherited_by_cells() {
+        // CSS 2.1 §17.6: border-collapse applies to table/inline-table and is NOT
+        // inherited (BUG-1777: only border-spacing, empty-cells, caption-side are).
+        // The author rule styles the table; the cell keeps the initial Separate.
         // Must walk the ancestor chain: root → body → table → (tbody) → tr → td.
         let doc = lumen_html_parser::parse("<table><tr><td>x</td></tr></table>");
         let sheet = lumen_css_parser::parse("table { border-collapse: collapse; }");
@@ -600,12 +602,13 @@
         let table = find_tag(&doc, body_node, "table").expect("table");
         let table_style = compute_style(&doc, table, &sheet, &body_style, VP, false);
         assert_eq!(table_style.border_collapse, BorderCollapse::Collapse, "table should have collapse");
-        // TD inherits via tr; tr uses table_style (or intermediate row-group).
+        // TD does NOT inherit: tr and td keep the initial Separate; the collapsed
+        // border model is driven by the table's own border-collapse during layout.
         let tr = find_tag(&doc, table, "tr").expect("tr");
         let tr_style = compute_style(&doc, tr, &sheet, &table_style, VP, false);
         let td = find_tag(&doc, tr, "td").expect("td");
         let td_style = compute_style(&doc, td, &sheet, &tr_style, VP, false);
-        assert_eq!(td_style.border_collapse, BorderCollapse::Collapse, "td inherits collapse from table");
+        assert_eq!(td_style.border_collapse, BorderCollapse::Separate, "border-collapse is not inherited");
     }
 
     #[test]

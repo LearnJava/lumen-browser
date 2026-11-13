@@ -4,7 +4,7 @@ use lumen_core::geom::{Rect, Size};
 
 fn lay(html: &str) -> (lumen_dom::Document, super::super::LayoutBox) {
     let doc = lumen_html_parser::parse(html);
-    let sheet = lumen_css_parser::parse("body{margin:0}");
+    let sheet = lumen_css_parser::parse("body{margin:0}table{border-spacing:0}");
     let root = super::super::layout(&doc, &sheet, Size::new(500.0, 600.0));
     (doc, root)
 }
@@ -136,7 +136,7 @@ impl crate::TextMeasurer for Mono {
 
 fn measured_cell_width(html: &str) -> f32 {
     let doc = lumen_html_parser::parse(html);
-    let sheet = lumen_css_parser::parse("body{margin:0}");
+    let sheet = lumen_css_parser::parse("body{margin:0}table{border-spacing:0}");
     let root = super::super::layout_measured(&doc, &sheet, Size::new(500.0, 600.0), &Mono);
     super::find_by_id_all(&root, &doc, "a").expect("нет #a").rect.width
 }
