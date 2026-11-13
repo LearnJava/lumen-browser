@@ -264,9 +264,11 @@ use super::*;
 
     #[test]
     fn cellspacing_hint_negative_ignored() {
+        // BUG-1777 UA table styles: a rejected hint leaves the UA default 2px
+        // (a hint that "won" would give -5).
         let s = doc_root_child_style("<table cellspacing=\"-5\"></table>");
-        assert_eq!(s.border_spacing_h, 0.0);
-        assert_eq!(s.border_spacing_v, 0.0);
+        assert_eq!(s.border_spacing_h, 2.0);
+        assert_eq!(s.border_spacing_v, 2.0);
     }
 
     #[test]
