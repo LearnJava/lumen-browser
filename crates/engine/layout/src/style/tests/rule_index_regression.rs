@@ -104,6 +104,52 @@
             "later same-specificity rule must win");
     }
 
+    /// BUG-1800 срез 8: `matches_complex_for_pseudo` pre-matches the subject compound
+    /// (sans PseudoElement parts) against the node before building the modified
+    /// selector — the `::before`/`::after` probes of `counters::walk` pay ~37k match
+    /// calls per flush on pikabu, ~99% of them refusals, and the old path cloned the
+    /// tail and all parts on every call. The pre-check must agree with the clone-based
+    /// full match in both directions: descendant/child prefix chains decide through the
+    /// real ancestors, a bare `::before` (empty stripped subject) is universal, and a
+    /// subject refusal is final without walking the chain.
+    #[test]
+    fn pseudo_subject_precheck_agrees_with_the_full_prefix_match() {
+        let doc = lumen_html_parser::parse(
+            "<div class=\"card\"><p class=story>t</p></div><p class=story>orphan</p><span>s</span>",
+        );
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let p_in = doc.get(div).children[0];
+        let p_out = doc.get(body).children[1];
+        let span = doc.get(body).children[2];
+        let parent = ComputedStyle::root();
+        let content_of = |css: &str, node: NodeId, pseudo: &str| {
+            let sheet = lumen_css_parser::parse(css);
+            compute_pseudo_element_style(&doc, node, pseudo, &sheet, &parent, VP, false)
+                .map(|s| format!("{:?}", s.content))
+        };
+        let descendant = ".card p::before { content: \"in\" }";
+        assert!(
+            content_of(descendant, p_in, "before").is_some(),
+            "descendant prefix must match through the real ancestor"
+        );
+        assert!(
+            content_of(descendant, p_out, "before").is_none(),
+            "wrong ancestor must refuse a descendant-prefix pseudo rule"
+        );
+        let child = "div > p::after { content: \"kid\" }";
+        assert!(content_of(child, p_in, "after").is_some(), "child prefix must match");
+        assert!(content_of(child, p_out, "after").is_none(), "child prefix must refuse a non-child");
+        assert!(
+            content_of("::before { content: \"all\" }", span, "before").is_some(),
+            "a bare pseudo-element is an empty subject compound — universal"
+        );
+        assert!(
+            content_of(".card span::before { content: \"x\" }", p_in, "before").is_none(),
+            "a subject refusal is final — the chain is not walked"
+        );
+    }
+
     /// BUG-935 срез 90: `compute_pseudo_element_style` reads candidates from the
     /// pseudo-subject indices (top level, active `@media`, active `@supports`),
     /// which carry the general index's rule numbering. Cascade order across the

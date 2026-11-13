@@ -15,9 +15,8 @@ use crate::style::cascade::{part_scopes_of, set_part_scope_host};
 use crate::style::matches_part_complex;
 use crate::style::{
     apply_declaration, apply_font_size, ensure_cascade_index, expand_attr_val, matches_complex,
-    note_pseudo_cascade, sheet_targets_pseudo, with_front_cascade_index, ComputedStyle, Content,
-    ContentItem,
-    Display, PSEUDO_STATS_ON, SHADOW_HOST_SCOPE,
+    matching::matches_simple, note_pseudo_cascade, sheet_targets_pseudo, with_front_cascade_index,
+    ComputedStyle, Content, ContentItem, Display, PSEUDO_STATS_ON, SHADOW_HOST_SCOPE,
 };
 use lumen_core::geom::Size;
 use lumen_css_parser::{
@@ -150,6 +149,24 @@ fn matches_complex_for_pseudo(
     if last.parts.iter().any(|p| matches!(p, SimpleSelector::PseudoElement(PseudoElementKind::Part(_)))) {
         return None;
     }
+    // BUG-1800 срез 8: subject-компаунд (последний, без PseudoElement-частей) против узла —
+    // ДО построения модифицированного селектора. Прежний путь клонировал tail и все части
+    // на каждый вызов; псевдо-пробы `counters::walk` дают ~37k вызовов на флаш pikabu при
+    // ~99 % отказов. Части и порядок — сами `matches_compound`/`matches_simple` (пустой
+    // компаунд — universal, не-элемент — отказ): результат совпадает с прежним бит-в-бит.
+    let NodeData::Element { name, attrs } = &doc.get(node).data else {
+        return None;
+    };
+    if !last.parts.iter().all(|p| {
+        matches!(p, SimpleSelector::PseudoElement(_)) || matches_simple(p, doc, node, &name.local, attrs)
+    }) {
+        return None;
+    }
+    // Селектор без префикса: subject уже решил матч целиком (таков и был бы
+    // `matches_chain` по модифицированному селектору — один compound).
+    if complex.tail.is_empty() {
+        return Some(complex.specificity());
+    }
     // Строим модифицированный последний compound без PseudoElement.
     let stripped = CompoundSelector {
         parts: last.parts.iter()
@@ -158,13 +175,9 @@ fn matches_complex_for_pseudo(
             .collect(),
     };
     // Собираем модифицированный ComplexSelector.
-    let modified = if complex.tail.is_empty() {
-        ComplexSelector { head: stripped, tail: vec![] }
-    } else {
-        let mut tail = complex.tail.clone();
-        tail.last_mut().unwrap().1 = stripped;
-        ComplexSelector { head: complex.head.clone(), tail }
-    };
+    let mut tail = complex.tail.clone();
+    tail.last_mut().unwrap().1 = stripped;
+    let modified = ComplexSelector { head: complex.head.clone(), tail };
     if matches_complex(&modified, doc, node) {
         Some(complex.specificity())
     } else {
@@ -572,28 +585,29 @@ fn compute_pseudo_element_style_inner(
     // pseudo-element in a subject cannot match here (`matches_complex_for_pseudo` returns
     // `None` for them before it looks at the node), and a `@media`/`@supports` block with no
     // such rule is not visited at all. Indices are the general index's own (same numbering).
-    let (cands, style_keys) = with_front_cascade_index(|idx| {
-        let cands = idx.pseudo_rules.candidates(node_tag, node_id, &node_classes, node_attrs);
-        let keys = cands.iter().map(|&i| idx.order.style(i)).collect::<Vec<_>>();
-        (cands, keys)
+    // BUG-1800 срез 8: style-ключ берётся лениво, на сматченном правиле, — сбор `keys`
+    // для всех кандидатов был аллокацией на каждую пробу (~16k на флаш pikabu), читался
+    // же лишь сматчившими (~200).
+    with_front_cascade_index(|idx| {
+        for rule_idx in idx.pseudo_rules.candidates(node_tag, node_id, &node_classes, node_attrs) {
+            let rule = &sheet.rules[rule_idx];
+            let mut best: Option<Specificity> = None;
+            for complex in &rule.selectors {
+                if let Some(spec) = matches_complex_for_pseudo(complex, pseudo, doc, node) {
+                    best = Some(match best {
+                        Some(prev) if prev >= spec => prev,
+                        _ => spec,
+                    });
+                }
+            }
+            if let Some(spec) = best {
+                let key = idx.order.style(rule_idx);
+                for (decl_idx, decl) in rule.declarations.iter().enumerate() {
+                    matched.push((decl.important, spec, key, decl_idx, decl));
+                }
+            }
+        }
     });
-    for (rule_idx, key) in cands.into_iter().zip(style_keys) {
-        let rule = &sheet.rules[rule_idx];
-        let mut best: Option<Specificity> = None;
-        for complex in &rule.selectors {
-            if let Some(spec) = matches_complex_for_pseudo(complex, pseudo, doc, node) {
-                best = Some(match best {
-                    Some(prev) if prev >= spec => prev,
-                    _ => spec,
-                });
-            }
-        }
-        if let Some(spec) = best {
-            for (decl_idx, decl) in rule.declarations.iter().enumerate() {
-                matched.push((decl.important, spec, key, decl_idx, decl));
-            }
-        }
-    }
 
     // Perf: see the analogous @media/@supports comments in `compute_style` —
     // "active" precomputed once per (sheet, viewport, dark_mode) rather than
