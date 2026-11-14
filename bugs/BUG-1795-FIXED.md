@@ -1,8 +1,17 @@
 # BUG-1795 — `border-image` в cssText сериализует url() с кавычками
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-11-15 (P3)
 **Заведён:** 2026-11-06 (P3, найдено в scoped-test гейте BUG-1694; воспроизводится на чистой ветке без правок BUG-1694 — stash-эксперимент)
 **Область:** js/cssom (сериализация `border-image`/`border` в `cssText`)
+
+## Решение
+
+Прав движка не потребовалось: `border-image` идёт через общую канонизацию
+`_lumen_css_canonical_background` → `canonical_specified_border_image`, а её
+`url("a.png")` — это канон CSSOM/Chrome (та же форма у `background-image`,
+BUG-1551: `crates/js/src/dom/tests/v8_bug1551_misc_cssom.rs:60`). Устаревшим был
+текст ожидания в тесте BUG-1552, он и исправлен. Та же находка — [BUG-1785](BUG-1785-FIXED.md),
+закрыт этим же фиксом как дубликат.
 
 ## Симптом
 
