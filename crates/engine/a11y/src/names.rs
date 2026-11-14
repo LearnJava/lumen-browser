@@ -108,21 +108,21 @@ pub fn compute_name(doc: &Document, node_id: NodeId) -> String {
             "a" if node.get_attr("href").is_some() => {
                 // Link text is the text content if href is present.
                 // Links without href are not accessible links.
-                let text_content = collect_text_content(doc, node_id);
+                let text_content = collect_name_from_content(doc, node_id);
                 if !text_content.is_empty() {
                     return text_content;
                 }
             }
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
                 // Heading text is the text content recursively.
-                let text_content = collect_text_content(doc, node_id);
+                let text_content = collect_name_from_content(doc, node_id);
                 if !text_content.is_empty() {
                     return text_content;
                 }
             }
             "summary" => {
                 // Summary (disclosure widget label) uses text content.
-                let text_content = collect_text_content(doc, node_id);
+                let text_content = collect_name_from_content(doc, node_id);
                 if !text_content.is_empty() {
                     return text_content;
                 }
@@ -141,7 +141,7 @@ pub fn compute_name(doc: &Document, node_id: NodeId) -> String {
                     }
                 }
                 // Otherwise, use text content.
-                let text_content = collect_text_content(doc, node_id);
+                let text_content = collect_name_from_content(doc, node_id);
                 if !text_content.is_empty() {
                     return text_content;
                 }
@@ -150,9 +150,9 @@ pub fn compute_name(doc: &Document, node_id: NodeId) -> String {
         }
     }
 
-    // 4. Recursive text content (innerText-like). For most elements, this is the fallback.
+    // 4. Recursive name from content. For most elements, this is the fallback.
     // For elements like <button>, this is the primary source of the name.
-    let text_content = collect_text_content(doc, node_id);
+    let text_content = collect_name_from_content(doc, node_id);
     if !text_content.is_empty() {
         return text_content;
     }
@@ -230,6 +230,107 @@ fn find_element_by_id(doc: &Document, target_id: &str) -> Option<NodeId> {
         }
     }
     None
+}
+
+/// Depth cap for name-from-content recursion. Real pages stay far below it;
+/// it only stops a pathological DOM from blowing the stack.
+const MAX_NAME_DEPTH: usize = 64;
+
+/// Name from content (ACCNAME-1.2 §4.3.2 step 2F): text nodes under `node_id`
+/// plus the text alternatives of descendant elements — `aria-label`, `alt` of
+/// `<img>`/`<area>`/`<input type=image>`, the `<title>` of an `<svg>`, and the
+/// descendant's own `title` attribute when nothing else names it.
+///
+/// Plain text concatenation alone leaves icon-only links nameless: a logo link
+/// `<a href="/"><img alt="GitHub"></a>` has no Text node at all (BUG-1793).
+fn collect_name_from_content(doc: &Document, node_id: NodeId) -> String {
+    let mut buf = String::new();
+    collect_name_recursive(doc, node_id, &mut buf, 0);
+    buf.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn collect_name_recursive(doc: &Document, node_id: NodeId, buf: &mut String, depth: usize) {
+    if depth > MAX_NAME_DEPTH {
+        return;
+    }
+    let node = doc.get(node_id);
+    match &node.data {
+        NodeData::Text(t) => push_name_part(buf, t),
+        NodeData::Element { .. } => {
+            // Hidden subtrees contribute no name text (ACCNAME-1.2 §4.3.2 step 2A).
+            if node
+                .get_attr("aria-hidden")
+                .is_some_and(|v| v.eq_ignore_ascii_case("true"))
+                || node.get_attr("hidden").is_some()
+            {
+                return;
+            }
+            // A descendant's own text alternative replaces its contents (step 2C/2D/2E).
+            if let Some(label) = non_empty_attr(node, "aria-label") {
+                push_name_part(buf, label);
+                return;
+            }
+            let tag = node
+                .element_name()
+                .map(|n| n.local.to_ascii_lowercase())
+                .unwrap_or_default();
+            match tag.as_str() {
+                // `alt=""` marks the image decorative: it adds nothing (step 2D).
+                "img" | "area" => {
+                    if let Some(alt) = node.get_attr("alt") {
+                        push_name_part(buf, alt);
+                    }
+                    return;
+                }
+                "input" => {
+                    if node.input_type() == Some(lumen_dom::InputType::Image)
+                        && let Some(alt) = node.get_attr("alt")
+                    {
+                        push_name_part(buf, alt);
+                    }
+                    return;
+                }
+                // SVG-AAM: the first `<title>` child names the graphic, taking
+                // precedence over the visible `<text>` inside it.
+                "svg" => {
+                    if let Some(title) = first_child_text(doc, node_id, "title") {
+                        push_name_part(buf, &title);
+                        return;
+                    }
+                }
+                _ => {}
+            }
+            let mut subtree = String::new();
+            for &child in &node.children {
+                collect_name_recursive(doc, child, &mut subtree, depth + 1);
+            }
+            if subtree.split_whitespace().next().is_some() {
+                push_name_part(buf, &subtree);
+            } else if let Some(title) = non_empty_attr(node, "title") {
+                // Step 2I: `title` is a last resort for a descendant that has
+                // neither text nor another text alternative.
+                push_name_part(buf, title);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Append one contribution to a name-from-content buffer, separating it from
+/// the previous one with a single space.
+fn push_name_part(buf: &mut String, part: &str) {
+    if part.trim().is_empty() {
+        return;
+    }
+    if !buf.is_empty() {
+        buf.push(' ');
+    }
+    buf.push_str(part);
+}
+
+/// Attribute value with surrounding whitespace trimmed, or `None` if absent/blank.
+fn non_empty_attr<'a>(node: &'a lumen_dom::Node, attr: &'a str) -> Option<&'a str> {
+    node.get_attr(attr).map(str::trim).filter(|v| !v.is_empty())
 }
 
 /// Return innerText equivalent: concatenate all Text nodes under `node_id`,
