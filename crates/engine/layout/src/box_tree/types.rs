@@ -781,6 +781,13 @@ pub enum BoxKind {
         src: String,
         /// Poster image URL (`poster` attribute), may be empty.
         poster: String,
+        /// Whether the `controls` attribute is present. Rides in the kind so
+        /// the shell builds the UA panel on the UI thread without a blocking
+        /// `document.lock()` — the engine thread holds that lock for seconds
+        /// during JS runs (BUG-1802). Same semantics as `Audio::controls`
+        /// (BUG-1719): a dynamic toggle reaches the panel at the next box
+        /// rebuild.
+        controls: bool,
     },
     /// Replaced element: HTML `<canvas>` element — CPU-rasterized drawing surface
     /// (HTML Living Standard §4.12.4).
