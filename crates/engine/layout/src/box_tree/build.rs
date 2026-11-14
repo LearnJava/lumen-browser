@@ -709,6 +709,9 @@ fn build_box_inner(
                 let node = doc.get(id);
                 let src = node.get_attr("src").unwrap_or("").to_string();
                 let poster = node.get_attr("poster").unwrap_or("").to_string();
+                // BUG-1802: `controls` captured here so the shell's per-frame
+                // UA-panel build needs no `document.lock()` on the UI thread.
+                let controls = node.get_attr("controls").is_some();
                 // HTML spec §14.1: UA default intrinsic size is 300×150 CSS px.
                 // Explicit width/height attrs applied earlier as presentational hints;
                 // fill only if still unset.
@@ -718,7 +721,7 @@ fn build_box_inner(
                 if style.height.is_none() {
                     Arc::make_mut(&mut style).height = Some(Length::Px(150.0));
                 }
-                BoxKind::Video { src, poster }
+                BoxKind::Video { src, poster, controls }
             } else if is_canvas_element(doc, id) {
                 let node = doc.get(id);
                 // HTML LS §4.12.4: width/height content attributes reflect as

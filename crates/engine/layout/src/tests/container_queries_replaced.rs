@@ -470,7 +470,7 @@ use super::*;
         let root = lay(r#"<video src="clip.mp4"></video>"#, "");
         let vid = first_video_child(&root);
         match &vid.kind {
-            BoxKind::Video { src, poster } => {
+            BoxKind::Video { src, poster, .. } => {
                 assert_eq!(src, "clip.mp4");
                 assert_eq!(poster, "");
             }
@@ -485,6 +485,18 @@ use super::*;
         if let BoxKind::Video { poster, .. } = &vid.kind {
             assert_eq!(poster, "thumb.jpg");
         }
+    }
+
+    /// BUG-1802: `controls` едет в kind — шелл строит UA-панель без
+    /// блокирующего `document.lock()` на UI-потоке.
+    #[test]
+    fn video_captures_controls_attribute() {
+        let with = lay(r#"<video src="clip.mp4" controls></video>"#, "");
+        let without = lay(r#"<video src="clip.mp4"></video>"#, "");
+        let yes = &first_video_child(&with).kind;
+        let no = &first_video_child(&without).kind;
+        assert!(matches!(yes, BoxKind::Video { controls: true, .. }));
+        assert!(matches!(no, BoxKind::Video { controls: false, .. }));
     }
 
     #[test]

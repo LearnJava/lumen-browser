@@ -141,8 +141,11 @@ fn kind_paint_eq<'a>(
             b,
             BoxKind::Image { src: s, alt: al, is_lazy: l } if src == s && alt == al && is_lazy == l
         ),
-        BoxKind::Video { src, poster } => {
-            matches!(b, BoxKind::Video { src: s, poster: p } if src == s && poster == p)
+        BoxKind::Video { src, poster, controls } => {
+            matches!(
+                b,
+                BoxKind::Video { src: s, poster: p, controls: c } if src == s && poster == p && controls == c
+            )
         }
         BoxKind::Canvas { width, height } => {
             matches!(b, BoxKind::Canvas { width: w, height: h } if width == w && height == h)

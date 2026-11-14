@@ -39,7 +39,6 @@
 
 use crate::*;
 use lumen_core::geom::Rect;
-use lumen_dom::Document;
 use lumen_layout::{BoxKind, Color, FontStretch, FontStyle, FontWeight, Position};
 use lumen_paint::DisplayCommand;
 
@@ -427,15 +426,16 @@ impl Lumen {
     /// `<video controls>` / `<audio controls>` текущего layout-дерева
     /// (в документном порядке) и возвращает зоны hit-test в оконных
     /// координатах. Команды дописываются в `out` в оконных координатах.
+    ///
+    /// BUG-1802: DOM на UI-потоке здесь не читается — `controls` обоих
+    /// элементов едет в `BoxKind` (у `<video>` с этого фикса, у `<audio>`
+    /// с BUG-1719): `document.lock()` на каждом кадре блокировал UI-поток
+    /// на время JS-хода движкового потока (до 0.5–1.9 с на ebay).
     pub(crate) fn build_media_controls_overlay(&self, out: &mut DisplayList) -> Vec<MediaHit> {
         let hits = Vec::new();
         let Some(lb) = self.layout_box.as_ref() else {
             return hits;
         };
-        let Some(ls) = self.layout_source.as_ref() else {
-            return hits;
-        };
-        let doc = ls.document.lock().unwrap_or_else(|e| e.into_inner());
         let viewport = Rect {
             x: 0.0,
             y: 0.0,
@@ -443,7 +443,6 @@ impl Lumen {
             height: self.viewport_height_css(),
         };
         let mut ctx = PanelCtx {
-            doc: &doc,
             store: &self.video_gif_store,
             clock_ms: self.media_clock_ms(),
             scroll: (self.scroll_x, self.scroll_y),
@@ -678,7 +677,6 @@ impl Lumen {
 
 /// Контекст одного прохода по layout-дереву.
 struct PanelCtx<'a> {
-    doc: &'a std::sync::MutexGuard<'a, Document>,
     store: &'a std::sync::Arc<lumen_js::VideoGifStore>,
     clock_ms: u64,
     scroll: (f32, f32),
@@ -713,9 +711,10 @@ fn walk_media_boxes(
         let win = box_window_rect(b, acc, ctx, fixed);
         // Панель видна, только если сам бокс пересекает вьюпорт.
         if clip_to_viewport(win, ctx.viewport).is_some() {
+            // BUG-1802: `controls` обоих медиа-элементов живёт в kind —
+            // DOM на UI-потоке не читается (см. doc у `build_media_controls_overlay`).
             let has_controls = match kind {
-                BoxKind::Video { .. } => ctx.doc.get(b.node).get_attr("controls").is_some(),
-                BoxKind::Audio { controls, .. } => *controls,
+                BoxKind::Video { controls, .. } | BoxKind::Audio { controls, .. } => *controls,
                 _ => false,
             };
             if has_controls {

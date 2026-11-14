@@ -115,8 +115,8 @@ fn write_box(out: &mut String, root: &LayoutBox, base_depth: usize) {
         if let BoxKind::Image { src, alt, .. } = &b.kind {
             let _ = write!(out, " src={src:?} alt={alt:?}");
         }
-        if let BoxKind::Video { src, poster } = &b.kind {
-            let _ = write!(out, " src={src:?} poster={poster:?}");
+        if let BoxKind::Video { src, poster, controls } = &b.kind {
+            let _ = write!(out, " src={src:?} poster={poster:?} controls={controls}");
         }
         if let BoxKind::Canvas { width, height } = &b.kind {
             let _ = write!(out, " canvas={width}x{height}");

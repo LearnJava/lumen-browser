@@ -57,7 +57,7 @@ fn promote_will_change_rec(lb: &LayoutBox, renderer: &mut dyn RenderBackend) {
 /// window (task #21) to pick a video to embed.  Returns `None` when the page
 /// has no `<video>`.
 pub(crate) fn find_video_source(lb: &LayoutBox) -> Option<(String, String)> {
-    if let lumen_layout::BoxKind::Video { src, poster } = &lb.kind {
+    if let lumen_layout::BoxKind::Video { src, poster, .. } = &lb.kind {
         return Some((src.clone(), poster.clone()));
     }
     for child in &lb.children {
