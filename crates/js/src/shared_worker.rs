@@ -1141,6 +1141,12 @@ fn install_shared_worker_globals_v8(
     // BUG-778: `fetch()`/`XMLHttpRequest` — `crate::worker_net`, installed last below.
     let net_provider = fetch_provider.clone();
 
+    // `importScripts('blob:…')` is not supported here (always-empty store —
+    // see this function's doc comment) and the same store answers a
+    // `fetch`/`XHR` of a `blob:` URL (BUG-1781's shared-store path; it
+    // misses, i.e. a network error, exactly like a revoked URL).
+    let no_blobs: crate::worker::WorkerBlobStore = Arc::new(Mutex::new(HashMap::new()));
+
     // _lumen_import_scripts_resolve(url) → String | undefined — BUG-778, see
     // this function's own doc comment on the `blob:` limitation.
     //
@@ -1150,7 +1156,7 @@ fn install_shared_worker_globals_v8(
     // `importScripts()` must reuse it for the same reason (CSP3 §6.4:
     // `worker-src` governs both).
     {
-        let no_blobs: crate::worker::WorkerBlobStore = Arc::new(Mutex::new(HashMap::new()));
+        let no_blobs = Arc::clone(&no_blobs);
         let fp = fetch_provider;
         rt.register_native(
             "_lumen_import_scripts_resolve",
@@ -1188,7 +1194,7 @@ fn install_shared_worker_globals_v8(
 
     rt.eval(SHARED_WORKER_GLOBAL_SHIM)?;
     rt.eval(crate::worker_shims::WORKER_TIMERS_SHIM)?;   // BUG-815
-    crate::worker_net::install_worker_net_v8(rt, net_provider)?;
+    crate::worker_net::install_worker_net_v8(rt, net_provider, &no_blobs)?;
     Ok(())
 }
 

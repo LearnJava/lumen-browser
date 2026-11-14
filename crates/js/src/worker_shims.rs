@@ -532,8 +532,9 @@ pub(crate) const WORKER_OPTIONS_SHIM: &str = r#"(function() {
 /// Depends on:
 /// - `_lumen_create_worker` / `_lumen_worker_post` / `_lumen_worker_terminate`
 ///   (native bindings installed by `install_worker_bindings_v8` above).
-/// - `_lumen_register_worker_blob` (native binding installed above — mirrors
-///   text blobs into `WorkerBlobStore` so `importScripts` can load them).
+/// - `_lumen_register_worker_blob_bytes` (native binding installed above —
+///   mirrors every Blob's bytes/MIME into `WorkerBlobStore` so workers can
+///   serve the blob: URL, BUG-1781, and `importScripts` can load it).
 /// - `_lumen_blob_url_entry` (defined in WEB_API_SHIM for blob: URL resolution).
 /// - `TextDecoder` (defined in WEB_API_SHIM for UTF-8 decoding of blob bytes).
 /// - `atob` (defined in WEB_API_SHIM for data: URLs with base64 encoding).
@@ -544,23 +545,19 @@ pub(crate) const WORKER_SHIM: &str = r#"(function() {
 
   // ── importScripts blob mirroring ─────────────────────────────────────────────
 
-  // Wrap URL.createObjectURL so that text/javascript and text/* blobs are also
-  // registered in the Rust WorkerBlobStore.  Workers can then importScripts()
-  // with the blob URL even though they run in a separate thread with no access
-  // to the JS-side _object_url_store.
+  // Wrap URL.createObjectURL so every Blob's raw bytes and MIME type are also
+  // registered in the Rust WorkerBlobStore. Workers run in a separate thread
+  // with no access to the JS-side _object_url_store: they read the shared
+  // store to serve fetch()/XMLHttpRequest of a blob: URL (BUG-1781) and to
+  // importScripts() the text/* ones.
   if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
     var _origCreateObjectURL = URL.createObjectURL;
     URL.createObjectURL = function(blob) {
       var url = _origCreateObjectURL.call(URL, blob);
-      if (blob && blob._bytes && blob.type) {
-        var t = String(blob.type).toLowerCase().split(';')[0].trim();
-        if (t === 'text/javascript' || t === 'application/javascript' ||
-            t.startsWith('text/')) {
-          try {
-            var text = new TextDecoder().decode(blob._bytes);
-            _lumen_register_worker_blob(url, text);
-          } catch(e) {}
-        }
+      if (blob && blob._bytes) {
+        try {
+          _lumen_register_worker_blob_bytes(url, String(blob.type || ''), new Uint8Array(blob._bytes));
+        } catch(e) {}
       }
       return url;
     };

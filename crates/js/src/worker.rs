@@ -12,10 +12,11 @@
 //! `Worker` instance in JS via `_lumen_deliver_worker_messages(msgs)`.
 //!
 //! **importScripts():** supported for `data:` and `blob:` URLs via
-//! `WorkerBlobStore` — a Rust-side `Arc<Mutex<HashMap<String, String>>>` that
-//! mirrors text blobs registered by `URL.createObjectURL()` on the main thread.
-//! The WORKER_SHIM wraps `URL.createObjectURL` to populate this store for any
-//! Blob whose MIME type starts with "text/" or is "application/javascript".
+//! `WorkerBlobStore` — a Rust-side blob store (bytes + MIME type per URL) that
+//! mirrors every Blob registered by `URL.createObjectURL()` on the main
+//! thread. The WORKER_SHIM wraps `URL.createObjectURL` to populate it; the
+//! same entries serve a worker's `fetch`/`XMLHttpRequest` of a `blob:` URL
+//! (BUG-1781, `worker_net.rs`).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -105,12 +106,22 @@ pub type WorkerRegistry = Arc<Mutex<HashMap<u32, WorkerHandle>>>;
 /// queue on each event-loop tick via `QuickJsRuntime::pump_workers`.
 pub type WorkerMessageQueue = Arc<Mutex<Vec<(u32, String)>>>;
 
-/// Shared blob store: blob URL → decoded script text.
+/// One blob URL entry of [`WorkerBlobStore`]: the Blob's raw bytes and MIME
+/// type as the page's `URL.createObjectURL` registered them (BUG-1781).
+#[derive(Clone)]
+pub struct WorkerBlobEntry {
+    pub bytes: Vec<u8>,
+    pub mime: String,
+}
+
+/// Shared blob store: blob URL → [`WorkerBlobEntry`].
 ///
-/// Populated on the main thread via `_lumen_register_worker_blob(url, text)`
-/// whenever `URL.createObjectURL` is called with a text/javascript Blob.
-/// Worker threads read this store to implement `importScripts('blob:…')`.
-pub type WorkerBlobStore = Arc<Mutex<HashMap<String, String>>>;
+/// Populated on the main thread via `_lumen_register_worker_blob_bytes(url,
+/// mime, bytes)` whenever `URL.createObjectURL` is called with any Blob.
+/// Worker threads read this store to serve `importScripts('blob:…')` (text
+/// decode of the bytes) and `fetch`/`XMLHttpRequest` of a `blob:` URL
+/// (BUG-1781) — the network layer rejects the scheme.
+pub type WorkerBlobStore = Arc<Mutex<HashMap<String, WorkerBlobEntry>>>;
 
 /// Outbound port-message queue: messages posted by a `MessagePort` living
 /// inside a worker thread, addressed to its transferred partner on the page
@@ -343,7 +354,7 @@ fn percent_decode(s: &str) -> String {
 /// Supported schemes:
 /// - `data:[type][;base64],<content>` — decoded inline; no network required.
 /// - `blob:<origin>/<uuid>` — looked up in `blob_store` by the URL without
-///   its fragment (File API §8.3 «resolve a blob URL»).
+///   its fragment (File API §8.3 «resolve a blob URL»), bytes decoded as text.
 /// - anything else — a synchronous GET via `fetch_provider` (BUG-778's
 ///   WPT-RUN-6 extension: `importScripts()` previously only worked for
 ///   `data:`/`blob:`, but the wrapper wptrunner builds for every
@@ -372,7 +383,11 @@ pub(crate) fn resolve_import_url(
         }
     } else if url.starts_with("blob:") {
         let key = url.split('#').next().unwrap_or(url);
-        blob_store.lock().unwrap().get(key).cloned()
+        blob_store
+            .lock()
+            .unwrap()
+            .get(key)
+            .map(|e| String::from_utf8_lossy(&e.bytes).into_owned())
     } else {
         fetch_worker_script(fetch_provider, url).map(|(body, _final_url)| body)
     }
@@ -549,7 +564,7 @@ pub(crate) fn install_worker_scope_globals_v8(
 // `worker_global_shim` (the worker-thread global scope) are pure JS.
 
 /// Install native bindings (`_lumen_create_worker`, `_lumen_worker_post`,
-/// `_lumen_worker_terminate`, `_lumen_register_worker_blob`,
+/// `_lumen_worker_terminate`, `_lumen_register_worker_blob_bytes`,
 /// `_lumen_worker_fetch_script`, `_lumen_worker_last_csp_block`) and the
 /// `Worker` JS class into `rt`.
 ///
@@ -783,13 +798,18 @@ fn install_worker_constructor_v8(
         )?;
     }
 
-    // _lumen_register_worker_blob(url: String, text: String)
+    // _lumen_register_worker_blob_bytes(url: String, mime: String, bytes: Vec<u8>)
+    //
+    // BUG-1781: every Blob the page hands to `URL.createObjectURL` lands here
+    // (WORKER_SHIM's wrapper), so a worker's `fetch`/`XMLHttpRequest` can serve
+    // the blob: URL out of this shared store (worker_net.rs) and
+    // `importScripts` keeps loading text/* ones out of the same entries.
     {
         let bs = Arc::clone(blob_store);
         rt.register_native(
-            "_lumen_register_worker_blob",
-            into_v8_fn2(move |url: String, text: String| {
-                bs.lock().unwrap().insert(url, text);
+            "_lumen_register_worker_blob_bytes",
+            into_v8_fn3(move |url: String, mime: String, bytes: Vec<u8>| {
+                bs.lock().unwrap().insert(url, WorkerBlobEntry { bytes, mime });
             }),
         )?;
     }
@@ -1386,13 +1406,14 @@ fn install_worker_globals_v8(
     // `Error`, same as any other fetch failure this API already produces.
     {
         let fp = fetch_provider;
+        let blobs = Arc::clone(&blob_store);
         rt.register_native(
             "_lumen_import_scripts_resolve",
             into_v8_fn1(move |url: String| -> Option<String> {
                 if import_scripts_csp_blocked(fp.as_deref(), &url) {
                     return None;
                 }
-                resolve_import_url(&url, &blob_store, fp.as_deref())
+                resolve_import_url(&url, &blobs, fp.as_deref())
             }),
         )?;
     }
@@ -1433,7 +1454,9 @@ fn install_worker_globals_v8(
     rt.eval(&worker_global_shim(worker_id))?;
     rt.eval(WORKER_TIMERS_SHIM)?;   // BUG-815
     rt.eval(WORKER_RAF_SHIM)?;      // BUG-959, DedicatedWorkerGlobalScope only
-    crate::worker_net::install_worker_net_v8(rt, net_provider)?;
+    // BUG-1781: this thread's blob store backs `fetch`/`XHR` of a `blob:` URL
+    // (worker_net.rs), the same entries `importScripts('blob:…')` reads.
+    crate::worker_net::install_worker_net_v8(rt, net_provider, &blob_store)?;
     Ok(())
 }
 
@@ -1597,7 +1620,10 @@ mod tests {
     #[test]
     fn resolve_blob_url_from_store() {
         let store = make_store();
-        store.lock().unwrap().insert("blob:null/42".to_string(), "var x = 1;".to_string());
+        store.lock().unwrap().insert(
+            "blob:null/42".to_string(),
+            WorkerBlobEntry { bytes: b"var x = 1;".to_vec(), mime: "text/javascript".into() },
+        );
         assert_eq!(resolve_import_url("blob:null/42", &store, None).unwrap(), "var x = 1;");
         // File API §8.3: the fragment takes no part in the lookup.
         assert_eq!(resolve_import_url("blob:null/42#f", &store, None).unwrap(), "var x = 1;");
@@ -2379,7 +2405,10 @@ mod tests_v8 {
         let store = make_store();
         store.lock().unwrap().insert(
             "blob:null/helper".to_string(),
-            "function mul(a,b){return a*b;}".to_string(),
+            WorkerBlobEntry {
+                bytes: b"function mul(a,b){return a*b;}".to_vec(),
+                mime: "text/javascript".into(),
+            },
         );
 
         let reg: WorkerRegistry = Arc::new(Mutex::new(HashMap::new()));
@@ -2432,7 +2461,10 @@ mod tests_v8 {
         let store = make_store();
         store.lock().unwrap().insert(
             "blob:null/1".to_string(),
-            "globalThis._ms1 = 10;".to_string(),
+            WorkerBlobEntry {
+                bytes: b"globalThis._ms1 = 10;".to_vec(),
+                mime: "text/javascript".into(),
+            },
         );
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
@@ -2448,6 +2480,51 @@ mod tests_v8 {
         let v2 = rt.eval("_ms2").unwrap();
         assert_eq!(v1, lumen_core::JsValue::Number(10.0));
         assert_eq!(v2, lumen_core::JsValue::Number(20.0));
+    }
+
+    /// BUG-1781: the page-side `URL.createObjectURL` wrapper (WORKER_SHIM) hands
+    /// every Blob's bytes and MIME type to `_lumen_register_worker_blob_bytes` —
+    /// the only writer of the store the worker's `fetch(blob:…)` reads, and a
+    /// path its `try/catch` would swallow silently if the native name or the
+    /// argument shapes ever drifted.
+    #[test]
+    fn v8_create_object_url_wrapper_registers_blob_bytes_into_the_store() {
+        let rt = V8JsRuntime::new().unwrap();
+        let store = make_store();
+        let reg: WorkerRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
+        let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
+        let nid = Arc::new(Mutex::new(0u32));
+        // The page's URL.createObjectURL (web_api_shim_mid_c2.js), abbreviated to
+        // the parts the wrapper depends on. Defined BEFORE the install: the
+        // wrapper only wraps when `URL.createObjectURL` already exists.
+        rt.eval(
+            "globalThis.Blob = function Blob(parts, opts) {\
+               var s = '';\
+               for (var i = 0; i < parts.length; i++) s += String(parts[i]);\
+               var bytes = new Uint8Array(s.length);\
+               for (var i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i) & 0xFF;\
+               this._bytes = bytes;\
+               this.type = (opts && opts.type) || '';\
+             };\
+             globalThis.URL = { createObjectURL: function(blob) {\
+               return 'blob:null/test-uuid';\
+             } };",
+        )
+        .unwrap();
+        install_worker_bindings_v8(
+            &rt, &reg, &queue, &errors, &nid, &store, None,
+            &Arc::new(Mutex::new(Vec::new())), None, None,
+        )
+        .unwrap();
+        rt.eval(
+            "URL.createObjectURL(new Blob(['hello'], { type: 'text/plain' }));",
+        )
+        .unwrap();
+        let entry = store.lock().unwrap().get("blob:null/test-uuid").cloned();
+        let entry = entry.expect("wrapper must register the blob");
+        assert_eq!(entry.bytes, b"hello");
+        assert_eq!(entry.mime, "text/plain");
     }
 
     #[test]
