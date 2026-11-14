@@ -959,19 +959,30 @@ fn bounded_document_lock_waits_out_another_thread() {
     let doc = make_named_access_doc();
     let held = Arc::clone(&doc);
     let (tx, rx) = std::sync::mpsc::channel();
-    let (checked_tx, checked_rx) = std::sync::mpsc::channel::<()>();
+    let release = Arc::new(AtomicBool::new(false));
+    let release_holder = Arc::clone(&release);
     let holder = std::thread::spawn(move || {
         let guard = held.lock().unwrap();
         tx.send(()).unwrap();
-        // Keep the hold until the main thread has seen it: on a loaded
-        // machine a fixed 4 ms sleep can run out before `try_lock` below.
-        checked_rx.recv().unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(4));
+        // Spin, never sleep (BUG-1787): in a full parallel run a sleeping
+        // holder is out of `NAMED_ACCESS_LOCK_BUDGET` (20 ms) by the time it
+        // is scheduled again — a released-but-not-rescheduled thread is
+        // indistinguishable from a lock that never frees, and the test then
+        // reports a bounded-wait failure that does not exist.
+        while !release_holder.load(Ordering::Acquire) {
+            std::hint::spin_loop();
+        }
+        // Keep the lock held into the waiter's first `try_lock`, so the poll
+        // path is what gets exercised; the hold size is CPU work, not wall
+        // time, so it cannot outlive the budget by being descheduled.
+        for _ in 0..10_000 {
+            std::hint::spin_loop();
+        }
         drop(guard);
     });
     rx.recv().unwrap();
     assert!(doc.try_lock().is_err(), "the other thread must hold the lock");
-    checked_tx.send(()).unwrap();
+    release.store(true, Ordering::Release);
     assert!(lock_document_bounded(&doc).is_some());
     holder.join().unwrap();
 }

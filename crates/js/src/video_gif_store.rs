@@ -290,6 +290,14 @@ pub(crate) fn clear_video_decoder() {
 #[cfg(test)]
 pub(crate) static DECODER_TEST_LOCK: Mutex<()> = Mutex::new(());
 
+/// Serializes every test that installs or reads the process-global store
+/// (`STORE`). Without it parallel tests race: one test's `set_video_gif_store`
+/// replaces the store between another test's `set` and its read, so the read
+/// sees a store it never installed (BUG-166, BUG-1787 — the audio and video
+/// binding tests were the overlapping pair).
+#[cfg(test)]
+pub(crate) static STORE_GUARD: Mutex<()> = Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::{VideoGifStore, VideoLoadRequest};

@@ -1418,9 +1418,10 @@ beforeRemove && afterRemove"#,
     #[test]
     fn ui_sync_mirrors_provider_state_into_playback_store() {
         use crate::video_gif_store::{
-            get_video_gif_store, set_video_gif_store, VideoGifStore,
+            get_video_gif_store, set_video_gif_store, VideoGifStore, STORE_GUARD,
         };
 
+        let _guard = STORE_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         let rt = with_audio();
         set_video_gif_store(Arc::new(VideoGifStore::default()));
 

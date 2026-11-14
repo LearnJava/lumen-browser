@@ -46,7 +46,7 @@
 - Флака в полных параллельных прогонах lumen-layout:
   `box_tree::tests::block_flow_trampoline::deep_chain_with_margins_collapses_through_the_trampoline`
   — изолированно зелёный всегда (3/3, до и после правок среза), в полном прогоне падает
-  через раз (17/16 failed в трёх подряд). Прецедент — [BUG-1787](BUG-1787-OPEN.md).
+  через раз (17/16 failed в трёх подряд). Прецедент — [BUG-1787](BUG-1787-FIXED.md).
 
 ## Репро
 

@@ -50,7 +50,7 @@ LUMEN_EXE=target/dev-release/lumen.exe python scripts/perf_audit.py --mode compa
 за флаш; `match_calls`/`match_first_fail`/`match_prefix_fail` — входы `matches_complex`
 и место смерти (subject-компаунд / префиксная цепочка). `matches_chain` переведён на
 единый выход (value-form, поведение идентично: 74 дифференциальных incr-теста, полный
-lib-прогон = те же 16 pre-existing красных — [BUG-1804](BUG-1804-OPEN.md)).
+lib-прогон = те же 16 pre-existing красных — [BUG-1804](BUG-1804-FIXED.md)).
 
 **Числа** (живой ebay, `dev-release`, 74–94 флаша за прогон, стабильны между прогонами
 при равных `candidates/элем`): на флаш **~610k кандидатов** (421/элем) и **~1.34M вызовов
@@ -85,7 +85,7 @@ subject. Откачен по перф-методике (S32/S36: механиз�
    каждый не-walk сайт вызова.
 
 **Попутно:** гейты на чистом main `860aaab0d` красные вне этого бага — см.
-[BUG-1804](BUG-1804-OPEN.md) (16 unit-красных lumen-layout, семья border-collapse/
+[BUG-1804](BUG-1804-FIXED.md) (16 unit-красных lumen-layout, семья border-collapse/
 table-гридов; там же: lumen-js --lib не компилируется, driver/paint/media-native —
 pre-existing, флака deep_chain trampoline). Гейт этого среза: clippy -p lumen-layout
 чистый; дифференциальные incr-тесты 74/74; `dump_golden` 12/12.
@@ -137,7 +137,7 @@ pre-existing, флака deep_chain trampoline). Гейт этого среза:
 66 599 → 34 893; `ready_s` **27,2 / 13,2 с** против 19,8/150,5/84,1 у среза 1 —
 шумит (BUG-1802), но оба прогона в пределах x2 от Chrome-базы. Гейт: clippy
 `-p lumen-layout --all-targets -D warnings` чистый; lib-прогон = те же 16
-pre-existing ([BUG-1804](BUG-1804-OPEN.md)) + известная флака deep_chain;
+pre-existing ([BUG-1804](BUG-1804-FIXED.md)) + известная флака deep_chain;
 graphic_tests 172 — «Изменений нет» (пиксели не тронуты).
 
 **Осталось:** childlist-флеши — `:has()`-reach на структурных изменениях
@@ -225,7 +225,7 @@ prefix_fail 33–64k, регресса каскадного времени не�
 `[engine] incr cascade`.
 
 **Гейт:** clippy `-p lumen-layout --all-targets -D warnings` чистый; lib-прогон
-5988 зелёных, 17 красных = те же 16 pre-existing ([BUG-1804](BUG-1804-OPEN.md)) +
+5988 зелёных, 17 красных = те же 16 pre-existing ([BUG-1804](BUG-1804-FIXED.md)) +
 известная флака deep_chain; graphic-тесты: 7/172 FAIL (21, 56, 62, 150, 151, 155,
 159) — **ровно тот же список на HEAD без среза** (парный прогон тем же бинарём
 гейта, «Изменений нет» в сравнении) — red-set pre-existing/средовой, пиксели
