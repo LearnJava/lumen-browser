@@ -16,6 +16,24 @@ use crate::*;
 /// idle-окна. Idle-callback-и трактуют это как «успей за ~10 ms».
 const IDLE_BUDGET_MS: f64 = 10.0;
 
+/// BUG-1807: индекс фрейма, снятый ДО мутации состава `self.frames`,
+/// пересчитать по живому js-хэндлу (`Arc::ptr_eq` — тот же приём, что снимок
+/// `doc` внутри `poll_dynamic_frames`): выгрузка/спавн фреймов сдвигает
+/// список, и старый индекс либо остаётся без фрейма (паника `frames[idx]`,
+/// len 5, idx 5), либо начинает указывать на чужой. `None` — фрейм выгружен:
+/// его отложенный запрос этого тика теряется, следующая мутация выставит
+/// флаг заново в свежем тике.
+fn reindex_frame(
+    frames: &[crate::frames::FrameHandle],
+    handles: &[(usize, Arc<dyn PersistentJs>)],
+    old: usize,
+) -> Option<usize> {
+    let js = handles.iter().find(|(i, _)| *i == old)?.1.clone();
+    frames
+        .iter()
+        .position(|h| h.js.as_ref().is_some_and(|f| Arc::ptr_eq(f, &js)))
+}
+
 impl Lumen {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn on_about_to_wait(&mut self, event_loop: &MainHandle<'_>) {
@@ -231,6 +249,26 @@ impl Lumen {
         if !frame_dirty.is_empty() {
             self.poll_dynamic_frames();
         }
+        // BUG-1807: poll_dynamic_frames между сбором и применением выгружает
+        // и спавнит фреймы — индексы, снятые по frame_js_handles, могли
+        // остаться без фрейма или указать на чужой (это касалось и соседних
+        // submits/reloads ниже). Пересчёт по живому js-хэндлу; выгруженный
+        // фрейм теряет свой запрос этого тика.
+        frame_dirty = frame_dirty
+            .into_iter()
+            .filter_map(|old| reindex_frame(&self.frames, &frame_js_handles, old))
+            .collect();
+        frame_submits = frame_submits
+            .into_iter()
+            .filter_map(|(old, form, submitter)| {
+                reindex_frame(&self.frames, &frame_js_handles, old)
+                    .map(|idx| (idx, form, submitter))
+            })
+            .collect();
+        frame_reloads = frame_reloads
+            .into_iter()
+            .filter_map(|old| reindex_frame(&self.frames, &frame_js_handles, old))
+            .collect();
         for idx in frame_dirty {
             self.refresh_frames(Some(idx));
         }
@@ -502,6 +540,12 @@ impl Lumen {
         if !frame_raf_dirty.is_empty() {
             self.poll_dynamic_frames();
         }
+        // BUG-1807: тот же сдвиг состава от poll_dynamic_frames, что и у
+        // frame_dirty выше — индексы сняты до него.
+        frame_raf_dirty = frame_raf_dirty
+            .into_iter()
+            .filter_map(|old| reindex_frame(&self.frames, &frame_js_handles, old))
+            .collect();
         // BUG-480 срез 25: тот же путь пересчёта, что у мутаций родителя/себя
         // выше — `refresh_frames` без гейта «размер/интерактив не менялись»
         // и с пересборкой display list страницы.

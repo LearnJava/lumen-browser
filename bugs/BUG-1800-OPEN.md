@@ -368,7 +368,7 @@ pikabu — регресс-страж: has_reach там не срабатывае
 джиттер DOM-мутаций (147 против 91 флешей), все метрики ON ≤ OFF — регресса нет.
 
 **Живая сверка**: `LUMEN_VERIFY_INCR_CASCADE=1` на auto-ru — 22 флаша подряд
-«equal to a full cascade», сессия оборвана [BUG-1807](BUG-1807-OPEN.md) (pre-existing крах
+«equal to a full cascade», сессия оборвана [BUG-1807](BUG-1807-FIXED.md) (pre-existing крах
 shell, воспроизведён на чистом main тем же env — к сужению отношения не имеет).
 
 **Осталось:** каноничный живой ebay-замер (когда сайт откроется — на ebay `:has()`-reach
