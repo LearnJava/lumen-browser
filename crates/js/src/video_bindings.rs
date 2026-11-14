@@ -597,7 +597,7 @@ pub(crate) mod tests_v8 {
     // Хелперы тестового модуля: исключение из clippy.toml покрывает
     // только тело `#[test]` (docs/lint-policy.md §10).
     #![allow(clippy::unwrap_used)]
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
     use lumen_core::ext::JsRuntime as _;
     use lumen_core::JsValue;
@@ -611,8 +611,9 @@ pub(crate) mod tests_v8 {
     /// Without this guard, parallel tests race: one test's `set_*_store`
     /// overwrites the global between another test's own `set` and the
     /// `install`/`load` that captures it, so the load lands in the wrong
-    /// store (BUG-166).
-    pub(crate) static STORE_GUARD: Mutex<()> = Mutex::new(());
+    /// store (BUG-166). Lives next to the global it guards — an audio test
+    /// that installs the same store races the same way (BUG-1787).
+    pub(crate) use crate::video_gif_store::STORE_GUARD;
 
     /// Serializes tests around the process-global `VideoDecoder` and clears
     /// it on both ends, so a test that assumes "no decoder" never sees one

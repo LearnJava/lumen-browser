@@ -308,7 +308,7 @@
 | 2gis-ru | 3 | BROKEN_RENDER | 8.05 | 1789 / 1750 | медленная загрузка | контент появляется на 8–16 с (в базовом прогоне text=0, сейчас 1790); исключение `Clickstream Agent offline` нефатально |
 | cnn-com | 3 | TIMEOUT | 40.7 | 0 / 9107 | таймаут загрузки | сеть отвечает 200, текст пуст за 40 с; поток движка занят — уже [BUG-1778](../../../bugs/BUG-1778-OPEN.md) |
 | google-com | 3 | OK | 9.3 | 164 / 1986 | ложное срабатывание + вёрстка | Chrome 1986 знаков — это consent-диалог; Lumen получает страницу без диалога (164 знака), но с разваленной вёрсткой: лого слева, поле поиска (`textarea.gLFyf` есть в HTML) не видно → в SITES-TRIAGE-4 |
-| mirtesen-ru | 3 | DEGRADED | 6.02 | 2 / 9812 | JS-исключение | `{}.toString.call(<элемент>)` даёт `[object Object]`, tippy.js не узнаёт элемент и зовёт `querySelectorAll(<элемент>)` → `SyntaxError`; [BUG-1779](../../../bugs/BUG-1779-OPEN.md) |
+| mirtesen-ru | 3 | DEGRADED | 6.02 | 2 / 9812 | JS-исключение | `{}.toString.call(<элемент>)` даёт `[object Object]`, tippy.js не узнаёт элемент и зовёт `querySelectorAll(<элемент>)` → `SyntaxError`; [BUG-1779](../../../bugs/BUG-1779-FIXED.md) |
 | roblox-com | 3 | DEGRADED | 13.14 | 970 / 1924 | медленная загрузка / частично | 970 знаков за 13 с (в базовом 0); SignalR/WebSocket `failed to connect` нефатален; полноту сверять в SITES-TRIAGE-4 |
 | rt-ru | 3 | OK | 12.22 | 3315 / 6360 | медленная загрузка | сейчас OK, 3315 знаков за 12 с; в базовом прогоне 0 — замер раньше появления контента |
 | samsung-com | 3 | BROKEN_RENDER | 8.34 | 46 / 3344 | JS-исключение (не изолировано) | `Cannot read properties of null (reading 'document')` и `videoInfo.el.load is not a function` в инициализации видеоблока; минимальная репродукция не найдена, бага нет |
@@ -317,17 +317,17 @@
 | tutu-ru | 3 | DEGRADED | 28.89 | 0 / 9955 | таймаут загрузки | запросы идут (200), `ready` не наступает за 29–40 с, текст 0, исключений нет → список SITES-TRIAGE-3 |
 | afisha-ru | 2 | BROKEN_RENDER | 1.25 | 11 / 8482 | зацикливание SSO | автологин Сбер ID: `id.sber.ru/CSAFront/api/initlow` → 400 → `/auth/cb/?error=sso_error` перезагружается по кругу, виден только лого и две точки; [BUG-1780](../../../bugs/BUG-1780-OPEN.md) |
 | aviasales-ru | 2 | DEGRADED | 7.7 | 1 / 9026 | JS-исключение | тот же `[object Object] is not a valid selector` (BUG-1779) после предупреждений effector `undefined is used to skip updates` |
-| b2b-center-ru | 2 | OK | 4.74 | 1 / 8808 | нет API | `fetch(blob:…)` внутри Worker → `unsupported scheme: blob`; [BUG-1781](../../../bugs/BUG-1781-OPEN.md) |
+| b2b-center-ru | 2 | OK | 4.74 | 1 / 8808 | нет API | `fetch(blob:…)` внутри Worker → `unsupported scheme: blob`; [BUG-1781](../../../bugs/BUG-1781-FIXED.md) |
 | bild-de | 2 | DEGRADED | 23.14 | 0 / 20742 | скрипт отказал / таймаут | `Integrity check failed: getComputedStyle` и `Cannot init rosetta` (загрузчик consent сверяет «нативность» API); текст 0 за 23 с → SITES-TRIAGE-3, гипотеза не подтверждена |
 | britannica-com | 2 | DEGRADED | 35.33 | 5273 / 4660 | медленная загрузка | 5273 знака (Chrome 4660) за 35 с; пусто только в базовом замере |
 | bspb-ru | 2 | NET_FAIL | 2.19 | 0 / 4787 | не наш: сертификат НУЦ | `Russian Trusted Sub CA` — `UnknownIssuer` без согласия пользователя (политика COMPAT-TRUST-NUC, `crates/network/src/tls/nuc.rs`) |
 | cbr-ru | 2 | DEGRADED | 9.55 | 0 / 3994 | прочее, без улик | ответ 200, исключений нет, текст 0 за 9,5 с при Chrome 3994; причину не изолировал |
-| claude-ai | 2 | DEGRADED | 6.38 | 2 / 3678 | нет API | `console.assert is not a function`; [BUG-1782](../../../bugs/BUG-1782-OPEN.md) |
+| claude-ai | 2 | DEGRADED | 6.38 | 2 / 3678 | нет API | `console.assert is not a function`; [BUG-1782](../../../bugs/BUG-1782-FIXED.md) |
 | cloudpayments-ru | 2 | DEGRADED | 15.12 | 3687 / 3712 | медленная загрузка | 3687 знаков (Chrome 3712) за 15 с; в базовом DEAD |
 | dailymail-com | 2 | TIMEOUT | 40.92 | 0 / 1298 | таймаут загрузки | сеть 200, текст 0 за 40 с (CMP + реклама) → SITES-TRIAGE-3 |
 | dailymotion-com | 2 | BROKEN_RENDER | 5.48 | 2 / 3440 | прочее: пустой consent-диалог | виден модальный блок с иконками-«битыми картинками» и без текста (2 знака против 3440); исключений нет, причина не изолирована |
 | dell-com | 2 | DEGRADED | 27.28 | 8962 / 10082 | медленная загрузка | 8962 знака (Chrome 10082) за 27 с; в базовом DEAD |
-| ea-com | 2 | DEAD | — | 0 / 7986 | падение V8 | процесс умирает: `bad_optional_access was thrown in -fno-exceptions mode` после `Cannot read properties of undefined (reading 'call')`; воспроизводится 2 из 2; [BUG-1783](../../../bugs/BUG-1783-OPEN.md) |
+| ea-com | 2 | DEAD | — | 0 / 7986 | падение V8 | процесс умирает: `bad_optional_access was thrown in -fno-exceptions mode` после `Cannot read properties of undefined (reading 'call')`; воспроизводится 2 из 2; [BUG-1783](../../../bugs/BUG-1783-FIXED.md) |
 | eapteka-ru | 2 | OK | 1.06 | 99 / 26574 | антибот: JS-проверка NGENIX | страница «Сейчас будет выполнена проверка вашего браузера», Chrome её проходит (26574 знака), Lumen остаётся на ней (99); класс «не наш» до выяснения механизма |
 | eldorado-ru | 2 | OK | 2.19 | 1 / 2286 | прочее, без улик | виден только спиннер, `ready` 2,2 с, исключений нет; Chrome 2286 знаков |
 | elpais-com | 2 | HUNG | 42.84 | 0 / 29308 | скрипт не загрузился | `loadExternalScript: Timeout loading ArcP` при том что `arc/subs/p.min.js` ответил 200 — возможно не срабатывает `onload` динамического `<script>`; HUNG → SITES-TRIAGE-3 |
@@ -361,11 +361,11 @@
 
 | баг | вес | сайты | суть |
 |---|---|---|---|
-| [BUG-1779](../../../bugs/BUG-1779-OPEN.md) | 5 | mirtesen-ru, aviasales-ru | `Object.prototype.toString.call(<HTML-элемент>)` → `[object Object]` |
+| [BUG-1779](../../../bugs/BUG-1779-FIXED.md) | 5 | mirtesen-ru, aviasales-ru | `Object.prototype.toString.call(<HTML-элемент>)` → `[object Object]` |
 | [BUG-1780](../../../bugs/BUG-1780-OPEN.md) | 4 | afisha-ru, gazeta-ru | зацикливание автологина Сбер ID (`sso_error`) |
-| [BUG-1781](../../../bugs/BUG-1781-OPEN.md) | 4 | b2b-center-ru (+ uchi-ru) | `fetch(blob:)` в Worker |
-| [BUG-1782](../../../bugs/BUG-1782-OPEN.md) | 4 | claude-ai (+ kaspersky-ru) | нет `console.assert/time/…` |
-| [BUG-1783](../../../bugs/BUG-1783-OPEN.md) | 2 | ea-com | падение V8 `bad_optional_access` |
+| [BUG-1781](../../../bugs/BUG-1781-FIXED.md) | 4 | b2b-center-ru (+ uchi-ru) | `fetch(blob:)` в Worker |
+| [BUG-1782](../../../bugs/BUG-1782-FIXED.md) | 4 | claude-ai (+ kaspersky-ru) | нет `console.assert/time/…` |
+| [BUG-1783](../../../bugs/BUG-1783-FIXED.md) | 2 | ea-com | падение V8 `bad_optional_access` |
 
 Передано дальше: зависания/таймауты (cnn, tutu, dailymail, elpais, film, bild) — SITES-TRIAGE-3; вёрстка google-com и полнота roblox — SITES-TRIAGE-4. Без бага остались: cbr-ru, eldorado-ru, dailymotion-com, samsung-com (причина не изолирована), eapteka-ru, fiverr-com (антибот), bspb-ru (политика НУЦ).
 
@@ -392,7 +392,7 @@
 | medium-com | 3 | HUNG | SITE_REFUSED | антибот Turnstile: [BUG-1790](../../../bugs/BUG-1790-OPEN.md) | run1 403 + `Turnstile … null (reading 'eval')`; Chrome челлендж решает |
 | vimeo-com | 3 | TIMEOUT | SITE_REFUSED | не наш: Turnstile 403 | Chrome получает тот же 403 (114 знаков) |
 | magnit-ru | 3 | HUNG | DEGRADED | движок занят: [BUG-1778](../../../bugs/BUG-1778-OPEN.md) | `about_to_wait.rs:295 for 13,4–13,6 с` 2/2, текст 0 при 10 тыс. у Chrome |
-| smi2-ru | 3 | HUNG | DEGRADED | JS-исключение: [BUG-1779](../../../bugs/BUG-1779-OPEN.md) | `[object Object] is not a valid selector` + adfox, текст 102 при 9443 у Chrome |
+| smi2-ru | 3 | HUNG | DEGRADED | JS-исключение: [BUG-1779](../../../bugs/BUG-1779-FIXED.md) | `[object Object] is not a valid selector` + adfox, текст 102 при 9443 у Chrome |
 | snapchat-com | 3 | TIMEOUT | DEGRADED | ушёл из зависаний | OK за 8 с, 1567 знаков; Chrome сам в челлендже (284) |
 | soundcloud-com | 3 | TIMEOUT | DEGRADED | движок занят (не изолировано) | текст 0 при 3980 у Chrome; `engine thread busy … smil.rs:28 for 0,0 с` — похож на ложный busy, стены нет |
 | tumblr-com | 3 | HUNG | OK | ушёл из зависаний | OK за 11–19 с |
@@ -424,7 +424,7 @@
 |---|---|---|---|
 | [BUG-1805](../../../bugs/BUG-1805-OPEN.md) | заведён (P2) | rutube-ru | нет `navigator.serviceWorker.startMessages` |
 | [BUG-1778](../../../bugs/BUG-1778-OPEN.md) | дополнен | cnn-com (подтверждён headless), discord-com, magnit-ru, ebay-com (разовый) | поток движка занят тиком `about_to_wait.rs` |
-| [BUG-1779](../../../bugs/BUG-1779-OPEN.md) | дополнен | smi2-ru | `[object Object] is not a valid selector` |
+| [BUG-1779](../../../bugs/BUG-1779-FIXED.md) | дополнен | smi2-ru | `[object Object] is not a valid selector` |
 | [BUG-1790](../../../bugs/BUG-1790-OPEN.md) | дополнен | medium-com | Turnstile не выдаёт токен → 403 |
 
 Без бага остались: intuit-com (медленная загрузка 45 с на границе порога; IDB-ошибки — см. BUG-914), soundcloud-com (текст 0, busy-улика из `smil.rs`, не изолировано), bbc/t-online/nytimes (TLS-флап сети без прокси — перепроверить при повторном прогоне с прокси), qq/imgsrc/github/vimeo (не наши: Chrome падает так же или получает тот же отказ), adobe (частичная загрузка: не резолвится `aem.live`), microsoft/godaddy/ivi (полнота контента — SITES-TRIAGE-4).
