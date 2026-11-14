@@ -792,7 +792,7 @@ fn build_box_inner(
                 if (style.aspect_ratio.is_none() || style.aspect_ratio_auto) && cw > 0 && ch > 0 && !size_contained {
                     Arc::make_mut(&mut style).aspect_ratio = Some((cw as f32, ch as f32));
                 }
-                BoxKind::Canvas { width: cw, height: ch }
+                BoxKind::Canvas { width: cw, height: ch, layout_subtree: canvas_has_layout_subtree(doc, id) }
             } else if is_audio_element(doc, id) {
                 let node = doc.get(id);
                 let src = node.get_attr("src").unwrap_or("").to_string();
@@ -1022,6 +1022,7 @@ fn build_box_inner(
     }
     if matches!(kind, BoxKind::Block | BoxKind::FlowRoot | BoxKind::Contents | BoxKind::FormControl { .. } | BoxKind::TableRow | BoxKind::Table | BoxKind::TableRowGroup)
         || video_has_vtt_cue_tree(doc, flat, id)
+        || canvas_has_layout_subtree(doc, id)
     {
         // BUG-935 срез 71: `BoxKind::SvgRoot` is deliberately not in this list — its
         // children are replaced below by `build_svg_children` (the SVG shape tree, not

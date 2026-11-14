@@ -749,7 +749,7 @@ use super::ordered_build_scroll::{build_ordered, count_variant};
             "body { margin: 0; } div { width: 40px; height: 40px; border-radius: 8px; background: rgba(0,0,255,0.5); box-shadow: 30px 0 rgb(255,0,0); }",
         );
         let cmds: Vec<DisplayCommand> = dl.to_vec();
-        let img = crate::cpu_raster::rasterize_cpu(100, 60, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        let img = crate::cpu_raster::rasterize_cpu_with_fonts(100, 60, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
         let px = |x: u32, y: u32| {
             let i = ((y * img.width + x) * 4) as usize;
             (img.data[i], img.data[i + 1], img.data[i + 2])

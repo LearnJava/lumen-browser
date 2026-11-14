@@ -28,7 +28,7 @@ impl DisplayCommand {
     /// (`T(dx,dy) · M · T(-dx,-dy)`): и родительская система, и содержимое
     /// сдвигаются на один и тот же вектор. Относительные величины (проценты
     /// градиентов, `position` фона, inset-ы sticky) не меняются.
-    pub(crate) fn translated(&self, dx: f32, dy: f32) -> DisplayCommand {
+    pub fn translated(&self, dx: f32, dy: f32) -> DisplayCommand {
         let mut c = self.clone();
         c.translate_in_place(dx, dy);
         c

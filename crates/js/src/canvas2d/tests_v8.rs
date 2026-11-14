@@ -22,7 +22,7 @@ use crate::v8_runtime::V8JsRuntime;
 
 fn with_canvas2d() -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    super::install_canvas2d_bindings_v8(&rt, "https://example.test").unwrap();
+    super::install_canvas2d_bindings_v8(&rt, "https://example.test", None, None).unwrap();
     rt
 }
 
@@ -486,7 +486,7 @@ fn js_present_rgba_resizes_existing_canvas() {
 fn noisy_scene(origin: &str, secret: Option<u64>) -> Vec<u8> {
     crate::noise_key::set_noise_secret(secret);
     let rt = V8JsRuntime::new().unwrap();
-    super::install_canvas2d_bindings_v8(&rt, origin).unwrap();
+    super::install_canvas2d_bindings_v8(&rt, origin, None, None).unwrap();
     rt.eval(
         "_lumen_canvas2d_create(1, 48, 48);\
          _lumen_canvas2d_set_fill_style(1, '#7a5c33');\

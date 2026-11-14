@@ -180,7 +180,7 @@ mod reftests {
             let order = PaintOrder::from_tree(&stacking);
             build_display_list_ordered(&tree, &stacking, &order).0
         });
-        crate::cpu_raster::rasterize_cpu(600, 300, &dl, &[], 0.0, 0.0).expect("rasterize")
+        crate::cpu_raster::rasterize_cpu_with_fonts(600, 300, &dl, &[], 0.0, 0.0, None, None).expect("rasterize")
     }
 
     fn element_by_id(doc: &lumen_dom::Document, id: &str) -> lumen_dom::NodeId {

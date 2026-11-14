@@ -87,7 +87,7 @@ mod promise_reject;
 mod script_attribution;
 mod sheet_sync;
 mod stall_sampler;
-mod style_flush;
+pub(crate) mod style_flush;
 #[cfg(test)]
 pub(crate) use style_flush::CONTENT_JOURNAL_DISABLED;
 mod thread;
@@ -436,6 +436,12 @@ impl V8JsRuntime {
                 verify_shadow: Arc::new(Mutex::new(Default::default())),
                 patched_sheet_cache: Arc::new(Mutex::new(None)),
             };
+            // BUG-1798: keep the handles reachable outside this `run` block —
+            // the canvas2d installer runs after it (each installer dispatches
+            // its own `eval` job, so none may nest inside `run`). Overwritten
+            // on every `install_dom`, like the natives' own captured copies.
+            *self.page_flush_handles.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(flush_handles.clone());
             let window_open_requests = Arc::clone(&self.window_open_requests);
             let console_messages = Arc::clone(&self.console_messages);
             let pending_history_url_updates = Arc::clone(&self.pending_history_url_updates);
@@ -1065,7 +1071,15 @@ impl V8JsRuntime {
         // BUG-454: the canvas fingerprint noise seed is derived from the document
         // origin, so like `file_input`/`filesystem_access` these two take an
         // explicit-arg call rather than `install_v8!`.
-        if let Err(e) = crate::canvas2d::install_canvas2d_bindings_v8(self, &page_origin) {
+        if let Err(e) = crate::canvas2d::install_canvas2d_bindings_v8(
+            self,
+            &page_origin,
+            self.page_flush_handles
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
+            Some(Arc::clone(&self.hit_test_tree)),
+        ) {
             eprintln!("v8: canvas2d::install_canvas2d_bindings_v8 failed: {e}");
         }
         // P1-imagebitmap: OffscreenCanvas was deferred past S8 (see the note at

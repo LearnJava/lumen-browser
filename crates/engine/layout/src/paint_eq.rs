@@ -147,8 +147,8 @@ fn kind_paint_eq<'a>(
                 BoxKind::Video { src: s, poster: p, controls: c } if src == s && poster == p && controls == c
             )
         }
-        BoxKind::Canvas { width, height } => {
-            matches!(b, BoxKind::Canvas { width: w, height: h } if width == w && height == h)
+        BoxKind::Canvas { width, height, layout_subtree } => {
+            matches!(b, BoxKind::Canvas { width: w, height: h, layout_subtree: s } if width == w && height == h && layout_subtree == s)
         }
         BoxKind::Audio { src, controls } => {
             matches!(b, BoxKind::Audio { src: s, controls: c } if src == s && controls == c)

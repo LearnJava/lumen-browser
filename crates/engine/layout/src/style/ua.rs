@@ -10,6 +10,7 @@
 
 use lumen_dom::{Document, NodeData, NodeId};
 
+use crate::box_tree::canvas_has_layout_subtree;
 use crate::style::{
     BorderStyle, BoxSizing, Color, ComputedStyle, ContentVisibility, CssColor, Display, FontStyle,
     FontWeight, Length, LengthOrAuto, ListStyleType, TextAlign, VerticalAlign, WhiteSpace, WritingMode,
@@ -76,6 +77,12 @@ pub(in crate::style) fn default_display(doc: &Document, node: NodeId) -> Display
         // canvas icon or an embedded widget next to text always took its own
         // line instead of flowing beside it. `is_atomic_inline_level` picks
         // them up the same way it picks up `<img>` (IFC-3).
+        // WICG html-in-canvas (BUG-1798): `<canvas layoutsubtree>` lays out its
+        // fallback children, so it needs a real block container — an atomic
+        // `inline-block` (the page still paints only the replaced box; its
+        // children are drawn solely by `drawElementImage`). Plain `inline`
+        // would trigger block-in-inline splitting of the replaced box.
+        "canvas" if canvas_has_layout_subtree(doc, node) => Display::InlineBlock,
         "video" | "canvas" | "audio" | "iframe" | "svg" => Display::Inline,
         // OBJECT-1: `<object>`/`<embed>` — тот же класс (HTML LS §15.3.1 не
         // даёт им `display: block`). С картинкой внутри это atomic inline

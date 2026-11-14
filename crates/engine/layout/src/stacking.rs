@@ -366,6 +366,13 @@ fn walk(root: &LayoutBox, root_sc: StackingContextId, tree: &mut StackingTree) {
         } else {
             parent_sc
         };
+        // WICG html-in-canvas (BUG-1798): children of `<canvas layoutsubtree>`
+        // are laid out for `drawElementImage` only — the page never paints them,
+        // so they enter neither a stacking context nor a paint bucket. The
+        // canvas box itself keeps its replaced-element paint above.
+        if matches!(b.kind, BoxKind::Canvas { layout_subtree: true, .. }) {
+            continue;
+        }
         match paint_child_order(b) {
             Some(order) => {
                 for &i in order.iter().rev() {

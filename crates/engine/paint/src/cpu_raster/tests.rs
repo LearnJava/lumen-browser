@@ -22,7 +22,7 @@ fn outline_is_drawn_outside_the_box_edge() {
             color: blue,
             offset,
         }];
-        rasterize_cpu(80, 80, &cmds, &[], 0.0, 0.0).expect("rasterize")
+        rasterize_cpu_with_fonts(80, 80, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize")
     };
     let img = mk(0.0);
     assert_eq!(px(&img, 21, 40), (0, 0, 255, 255), "outer band starts at x=20");
@@ -54,7 +54,7 @@ fn outline_band_is_cut_by_clip_rect_around_the_box() {
         },
         DisplayCommand::PopClip,
     ];
-    let img = rasterize_cpu(100, 100, &cmds, &[], 0.0, 0.0).expect("rasterize");
+    let img = rasterize_cpu_with_fonts(100, 100, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
     assert_eq!(px(&img, 25, 40), (0, 128, 0, 255), "band inside the clip is painted");
     assert_eq!(px(&img, 10, 40), white, "band beyond the clip is cut");
     assert_eq!(px(&img, 70, 40), white);
@@ -73,7 +73,7 @@ fn scroll_layer_translates_content_inside_clip() {
         DisplayCommand::FillRect { rect: rect(0.0, 40.0, 40.0, 100.0), color: green },
         DisplayCommand::PopScrollLayer,
     ];
-    let img = rasterize_cpu(64, 80, &cmds, &[], 0.0, 0.0).expect("rasterize");
+    let img = rasterize_cpu_with_fonts(64, 80, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
     assert_eq!(px(&img, 10, 5), (128, 128, 128, 255), "grey still covers y<30");
     assert_eq!(px(&img, 10, 25), (128, 128, 128, 255), "grey ends at 40-10=30");
     assert_eq!(px(&img, 10, 35), (0, 128, 0, 255), "green starts at 30");
@@ -92,7 +92,7 @@ fn scroll_layer_shows_content_from_below_the_canvas() {
         DisplayCommand::FillRect { rect: rect(0.0, 80.0, 40.0, 20.0), color: green },
         DisplayCommand::PopScrollLayer,
     ];
-    let img = rasterize_cpu(40, 60, &cmds, &[], 0.0, 0.0).expect("rasterize");
+    let img = rasterize_cpu_with_fonts(40, 60, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
     assert_eq!(px(&img, 10, 5), (255, 255, 255, 255), "above the block");
     assert_eq!(px(&img, 10, 15), (0, 128, 0, 255), "block at 80-70=10");
     assert_eq!(px(&img, 10, 35), (255, 255, 255, 255), "below the block, inside the clip");
@@ -108,7 +108,7 @@ fn scroll_layer_shows_content_from_right_of_the_canvas() {
         DisplayCommand::FillRect { rect: rect(100.0, 0.0, 20.0, 40.0), color: green },
         DisplayCommand::PopScrollLayer,
     ];
-    let img = rasterize_cpu(50, 40, &cmds, &[], 0.0, 0.0).expect("rasterize");
+    let img = rasterize_cpu_with_fonts(50, 40, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
     assert_eq!(px(&img, 5, 20), (255, 255, 255, 255));
     assert_eq!(px(&img, 15, 20), (0, 128, 0, 255), "block at 100-90=10");
     assert_eq!(px(&img, 35, 20), (255, 255, 255, 255));
@@ -123,7 +123,7 @@ fn scroll_layer_at_origin_is_plain_clip() {
         DisplayCommand::FillRect { rect: rect(0.0, 0.0, 40.0, 40.0), color: grey },
         DisplayCommand::PopScrollLayer,
     ];
-    let img = rasterize_cpu(40, 40, &cmds, &[], 0.0, 0.0).expect("rasterize");
+    let img = rasterize_cpu_with_fonts(40, 40, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
     assert_eq!(px(&img, 10, 10), (128, 128, 128, 255));
     assert_eq!(px(&img, 30, 30), (255, 255, 255, 255));
 }
@@ -161,7 +161,7 @@ fn single_colour_gradients_paint_solid() {
                 repeating,
             },
         ];
-        let img = rasterize_cpu(40, 40, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu_with_fonts(40, 40, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
         for (x, y) in [(5, 5), (35, 8), (5, 25), (35, 28)] {
             assert_eq!(px(&img, x, y), (0, 128, 0, 255), "({x},{y}) repeating={repeating}");
         }
@@ -195,7 +195,7 @@ fn linear_gradient_stops_outside_the_line_keep_their_real_position() {
             stops: vec![stop(black, a.clone()), stop(lime, b.clone())],
             repeating: false,
         }];
-        let img = rasterize_cpu(100, 10, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu_with_fonts(100, 10, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
         for (x, want) in [(5, want5), (90, want90)] {
             let (r, g, bl, _) = px(&img, x, 5);
             assert!(
@@ -217,7 +217,7 @@ fn svg_path_fills_triangle_interior() {
         vertices: vec![[10.0, 10.0], [50.0, 10.0], [30.0, 50.0]],
         color: red,
     }];
-    let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+    let img = rasterize_cpu_with_fonts(64, 64, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
 
     // Centroid ≈ (30, 23): solidly inside the triangle.
     assert_eq!(px(&img, 30, 23), (255, 0, 0, 255), "interior should be red");
@@ -250,8 +250,8 @@ fn svg_stroke_cpu_matches_tessellated_path() {
         vertices: crate::svg_path::tessellate_stroke_ex(&contours, &params),
         color: blue,
     }];
-    let a = rasterize_cpu(64, 64, &stroke_cmd, &[], 0.0, 0.0).expect("stroke");
-    let b = rasterize_cpu(64, 64, &path_cmd, &[], 0.0, 0.0).expect("path");
+    let a = rasterize_cpu_with_fonts(64, 64, &stroke_cmd, &[], 0.0, 0.0, None, None).expect("stroke");
+    let b = rasterize_cpu_with_fonts(64, 64, &path_cmd, &[], 0.0, 0.0, None, None).expect("path");
     assert_eq!(a.data, b.data, "CPU DrawSvgStroke must be byte-identical to the old triangle soup");
 }
 
@@ -300,7 +300,7 @@ fn text_stroke_expands_to_glyph_contours() {
 #[test]
 fn text_stroke_paints_outline_not_fill() {
     let blue = Color { r: 0, g: 0, b: 255, a: 255 };
-    let img = rasterize_cpu(160, 128, &[stroke_cmd_sized("O", 96.0, 2.0, blue)], &[], 0.0, 0.0).expect("raster");
+    let img = rasterize_cpu_with_fonts(160, 128, &[stroke_cmd_sized("O", 96.0, 2.0, blue)], &[], 0.0, 0.0, None, None).expect("raster");
     let is_ink = |x: u32, y: u32| px(&img, x, y) == (0, 0, 255, 255);
     let ink = (0..128u32).flat_map(|y| (0..160u32).map(move |x| (x, y))).filter(|&(x, y)| is_ink(x, y)).count();
     assert!(ink > 200, "обводка нарисована: {ink} px");
@@ -326,7 +326,7 @@ fn draw_image_fills_grey_placeholder() {
         object_position: ObjectPosition::default(),
         image_rendering: ImageRendering::Auto,
     }];
-    let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+    let img = rasterize_cpu_with_fonts(64, 64, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
 
     // Interior of the box is the grey placeholder.
     assert_eq!(px(&img, 30, 25), (217, 217, 217, 255), "placeholder grey");
@@ -350,7 +350,7 @@ fn rounded_clip_cuts_child_corners() {
         DisplayCommand::FillRect { rect: Rect::new(0.0, 0.0, 60.0, 60.0), color: red },
         DisplayCommand::PopClip,
     ];
-    let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+    let img = rasterize_cpu_with_fonts(64, 64, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
     // Centre is inside the circle → red.
     assert_eq!(px(&img, 30, 30), (255, 0, 0, 255), "centre painted");
     // Top-left corner (1,1) is well outside the circle → clipped, stays white.
@@ -364,7 +364,7 @@ fn svg_path_empty_is_noop() {
         vertices: vec![],
         color: Color { r: 0, g: 0, b: 0, a: 255 },
     }];
-    let img = rasterize_cpu(8, 8, &cmds, &[], 0.0, 0.0).expect("rasterize");
+    let img = rasterize_cpu_with_fonts(8, 8, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
     assert_eq!(px(&img, 4, 4), (255, 255, 255, 255), "background untouched");
 }
 
@@ -386,7 +386,7 @@ fn conic_sweeps_first_to_last_stop() {
         ],
         repeating: false,
     }];
-    let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+    let img = rasterize_cpu_with_fonts(64, 64, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
 
     // Top-centre column ≈ start of the sweep → essentially red.
     let (tr, _tg, tb, ta) = px(&img, 32, 2);
@@ -411,7 +411,7 @@ fn conic_empty_stops_noop() {
         stops: vec![],
         repeating: false,
     }];
-    let img = rasterize_cpu(8, 8, &cmds, &[], 0.0, 0.0).expect("rasterize");
+    let img = rasterize_cpu_with_fonts(8, 8, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
     assert_eq!(px(&img, 4, 4), (255, 255, 255, 255), "background untouched");
 }
 
@@ -429,7 +429,7 @@ fn push_clip_rect_clips_fill() {
         DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: blue },
         DisplayCommand::PopClip,
     ];
-    let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+    let img = rasterize_cpu_with_fonts(64, 64, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
 
     // Inside the clip [10,30) — filled blue.
     assert_eq!(px(&img, 20, 20), (0, 0, 255, 255), "inside clip is blue");
@@ -449,7 +449,7 @@ fn pop_clip_restores_full_drawing() {
         DisplayCommand::PopClip,
         DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: green },
     ];
-    let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+    let img = rasterize_cpu_with_fonts(64, 64, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
 
     // A point that was outside the first (clipped) fill is painted by the
     // second, unclipped fill → green, proving the clip was popped.
@@ -468,7 +468,7 @@ fn nested_clip_intersects() {
         DisplayCommand::PopClip,
         DisplayCommand::PopClip,
     ];
-    let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+    let img = rasterize_cpu_with_fonts(64, 64, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
 
     // Intersection [30,50) — blue.
     assert_eq!(px(&img, 40, 40), (0, 0, 255, 255), "intersection is blue");
@@ -491,7 +491,7 @@ fn clip_path_circle_clips_to_circle_not_bbox() {
         DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: blue },
         DisplayCommand::PopClip,
     ];
-    let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+    let img = rasterize_cpu_with_fonts(64, 64, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
 
     // Центр круга — синий.
     assert_eq!(px(&img, 32, 32), (0, 0, 255, 255), "centre inside circle");
@@ -518,7 +518,7 @@ fn clip_path_polygon_clips_to_triangle() {
         DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: red },
         DisplayCommand::PopClip,
     ];
-    let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+    let img = rasterize_cpu_with_fonts(64, 64, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
 
     // Центроид (32, 41) — внутри треугольника.
     assert_eq!(px(&img, 32, 41), (255, 0, 0, 255), "triangle interior red");
@@ -548,7 +548,7 @@ fn clip_path_polygon_even_odd_hole() {
             DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: red },
             DisplayCommand::PopClip,
         ];
-        rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize")
+        rasterize_cpu_with_fonts(64, 64, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize")
     };
 
     let nz = make(false);
@@ -580,7 +580,7 @@ fn clip_path_carried_through_transform() {
         DisplayCommand::PopClip,
         DisplayCommand::PopTransform,
     ];
-    let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+    let img = rasterize_cpu_with_fonts(64, 64, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
 
     // Круг задан вокруг (16,32); transform сдвигает результат на +20 по X
     // → синий центр в (36,32), а исходная позиция (16,32) — белая.
@@ -613,7 +613,7 @@ fn draw_text_renders_ink() {
         highlight_name: None,
         text_orientation: None,
     }];
-    let img = rasterize_cpu(128, 48, &cmds, &[], 0.0, 0.0).expect("rasterize");
+    let img = rasterize_cpu_with_fonts(128, 48, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
 
     // At least one pixel in the run box must carry blue ink (not white bg).
     let mut inked = false;
@@ -651,7 +651,7 @@ fn draw_text_letter_and_word_spacing_shift_ink() {
             highlight_name: None,
             text_orientation: None,
         }];
-        let img = rasterize_cpu(320, 48, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu_with_fonts(320, 48, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
         (0..320).rev().find(|&x| (0..48).any(|y| { let (r, g, b, _) = px(&img, x, y); b > r && b > g })).unwrap()
     };
     let base = ink_right("A B", 0.0, 0.0);
@@ -703,9 +703,9 @@ fn draw_text_sideways_rotates_ink_bbox() {
     };
 
     let horizontal =
-        rasterize_cpu(160, 160, &make_cmds(None), &[], 0.0, 0.0).expect("rasterize");
-    let sideways = rasterize_cpu(
-        160, 160, &make_cmds(Some(TextOrientation::Sideways)), &[], 0.0, 0.0,
+        rasterize_cpu_with_fonts(160, 160, &make_cmds(None), &[], 0.0, 0.0, None, None).expect("rasterize");
+    let sideways = rasterize_cpu_with_fonts(
+        160, 160, &make_cmds(Some(TextOrientation::Sideways)), &[], 0.0, 0.0, None, None,
     )
     .expect("rasterize");
 
@@ -745,7 +745,7 @@ fn draw_text_sideways_ink_stays_inside_the_column_box() {
         highlight_name: None,
         text_orientation: Some(TextOrientation::Sideways),
     }];
-    let img = rasterize_cpu(160, 160, &cmds, &[], 0.0, 0.0).expect("rasterize");
+    let img = rasterize_cpu_with_fonts(160, 160, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
     let (l, t, r, b) = ink_bbox_blue(&img);
     assert!(r > l && b > t, "sideways run produced no ink");
     assert!(l >= 60 && r <= 100, "ink x-range {l}..{r} must lie inside the column 60..100");
@@ -798,9 +798,9 @@ fn draw_text_mixed_keeps_cjk_upright() {
     };
 
     let horizontal =
-        rasterize_cpu(80, 80, &make_cmds(None), &[], 0.0, 0.0).expect("rasterize");
+        rasterize_cpu_with_fonts(80, 80, &make_cmds(None), &[], 0.0, 0.0, None, None).expect("rasterize");
     let mixed =
-        rasterize_cpu(80, 80, &make_cmds(Some(TextOrientation::Mixed)), &[], 0.0, 0.0)
+        rasterize_cpu_with_fonts(80, 80, &make_cmds(Some(TextOrientation::Mixed)), &[], 0.0, 0.0, None, None)
             .expect("rasterize");
 
     let (hl, ht, hr, hb) = ink_bbox_blue(&horizontal);
@@ -837,11 +837,11 @@ fn draw_text_mixed_rotates_latin_run() {
         }]
     };
 
-    let sideways = rasterize_cpu(
-        160, 160, &make_cmds(Some(TextOrientation::Sideways)), &[], 0.0, 0.0,
+    let sideways = rasterize_cpu_with_fonts(
+        160, 160, &make_cmds(Some(TextOrientation::Sideways)), &[], 0.0, 0.0, None, None,
     )
     .expect("rasterize");
-    let mixed = rasterize_cpu(160, 160, &make_cmds(Some(TextOrientation::Mixed)), &[], 0.0, 0.0)
+    let mixed = rasterize_cpu_with_fonts(160, 160, &make_cmds(Some(TextOrientation::Mixed)), &[], 0.0, 0.0, None, None)
         .expect("rasterize");
 
     let (sl, st, sr, sb) = ink_bbox_blue(&sideways);
@@ -875,7 +875,7 @@ fn draw_text_empty_is_noop() {
         highlight_name: None,
         text_orientation: None,
     }];
-    let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+    let img = rasterize_cpu_with_fonts(64, 64, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
     assert_eq!(px(&img, 10, 10), (255, 255, 255, 255), "empty text left bg white");
 }
 
@@ -907,7 +907,7 @@ fn draw_text_respects_clip() {
         },
         DisplayCommand::PopClip,
     ];
-    let img = rasterize_cpu(320, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+    let img = rasterize_cpu_with_fonts(320, 64, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
     // Left half (outside clip) must remain white.
     for x in (5..180).step_by(10) {
         assert_eq!(
@@ -916,6 +916,24 @@ fn draw_text_respects_clip() {
             "glyph pixel at x={x} should be clipped out",
         );
     }
+}
+
+/// BUG-1798: `rasterize_cpu_element_image` leaves the background transparent
+/// and returns straight (un-premultiplied) alpha — a half-transparent red
+/// rect must read back as `(255, 0, 0, ~127)`, not as the darkened
+/// premultiplied `(~127, 0, 0, ~127)` raw tiny-skia stores.
+#[test]
+fn element_image_is_transparent_with_straight_alpha() {
+    let red = Color { r: 255, g: 0, b: 0, a: 127 };
+    let cmds = vec![DisplayCommand::FillRect { rect: rect(0.0, 0.0, 8.0, 8.0), color: red }];
+    let img = super::rasterize_cpu_element_image(16, 16, &cmds, &[]).expect("rasterize");
+    assert_eq!(px(&img, 4, 4).0, 255, "red channel un-premultiplied back to full");
+    assert_eq!(px(&img, 4, 4).1, 0);
+    assert_eq!(px(&img, 4, 4).2, 0);
+    let a = px(&img, 4, 4).3;
+    assert!((113..=141).contains(&a), "alpha ~127, got {a}");
+    // Outside the rect the canvas shows through: fully transparent.
+    assert_eq!(px(&img, 12, 12), (0, 0, 0, 0), "background must stay transparent");
 }
 
 /// FONTLOAD-18: a `font_provider` with no `@font-face` registered for the
@@ -943,7 +961,7 @@ fn draw_text_with_provider_but_no_match_is_byte_identical() {
         text_orientation: None,
     }];
     let registry = lumen_font::FontRegistry::new();
-    let without_provider = rasterize_cpu(128, 48, &cmds, &[], 0.0, 0.0).expect("rasterize");
+    let without_provider = rasterize_cpu_with_fonts(128, 48, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
     let with_empty_provider = rasterize_cpu_with_fonts(
         128, 48, &cmds, &[], 0.0, 0.0,
         Some(&registry as &dyn FontProvider), None,
@@ -1006,7 +1024,7 @@ fn draw_text_size_adjust_from_registered_face_widens_ink() {
         }
         n
     };
-    let unadjusted = rasterize_cpu(300, 80, &cmds, &[], 0.0, 0.0).expect("rasterize");
+    let unadjusted = rasterize_cpu_with_fonts(300, 80, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
     let adjusted = rasterize_cpu_with_fonts(
         300, 80, &cmds, &[], 0.0, 0.0,
         Some(&registry as &dyn FontProvider), None,
@@ -1176,7 +1194,7 @@ fn layout_measurer_width_equals_cpu_pen_advance() {
             highlight_name: None,
             text_orientation: None,
         }];
-        rasterize_cpu(420, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        rasterize_cpu_with_fonts(420, 64, &cmds, &[], 0.0, 0.0, None, None).expect("rasterize");
         let pen = TEST_PEN_END.with(std::cell::Cell::get) - 2.0;
         let params = ShapeParams {
             font_size_px: 32.0,

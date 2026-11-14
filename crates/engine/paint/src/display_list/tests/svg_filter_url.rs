@@ -164,7 +164,7 @@ mod raster {
 
     fn render(html: &str) -> lumen_image::Image {
         let list = build(html, "");
-        crate::cpu_raster::rasterize_cpu(200, 120, &list, &[], 0.0, 0.0).expect("rasterize")
+        crate::cpu_raster::rasterize_cpu_with_fonts(200, 120, &list, &[], 0.0, 0.0, None, None).expect("rasterize")
     }
 
     fn px(img: &lumen_image::Image, x: u32, y: u32) -> [u8; 3] {
@@ -231,7 +231,7 @@ mod raster {
 
     fn render_with(html: &str, images: &[(String, std::sync::Arc<lumen_image::Image>)]) -> lumen_image::Image {
         let list = build(html, "");
-        crate::cpu_raster::rasterize_cpu(200, 120, &list, images, 0.0, 0.0).expect("rasterize")
+        crate::cpu_raster::rasterize_cpu_with_fonts(200, 120, &list, images, 0.0, 0.0, None, None).expect("rasterize")
     }
 
     /// Картинка `w × h`: левая половина красная, правая синяя.

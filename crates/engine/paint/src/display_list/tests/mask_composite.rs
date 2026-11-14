@@ -63,7 +63,7 @@ mod raster {
             "<div></div>",
             &format!("div {{ width: 200px; height: 200px; background: rgb(0,255,0); {css} }}"),
         );
-        crate::cpu_raster::rasterize_cpu(220, 220, &dl, images, 0.0, 0.0).expect("rasterize")
+        crate::cpu_raster::rasterize_cpu_with_fonts(220, 220, &dl, images, 0.0, 0.0, None, None).expect("rasterize")
     }
 
     fn green(img: &lumen_image::Image) -> usize {
@@ -142,7 +142,7 @@ mod raster {
                 ".p {{ width: 50px; height: 50px; position: absolute; left: 0; top: 0; {mask} }}                  .c {{ position: absolute; left: 0; top: 0; width: 100px; height: 100px; background: rgb(0,255,0); }}"
             ),
         );
-        green(&crate::cpu_raster::rasterize_cpu(220, 220, &dl, &[], 0.0, 0.0).expect("rasterize"))
+        green(&crate::cpu_raster::rasterize_cpu_with_fonts(220, 220, &dl, &[], 0.0, 0.0, None, None).expect("rasterize"))
     }
 
     #[test]
@@ -183,13 +183,15 @@ mod raster {
             "<div></div>",
             "div { width: 100px; height: 100px; background: rgb(0,255,0); mask-image: url(m.png); }",
         );
-        let img = crate::cpu_raster::rasterize_cpu(
+        let img = crate::cpu_raster::rasterize_cpu_with_fonts(
             120,
             120,
             &dl,
             &[("m.png".to_string(), std::sync::Arc::new(image))],
             0.0,
             0.0,
+            None,
+            None,
         )
         .expect("rasterize");
         assert_eq!(green(&img), 5000);
