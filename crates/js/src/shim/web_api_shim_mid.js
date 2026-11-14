@@ -8073,6 +8073,30 @@ NodeList.prototype.entries = function() { return _lumen_index_iterator(this, 'en
 NodeList.prototype.keys    = function() { return _lumen_index_iterator(this, 'keys'); };
 NodeList.prototype.values  = function() { return _lumen_index_iterator(this, 'values'); };
 NodeList.prototype[Symbol.iterator] = function() { return _lumen_index_iterator(this, 'values'); };
+// HTMLCollection is iterable in every real engine (Blink/WebKit declare
+// `iterable<Element>` on the interface, Gecko since FF 51) even though the
+// HTML spec text omits it — `[...el.children]`/`for..of` over `children`,
+// `getElementsByTagName` etc. must not throw (BUG-1792: lenta.ru
+// `e.children is not iterable`). Same length+index machinery as NodeList;
+// the proxy get-trap resolves the symbol through this prototype. Every
+// member is defined non-enumerable (WebIDL interface members are): plain
+// assignment would leak method names into `for-in` over a collection and
+// break the BUG-323 contract (indices and named keys only).
+['forEach', 'entries', 'keys', 'values'].forEach(function(name) {
+    Object.defineProperty(HTMLCollection.prototype, name, {
+        value: name === 'forEach'
+            ? function(cb, thisArg) {
+                if (typeof cb !== 'function') throw new TypeError('callback is not a function');
+                for (var i = 0; i < this.length; i++) cb.call(thisArg, this[i], i, this);
+            }
+            : function() { return _lumen_index_iterator(this, name); },
+        writable: true, enumerable: false, configurable: true,
+    });
+});
+Object.defineProperty(HTMLCollection.prototype, Symbol.iterator, {
+    value: function() { return _lumen_index_iterator(this, 'values'); },
+    writable: true, enumerable: false, configurable: true,
+});
 
 // BUG-328: the `name`-attribute half of `namedItem`/`ownKeys` (below) only
 // applies to elements in the HTML namespace (DOM §4.2.10.2) — an element

@@ -955,6 +955,18 @@ the time — read dates.
   `enumerable: true`, `id`/`name`-derived keys `enumerable: false` (visible via
   `getOwnPropertyNames`/`hasOwnProperty`, not `for-in`), matching real engines. Unit test
   `html_collection_supports_enumeration`.
+- **HTMLCollection is iterable — `forEach`/`entries`/`keys`/`values`/`@@iterator` (BUG-1792 fix,
+  [P3] 2026-11-14).** `HTMLCollection.prototype` had no `Symbol.iterator` while `NodeList.prototype`
+  did (BUG-994), so `[...el.children]`/`for..of` over every collection (`children` on HTML/SVG/MathML/
+  shadow-host elements, `ShadowRoot`, `template.content`, `Document`, `getElementsByTagName`, … — all
+  build on `_lumen_make_html_collection` over this prototype) threw `TypeError: … is not iterable`
+  (lenta.ru player code). The HTML spec doesn't declare the interface iterable, but all three engines
+  do (Blink/WebKit `iterable<Element>`, Gecko since FF 51), so spread over a collection is de-facto
+  platform behaviour. Trap for future shim work: every member added to a collection prototype must go
+  through `Object.defineProperty` with `enumerable: false` (WebIDL interface-member semantics) — plain
+  `prototype.m = fn` assignment makes it enumerable, leaks the name into `for-in` over the collection
+  and breaks the BUG-323 contract (indices and named keys only); caught immediately by
+  `html_collection_supports_enumeration`. Tests: `tests/cases/bug1792_html_collection_iterable.rs` (3).
 - **Native element/text wrapper `[[Prototype]]` chain — `instanceof Element`/`Node`/`HTML*Element`/
   `Text`/`CharacterData` (DOM §4.9/§4.4, HTML §3.1.3, [BUG-322](../bugs/BUG-322-FIXED.md) fix,
   [P1] 2026-07-21).** `_lumen_build_element` (the single builder behind `_lumen_make_element`, used
