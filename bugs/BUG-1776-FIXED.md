@@ -72,6 +72,6 @@
   `cargo clippy --workspace --all-targets -- -D warnings` — чисто.
 - `cargo test -p lumen-layout scoped_collect` (11, включая новый), `br_lines` (3) — зелёные.
 - `scripts/scoped-test.sh` — зелёный, кроме двух падений чистого `main`, воспроизведённых
-  байт-в-байт на нетронутом HEAD: `bug1191_boxless_computed_style` ([BUG-1784](BUG-1784-OPEN.md))
+  байт-в-байт на нетронутом HEAD: `bug1191_boxless_computed_style` ([BUG-1784](BUG-1784-FIXED.md))
   и `cpu_snapshots_match_references` ([BUG-1236](BUG-1236-OPEN.md)).
 - `graphic_tests/dump_golden.py` — все 12 дампов совпадают с эталоном.
