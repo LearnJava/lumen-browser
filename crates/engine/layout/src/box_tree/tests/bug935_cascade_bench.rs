@@ -63,6 +63,56 @@ fn page() -> (String, String) {
     (html, css)
 }
 
+/// BUG-1800 срез 9 — та же страница, что у [`cascade_matching_cost`], но с пробами,
+/// вооружёнными честно (форма нагрузки pikabu/ebay): счётчики на псевдоэлементах
+/// (`sheet_has_pseudo_counters` → `pseudo_probe=true`, проба `::before`/`::after` на
+/// КАЖДОМ элементе) и `content: counters(...)` читающим их. Пробный заголовок
+/// (`node_classes`/`candidates`) и снапшот стеков счётчиков на элемент — статья среза.
+fn probed_page() -> (String, String) {
+    let (mut html, mut css) = page();
+    html = html.replace("<div class=\"b0\">", "<div class=\"b0 feed\">");
+    css.push_str(
+        "div::before{counter-increment:d}\n\
+         .feed .b0__cell::after{content:counters(d, \".\")}\n\
+         .feed .b0__row::after{content:counter(d)}\n",
+    );
+    (html, css)
+}
+
+/// Стенд: полный каскад через `walk` с активными пробами; лучший из 39 проходов,
+/// `--profile dev-release` (`cargo test -p lumen-layout --profile dev-release
+/// pseudo_probe_walk_cost -- --ignored --nocapture`).
+#[test]
+#[ignore = "стенд: печатает время, ничего не проверяет"]
+fn pseudo_probe_walk_cost() {
+    use crate::counters::{precompute_counters, take_cascade_stats};
+    let (html, css) = probed_page();
+    let doc = lumen_html_parser::parse(&html);
+    let sheet = lumen_css_parser::parse(&css);
+    let vp = Size::new(1280.0, 800.0);
+    let flat = lumen_dom::build_flat_tree(&doc);
+    let mut best = u64::MAX;
+    let mut elements = 0;
+    let mut probed = 0u32;
+    for round in 0..40 {
+        let _ = take_cascade_stats();
+        let _ = precompute_counters(&doc, &sheet, vp, &flat, false);
+        let s = take_cascade_stats();
+        elements = s.recomputed;
+        probed = s.candidates;
+        if round > 0 {
+            best = best.min(s.walk_ns);
+        }
+    }
+    println!(
+        "pseudo_probe_walk_cost: {} элементов, candidates {} за проход, лучший из 39 проходов {:.2} мс ({:.1} мкс/элемент)",
+        elements,
+        probed,
+        best as f64 / 1e6,
+        best as f64 / 1e3 / f64::from(elements.max(1)),
+    );
+}
+
 #[test]
 #[ignore = "стенд: печатает время, ничего не проверяет"]
 fn cascade_matching_cost() {

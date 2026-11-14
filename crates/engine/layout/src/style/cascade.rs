@@ -530,7 +530,6 @@ pub(crate) fn compute_style_shareable(
     let node_tag = node_data.element_name().map_or("", |q| q.local.as_str());
     let node_id = node_data.get_attr("id");
     let class_attr = node_data.get_attr("class").unwrap_or("");
-    let node_classes: Vec<&str> = class_attr.split_whitespace().collect();
     let node_attrs: &[lumen_dom::Attribute] = match &node_data.data {
         lumen_dom::NodeData::Element { attrs, .. } => attrs,
         _ => &[],
@@ -540,9 +539,10 @@ pub(crate) fn compute_style_shareable(
     ensure_cascade_index(sheet, viewport, dark_mode);
     // BUG-1492: `key` is the rule's place in the source-order numbering shared with the
     // `@media`/`@supports` blocks (`RuleOrder`); `rule_idx` indexes `sheet.rules`.
+    // BUG-1800 срез 9: classes go to `candidates` as an iterator — no `Vec<&str>` header.
     let cands = with_front_cascade_index(|idx| {
         idx.rules
-            .candidates(node_tag, node_id, &node_classes, node_attrs)
+            .candidates(node_tag, node_id, class_attr.split_whitespace(), node_attrs)
             .into_iter()
             .map(|i| (i, idx.order.style(i)))
             .collect::<Vec<_>>()
@@ -580,7 +580,7 @@ pub(crate) fn compute_style_shareable(
     // blocks, i.e. exactly the old `layer_rule_offset + rule_idx`.
     let layer_cands = with_front_cascade_index(|idx| {
         idx.layers
-            .candidates(node_tag, node_id, &node_classes, node_attrs)
+            .candidates(node_tag, node_id, class_attr.split_whitespace(), node_attrs)
             .into_iter()
             .filter_map(|flat| {
                 let (block, rule_idx) = *idx.layer_rules.get(flat)?;
@@ -636,7 +636,7 @@ pub(crate) fn compute_style_shareable(
         // BUG-284: candidate pre-filter (see @layer above) — real-world
         // stylesheets often put the bulk of their rules inside @media blocks.
         let media_cands = with_front_cascade_index(|idx| {
-            idx.media[media_i].candidates(node_tag, node_id, &node_classes, node_attrs)
+            idx.media[media_i].candidates(node_tag, node_id, class_attr.split_whitespace(), node_attrs)
         });
         for rule_idx in media_cands {
             let rule = &media.rules[rule_idx];
@@ -673,7 +673,7 @@ pub(crate) fn compute_style_shareable(
         }
         let supports_base = with_front_cascade_index(|idx| idx.order.supports_base[supports_i]);
         let supports_cands = with_front_cascade_index(|idx| {
-            idx.supports[supports_i].candidates(node_tag, node_id, &node_classes, node_attrs)
+            idx.supports[supports_i].candidates(node_tag, node_id, class_attr.split_whitespace(), node_attrs)
         });
         for rule_idx in supports_cands {
             let rule = &supports.rules[rule_idx];

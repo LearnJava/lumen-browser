@@ -46,9 +46,13 @@ pub fn restyle_roots_for_rule_changes(doc: &Document, changed: &[&Rule]) -> Opti
     while let Some(id) = stack.pop() {
         let node = doc.get(id);
         if let NodeData::Element { name, attrs, .. } = &node.data {
-            let classes: Vec<&str> = node.get_attr("class").unwrap_or("").split_whitespace().collect();
             let selected = index
-                .candidates(name.local.as_str(), node.get_attr("id"), &classes, attrs)
+                .candidates(
+                    name.local.as_str(),
+                    node.get_attr("id"),
+                    node.get_attr("class").unwrap_or("").split_whitespace(),
+                    attrs,
+                )
                 .into_iter()
                 .any(|rule| changed[rule].selectors.iter().any(|s| matches_complex(s, doc, id)));
             if selected {

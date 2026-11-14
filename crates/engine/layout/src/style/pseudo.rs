@@ -571,11 +571,15 @@ fn compute_pseudo_element_style_inner(
     // function's doc comment. Nothing here reads the pseudo-element's own style.
     let prof_match = lumen_core::profile::scope_detail("ps_match");
     let mut matched: Vec<(bool, Specificity, usize, usize, &Declaration)> = Vec::new();
+    // BUG-1800 срез 9: one candidate buffer reused across every block below —
+    // `candidates_into` clears it, so the probe pays at most one allocation
+    // instead of one per block (the probe runs on every element, twice per
+    // element on a sheet that arms `pseudo_probe`).
+    let mut cand = Vec::new();
     let node_data = doc.get(node);
     let node_tag = node_data.element_name().map_or("", |q| q.local.as_str());
     let node_id = node_data.get_attr("id");
     let class_attr = node_data.get_attr("class").unwrap_or("");
-    let node_classes: Vec<&str> = class_attr.split_whitespace().collect();
     let node_attrs: &[lumen_dom::Attribute] = match &node_data.data {
         lumen_dom::NodeData::Element { attrs, .. } => attrs,
         _ => &[],
@@ -589,8 +593,10 @@ fn compute_pseudo_element_style_inner(
     // для всех кандидатов был аллокацией на каждую пробу (~16k на флаш pikabu), читался
     // же лишь сматчившими (~200).
     with_front_cascade_index(|idx| {
-        for rule_idx in idx.pseudo_rules.candidates(node_tag, node_id, &node_classes, node_attrs) {
-            let rule = &sheet.rules[rule_idx];
+        for rule_idx in
+            idx.pseudo_rules.candidates_into(node_tag, node_id, class_attr.split_whitespace(), node_attrs, &mut cand)
+        {
+            let rule = &sheet.rules[*rule_idx];
             let mut best: Option<Specificity> = None;
             for complex in &rule.selectors {
                 if let Some(spec) = matches_complex_for_pseudo(complex, pseudo, doc, node) {
@@ -601,7 +607,7 @@ fn compute_pseudo_element_style_inner(
                 }
             }
             if let Some(spec) = best {
-                let key = idx.order.style(rule_idx);
+                let key = idx.order.style(*rule_idx);
                 for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                     matched.push((decl.important, spec, key, decl_idx, decl));
                 }
@@ -627,8 +633,10 @@ fn compute_pseudo_element_style_inner(
                     .map(|b| (b, &sheet.supports_rules[b.block].rules)),
             );
         for (block, rules) in blocks {
-            for rule_idx in block.index.candidates(node_tag, node_id, &node_classes, node_attrs) {
-                let rule = &rules[rule_idx];
+            for rule_idx in
+                block.index.candidates_into(node_tag, node_id, class_attr.split_whitespace(), node_attrs, &mut cand)
+            {
+                let rule = &rules[*rule_idx];
                 let mut best: Option<Specificity> = None;
                 for complex in &rule.selectors {
                     if let Some(spec) = matches_complex_for_pseudo(complex, pseudo, doc, node) {
@@ -639,7 +647,7 @@ fn compute_pseudo_element_style_inner(
                     }
                 }
                 if let Some(spec) = best {
-                    let global_rule_idx = block.base + rule_idx;
+                    let global_rule_idx = block.base + *rule_idx;
                     for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                         matched.push((decl.important, spec, global_rule_idx, decl_idx, decl));
                     }
