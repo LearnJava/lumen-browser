@@ -200,14 +200,36 @@ impl RuleIndex {
     /// `extend_from_slice` into one `Vec`, sorted+deduped once at the end,
     /// keeps the same result with at most one allocation per call instead of
     /// one per element.
-    pub fn candidates(
+    ///
+    /// BUG-1800 срез 9: `classes` is an iterator — the probe passes
+    /// `class_attr.split_whitespace()` directly, so the per-node `Vec<&str>`
+    /// header allocation is gone at every call site.
+    pub fn candidates<'a>(
         &self,
         tag: &str,
         id: Option<&str>,
-        classes: &[&str],
+        classes: impl Iterator<Item = &'a str>,
         attrs: &[Attribute],
     ) -> Vec<RuleIdx> {
-        let mut out: Vec<RuleIdx> = Vec::new();
+        let mut out = Vec::new();
+        self.candidates_into(tag, id, classes, attrs, &mut out);
+        out
+    }
+
+    /// [`Self::candidates`] without the per-call `Vec` allocation: the caller
+    /// reuses one buffer across calls (cleared here). BUG-1800 срез 9 —
+    /// the `::before`/`::after` probe runs this once per active block on *every*
+    /// element (~16k probes per flush pikabu); with a reused buffer the probe
+    /// pays at most one allocation instead of one per block.
+    pub fn candidates_into<'a, 'r>(
+        &self,
+        tag: &str,
+        id: Option<&str>,
+        classes: impl Iterator<Item = &'a str>,
+        attrs: &[Attribute],
+        out: &'r mut Vec<RuleIdx>,
+    ) -> &'r [RuleIdx] {
+        out.clear();
         if let Some(v) = self.by_type.get(tag) {
             out.extend_from_slice(v);
         }
@@ -216,7 +238,7 @@ impl RuleIndex {
         {
             out.extend_from_slice(v);
         }
-        for &cls in classes {
+        for cls in classes {
             if let Some(v) = self.by_class.get(cls) {
                 out.extend_from_slice(v);
             }
@@ -290,7 +312,7 @@ mod tests {
         assert!(!idx.by_class.contains_key("b"), "second class must not create a separate bucket entry");
 
         // Node with class="a" only → is a candidate (will be rejected later by matches_complex)
-        let cands = idx.candidates("span", None, &["a"], &[]);
+        let cands = idx.candidates("span", None, ["a"].into_iter(), &[]);
         assert!(!cands.is_empty(), "should be a candidate when only .a matches");
     }
 
@@ -301,9 +323,9 @@ mod tests {
         assert!(idx.by_class.contains_key("title"), "must bucket under subject .title");
         assert!(!idx.by_class.contains_key("card"), "ancestor class must not create bucket");
 
-        let cands = idx.candidates("span", None, &["title"], &[]);
+        let cands = idx.candidates("span", None, ["title"].into_iter(), &[]);
         assert!(!cands.is_empty());
-        let cands_no_title = idx.candidates("span", None, &["card"], &[]);
+        let cands_no_title = idx.candidates("span", None, ["card"].into_iter(), &[]);
         assert!(cands_no_title.is_empty(), "node without .title is not a candidate");
     }
 
@@ -325,13 +347,13 @@ mod tests {
         let idx = build("div:is(.x) { color: red }");
         assert!(idx.by_type.contains_key("div"));
         assert!(idx.universal.is_empty());
-        assert!(idx.candidates("span", None, &["x"], &[]).is_empty());
+        assert!(idx.candidates("span", None, ["x"].into_iter(), &[]).is_empty());
 
         let idx = build(".btn:where([data-size=small]) { color: red }");
         assert!(idx.by_class.contains_key("btn"));
         assert!(idx.by_attr.is_empty(), "class outranks attribute");
-        assert_eq!(idx.candidates("a", None, &["btn"], &[]), vec![0]);
-        assert!(idx.candidates("a", None, &["other"], &[]).is_empty());
+        assert_eq!(idx.candidates("a", None, ["btn"].into_iter(), &[]), vec![0]);
+        assert!(idx.candidates("a", None, ["other"].into_iter(), &[]).is_empty());
 
         // Only a functional pseudo in the subject — nothing to key on.
         let idx = build(":where(.a) { color: red }");
@@ -348,9 +370,13 @@ mod tests {
         assert!(idx_attr.universal.is_empty());
         assert!(idx_attr.by_attr.contains_key("hidden"));
         let attr = |n: &str| Attribute { name: lumen_dom::QualName::html(n), value: String::new() };
-        assert_eq!(idx_attr.candidates("div", None, &[], &[attr("hidden")]), vec![0]);
-        assert_eq!(idx_attr.candidates("div", None, &[], &[attr("data-mode"), attr("hidden")]), vec![0, 1]);
-        assert!(idx_attr.candidates("div", None, &[], &[attr("title")]).is_empty());
+        let no_classes = std::iter::empty::<&str>();
+        assert_eq!(idx_attr.candidates("div", None, no_classes, &[attr("hidden")]), vec![0]);
+        assert_eq!(
+            idx_attr.candidates("div", None, std::iter::empty::<&str>(), &[attr("data-mode"), attr("hidden")]),
+            vec![0, 1]
+        );
+        assert!(idx_attr.candidates("div", None, std::iter::empty::<&str>(), &[attr("title")]).is_empty());
     }
 
     /// `candidates()` merges type + class + id + universal and deduplicates.
@@ -360,7 +386,7 @@ mod tests {
         let sheet = parse("div, * { color: red }");
         let idx = RuleIndex::build(&sheet);
         // rule 0 should appear from by_type["div"] AND universal; after dedup only once.
-        let cands = idx.candidates("div", None, &[], &[]);
+        let cands = idx.candidates("div", None, std::iter::empty::<&str>(), &[]);
         let rule0_count = cands.iter().filter(|&&r| r == 0).count();
         assert_eq!(rule0_count, 1, "dedup must not repeat rule_idx");
     }

@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-11-14T01:59:07",
+  "timestamp": "2026-11-14T03:10:49",
   "git": {
-    "commit": "c709c0c3a",
+    "commit": "8851a3627",
     "branch": "p3-bug-1800",
-    "subject": "BUG-1800 срез 7: lock-wait читалок снят (ожидания <=0,5 с/сессию)"
+    "subject": "BUG-1800 срез 8: псевдо-пробы дешевле — матч без клонов (walk pikabu −18…−22 %)"
   },
   "crop_offset": [
     8,
@@ -13,9 +13,9 @@
   "summary": {
     "total": 172,
     "passed": 119,
-    "failed": 9,
+    "failed": 7,
     "errors": 0,
-    "debtors": 44,
+    "debtors": 46,
     "skipped": 0
   },
   "tests": [
@@ -243,8 +243,8 @@
       "label": "images",
       "html": "18-images.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 6.0928,
+      "status": "DEBTOR",
+      "diff_pct": 2.0829,
       "diff_region": {
         "top": 28,
         "left": 28,
@@ -255,7 +255,7 @@
       "debtor": {
         "bug": "BUG-219",
         "baseline": 2.08,
-        "verdict": "REGRESS"
+        "verdict": "OK"
       }
     },
     {
@@ -490,7 +490,7 @@
       "html": "34-forms.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.082,
+      "diff_pct": 3.0821,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -769,7 +769,7 @@
       "html": "53-background-origin.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.0396,
+      "diff_pct": 1.0399,
       "diff_region": {
         "top": 36,
         "left": 0,
@@ -911,8 +911,8 @@
       "label": "View Transitions API: document.startViewTransition(cb) — JS API, ViewTransition object, Begin/End events, 300 ms cross-fade",
       "html": "61-view-transitions.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 10.8241,
+      "status": "DEBTOR",
+      "diff_pct": 3.3782,
       "diff_region": {
         "top": 32,
         "left": 40,
@@ -923,7 +923,7 @@
       "debtor": {
         "bug": "BUG-103",
         "baseline": 3.26,
-        "verdict": "REGRESS"
+        "verdict": "OK"
       }
     },
     {
@@ -954,7 +954,7 @@
       "html": "63-masonry.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.4034,
+      "diff_pct": 1.4041,
       "diff_region": {
         "top": 31,
         "left": 11,
@@ -996,7 +996,7 @@
       "html": "65-flex-align-content.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.4978,
+      "diff_pct": 0.4979,
       "diff_region": {
         "top": 30,
         "left": 2,
@@ -1214,7 +1214,7 @@
       "html": "78-scroll-driven-animations.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.3777,
+      "diff_pct": 2.3642,
       "diff_region": {
         "top": 28,
         "left": 0,
@@ -1314,7 +1314,7 @@
       "html": "83-scroll-behavior.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 8.3023,
+      "diff_pct": 8.3016,
       "diff_region": {
         "top": 31,
         "left": 51,
@@ -1801,12 +1801,12 @@
       "html": "112-clip-path-fill-rule.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0003,
+      "diff_pct": 0.2262,
       "diff_region": {
-        "top": 137,
-        "left": 280,
+        "top": 90,
+        "left": 256,
         "bottom": 137,
-        "right": 281
+        "right": 305
       },
       "capture": "ipc"
     },
@@ -1951,7 +1951,7 @@
       "html": "122-line-height-step.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 9.584,
+      "diff_pct": 9.5839,
       "diff_region": {
         "top": 32,
         "left": 41,
@@ -2233,7 +2233,7 @@
       "html": "140-placeholder-pseudo.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.288,
+      "diff_pct": 1.2877,
       "diff_region": {
         "top": 41,
         "left": 41,
@@ -2393,7 +2393,7 @@
       "html": "150-font-variant-caps.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 7.49,
+      "diff_pct": 7.4896,
       "diff_region": {
         "top": 46,
         "left": 37,
@@ -2532,7 +2532,7 @@
       "html": "159-background-clip-text.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 2.5064,
+      "diff_pct": 2.5065,
       "diff_region": {
         "top": 34,
         "left": 41,

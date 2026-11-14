@@ -239,7 +239,6 @@ pub(crate) fn dynamic_fingerprint(
     let node_tag = node_data.element_name().map_or("", |q| q.local.as_str());
     let node_id = node_data.get_attr("id");
     let class_attr = node_data.get_attr("class").unwrap_or("");
-    let node_classes: Vec<&str> = class_attr.split_whitespace().collect();
     let node_attrs: &[lumen_dom::Attribute] = match &node_data.data {
         lumen_dom::NodeData::Element { attrs, .. } => attrs,
         _ => &[],
@@ -255,14 +254,16 @@ pub(crate) fn dynamic_fingerprint(
         }
     };
 
-    let cands = with_front_cascade_index(|idx| idx.rules.candidates(node_tag, node_id, &node_classes, node_attrs));
+    let cands = with_front_cascade_index(|idx| {
+        idx.rules.candidates(node_tag, node_id, class_attr.split_whitespace(), node_attrs)
+    });
     for rule_idx in cands {
         push_from(&sheet.rules[rule_idx]);
     }
 
     let layer_cands = with_front_cascade_index(|idx| {
         idx.layers
-            .candidates(node_tag, node_id, &node_classes, node_attrs)
+            .candidates(node_tag, node_id, class_attr.split_whitespace(), node_attrs)
             .into_iter()
             .filter_map(|flat| idx.layer_rules.get(flat).copied())
             .collect::<Vec<_>>()
@@ -279,7 +280,7 @@ pub(crate) fn dynamic_fingerprint(
             continue;
         }
         let media_cands = with_front_cascade_index(|idx| {
-            idx.media[media_i].candidates(node_tag, node_id, &node_classes, node_attrs)
+            idx.media[media_i].candidates(node_tag, node_id, class_attr.split_whitespace(), node_attrs)
         });
         for rule_idx in media_cands {
             push_from(&media.rules[rule_idx]);
@@ -292,7 +293,7 @@ pub(crate) fn dynamic_fingerprint(
             continue;
         }
         let supports_cands = with_front_cascade_index(|idx| {
-            idx.supports[supports_i].candidates(node_tag, node_id, &node_classes, node_attrs)
+            idx.supports[supports_i].candidates(node_tag, node_id, class_attr.split_whitespace(), node_attrs)
         });
         for rule_idx in supports_cands {
             push_from(&supports.rules[rule_idx]);
