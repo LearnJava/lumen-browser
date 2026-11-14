@@ -29,6 +29,10 @@ const MATHML_SHIM: &str = r#"
   // `dataset`/`style`/event-target members generically — this class exists
   // only so `_lumen_element_prototype_for` has a typed prototype to hand out.
   class MathMLElement extends (typeof Element !== 'undefined' ? Element : Object) {}
+  // BUG-1779: without its own `@@toStringTag` a MathML element stringifies as
+  // the inherited `Element` tag instead of `[object MathMLElement]`.
+  Object.defineProperty(MathMLElement.prototype, Symbol.toStringTag,
+    { value: 'MathMLElement', writable: false, enumerable: false, configurable: true });
   window.MathMLElement = MathMLElement;
 
   window.MATHML_NAMESPACE = 'http://www.w3.org/1998/Math/MathML';

@@ -133,6 +133,8 @@
     _HTMLMediaElement.prototype = Object.create(HTMLElement.prototype);
     Object.defineProperty(_HTMLMediaElement.prototype, 'constructor',
       { value: _HTMLMediaElement, writable: true, configurable: true });
+    Object.defineProperty(_HTMLMediaElement.prototype, Symbol.toStringTag,
+      { value: 'HTMLMediaElement', writable: false, enumerable: false, configurable: true });
     var _MEDIA_CONSTS = {
       NETWORK_EMPTY: NETWORK_EMPTY, NETWORK_IDLE: NETWORK_IDLE,
       NETWORK_LOADING: NETWORK_LOADING, NETWORK_NO_SOURCE: NETWORK_NO_SOURCE,

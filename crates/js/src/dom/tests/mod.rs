@@ -568,4 +568,7 @@ mod v8_bug1713_textdecoder_latin1;
 mod v8_bug1775_query_encoding;
 
 #[cfg(feature = "v8-backend")]
+mod v8_bug1779_element_class_string;
+
+#[cfg(feature = "v8-backend")]
 mod v8_xpath_large_dom;

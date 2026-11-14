@@ -5333,6 +5333,7 @@ DOMImplementation.prototype.constructor = DOMImplementation;
     Object.defineProperty(_ctor, 'name', { value: _name, configurable: true });
     _ctor.prototype = Object.create(HTMLElement.prototype);
     _ctor.prototype.constructor = _ctor;
+    _lumen_idl_tag(_ctor, _name);
     globalThis[_name] = _ctor;
 });
 
@@ -5576,6 +5577,21 @@ function DocumentFragment() { return _lumen_make_document_fragment(_lumen_create
 DocumentFragment.prototype = Object.create(Node.prototype);
 DocumentFragment.prototype.constructor = DocumentFragment;
 Object.setPrototypeOf(_lumen_document_fragment_members, DocumentFragment.prototype);
+// BUG-1779: every interface prototype above carries its own `@@toStringTag`
+// (WebIDL §3.7.3, the BUG-912/BUG-1138 shape — an inherited tag would make a
+// subclass claim the base's name), so `{}.toString.call(node)` names the
+// interface instead of `[object Object]`; tippy.js sniffs elements this way.
+_lumen_idl_tag(Node, 'Node');
+_lumen_idl_tag(Element, 'Element');
+_lumen_idl_tag(CharacterData, 'CharacterData');
+_lumen_idl_tag(Attr, 'Attr');
+_lumen_idl_tag(DocumentType, 'DocumentType');
+_lumen_idl_tag(ProcessingInstruction, 'ProcessingInstruction');
+_lumen_idl_tag(HTMLElement, 'HTMLElement');
+_lumen_idl_tag(Comment, 'Comment');
+_lumen_idl_tag(Text, 'Text');
+_lumen_idl_tag(CDATASection, 'CDATASection');
+_lumen_idl_tag(DocumentFragment, 'DocumentFragment');
 // DOM §4.4: a fragment's (and so a ShadowRoot's) `nodeType`/`nodeName`. The
 // arena-backed ShadowRoot wrapper has no own copy of either, and since BUG-1122
 // it would otherwise inherit `Node.prototype`'s element-oriented getters and
@@ -14178,6 +14194,7 @@ function _lumen_document_collection(key, selector) {
 function HTMLImageElement() { throw new TypeError('Illegal constructor'); }
 HTMLImageElement.prototype = Object.create(HTMLElement.prototype);
 HTMLImageElement.prototype.constructor = HTMLImageElement;
+_lumen_idl_tag(HTMLImageElement, 'HTMLImageElement');
 
 // WebIDL §3.7.6 [LegacyFactoryFunction] (BUG-923): `Image`/`Option`/`Audio` are
 // constructors only — a call without `new` throws — whose `.name` is the
