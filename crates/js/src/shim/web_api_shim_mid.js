@@ -11698,13 +11698,11 @@ function _lumen_build_element(nid, ifaceOverride) {
 
 var _lumen_root_nid = _lumen_get_document_root();
 
-var console = {
-    log:   function() { _lumen_console_log(  Array.prototype.join.call(arguments, ' ')); },
-    warn:  function() { _lumen_console_warn( Array.prototype.join.call(arguments, ' ')); },
-    error: function() { _lumen_console_error(Array.prototype.join.call(arguments, ' ')); },
-    info:  function() { _lumen_console_log(  Array.prototype.join.call(arguments, ' ')); },
-    debug: function() { _lumen_console_log(  Array.prototype.join.call(arguments, ' ')); },
-};
+var console = _lumen_make_console(function(level, text) {
+    if (level === 'error') _lumen_console_error(text);
+    else if (level === 'warn') _lumen_console_warn(text);
+    else _lumen_console_log(text);
+});
 
 // ── FontFace and FontFaceSet (CSS Fonts Module Level 4 §11 / CSS Font Loading) ─
 // FONTLOAD-1 (2026-09-04): a real `FontFace` constructor and a `document.fonts`

@@ -68,6 +68,36 @@ fn console_log_does_not_crash() {
     rt.eval("console.log('hello from test')").unwrap();
 }
 
+/// BUG-1782: the page console carries the full Console Standard surface, and
+/// the stateful methods behave — `assert` logs only a falsy condition, timers
+/// and counters report through the log sink, groups indent. The first eval is
+/// the bug card's own repro (the filter must come out empty).
+#[test]
+fn v8_bug1782_console_standard_surface() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let missing = rt
+        .eval(
+            "['assert','clear','count','countReset','dir','dirxml','group','groupCollapsed',\
+             'groupEnd','table','time','timeEnd','timeLog','trace']\
+             .filter(function(k){ return typeof console[k] !== 'function'; }).join(',')",
+        )
+        .unwrap();
+    assert_eq!(missing, lumen_core::JsValue::String("".into()), "{missing:?}");
+
+    rt.eval("console.assert(true, 'must stay silent'); console.assert(false, 'condition', 'failed');").unwrap();
+    rt.eval("console.time('t'); console.timeEnd('t'); console.count('c'); console.count('c');").unwrap();
+    rt.eval("console.group('outer'); console.log('in'); console.groupEnd(); console.log('after');").unwrap();
+    let msgs = rt.take_console_messages();
+    let joined: Vec<String> = msgs.iter().map(|(_, s)| s.clone()).collect();
+    let joined = joined.join("\n");
+    assert_eq!(msgs[0], (2, "Assertion failed: condition failed".to_string()), "{joined}");
+    assert!(joined.contains("t: "), "timeEnd must log its duration: {joined}");
+    assert!(joined.contains("c: 1"), "count must report the first hit: {joined}");
+    assert!(joined.contains("c: 2"), "count must increment per label: {joined}");
+    assert!(joined.contains("\n  in"), "group must indent its body: {joined}");
+    assert!(joined.contains("\nafter"), "groupEnd must restore the depth: {joined}");
+}
+
 // BUG-243: dynamic SVG built via document.createElementNS must produce NATIVE
 // arena nodes (carrying __nid__) so that appendChild attaches them to the Rust
 // document tree and layout/paint can see them. The previous svg.rs override

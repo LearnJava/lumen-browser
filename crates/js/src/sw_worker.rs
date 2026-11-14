@@ -427,11 +427,9 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     }}
   }};
 
-  // Minimal console stub.
-  globalThis.console = {{
-    log: function() {{}}, warn: function() {{}}, error: function() {{}},
-    debug: function() {{}}, info: function() {{}},
-  }};
+  // Console (BUG-1782): the full standard surface from `CONSOLE_SHIM`'s
+  // factory; this scope has no console sink, so it stays silent as before.
+  globalThis.console = _lumen_make_console(function(level, text) {{}});
 
   // queueMicrotask stub.
   globalThis.queueMicrotask = function(fn) {{ Promise.resolve().then(fn); }};

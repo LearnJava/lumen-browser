@@ -100,6 +100,9 @@ fn worker_exposed_shim_is_a_verbatim_slice_of_the_page_shim() {
     assert!(worker.contains(WORKER_LOCATION_NAVIGATOR_SHIM));
     assert!(!page.contains("globalThis.WorkerLocation"));
     assert!(!page.contains("globalThis.WorkerNavigator"));
+    // Console factory (BUG-1782): один и тот же текст на странице и в воркере.
+    assert!(page.contains(CONSOLE_SHIM));
+    assert!(worker.contains(CONSOLE_SHIM));
 }
 
 #[cfg(feature = "v8-backend")]

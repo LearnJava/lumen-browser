@@ -336,13 +336,11 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
     delete _ports[pid];
   };
 
-  globalThis.console = {
-    log:   function() { _lumen_sw_console_log(Array.prototype.map.call(arguments, String).join(' ')); },
-    info:  function() { _lumen_sw_console_log(Array.prototype.map.call(arguments, String).join(' ')); },
-    warn:  function() { _lumen_sw_console_log('[WARN] ' + Array.prototype.map.call(arguments, String).join(' ')); },
-    error: function() { _lumen_sw_console_log('[ERR]  ' + Array.prototype.map.call(arguments, String).join(' ')); },
-    debug: function() {},
-  };
+  // Console (BUG-1782): the full standard surface from `CONSOLE_SHIM`'s
+  // factory, one prefixed stderr native as the sink.
+  globalThis.console = _lumen_make_console(function(level, text) {
+    _lumen_sw_console_log(level === 'warn' ? '[WARN] ' + text : level === 'error' ? '[ERR]  ' + text : text);
+  });
 
   // importScripts(url1[, url2, …]) — WHATWG Web Workers §4.2.3 (BUG-778:
   // previously an unconditional throw for every URL, including `data:`; now
@@ -1254,6 +1252,33 @@ mod tests_v8 {
         ] {
             assert_eq!(rt.eval(expr).unwrap(), JsValue::Bool(true), "{expr}");
         }
+    }
+
+    /// BUG-1782: the shared-worker console carries the full Console Standard
+    /// surface from `CONSOLE_SHIM`'s factory — the same text the page runs
+    /// (sibling test `v8_bug1782_console_standard_surface` in `dom.rs`).
+    #[test]
+    fn shared_worker_console_has_standard_surface() {
+        let rt = V8JsRuntime::new().unwrap();
+        let ports = Arc::new(Mutex::new(HashMap::new()));
+        install_shared_worker_globals_v8(&rt, ports, None, "", false, Arc::new(AtomicBool::new(false)), None)
+            .unwrap();
+        for expr in [
+            "typeof console.assert === 'function'",
+            "typeof console.clear === 'function'",
+            "typeof console.count === 'function'",
+            "typeof console.dir === 'function'",
+            "typeof console.group === 'function'",
+            "typeof console.table === 'function'",
+            "typeof console.time === 'function'",
+            "typeof console.timeEnd === 'function'",
+            "typeof console.trace === 'function'",
+        ] {
+            assert_eq!(rt.eval(expr).unwrap(), JsValue::Bool(true), "{expr}");
+        }
+        // The stateful paths run through the flavour's own emit without crashing.
+        rt.eval("console.time('t'); console.count('c'); console.timeEnd('t'); console.assert(false, 'boom');")
+            .unwrap();
     }
 
     /// BUG-766: `SharedWorkerGlobalScope.isSecureContext` follows the same
