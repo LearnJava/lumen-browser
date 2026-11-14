@@ -2244,7 +2244,11 @@ var window = {
             }
             if (target !== origin) return;
         }
-        var ev = new MessageEvent(structuredClone(message));
+        // HTML LS §9.3.4: the UA itself dispatches this event, so Chrome
+        // reports `isTrusted === true` even though a script called
+        // `postMessage` — Cloudflare Turnstile drops every untrusted message
+        // (BUG-1790).
+        var ev = new MessageEvent(structuredClone(message), { isTrusted: true });
         ev.origin = origin;
         ev.source = window;
         // GAP-ORIGIN: a delivered event's real origin — the sender is this
@@ -2276,7 +2280,7 @@ for (var _wohi = 0; _wohi < _LUMEN_EVENT_HANDLER_ATTRS.length; _wohi++) {
 // source — фасад окна отправителя или null. Тот же порядок, что у локального
 // window.postMessage выше: сначала onmessage, затем addEventListener('message').
 __lumen_C._lumen_deliver_frame_message = function(data, origin, source, opaqueId) {
-    var ev = new MessageEvent(data);
+    var ev = new MessageEvent(data, { isTrusted: true });
     ev.origin = origin || '';
     if (source !== null && source !== undefined) ev.source = source;
     // GAP-ORIGIN: the sender's origin as the frame bridge computed it; empty

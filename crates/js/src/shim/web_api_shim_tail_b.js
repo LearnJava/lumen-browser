@@ -8313,11 +8313,13 @@ function _lumen_apply_resize(nid, delta_x, delta_y) {
         getManifest: function() { return { name: '', version: '0', manifest_version: 3 }; }
     };
     if (typeof globalThis !== 'undefined') {
-        globalThis.chrome = { runtime: _rt };
+        globalThis.chrome = globalThis.chrome || {};
+        globalThis.chrome.runtime = _rt;
         globalThis.browser = { runtime: _rt };
     }
     if (typeof window !== 'undefined') {
-        window.chrome = { runtime: _rt };
+        window.chrome = window.chrome || {};
+        window.chrome.runtime = _rt;
         window.browser = { runtime: _rt };
     }
 })();

@@ -14,7 +14,9 @@
 //! 1. Standard browser compatibility properties that fingerprinting
 //!    scripts expect on any real browser (`navigator.plugins`,
 //!    `navigator.mimeTypes`, `navigator.appName`, `navigator.vendor`,
-//!    `navigator.product`, `navigator.productSub`).
+//!    `navigator.product`, `navigator.productSub`) and the `window.chrome`
+//!    shape Chrome exposes on an ordinary page (`app`/`csi`/`loadTimes`,
+//!    no `runtime` — BUG-1790).
 //! 2. Freezes `navigator.cookieEnabled = true` and
 //!    `navigator.doNotTrack = null` (Chrome-matching).
 //! 3. Defines `navigator.globalPrivacyControl = true` when — and only when —
@@ -181,38 +183,28 @@ const SURFACE_API_SHIM: &str = r#"(function() {
       }
     } catch(_) {}
 
-    // navigator.plugins / navigator.mimeTypes — empty PluginArray/MimeTypeArray.
-    // Real Chrome has a non-empty plugins list; fingerprinting scripts check
-    // for an object with length ≥ 0 and named-item access.  We provide a
-    // minimal compatible stub.
+    // navigator.plugins / navigator.mimeTypes — Chrome's PDF-viewer set.
+    // Chrome exposes five legacy PDF plugins and two MIME types; an empty
+    // PluginArray is a one-line fingerprint that Cloudflare's challenge reads
+    // (BUG-1790).  The interfaces sit on Navigator.prototype like Chrome's,
+    // not as own properties of `navigator` (own props are detectable).
     try {
       if (typeof navigator.plugins === 'undefined') {
-        var _emptyPlugins = Object.create(null);
-        _emptyPlugins.length = 0;
-        _emptyPlugins.item = function() { return null; };
-        _emptyPlugins.namedItem = function() { return null; };
-        _emptyPlugins[Symbol.iterator] = function*() {};
-        Object.defineProperty(navigator, 'plugins', {
-          get: function() { return _emptyPlugins; },
-          configurable: true, enumerable: true
-        });
-      }
-    } catch(_) {}
-
-    try {
-      if (typeof navigator.mimeTypes === 'undefined') {
-        var _emptyMimes = Object.create(null);
-        _emptyMimes.length = 0;
-        _emptyMimes.item = function() { return null; };
-        _emptyMimes.namedItem = function() { return null; };
-        _emptyMimes[Symbol.iterator] = function*() {};
-        Object.defineProperty(navigator, 'mimeTypes', {
-          get: function() { return _emptyMimes; },
-          configurable: true, enumerable: true
-        });
+        install_legacy_plugin_array();
       }
     } catch(_) {}
   }
+
+  // ── window.chrome — the shape real Chrome has on an ordinary page ─────────
+  // Chrome exposes exactly `loadTimes`, `csi` and `app` here; `runtime` is a
+  // CDP/extension marker and stays absent (privacy.md §9.5).  ADR-034 п.1 takes
+  // the shape from the identity profile, and its absence is itself a
+  // fingerprint the Turnstile challenge reads (BUG-1790).
+  try {
+    if (typeof globalThis !== 'undefined' && typeof globalThis.chrome === 'undefined') {
+      install_window_chrome();
+    }
+  } catch(_) {}
 
   // ── Automation globals: deliberately NOT defined ──────────────────────────
   // `__playwright`, `__pwInitScripts`, `__pwExecPath`, `__selenium_unwrapped`,
@@ -234,6 +226,133 @@ const SURFACE_API_SHIM: &str = r#"(function() {
   // foreign script shows up in `getOwnPropertyNames` whether we reserved the
   // name or not. Intercepting *writes* would need a `globalThis` proxy, which
   // is a different mechanism — see the BUG-379 report before adding one.
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  // Legacy NPAPI interfaces.  Lumen has no plugins at all, but a page still
+  // sees the PDF-viewer set Chrome reports (BUG-1790); only the shape is
+  // simulated, nothing here can load or run a plugin.
+  function install_legacy_plugin_array() {
+    function legacyClass(clsName) {
+      var C = function() { throw new TypeError('Illegal constructor'); };
+      Object.defineProperty(C, 'name', { value: clsName, configurable: true });
+      Object.defineProperty(C.prototype, 'constructor', { value: C, writable: true, configurable: true });
+      Object.defineProperty(C.prototype, Symbol.toStringTag, { value: clsName, configurable: true });
+      return C;
+    }
+    function getter(proto, name, fn) {
+      Object.defineProperty(proto, name, { get: fn, configurable: true, enumerable: true });
+    }
+    function arrayClass(clsName, extra) {
+      var C = legacyClass(clsName);
+      getter(C.prototype, 'length', function() { return this._len; });
+      C.prototype.item = function item(i) { return this[i] || null; };
+      C.prototype.namedItem = function namedItem(n) { return this[n] || null; };
+      if (extra) { C.prototype[extra] = function() {}; }
+      return C;
+    }
+    function fillCycle(target, items, key) {
+      for (var i = 0; i < items.length; i++) {
+        target[i] = items[i];
+        target[key(items[i])] = items[i];
+      }
+    }
+
+    var MimeType = legacyClass('MimeType');
+    getter(MimeType.prototype, 'type', function() { return this._type; });
+    getter(MimeType.prototype, 'suffixes', function() { return this._suffixes; });
+    getter(MimeType.prototype, 'description', function() { return this._description; });
+    getter(MimeType.prototype, 'enabledPlugin', function() { return this._enabledPlugin; });
+
+    var Plugin = legacyClass('Plugin');
+    getter(Plugin.prototype, 'name', function() { return this._name; });
+    getter(Plugin.prototype, 'filename', function() { return this._filename; });
+    getter(Plugin.prototype, 'description', function() { return this._description; });
+    getter(Plugin.prototype, 'length', function() { return this._len; });
+    Plugin.prototype.item = function item(i) { return this[i] || null; };
+    Plugin.prototype.namedItem = function namedItem(n) { return this[n] || null; };
+
+    var MimeTypeArray = arrayClass('MimeTypeArray', null);
+    var PluginArray = arrayClass('PluginArray', 'refresh');
+
+    var MIME = 'Portable Document Format';
+    var mimes = ['application/pdf', 'text/pdf'].map(function(type) {
+      var m = Object.create(MimeType.prototype);
+      m._type = type; m._suffixes = 'pdf'; m._description = MIME;
+      return m;
+    });
+    var pluginNames = ['PDF Viewer', 'Chrome PDF Viewer', 'Chromium PDF Viewer',
+                       'Microsoft Edge PDF Viewer', 'WebKit built-in PDF'];
+    var plugins = pluginNames.map(function(name) {
+      var p = Object.create(Plugin.prototype);
+      p._name = name; p._filename = 'internal-pdf-viewer'; p._description = MIME;
+      Object.defineProperty(p, '_len', { value: mimes.length });
+      fillCycle(p, mimes, function(m) { return m.type; });
+      return p;
+    });
+    // Every MIME type is enabled by the first plugin, as in Chrome.
+    for (var i = 0; i < mimes.length; i++) { mimes[i]._enabledPlugin = plugins[0]; }
+
+    var mimeTypes = Object.create(MimeTypeArray.prototype);
+    Object.defineProperty(mimeTypes, '_len', { value: mimes.length });
+    fillCycle(mimeTypes, mimes, function(m) { return m.type; });
+    var pluginArray = Object.create(PluginArray.prototype);
+    Object.defineProperty(pluginArray, '_len', { value: plugins.length });
+    fillCycle(pluginArray, plugins, function(p) { return p.name; });
+
+    var interfaces = [Plugin, PluginArray, MimeType, MimeTypeArray];
+    for (var t = 0; t < interfaces.length; t++) {
+      if (typeof globalThis[interfaces[t].name] === 'undefined') {
+        Object.defineProperty(globalThis, interfaces[t].name, {
+          value: interfaces[t], writable: true, configurable: true, enumerable: false
+        });
+      }
+    }
+
+    var proto = Object.getPrototypeOf(navigator);
+    var host = (proto && proto !== Object.prototype) ? proto : navigator;
+    getter(host, 'plugins', function() { return pluginArray; });
+    getter(host, 'mimeTypes', function() { return mimeTypes; });
+  }
+
+  // Chrome's `window.chrome` — `app`/`csi`/`loadTimes` only, no `runtime`.
+  function install_window_chrome() {
+    var origin = (typeof performance !== 'undefined' && performance.timeOrigin)
+      ? performance.timeOrigin : Date.now();
+    function now() {
+      return (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
+    }
+    var onloadT = 0;
+    var chrome = {
+      loadTimes: function loadTimes() {
+        var t = origin / 1000;
+        var done = t + now() / 1000;
+        return {
+          requestTime: t, startLoadTime: t,
+          commitLoadTime: t + 0.001, finishDocumentLoadTime: done, finishLoadTime: done,
+          firstPaintTime: done, firstPaintAfterLoadTime: 0,
+          navigationType: 'Other', wasFetchedViaSpdy: true, wasNpnNegotiated: true,
+          npnNegotiatedProtocol: 'h2', wasAlternateProtocolAvailable: false,
+          connectionInfo: 'h2'
+        };
+      },
+      csi: function csi() {
+        if (!onloadT) { onloadT = Math.round(origin + now()); }
+        return { startE: Math.round(origin), onloadT: onloadT, pageT: now(), tran: 15 };
+      },
+      app: {
+        isInstalled: false,
+        getDetails: function getDetails() { return null; },
+        getIsInstalled: function getIsInstalled() { return false; },
+        installState: function installState() { return 'not_installed'; },
+        runningState: function runningState() { return 'cannot_run'; },
+        InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' },
+        RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' }
+      }
+    };
+    Object.defineProperty(globalThis, 'chrome', {
+      value: chrome, writable: true, enumerable: true, configurable: false
+    });
+  }
 })();
 "#;
 
@@ -315,22 +434,50 @@ mod tests {
     }
 
     #[test]
-    fn plugins_exists_with_length_zero() {
+    fn plugins_has_chrome_pdf_set() {
         with_surface_api(|rt| {
             let v = rt
-                .eval("typeof navigator.plugins === 'object' && navigator.plugins.length === 0")
+                .eval("Object.prototype.toString.call(navigator.plugins) === '[object PluginArray]' \
+                       && navigator.plugins.length === 5 \
+                       && navigator.plugins[0].name === 'PDF Viewer' \
+                       && navigator.plugins[0].filename === 'internal-pdf-viewer' \
+                       && navigator.plugins.namedItem('WebKit built-in PDF') !== null \
+                       && navigator.plugins === navigator.plugins")
                 .unwrap();
-            assert_eq!(v, JsValue::Bool(true), "navigator.plugins must be an object with length 0");
+            assert_eq!(v, JsValue::Bool(true), "navigator.plugins must read as Chrome's PDF set (BUG-1790)");
         });
     }
 
     #[test]
-    fn mime_types_exists_with_length_zero() {
+    fn mime_types_has_chrome_pdf_set() {
         with_surface_api(|rt| {
             let v = rt
-                .eval("typeof navigator.mimeTypes === 'object' && navigator.mimeTypes.length === 0")
+                .eval("Object.prototype.toString.call(navigator.mimeTypes) === '[object MimeTypeArray]' \
+                       && navigator.mimeTypes.length === 2 \
+                       && navigator.mimeTypes[0].type === 'application/pdf' \
+                       && navigator.mimeTypes[1].type === 'text/pdf' \
+                       && navigator.mimeTypes[0].enabledPlugin === navigator.plugins[0]")
                 .unwrap();
-            assert_eq!(v, JsValue::Bool(true), "navigator.mimeTypes must be an object with length 0");
+            assert_eq!(v, JsValue::Bool(true), "navigator.mimeTypes must read as Chrome's PDF set (BUG-1790)");
+        });
+    }
+
+    /// BUG-1790: `window.chrome` is part of Chrome's ordinary surface
+    /// (`loadTimes`/`csi`/`app`); `chrome.runtime` stays absent as a CDP marker
+    /// (privacy.md §9.5).
+    #[test]
+    fn window_chrome_has_chrome_shape_without_runtime() {
+        with_surface_api(|rt| {
+            let v = rt
+                .eval("Object.getOwnPropertyNames(globalThis.chrome).join(',') === 'loadTimes,csi,app' \
+                       && typeof globalThis.chrome.csi === 'function' \
+                       && typeof globalThis.chrome.csi().pageT === 'number' \
+                       && typeof globalThis.chrome.loadTimes().requestTime === 'number' \
+                       && globalThis.chrome.app.isInstalled === false \
+                       && globalThis.chrome.app.runningState() === 'cannot_run' \
+                       && typeof globalThis.chrome.runtime === 'undefined'")
+                .unwrap();
+            assert_eq!(v, JsValue::Bool(true), "window.chrome must have Chrome's shape without runtime");
         });
     }
 
