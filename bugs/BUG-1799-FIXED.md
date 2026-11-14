@@ -1,6 +1,6 @@
 # BUG-1799 — workspace-clippy на чистом main красный: мёртвые `rasterize_cpu*` в lumen-paint
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-11-14 (срезом BUG-1798)
 **Заведён:** 2026-11-12 (P5, ревизия очередей)
 **Область:** paint (`crates/engine/paint/src/cpu_raster.rs:217`, `:233`)
 

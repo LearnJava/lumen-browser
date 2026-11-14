@@ -22,7 +22,7 @@ use crate::DisplayCommand;
 
 /// Headless CPU-бэкенд на tiny-skia: детерминированный рендер без GPU.
 ///
-/// Реализует [`RenderBackend`] через [`crate::cpu_raster::rasterize_cpu`].
+/// Реализует [`RenderBackend`] через [`crate::cpu_raster::rasterize_cpu_with_fonts`].
 /// После каждого [`render`][RenderBackend::render] пиксели доступны через
 /// [`screenshot_rgba`][RenderBackend::screenshot_rgba].
 ///

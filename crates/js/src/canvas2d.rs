@@ -21,6 +21,8 @@
 use std::cell::RefCell;
 #[cfg(feature = "v8-backend")]
 use std::cell::Cell;
+#[cfg(feature = "v8-backend")]
+use std::sync::{Arc, Mutex, atomic::Ordering};
 use std::collections::HashMap;
 #[cfg(feature = "v8-backend")]
 use std::collections::HashSet;
@@ -437,6 +439,80 @@ fn mark_dirty(nid: u32) {
     });
 }
 
+/// BUG-1798: rasterize the laid-out subtree of the node `nid` (pre-order first
+/// box — a block-in-inline split would own several; the first is the main one)
+/// and blend it into the canvas at `(dx, dy)` in its border-box size.
+#[cfg(feature = "v8-backend")]
+fn render_element_image(
+    dst_nid: u32,
+    root: &lumen_layout::LayoutBox,
+    nid: u32,
+    dx: f64,
+    dy: f64,
+) {
+    let Some(b) = find_layout_box(root, nid) else { return };
+    let rect = b.rect;
+    let w = rect.width.ceil() as u32;
+    let h = rect.height.ceil() as u32;
+    if w == 0 || h == 0 {
+        return;
+    }
+    // Rebase the subtree to the image origin: every command carries page
+    // coordinates; the element's border-box origin becomes (0, 0). `translated`
+    // conjugates nested transforms, and commands past the border box (ink
+    // overflow the surface crops) keep their relative geometry.
+    //
+    // The ORDERED builder trio, over a synthetic root: the plain walk emits
+    // mask/backdrop layer ops in an order the CPU rasterizer's backdrop
+    // machinery resolves against the wrong layer, and `StackingTree::build`
+    // never evaluates the root's own triggers — the drawn element carries them
+    // itself (opacity/mask/backdrop-filter on the element = no-ops without the
+    // wrapper). Same emission path the shell renders pages with.
+    let wrapper = lumen_layout::LayoutBox::synthetic_paint_root(b);
+    let tree = lumen_layout::StackingTree::build(&wrapper);
+    let order = lumen_layout::PaintOrder::from_tree(&tree);
+    let mut dl = lumen_paint::build_display_list_ordered(&wrapper, &tree, &order).0;
+    for cmd in &mut dl {
+        *cmd = cmd.translated(-rect.x, -rect.y);
+    }
+    // Decoded `<img>` bitmaps live on the shell side; without them an inline
+    // raster draws its placeholder (`shortcut`, upgrade when a subtree with
+    // raster images needs the element image).
+    let Ok(img) = lumen_paint::cpu_raster::rasterize_cpu_element_image(w, h, &dl, &[])
+    else {
+        return;
+    };
+    with_canvas(dst_nid, |c| {
+        c.draw_image_cropped(
+            &img.data,
+            img.width,
+            img.height,
+            0.0,
+            0.0,
+            img.width as f32,
+            img.height as f32,
+            dx as f32,
+            dy as f32,
+            img.width as f32,
+            img.height as f32,
+        );
+        c.taint();
+    });
+    mark_dirty(dst_nid);
+}
+
+/// Pre-order first box whose node is `nid`.
+#[cfg(feature = "v8-backend")]
+fn find_layout_box(
+    b: &lumen_layout::LayoutBox,
+    nid: u32,
+) -> Option<&lumen_layout::LayoutBox> {
+    if b.node.raw() == nid {
+        return Some(b);
+    }
+    b.children.iter().find_map(|c| find_layout_box(c, nid))
+}
+
 /// Present a WebGPU-rendered RGBA8 frame into the `<canvas>` `nid`'s CPU buffer.
 ///
 /// Used by the WebGPU canvas-present path (`getContext('webgpu')` → render → `queue.submit`):
@@ -515,6 +591,10 @@ fn bitmaprenderer_transfer_native(nid: u32, canvas_id: u32) -> bool {
 pub(crate) fn install_canvas2d_bindings_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
     origin: &str,
+    // BUG-1798: same-tick flush + embedded layout tree for `drawElementImage`
+    // (see the native below). `None` in unit tests keeps the old stub behavior.
+    flush: Option<crate::v8_runtime::style_flush::FlushHandles>,
+    hit_test_tree: Option<Arc<Mutex<Option<Arc<lumen_layout::LayoutBox>>>>>,
 ) -> lumen_core::JsResult<()> {
     use crate::v8_compat::{
         into_v8_fn1, into_v8_fn2, into_v8_fn3, into_v8_fn4, into_v8_fn5, into_v8_fn6,
@@ -1082,20 +1162,32 @@ pub(crate) fn install_canvas2d_bindings_v8(
     )?;
 
     // ── drawElementImage (HTML-in-canvas, WICG) ─────────────────────────────────
+    // BUG-1798: rasterize the element's laid-out subtree into the canvas at
+    // (dx, dy). The subtree display list is emitted from the freshest layout
+    // tree (the same-tick flush's basis when the embedded snapshot is stale —
+    // the BUG-1202 rule `_lumen_element_from_point` uses), rebased so the
+    // element's border-box origin is the image origin. Any element image taints
+    // the canvas (same-origin provenance is not tracked yet — `shortcut`,
+    // upgrade when an origin-clean path needs getImageData).
     rt.register_native(
         "_lumen_canvas2d_draw_element_image",
-        into_v8_fn4(|dst_nid: u32, _element_nid: u32, _dx: f64, _dy: f64| {
-            // TODO: Implement drawElementImage - render element subtree to canvas
-            // This requires:
-            // 1. Find LayoutBox for element_nid
-            // 2. Build display list for element subtree
-            // 3. Render to offscreen bitmap
-            // 4. Draw bitmap to canvas at (dx, dy)
-            // For now, mark as dirty but don't draw (returns undefined)
-            with_canvas(dst_nid, |c| {
-                c.taint(); // Drawing from element taints canvas (cross-origin potential)
-            });
-            mark_dirty(dst_nid);
+        into_v8_fn4(move |dst_nid: u32, element_nid: u32, dx: f64, dy: f64| {
+            let Some(flush) = flush.as_ref() else {
+                with_canvas(dst_nid, |c| c.taint());
+                mark_dirty(dst_nid);
+                return;
+            };
+            flush.maybe_flush();
+            if flush.hit_tree_stale.load(Ordering::Relaxed) {
+                let basis = flush.incr_basis.lock().unwrap_or_else(|e| e.into_inner());
+                let Some(b) = basis.as_ref() else { return };
+                render_element_image(dst_nid, &b.layout, element_nid, dx, dy);
+            } else {
+                let Some(tree) = hit_test_tree.as_ref() else { return };
+                let root = tree.lock().unwrap_or_else(|e| e.into_inner());
+                let Some(root) = root.as_ref() else { return };
+                render_element_image(dst_nid, root, element_nid, dx, dy);
+            }
         }),
     )?;
 

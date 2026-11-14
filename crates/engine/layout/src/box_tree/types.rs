@@ -159,6 +159,41 @@ pub struct LayoutBox {
     pub origin: BoxOrigin,
 }
 
+impl LayoutBox {
+    /// Синтетический простой родитель вокруг `child` — `<html>`-образный корень
+    /// для `StackingTree::build`, который собственные stacking-триггеры корня не
+    /// оценивает: на странице корень — `<html>`, а элемент, чью картинку снимает
+    /// `canvas.drawElementImage` (BUG-1798), несёт их сам (opacity/mask/
+    /// backdrop-filter/blend/transform). Стиль обёртки — нейтральный
+    /// `ComputedStyle::root()`: она ничего не красит и триггеров не имеет.
+    pub fn synthetic_paint_root(child: &LayoutBox) -> LayoutBox {
+        LayoutBox {
+            node: child.node,
+            rect: child.rect,
+            style: std::sync::Arc::new(crate::style::ComputedStyle::root()),
+            used_line_height: 0.0,
+            used_padding: None,
+            grid_baselines: None,
+            fieldset_legend: None,
+            table_caption_inset: [0.0; 2],
+            clamp_clip: None,
+            subgrid_tracks: None,
+            used_grid_tracks: None,
+            kind: BoxKind::Block,
+            children: vec![child.clone()],
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            anchor_scroll: None,
+            cv_hidden: Vec::new(),
+            dirty: Default::default(),
+            origin: crate::box_tree::BoxOrigin::default(),
+        }
+    }
+}
+
 impl Drop for LayoutBox {
     /// LAYOUT-1 срез 2: the compiler-generated recursive drop glissade for
     /// `children: Vec<LayoutBox>` (and nested `SvgMaskContent::content`)
@@ -801,6 +836,12 @@ pub enum BoxKind {
         width: u32,
         /// Canvas bitmap height in CSS pixels (from `height` attribute, default 150).
         height: u32,
+        /// WICG html-in-canvas (BUG-1798): `<canvas layoutsubtree>` — the fallback
+        /// children are laid out inside the box, but painted only by
+        /// `drawElementImage` into the canvas bitmap. The page never paints them
+        /// (stacking walk and hit test skip them); without the attribute the
+        /// children get no boxes at all.
+        layout_subtree: bool,
     },
     /// Replaced element: HTML `<audio>` element (HTML spec §4.8.10).
     ///

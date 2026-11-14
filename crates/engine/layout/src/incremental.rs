@@ -858,8 +858,8 @@ pub(crate) fn kind_layout_eq(a: &crate::box_tree::BoxKind, b: &crate::box_tree::
             Video { src: s1, poster: p1, controls: c1 },
             Video { src: s2, poster: p2, controls: c2 },
         ) => s1 == s2 && p1 == p2 && c1 == c2,
-        (Canvas { width: w1, height: h1 }, Canvas { width: w2, height: h2 }) => {
-            w1 == w2 && h1 == h2
+        (Canvas { width: w1, height: h1, layout_subtree: s1 }, Canvas { width: w2, height: h2, layout_subtree: s2 }) => {
+            w1 == w2 && h1 == h2 && s1 == s2
         }
         (Audio { src: s1, controls: c1 }, Audio { src: s2, controls: c2 }) => {
             s1 == s2 && c1 == c2

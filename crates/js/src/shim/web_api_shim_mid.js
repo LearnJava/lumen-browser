@@ -7601,7 +7601,10 @@ _lumen_c2d_method('drawElementImage', function(element, dx, dy) {
     if (!element || element.__nid__ === undefined) {
         throw new TypeError("drawElementImage: argument 1 is not an Element");
     }
-    _lumen_canvas2d_draw_element_image(nid, element.__nid__, +dx, +dy);
+    dx = +dx; dy = +dy;
+    // WebIDL `unrestricted double`: non-finite coordinates draw nothing (canvas §4.12.5.1.16).
+    if (!isFinite(dx) || !isFinite(dy)) { return; }
+    _lumen_canvas2d_draw_element_image(nid, element.__nid__, dx, dy);
 });
 // Text
 _lumen_c2d_method('fillText', function(t, x, y) {
@@ -10760,6 +10763,15 @@ function _lumen_canvas_nid(self) {
     }
     return nid;
 }
+
+// `requestPaint()` (WICG html-in-canvas) — queues a canvas paint and fires the
+// `paint` event when it is done. Lumen flushes the bitmap on the next frame
+// upload, so the event rides a zero-delay task after the draw calls of the task
+// that requested the paint (what `wait-for-canvas-paint.js` needs).
+HTMLCanvasElement.prototype.requestPaint = function() {
+    var self = this;
+    setTimeout(function() { self.dispatchEvent(new Event('paint')); }, 0);
+};
 
 // `getContext(contextId, options)` — `contextId` is a required DOMString, and
 // §4.12.5 matches it by EXACT value against the context-id table. Lower-casing it

@@ -209,23 +209,7 @@ impl CpuLayer {
     }
 }
 
-/// Rasterize display commands to an image using tiny-skia (CPU only,
-/// deterministic). `DrawText` always resolves fonts as before this function's
-/// [`FONTLOAD-18`](crate::cpu_font_resolve) sibling was added — see
-/// [`rasterize_cpu_with_fonts`] for the page-`@font-face`-aware entry point.
-#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
-pub(crate) fn rasterize_cpu(
-    width: u32,
-    height: u32,
-    commands: &[DisplayCommand],
-    images: &[(String, std::sync::Arc<Image>)],
-    scroll_x: f32,
-    scroll_y: f32,
-) -> Result<Image, Box<dyn std::error::Error>> {
-    rasterize_cpu_with_fonts(width, height, commands, images, scroll_x, scroll_y, None, None)
-}
-
-/// Same as [`rasterize_cpu`], but `DrawText` resolves `@font-face` bytes and CSS Fonts L4 §14
+/// `DrawText` resolves `@font-face` bytes and CSS Fonts L4 §14
 /// overrides through `font_provider` (FONTLOAD-18, [`crate::cpu_font_resolve::resolve_face`]),
 /// and the surface clears to `canvas_background` (`lumen_layout::canvas_background_color` —
 /// the only carrier of `<body>`'s propagated background since BUG-1103; `None` → UA white).
@@ -258,6 +242,47 @@ pub(crate) fn rasterize_cpu_with_fonts(
         icc_profile: None,
         vector_source: None,
     })
+}
+
+/// BUG-1798 (`canvas.drawElementImage`): растеризует `commands` поддерева
+/// элемента в прозрачное полотно `width`×`height` — картинку элемента, которую
+/// потребляет canvas 2D. В отличие от [`rasterize_cpu_with_fonts`] фон не
+/// заливается (canvas просвечивает там, где элемент ничего не нарисовал), а
+/// альфа в результате — прямая (straight), не премультиплицированная, как её
+/// ждут `ImageData`/`drawImage`. Шрифты — через встроенный fallback-путь;
+/// страничных `@font-face` здесь нет.
+pub fn rasterize_cpu_element_image(
+    width: u32,
+    height: u32,
+    commands: &[DisplayCommand],
+    images: &[(String, std::sync::Arc<Image>)],
+) -> Result<Image, Box<dyn std::error::Error>> {
+    // Прозрачный canvas background (`a: 0`) — заливка прозрачным поверх
+    // прозрачного полотна, т.е. фон не появляется вовсе.
+    let mut img = rasterize_cpu_with_fonts(
+        width,
+        height,
+        commands,
+        images,
+        0.0,
+        0.0,
+        None,
+        Some(Color { r: 0, g: 0, b: 0, a: 0 }),
+    )?;
+    // tiny-skia хранит пиксели премультиплицированными; canvas-пиксели — прямые.
+    for px in img.data.chunks_exact_mut(4) {
+        let a = u32::from(px[3]);
+        if a == 0 {
+            px[0] = 0;
+            px[1] = 0;
+            px[2] = 0;
+        } else if a < 255 {
+            px[0] = ((u32::from(px[0]) * 255 + a / 2) / a) as u8;
+            px[1] = ((u32::from(px[1]) * 255 + a / 2) / a) as u8;
+            px[2] = ((u32::from(px[2]) * 255 + a / 2) / a) as u8;
+        }
+    }
+    Ok(img)
 }
 
 /// Тело растеризатора: рисует `commands` на полотно `width`×`height` и отдаёт

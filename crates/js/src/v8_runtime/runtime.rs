@@ -76,6 +76,14 @@ pub struct V8JsRuntime {
     /// reports for the same point. `Arc` avoids cloning the whole tree per lookup;
     /// `None` before the first layout.
     pub(super) hit_test_tree: Arc<Mutex<Option<Arc<lumen_layout::LayoutBox>>>>,
+    /// BUG-1798: the same-tick flush handles `install_dom` built for the
+    /// document it last installed, read back after its `self.run` install block
+    /// (where the local lives) to hand
+    /// [`crate::canvas2d::install_canvas2d_bindings_v8`] the handles
+    /// `drawElementImage` needs — the same per-install lifetime the re-run of
+    /// `install_dom` gives every other native's captured handles.
+    /// `None` until the first `install_dom`.
+    pub(super) page_flush_handles: Mutex<Option<style_flush::FlushHandles>>,
     /// Current viewport size `[width, height]` in CSS px.
     pub(super) viewport_size: Arc<Mutex<[f32; 2]>>,
     /// Current page zoom factor (Ctrl+=/Ctrl+-/Ctrl+0 in the shell). 1.0 = no
@@ -504,6 +512,7 @@ impl V8JsRuntime {
             layout_rects: Arc::new(Mutex::new(HashMap::new())),
             client_rects: Arc::new(Mutex::new(HashMap::new())),
             hit_test_tree: Arc::new(Mutex::new(None)),
+            page_flush_handles: Mutex::new(None),
             viewport_size: Arc::new(Mutex::new([0.0, 0.0])),
             zoom_factor: Arc::new(Mutex::new(1.0)),
             meta_viewport_scale: Arc::new(Mutex::new(1.0)),

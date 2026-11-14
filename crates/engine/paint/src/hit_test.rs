@@ -143,8 +143,16 @@ fn hit_test_box(point: Point, b: &LayoutBox) -> Option<HitTestResult> {
     let mut layer6: Vec<&LayoutBox> = Vec::new();
     let mut in_flow: Vec<&LayoutBox> = Vec::new();
     // `order` на flex/grid-детях меняет и paint order, а с ним и hit-test.
-    let order = paint_child_order(b);
-    let children = (0..b.children.len()).map(|k| &b.children[order.as_ref().map_or(k, |o| o[k])]);
+    // WICG html-in-canvas (BUG-1798): children of `<canvas layoutsubtree>` are
+    // painted only via drawElementImage — the page cannot hit them; the canvas
+    // box itself still does.
+    let children: Vec<&LayoutBox> = if matches!(b.kind, BoxKind::Canvas { layout_subtree: true, .. })
+    {
+        Vec::new()
+    } else {
+        let order = paint_child_order(b);
+        (0..b.children.len()).map(|k| &b.children[order.as_ref().map_or(k, |o| o[k])]).collect()
+    };
     for child in children {
         match (owns_paint_layer(child), child.style.z_index) {
             (true, Some(z)) if z > 0 => positive.push((child, z)),
@@ -238,8 +246,14 @@ fn hit_test_all_box(point: Point, b: &LayoutBox, out: &mut Vec<HitTestResult>) {
     let mut layer6: Vec<&LayoutBox> = Vec::new();
     let mut in_flow: Vec<&LayoutBox> = Vec::new();
     // `order` на flex/grid-детях меняет и paint order, а с ним и hit-test.
-    let order = paint_child_order(b);
-    let children = (0..b.children.len()).map(|k| &b.children[order.as_ref().map_or(k, |o| o[k])]);
+    // WICG html-in-canvas (BUG-1798): см. комментарий в `hit_test_box`.
+    let children: Vec<&LayoutBox> = if matches!(b.kind, BoxKind::Canvas { layout_subtree: true, .. })
+    {
+        Vec::new()
+    } else {
+        let order = paint_child_order(b);
+        (0..b.children.len()).map(|k| &b.children[order.as_ref().map_or(k, |o| o[k])]).collect()
+    };
     for child in children {
         match (owns_paint_layer(child), child.style.z_index) {
             (true, Some(z)) if z > 0 => positive.push((child, z)),

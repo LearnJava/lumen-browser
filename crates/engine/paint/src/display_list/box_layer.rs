@@ -694,6 +694,14 @@ fn continue_fill<'a>(
     let ContinueFrame {
         b, current_sc, is_sc_root, next_idx, child_order, child_clips, fixed_cb_clips, abs_cb_clips, leave_payload,
     } = cf;
+    // WICG html-in-canvas (BUG-1798): children of `<canvas layoutsubtree>` are
+    // painted only via drawElementImage — the page paint skips them, exactly
+    // like `StackingTree::build` skips them, so no child SC ids are consumed
+    // either and the bucket indices stay in sync.
+    if matches!(b.kind, BoxKind::Canvas { layout_subtree: true, .. }) {
+        stack.push(FillFrame::Leave(LeaveFill { b, current_sc, payload: leave_payload }));
+        return;
+    }
     if next_idx >= b.children.len() {
         stack.push(FillFrame::Leave(LeaveFill { b, current_sc, payload: leave_payload }));
         return;

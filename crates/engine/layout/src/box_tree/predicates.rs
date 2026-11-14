@@ -230,6 +230,14 @@ pub(crate) fn is_canvas_element(doc: &Document, id: NodeId) -> bool {
     )
 }
 
+/// WICG html-in-canvas (`layoutsubtree`): у `<canvas>` с этим атрибутом
+/// fallback-дети раскладываются как обычное поддерево — их рисует только
+/// `drawElementImage` в bitmap канваса, replaced-рисовалка на странице их не
+/// обходит (BUG-1798). Без атрибута дети не строятся, как у всякого replaced.
+pub(crate) fn canvas_has_layout_subtree(doc: &Document, id: NodeId) -> bool {
+    is_canvas_element(doc, id) && doc.get(id).get_attr("layoutsubtree").is_some()
+}
+
 /// HTML-имя `<audio>` для распознавания media replaced-боксов в layout.
 pub(crate) fn is_audio_element(doc: &Document, id: NodeId) -> bool {
     matches!(

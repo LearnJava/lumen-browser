@@ -122,7 +122,7 @@ mod predicates;
 // axis is physically horizontal under a vertical writing mode, so those (not
 // the `_inline` pair) are the ones that apply there.
 pub(crate) use predicates::{
-    embedded_document_url, embedded_image, embedded_resource_url, is_audio_element, is_canvas_element,
+    canvas_has_layout_subtree, embedded_document_url, embedded_image, embedded_resource_url, is_audio_element, is_canvas_element,
     is_iframe_element, is_image_element,
     blockified_legend_display, is_fieldset_element, is_fieldset_legend, is_inline_replaced_media_element, is_picture_element, is_ruby_element,
     is_ruby_base_element, is_ruby_parenthesis_element, is_ruby_text_container_element, is_ruby_text_element,
