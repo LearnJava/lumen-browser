@@ -1,6 +1,6 @@
 # BUG-1777 — html/: 6 регрессий WPT 10-22→10-27 без бисекта (reftest dir-shadow-41, draw-element-image, 4 теста −1…−3 подтеста)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-11-14 (последний остаток — reftest `draw-element-image/css-backdrop-filter-and-mask` — снят срезом 2 BUG-1798)
 **Заведён:** 2026-10-28 (P2, WPT-DROP-1027-S3)
 **Область:** layout / paint / shell (окна ниже; виновники не найдены)
 
@@ -108,8 +108,15 @@ fallback-и проходили мимо. Три корня, найдены пр�
 Тесты `state_pseudo_classes::dir_shadow_slot_*`; полный lumen-layout — множество
 падений совпадает с чистым main (17, таблицы/BUG-1784/1785 и пр.).
 
-Остаток бага: `draw-element-image/css-backdrop-filter-and-mask` (reftest — ждёт реальную
-реализацию BUG-1798).
+**2026-11-14 (P3, срез 2 BUG-1798): `css-backdrop-filter-and-mask` PASS** — байт-в-байт с референсом
+(fuzzy теста `3900px@1` больше не задействован). Корень остаточного 200 px@2 был не в маске и не в
+element-image-конвейере, а в f32-округлении выборки при 1:1-блите в
+`Context2D::draw_image_cropped` (`crates/engine/canvas/src/lib.rs`): `(dy/dest_h)·sh` в f32 давало
+`52.999996` для строк 53 и 100-строчного блита, `floor` брал предыдущую строку источника —
+canvas-битмап дублировал строки 53 и 59 растра элемента. Починка — snap `+1e-3` до `floor` (реальные
+дробные выборки сдвигаются не более чем на тысячную пикселя, NEAREST этого не различает); регресс-тест
+`draw_image_cropped_1to1_preserves_every_row`. Попутно тест закрыл оба REGRESS из BUG-1806
+(`18-images`, `61-view-transitions` — снова 0.00 %).
 
 ## Воспроизведение
 

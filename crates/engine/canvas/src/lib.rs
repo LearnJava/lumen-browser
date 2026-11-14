@@ -1301,10 +1301,17 @@ impl Context2D {
                 let u = (dx_px as f32 - x0) / dest_w;
                 let v = (dy_px as f32 - y0) / dest_h;
                 // Map the destination sample into the source crop rectangle (source px).
+                // The f32 round-trip `(dy/dest_h)·sh` lands just *below* the true
+                // integer for 1:1 blits (`53/100·100 = 52.999996` in f32), so a
+                // plain `floor` duplicated the previous source row at those
+                // positions (BUG-1798 срез 2: 200 px@2 in
+                // `css-backdrop-filter-and-mask`). The 1e-3-px snap absorbs the
+                // representation error; real fractional samples move by at most
+                // a thousandth of a source pixel, which NEAREST can't distinguish.
                 let src_fx = sx + u * sw;
                 let src_fy = sy + v * sh;
-                let sxi = src_fx.floor().clamp(0.0, (src_w - 1) as f32) as u32;
-                let syi = src_fy.floor().clamp(0.0, (src_h - 1) as f32) as u32;
+                let sxi = (src_fx + 1e-3).floor().clamp(0.0, (src_w - 1) as f32) as u32;
+                let syi = (src_fy + 1e-3).floor().clamp(0.0, (src_h - 1) as f32) as u32;
                 let si = ((syi * src_w + sxi) * 4) as usize;
                 if si + 3 >= src_pixels.len() { continue; }
                 let src_color = CanvasColor::rgba(
@@ -2025,5 +2032,29 @@ mod tests {
         // Empty source crop: nothing should be written (dest stays transparent).
         ctx.draw_image_cropped(&src, 2, 2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 2.0);
         assert_eq!(px_at(&ctx, 0, 0), (0, 0, 0, 0), "untouched transparent");
+    }
+
+    /// BUG-1798 срез 2: 1:1-блит обязан сохранять каждую строку источника.
+    /// f32-обратный ход `dy/100·100` давал `52.999996` для строк 53 и 59, и
+    /// `floor` дублировал предыдущую строку — 200 px@2 в reftest
+    /// `draw-element-image/css-backdrop-filter-and-mask`.
+    #[test]
+    fn draw_image_cropped_1to1_preserves_every_row() {
+        let w: u32 = 100;
+        let h: u32 = 100;
+        let mut src = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for _x in 0..w {
+                src.extend_from_slice(&[(y as u8) * 2, y as u8, 255, 255]);
+            }
+        }
+        let mut ctx = Context2D::new(w, h);
+        ctx.draw_image_cropped(&src, w, h, 0.0, 0.0, w as f32, h as f32, 0.0, 0.0, w as f32, h as f32);
+        for y in 0..h {
+            let (r, g, b, a) = px_at(&ctx, 50, y);
+            assert_eq!(r, (y as u8) * 2, "row {y}: red channel must carry 2·row");
+            assert_eq!(g, y as u8, "row {y}: green channel must carry the row index");
+            assert_eq!((b, a), (255, 255), "row {y}");
+        }
     }
 }

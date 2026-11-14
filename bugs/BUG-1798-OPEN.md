@@ -1,12 +1,39 @@
 # BUG-1798 — `canvas.drawElementImage` — заглушка, не рендерит элемент
 
-**Статус:** OPEN (срез 1: ядро реализовано, базовые тесты зелёные; длинный хвост WICG — см. «Остаток»)
+**Статус:** OPEN (срез 1: ядро реализовано; срез 2: остаток среза 1 снят, хвост WICG — см. «Остаток»)
 **Заведён:** 2026-11 (по строке `BUGS.md`; файл создан при ревизии очередей P5 2026-11-12 — ссылка из `BUGS.md` была битой)
 **Область:** js (`crates/js/src/canvas2d.rs`, `crates/js/src/shim/web_api_shim_mid.js` — `drawElementImage`), layout (`layoutsubtree`), paint (`rasterize_cpu_element_image`)
 
 ## Суть
 
 `canvas.drawElementImage(element, dx, dy)` — заглушка: только помечает canvas tainted/dirty, не рендерит элемент.
+
+## Сделано (срез 2, 2026-11-14)
+
+Снят остаток срез 1 — `css-backdrop-filter-and-mask` 200 px@2:
+
+- **Корень найден не там, где искали.** Кривая градиентной маски, ветки композита backdrop-filter
+  (`apply_backdrop_to_stack`: `top=1 base_len=1 src_idx=0` на обеих сторонах) и сам растр element
+  image — байт-в-байт одинаковы между страничным рендером и растеризацией поддерева. Дифф вносил
+  **блит в canvas-битмап**: `Context2D::draw_image_cropped` (`crates/engine/canvas/src/lib.rs`)
+  семплировал источник через `floor((dy/dest_h)·sh)`, и f32-обратный ход `(53/100)·100 = 52.999996`
+  клал строку 53 на строку 52 (и 59 на 58) — canvas-битмап дублировал две строки растра, страница
+  показывала значения предыдущей строки (±2/255 на 200 пикселях).
+- **Починка** — снап до `floor`: `(src + 1e-3).floor()` для обеих осей; реальная дробная выборка
+  сдвигается ≤ 0.001 px, NEAREST-семплинг этого не различает. Регресс-тест
+  `draw_image_cropped_1to1_preserves_every_row` (lumen-canvas) — каждая строка 1:1-блита обязана
+  сохранить индекс; без снапа падает на строках 53/59.
+- **guard** в lumen-paint (`backdrop_mask_page_render_matches_element_image`): страничный рендер той
+  же команды mask+backdrop-filter обязан совпадать с element-image-растром попиксельно — сюда
+  диагностический поиск вышел бы сразу.
+- Попутно закрыты: **BUG-1806** (TEST-18/TEST-61 graphic-гейта — те же divergent-строки 1:1-блита;
+  оба вернулись к 0.00 %) и последний остаток **BUG-1777** (reftest теперь PASS байт-в-байт).
+- Полная категория `draw-element-image/` (89 тестов): 131 expected / 29 unexpected — все 29 из
+  документированного хвоста WICG ниже; новых unexpected нет. Ожидания `.ini` обновлены под
+  наблюдённое состояние: 4 вложенных testharness-теста (moved-nested, nested-div, triple-nested,
+  intersection-observer-visibility) PASS — убран `expected: FAIL`; `nested-layoutsubtree-canvas` —
+  стабильный TIMEOUT (promise теста не заселяется при рабочем nested `requestPaint`; висит на
+  onpaint-хвосте), `expected: FAIL` → `expected: TIMEOUT` (файл + подтест).
 
 ## Сделано (срез 1, 2026-11-14)
 
@@ -19,14 +46,31 @@
 
 ## Проверка
 
-- `run_smoke.py` по категории `draw-element-image/`: **24 PASS** (было 0), среди них цель BUG-1777 `css-backdrop-filter-and-mask` — пиксельная разница сведена с 9900 px@200 до **200 px@2** (fuzzy теста: 3900 px@1 — счётчик проходит, не проходит по max-разнице, см. «Остаток»), `basic-rect` — байт-в-байт с эталоном, `css-backdrop-filter-on-div`, `element-image-fractional-size`, `error-conditions`, `draw-element-image-empty`, `layoutsubtree-no-hit-test` 3/3, `draw-element-image-zero-size`, `drawing-display-none-fails` и др.
-- Юнит: `element_image_is_transparent_with_straight_alpha` (paint), 34 canvas2d-теста js.
+- Срез 2: `css-backdrop-filter-and-mask` — **PASS** (smoke, байт-в-байт с референсом; на срезе 1 —
+  FAIL 200 px@2). Полная категория 89 тестов: 131 expected / 29 unexpected = только хвост WICG.
+  Graphic-гейт 172 теста (IPC-hybrid, `results/20261114-102104.json`): новых FAIL нет, diff%
+  остальных 22 совпадают со срезом 1 до 4 знака, TEST-18/TEST-61 — 0.00 % (было 6.09/10.82).
+- Срез 1: `run_smoke.py` по категории `draw-element-image/`: **24 PASS** (было 0), среди них цель
+  BUG-1777 `css-backdrop-filter-and-mask` — пиксельная разница сведена с 9900 px@200 до **200 px@2**
+  (fuzzy теста: 3900 px@1 — счётчик проходит, не проходит по max-разнице, см. срез 2), `basic-rect`
+  — байт-в-байт с эталоном, `css-backdrop-filter-on-div`, `element-image-fractional-size`,
+  `error-conditions`, `draw-element-image-empty`, `layoutsubtree-no-hit-test` 3/3,
+  `draw-element-image-zero-size`, `drawing-display-none-fails` и др.
+- Юнит: `element_image_is_transparent_with_straight_alpha` (paint), 34 canvas2d-теста js,
+  `draw_image_cropped_1to1_preserves_every_row` (canvas), `backdrop_mask_page_render_matches_element_image` (paint).
 
 ## Остаток
 
-- **`css-backdrop-filter-and-mask`: 200 px@2** (лимит 1). Остаточная полоса ±2/255 высотой ~7 строк в зоне градиентной маски — расхождение округления композита градиентной маски между растром 100×100 и страничным полотном; нужен либо шаг точности в `MaskSpec`-композите, либо пересмотр fuzzy.
-- **`css-opacity-on-div`/`css-mask-on-div`: эталонная сторона** — дефект страницы, не фичи: `box_can_own_stacking_context` (`stacking.rs`) не содержит `Canvas`/`Video`/`Iframe`/`Audio`, поэтому own `opacity`/`mask-image` на replaced-боксе молча игнорируются (реф канвас с `opacity: 0.5` рисуется непрозрачным). Завести отдельным багом.
-- **Семейства WICG-длинного хвоста:** `onpaint-*` (спецификационные `requestPaint`/инвалидация/`changedElements`), `scale`/`*-zoom` (растр 1:1 CSS px без DPR/масштаба), `blend`/`compositing-*`, `iframe*` (захват чужого фрейма), `element-shadow*`/`shadow-*` (теневые деревья), `top-layer*`, `svg-*`, `selection-*`, `percent-sizing`, `nested-canvas-invalidation`, `get-element-transform`, `requestPaint`-варианты. Это отдельные срезы: упорядоченный хвост требует либо того же trio с DPR, либо shell-side IPC-захвата.
+- **Семейства WICG-длинного хвоста (29 unexpected полной категории):** `onpaint-*` (спецификационные
+  `requestPaint`/инвалидация/`changedElements`; сюда же — стабильный TIMEOUT
+  `nested-layoutsubtree-canvas`: promise теста не заселяется при рабочем nested `requestPaint`),
+  `scale`/`*-zoom` (растр 1:1 CSS px без DPR/масштаба), `blend`/`compositing-*`, `iframe*` (захват
+  чужого фрейма), `element-shadow*`/`shadow-*` (теневые деревья), `top-layer*`, `svg-*`,
+  `selection-*`, `percent-sizing`, `nested-canvas-invalidation`, `get-element-transform`,
+  `requestPaint`-варианты, `css-*-{opacity,mask,transform,clip-path}-on-div` (см. BUG-1810),
+  `ink-overflow`, `non-opaque-element`, `opacity-animation`, `anchor-positioning`,
+  `changes/changing-size-in-paint-event`, `clips-overflow`. Это отдельные срезы: упорядоченный хвост
+  требует либо того же trio с DPR, либо shell-side IPC-захвата.
 
 ## Прежняя формулировка (до среза 1)
 

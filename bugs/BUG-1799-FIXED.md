@@ -1,6 +1,6 @@
 # BUG-1799 — workspace-clippy на чистом main красный: мёртвые `rasterize_cpu*` в lumen-paint
 
-**Статус:** OPEN → закрыт срезом BUG-1798 (2026-11-14): тонкая обёртка `rasterize_cpu` удалена, её вызовы (~45 в тестах cpu_raster/display_list + `frame_entry.rs::render_to_image_cpu`/`render_tile`) переведены на `rasterize_cpu_with_fonts(..., None, None)` — байт-в-байт та же семантика; `rasterize_cpu_with_fonts` получил живого lib-вызывателя `rasterize_cpu_element_image` (`canvas.drawElementImage`, BUG-1798). `cargo clippy -p lumen-paint --all-targets -- -D warnings` зелёный. Строку-указатель и статус в `BUGS.md` снимает владелец очереди при закрытии.
+**Статус:** FIXED 2026-11-14 (срезом BUG-1798)
 **Заведён:** 2026-11-12 (P5, ревизия очередей)
 **Область:** paint (`crates/engine/paint/src/cpu_raster.rs:217`, `:233`)
 

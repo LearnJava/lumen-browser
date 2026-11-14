@@ -2,6 +2,60 @@ use super::*;
 
 mod layers_borders_images;
 
+/// BUG-1798 (срез 2): element image обязана повторять страничный рендер того
+/// же поддерева попиксельно — обе сцены идут через один CPU-растеризатор
+/// (`build_display_list_ordered` + `rasterize_cpu_*`), поэтому расхождение
+/// рядов значило бы, что trio/synthetic-root ломает маску или backdrop-filter.
+/// (Сам расхождение среза 1 было не здесь, а в f32-снаппинге 1:1-блита
+/// `Context2D::draw_image_cropped` — тест `lumen-canvas`
+/// `draw_image_cropped_1to1_preserves_every_row`.)
+#[test]
+fn backdrop_mask_page_render_matches_element_image() {
+    let red = Color { r: 255, g: 0, b: 0, a: 255 };
+    let black = Color { r: 0, g: 0, b: 0, a: 255 };
+    let clear = Color { r: 0, g: 0, b: 0, a: 0 };
+    let stops = vec![
+        GradientStop { color: black, color_space: lumen_layout::ColorSpace::Srgb, position: None },
+        GradientStop { color: clear, color_space: lumen_layout::ColorSpace::Srgb, position: None },
+    ];
+    let mk = |x: f32, y: f32| vec![
+        DisplayCommand::FillRect { rect: rect(x, y, 100.0, 100.0), color: red },
+        // Ordered-путь (box_layer.rs): PushMask попадает в `pre` ДО
+        // PushBackdropFilter, поэтому wrappers считает и его (pre.len() = 1).
+        DisplayCommand::PushMaskLinearGradient {
+            rect: rect(x, y, 100.0, 100.0),
+            angle_deg: 180.0,
+            stops: stops.clone(),
+            repeating: false,
+        },
+        DisplayCommand::PushBackdropFilter {
+            filters: vec![lumen_layout::style::FilterFn::Grayscale(1.0)],
+            bounds: rect(x, y, 100.0, 100.0),
+            radii: [0.0; 4],
+            wrappers: 1,
+        },
+        DisplayCommand::PopBackdropFilter,
+        DisplayCommand::PopMask,
+    ];
+    let page = rasterize_cpu_with_fonts(
+        1024, 720, &mk(8.0, 8.0), &[], 0.0, 0.0, None,
+        Some(Color { r: 255, g: 255, b: 255, a: 255 }),
+    ).expect("page");
+    let elem = rasterize_cpu_element_image(100, 100, &mk(0.0, 0.0), &[]).expect("element image");
+
+    // Поддерево непрозрачно (красный фон 100×100), поэтому element image
+    // обязан совпасть со страничной отрисовкой байт-в-байт.
+    for y in 0..100u32 {
+        for x in (0..100u32).step_by(7) {
+            assert_eq!(
+                px(&elem, x, y),
+                px(&page, 8 + x, 8 + y),
+                "element image diverges from page render at ({x},{y})"
+            );
+        }
+    }
+}
+
 /// Sample the RGBA8 pixel at `(x, y)` from a rasterized [`Image`].
 fn px(img: &Image, x: u32, y: u32) -> (u8, u8, u8, u8) {
     let i = ((y * img.width + x) * 4) as usize;
