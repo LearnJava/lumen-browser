@@ -60,6 +60,7 @@ Anti-detection покрывает **шесть слоёв**, потому что
 #### Слой 1 — Surface API: нет automation-маркеров (always-on, default)
 
 - `navigator.webdriver === false` (configurable enumerable accessor, как в Chrome/Firefox вне автоматизации; отсутствие свойства само было бы маркером — BUG-754).
+- `window.chrome` в форме настоящего Chrome — `loadTimes`/`csi`/`app`, без `runtime` (ADR-034 п.1, BUG-1790); `navigator.plugins`/`mimeTypes` — PDF-набор Chrome, а не пустые объекты.
 - Нет `chrome.runtime`, `__playwright`, `__puppeteer`, `cdc_*` (ChromeDriver), `_phantom`, `callPhantom`, `Buffer`, `emit`-on-window и других классических маркеров.
 - JS-runtime (`rquickjs` Phase 0, V8 Phase 3+) **не инструментирован** для automation. Автоматизация идёт через `BrowserSession` (см. §6.11, ADR-006) — она не касается JS-окружения, если страница сама к нему не обращается.
 - `event.isTrusted = true` для native-injected input — события приходят в event loop тем же путём, что от ОС.
