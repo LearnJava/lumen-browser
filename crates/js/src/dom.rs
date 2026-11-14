@@ -595,6 +595,15 @@ const WEB_API_SHIM_TAIL_B: &str = include_str!("shim/web_api_shim_tail_b.js");
 /// are ordinary prototype accessors — those are not unforgeable.
 pub(crate) const WORKER_LOCATION_NAVIGATOR_SHIM: &str = include_str!("shim/worker_location_navigator_shim.js");
 
+/// Console Standard `console` factory (BUG-1782) — `_lumen_make_console(emit)`
+/// builds the whole `console` object; the page and every worker flavour call it
+/// with their own sink. `[Exposed=*]`: spliced into the page program (before
+/// `WEB_API_SHIM_MID`, whose `var console` uses it) and into
+/// [`worker_exposed_shim`], so all four scopes run the same text.
+/// Порядок склейки закреплён тестом `web_api_shim_splices_its_parts_in_source_order`.
+#[cfg(feature = "v8-backend")]
+pub(crate) const CONSOLE_SHIM: &str = include_str!("shim/console_shim.js");
+
 /// The page-scope Web API shim, re-assembled from its five parts in source
 /// order: head, [`EVENT_TARGET_SHIM`], mid, [`PERFORMANCE_SHIM`], tail.
 ///
@@ -605,7 +614,7 @@ pub(crate) const WORKER_LOCATION_NAVIGATOR_SHIM: &str = include_str!("shim/worke
 /// split is invisible to the shim's own code.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn web_api_shim() -> String {
-    format!("{WEB_API_SHIM_HEAD}{EVENT_SHIM}{EVENT_TARGET_SHIM}{WEB_API_SHIM_MID}{URL_PARSE_SHIM}{WEB_API_SHIM_MID_B}{ABORT_SHIM}{STREAMS_SHIM}{HEADERS_SHIM}{FETCH_BODY_SHIM}{FORM_DATA_SHIM}{TEXT_ENCODING_SHIM}{WEB_API_SHIM_MID_B3}{WEBSOCKET_SHIM}{WEB_API_SHIM_MID_B4}{GEOMETRY_SHIM}{PSEUDO_ELEMENT_SHIM}{URL_SHIM}{ORIGIN_SHIM}{WEB_API_SHIM_MID_C}{FILE_API_SHIM}{WEB_API_SHIM_MID_C2}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}{MESSAGE_CHANNEL_SHIM}{WEB_API_SHIM_TAIL_MC}{IDB_SHIM}{CRYPTO_SHIM}{WEB_API_SHIM_TAIL_B}")
+    format!("{WEB_API_SHIM_HEAD}{EVENT_SHIM}{EVENT_TARGET_SHIM}{CONSOLE_SHIM}{WEB_API_SHIM_MID}{URL_PARSE_SHIM}{WEB_API_SHIM_MID_B}{ABORT_SHIM}{STREAMS_SHIM}{HEADERS_SHIM}{FETCH_BODY_SHIM}{FORM_DATA_SHIM}{TEXT_ENCODING_SHIM}{WEB_API_SHIM_MID_B3}{WEBSOCKET_SHIM}{WEB_API_SHIM_MID_B4}{GEOMETRY_SHIM}{PSEUDO_ELEMENT_SHIM}{URL_SHIM}{ORIGIN_SHIM}{WEB_API_SHIM_MID_C}{FILE_API_SHIM}{WEB_API_SHIM_MID_C2}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}{MESSAGE_CHANNEL_SHIM}{WEB_API_SHIM_TAIL_MC}{IDB_SHIM}{CRYPTO_SHIM}{WEB_API_SHIM_TAIL_B}")
 }
 
 /// The subset of the page shim that WHATWG also exposes in a
@@ -629,7 +638,7 @@ pub(crate) fn web_api_shim() -> String {
 pub(crate) fn worker_exposed_shim() -> String {
     use crate::url_pattern::URL_PATTERN_SHIM;
     format!(
-        "{EVENT_SHIM}{EVENT_TARGET_SHIM}{PERFORMANCE_SHIM}{URL_PARSE_SHIM}{URL_SHIM}{ORIGIN_SHIM}\
+        "{EVENT_SHIM}{EVENT_TARGET_SHIM}{CONSOLE_SHIM}{PERFORMANCE_SHIM}{URL_PARSE_SHIM}{URL_SHIM}{ORIGIN_SHIM}\
          \n{URL_PATTERN_SHIM}\n{TEXT_ENCODING_SHIM}{ABORT_SHIM}{STREAMS_SHIM}{HEADERS_SHIM}{FETCH_BODY_SHIM}{FORM_DATA_SHIM}{FILE_API_SHIM}{WEBSOCKET_SHIM}\
          {WORKER_LOCATION_NAVIGATOR_SHIM}\nundefined;\n"
     )

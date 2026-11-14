@@ -352,14 +352,11 @@ pub(crate) fn worker_global_shim(worker_id: u32) -> String {
                         currentTarget: p, bubbles: false, cancelable: false }});
   }};
 
-  // Minimal console (no DOM — write to stderr via native binding).
-  globalThis.console = {{
-    log:   function() {{ _lumen_worker_console_log(Array.prototype.map.call(arguments, String).join(' ')); }},
-    info:  function() {{ _lumen_worker_console_log(Array.prototype.map.call(arguments, String).join(' ')); }},
-    warn:  function() {{ _lumen_worker_console_log('[WARN] ' + Array.prototype.map.call(arguments, String).join(' ')); }},
-    error: function() {{ _lumen_worker_console_log('[ERR]  ' + Array.prototype.map.call(arguments, String).join(' ')); }},
-    debug: function() {{}},
-  }};
+  // Console (BUG-1782): the full standard surface from `CONSOLE_SHIM`'s
+  // factory, one prefixed stderr native as the sink.
+  globalThis.console = _lumen_make_console(function(level, text) {{
+    _lumen_worker_console_log(level === 'warn' ? '[WARN] ' + text : level === 'error' ? '[ERR]  ' + text : text);
+  }});
 
   // importScripts(url1[, url2, …]) — WHATWG Web Workers §4.2.3.
   // Synchronously loads and evaluates one or more scripts. `data:`/
