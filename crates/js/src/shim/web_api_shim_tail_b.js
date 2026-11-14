@@ -1391,6 +1391,7 @@ function _lumen_install_reflection(proto, entries) {
     Object.defineProperty(_ctor, 'name', { value: _name, configurable: true });
     _ctor.prototype = Object.create(HTMLElement.prototype);
     _ctor.prototype.constructor = _ctor;
+    _lumen_idl_tag(_ctor, _name);
     globalThis[_name] = _ctor;
 });
 _lumen_html_tag_prototypes['AREA']      = HTMLAreaElement;
