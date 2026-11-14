@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::v8_compat::{into_v8_fn0, into_v8_fn1, into_v8_fn2, into_v8_fn3, into_v8_fn6};
 use crate::v8_runtime::V8JsRuntime;
+use crate::worker::WorkerBlobStore;
 use lumen_core::JsResult;
 use lumen_core::ext::JsRuntime as _;
 
@@ -45,6 +46,39 @@ fn chunk(body: &[u8], offset: u32, size: u32) -> Vec<u8> {
     let start = (offset as usize).min(body.len());
     let end = start.saturating_add(size as usize).min(body.len());
     body[start..end].to_vec()
+}
+
+/// Answers a worker `blob:` request from the shared blob store — Fetch §4.2
+/// scheme fetch without touching the network, which rejects the scheme
+/// (BUG-1781). GET only; the URL's fragment takes no part in the lookup
+/// (File API §8.3); the response is 200/OK with `Content-Length` and the
+/// entry's MIME as `Content-Type` (the headers the page's own blob fetch
+/// builds). `None` is a network error — a revoked or unknown URL, or a
+/// non-GET method; the caller gates on the scheme, so nothing falls through.
+fn blob_scheme_fetch(
+    blobs: &WorkerBlobStore,
+    store: &Mutex<BodyStore>,
+    url: &str,
+    method: &str,
+) -> Option<String> {
+    let entry = (method == "GET")
+        .then(|| blobs.lock().ok().and_then(|s| s.get(url.split('#').next().unwrap_or(url)).cloned()))
+        .flatten()?;
+    let len = entry.bytes.len();
+    if let Ok(mut s) = store.lock() {
+        s.last = entry.bytes;
+    }
+    serde_json::to_string(&serde_json::json!({
+        "status": 200,
+        "statusText": "OK",
+        "headers": [
+            ["Content-Length", len.to_string()],
+            ["Content-Type", entry.mime],
+        ],
+        "url": url,
+        "redirected": false,
+    }))
+    .ok()
 }
 
 /// Performs one worker request and returns its metadata as JSON
@@ -106,14 +140,17 @@ fn net_fetch(
 /// last body) and `_lumen_stream_alloc`/`_length`/`_chunk`/`_free` (a body
 /// moved into its own slot). Call after [`crate::dom::install_worker_exposed_v8`]
 /// (the shim builds on its `Response`/`Request`) and after the flavour's
-/// `_lumen_worker_base_url` global is set.
+/// `_lumen_worker_base_url` global is set. `blobs` is the page's shared blob
+/// store, read to serve a worker `fetch`/`XHR` of a `blob:` URL (BUG-1781).
 pub(crate) fn install_worker_net_v8(
     rt: &V8JsRuntime,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
+    blobs: &WorkerBlobStore,
 ) -> JsResult<()> {
     let store: Arc<Mutex<BodyStore>> = Arc::new(Mutex::new(BodyStore::default()));
 
     let st = Arc::clone(&store);
+    let page_blobs = Arc::clone(blobs);
     rt.register_native(
         "_lumen_worker_net_fetch",
         into_v8_fn6(
@@ -124,6 +161,13 @@ pub(crate) fn install_worker_net_v8(
                   content_type: String,
                   cache: String|
                   -> Option<String> {
+                // BUG-1781: a `blob:` URL never reaches the provider — it is
+                // served out of the page's shared blob store (worker fetch
+                // and worker XHR both come through this one native); a miss
+                // here is the network error, not a fall-through.
+                if url.starts_with("blob:") {
+                    return blob_scheme_fetch(&page_blobs, &st, &url, &method);
+                }
                 let body = body
                     .as_deref()
                     .map(|bytes| lumen_core::ext::JsFetchBody { content_type: &content_type, bytes });

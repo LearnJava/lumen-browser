@@ -4,6 +4,7 @@
 // `#[test]` (docs/lint-policy.md §10).
 #![allow(clippy::unwrap_used)]
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use lumen_core::JsValue;
@@ -59,14 +60,21 @@ impl lumen_core::ext::JsFetchProvider for Net {
 
 /// A worker scope as the dedicated/shared flavours build it: the
 /// `[Exposed=Worker]` shim, a base URL, then the network surface.
-fn scope(net: Option<Arc<Net>>) -> V8JsRuntime {
+///
+/// `blobs` is the page-side blob store the worker's `fetch`/`XHR` read a
+/// `blob:` URL from (BUG-1781); [`scope`] passes the empty one.
+fn scope_blobs(net: Option<Arc<Net>>, blobs: crate::worker::WorkerBlobStore) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     crate::worker::install_worker_scope_globals_v8(&rt, None).unwrap();
     rt.eval(crate::worker_shims::WORKER_TIMERS_SHIM).unwrap();
     rt.set_global("_lumen_worker_base_url", JsValue::String("https://w.test/dir/worker.js".into())).unwrap();
     let provider = net.map(|n| n as Arc<dyn lumen_core::ext::JsFetchProvider>);
-    super::install_worker_net_v8(&rt, provider).unwrap();
+    super::install_worker_net_v8(&rt, provider, &blobs).unwrap();
     rt
+}
+
+fn scope(net: Option<Arc<Net>>) -> V8JsRuntime {
+    scope_blobs(net, Arc::new(Mutex::new(HashMap::new())))
 }
 
 fn text(rt: &V8JsRuntime, expr: &str) -> String {
@@ -117,6 +125,42 @@ fn fetch_sends_resolved_url_and_body() {
     assert_eq!(seen[0].1, "POST");
     assert_eq!(seen[0].2, b"a=1&b=2");
     assert_eq!(seen[0].3, "application/x-www-form-urlencoded;charset=UTF-8");
+}
+
+/// BUG-1781: a worker `fetch(blob:…)` is served out of the shared blob store
+/// with the Blob's own Content-Type, the fragment takes no part in the lookup
+/// (File API §8.3), a revoked/unknown URL and a non-GET method are network
+/// errors (`TypeError: Failed to fetch`), and nothing reaches the network.
+#[test]
+fn fetch_serves_blob_urls_from_the_shared_store() {
+    let n = Net::new(200, &[], b"NETWORK");
+    let seen = Arc::clone(&n);
+    let blobs: crate::worker::WorkerBlobStore = Arc::new(Mutex::new(HashMap::new()));
+    blobs.lock().unwrap().insert(
+        "blob:https://w.test/42".into(),
+        crate::worker::WorkerBlobEntry { bytes: b"hello".to_vec(), mime: "text/plain".into() },
+    );
+    let rt = scope_blobs(Some(n), blobs);
+    rt.eval(
+        "globalThis.log = [];\
+         [function() { return fetch('blob:https://w.test/42#frag').then(function(r) {\
+            return r.text().then(function(t) {\
+              log.push([r.status, r.statusText, r.headers.get('content-type'), r.url, t].join('|'));\
+            }); }); },\
+          function() { return fetch('blob:https://w.test/gone').then(function() { log.push('resolved'); },\
+            function(e) { log.push('gone:' + e.name + ':' + e.message); }); },\
+          function() { return fetch('blob:https://w.test/42', { method: 'post' })\
+            .then(function() { log.push('resolved'); },\
+              function(e) { log.push('post:' + e.name); }); },\
+         ].reduce(function(cur, next) { return cur.then(next); }, Promise.resolve());",
+    )
+    .unwrap();
+    assert_eq!(
+        text(&rt, "log.join(',')"),
+        "200|OK|text/plain|blob:https://w.test/42#frag|hello,gone:TypeError:Failed to fetch,post:TypeError"
+    );
+    // The network layer saw none of these requests.
+    assert!(seen.seen.lock().unwrap().is_empty());
 }
 
 /// A provider-less scope (headless dump modes) rejects with `TypeError`

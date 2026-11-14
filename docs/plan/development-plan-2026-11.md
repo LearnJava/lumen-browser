@@ -37,7 +37,7 @@
 
 ### 2.2 Пустые страницы — часто один JS-разрыв, убивающий приложение целиком
 
-`Object.prototype.toString.call(<элемент>)` возвращает `[object Object]` вместо `[object HTMLDivElement]` — tippy.js не узнаёт элемент, React не монтируется ([BUG-1779](../../bugs/BUG-1779-OPEN.md)). Рядом: нет `console.assert/time/...` ([BUG-1782](../../bugs/BUG-1782-OPEN.md)), `fetch(blob:)` в Worker ([BUG-1781](../../bugs/BUG-1781-OPEN.md)), краш V8 на ea.com ([BUG-1783](../../bugs/BUG-1783-OPEN.md)), петля автологина Сбер ID ([BUG-1780](../../bugs/BUG-1780-OPEN.md)). Каждый такой дефект стоит десятков сайтов и чинится за часы.
+`Object.prototype.toString.call(<элемент>)` возвращает `[object Object]` вместо `[object HTMLDivElement]` — tippy.js не узнаёт элемент, React не монтируется ([BUG-1779](../../bugs/BUG-1779-FIXED.md), исправлен 2026-11-14). Рядом: нет `console.assert/time/...` ([BUG-1782](../../bugs/BUG-1782-OPEN.md)), `fetch(blob:)` в Worker ([BUG-1781](../../bugs/BUG-1781-FIXED.md), исправлен 2026-11-14), краш V8 на ea.com ([BUG-1783](../../bugs/BUG-1783-OPEN.md)), петля автологина Сбер ID ([BUG-1780](../../bugs/BUG-1780-OPEN.md)). Каждый такой дефект стоит десятков сайтов и чинится за часы.
 
 ### 2.3 Конвейера правок вне релиза нет
 
@@ -178,7 +178,7 @@
 1. P2: перезамер SPR-w и перфа после LOAD, две записи в journal.
 2. P2: SITES-TRIAGE-3, первые 15 сайтов веса 3.
 3. P1: BUG-1778 — профиль каскада псевдоэлементов и фикс, cnn.com < 10 с.
-4. P3: BUG-1779, BUG-1782, BUG-1781, BUG-1783, BUG-1780.
+4. P3: BUG-1782, BUG-1783, BUG-1780 (BUG-1779 и BUG-1781 закрыты 2026-11-14).
 5. P1: BUG-935 — решить судьбу задачи и снять короткое замыкание в `relayout_raf_dirty`.
 6. P2: WPT-DROP-1027, срезы S3–S9 — восстановить 21 просадку.
 7. P5: чистка веток, worktree и артефактов; `DOC-ROADMAP-COLUMNS`.
