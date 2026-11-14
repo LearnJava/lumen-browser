@@ -624,6 +624,43 @@ fn link_text_from_content() {
 }
 
 #[test]
+fn link_name_from_nested_img_alt() {
+    let tree = build_tree(r#"<a href="https://github.com/"><img src="gh.svg" alt="GitHub"></a>"#);
+    let link = find_role_dfs(&tree.root, AXRole::Link).expect("link");
+    assert_eq!(link.name, "GitHub", "icon link is named by the nested img alt (BUG-1793)");
+}
+
+#[test]
+fn link_name_from_nested_svg_title_child() {
+    let tree = build_tree(
+        r#"<a href="/"><svg viewBox="0 0 10 10"><title>Mastodon</title><path d="M0 0"/></svg></a>"#,
+    );
+    let link = find_role_dfs(&tree.root, AXRole::Link).expect("link");
+    assert_eq!(link.name, "Mastodon", "svg <title> names the icon link");
+}
+
+#[test]
+fn link_name_from_nested_svg_aria_label() {
+    let tree = build_tree(r#"<a href="/"><svg aria-label="Bluesky"><path d="M0 0"/></svg></a>"#);
+    let link = find_role_dfs(&tree.root, AXRole::Link).expect("link");
+    assert_eq!(link.name, "Bluesky", "svg aria-label names the icon link");
+}
+
+#[test]
+fn link_name_mixes_icon_alt_and_text() {
+    let tree = build_tree(r#"<a href="/"><img src="rust.svg" alt="Rust"> lang</a>"#);
+    let link = find_role_dfs(&tree.root, AXRole::Link).expect("link");
+    assert_eq!(link.name, "Rust lang", "icon alt and text are both part of the name");
+}
+
+#[test]
+fn link_decorative_img_stays_unnamed() {
+    let tree = build_tree(r#"<a href="/"><img src="spacer.png" alt=""></a>"#);
+    let link = find_role_dfs(&tree.root, AXRole::Link).expect("link");
+    assert_eq!(link.name, "", "alt=\"\" is decorative and must not name the link");
+}
+
+#[test]
 fn link_empty_href_not_link_role() {
     let tree = build_tree("<a>Not a link</a>");
     let link = find_role_dfs(&tree.root, AXRole::Link);
