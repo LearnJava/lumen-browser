@@ -12,6 +12,7 @@
 mod activation_target;
 mod bug1147_frame_facade_style;
 mod bug1208_window_origin;
+mod bug1792_html_collection_iterable;
 mod bug1801_window_status;
 mod bug1083_textdecoder_stream_bom;
 mod bug518_mixin_cssom;
