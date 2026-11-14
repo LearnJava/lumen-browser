@@ -356,6 +356,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('170', '170-border-image.html', 0.5, 'BIMG CSS Backgrounds L3 §6: border-image на блоке. A: slice 30 stretch · B: repeat — плитки центрируются, крайние обрезаются · C: round — целое число плиток · D: space — зазоры между плитками · E: fill + border-image-width 25px + outset 10px · F: линейный градиент как источник. Без текста'),
     ('171', '171-background-clip-border-area.html', 0.5, 'BCBA CSS Backgrounds L4 §3.8: background-clip: border-area — фон только под нарисованной рамкой. A: градиент, сплошная рамка · B: цвет + border-radius 50px · C: разные радиусы углов 20/80 и градиент · D: разные ширины сторон · E: два слоя border-area + padding-box · F: эталон border-box. Без текста'),
     ('172', '172-fieldset-vertical-flex-grid.html', 0.5, 'FSVFG HTML Rendering §15.3.13 + Writing Modes L3: flex/grid-fieldset в вертикальном writing-mode, legend на границе блока-начала. A: vertical-rl flex · B: vertical-lr flex · C: vertical-rl flex column · D: vertical-rl grid · E: vertical-lr grid · F: legend внутри толстой рамки, justify-self: end. Без текста'),
+    ('173', '173-synthetic-bold-italic.html', 0.5, 'TEXTQ-6 синтетический жирный/курсив (CSS Fonts L4 §5.5): семейство из одного regular-файла без дескрипторов - bold/italic-текст синтезируется (второй квад со сдвигом, наклон вершин), как CPU-путь; то же семейство с объявленными weight/style face-ами - синтеза нет (контроль). GPU_CAPTURE: снимок gdigrab-ом (wgpu-путь живой)'),
 ]
 
 # --- Известные должники (Phase 2+ фичи, baseline-храповик) ---
@@ -720,6 +721,7 @@ GPU_CAPTURE: frozenset[str] = frozenset({
     '16', '51', '53', '45', '147', '79', '117', '97',   # AA-края
     '19', '55', '57', '59', '62', '78', '80',           # прочие
     '166',                                              # качество текста wgpu-пути (TEXTQ)
+    '173',                                              # синтетический bold/italic wgpu-пути (TEXTQ-6)
 })
 
 
@@ -757,7 +759,7 @@ def self_test() -> int:
     known = {t[0] for t in TESTS}
     for tid in sorted(GPU_CAPTURE - known, key=int):
         errors.append(f'GPU_CAPTURE: id {tid} нет в TESTS')
-    expected = 24  # число id в ROADMAP TEST-9 (5 + 3 + 8 + 7) + 166 (TEXTQ-1)
+    expected = 25  # число id в ROADMAP TEST-9 (5 + 3 + 8 + 7) + 166 (TEXTQ-1) + 173 (TEXTQ-6)
     if len(GPU_CAPTURE) != expected:
         errors.append(f'GPU_CAPTURE: {len(GPU_CAPTURE)} id вместо {expected} (дубль в литерале?)')
     for tid, want in (('100', 'gdigrab'), ('97', 'gdigrab'), ('03', 'ipc'), ('00', 'ipc')):

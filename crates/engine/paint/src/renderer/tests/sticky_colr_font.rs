@@ -403,6 +403,8 @@ fn color_glyph_emits_one_quad_per_layer_with_palette_colors() {
         descent_override: None,
         size_adjust: None,
         variation_settings: Vec::new(),
+        weight: 400,
+    italic: false,
     }];
     let mut lazy = LazyParsedFaces::new(&faces);
     let mut atlas = GlyphAtlas::new(ATLAS_DIM);
@@ -429,6 +431,8 @@ fn color_glyph_emits_one_quad_per_layer_with_palette_colors() {
         (0.0, 0.0),
         None,
         1.0,
+        400,
+        lumen_layout::FontStyle::Normal,
     );
 
     // Два слоя → два quad-а → 12 вершин; монохромный фолбэк дал бы 6.
@@ -459,6 +463,8 @@ fn atlas_exhaustion_is_not_memoized_and_heals_after_reset() {
         descent_override: None,
         size_adjust: None,
         variation_settings: Vec::new(),
+        weight: 400,
+    italic: false,
     }];
     let mut lazy = LazyParsedFaces::new(&faces);
     let mut atlas = GlyphAtlas::new(64);
@@ -504,6 +510,8 @@ fn custom_palette_override_reaches_the_emitted_vertices() {
         descent_override: None,
         size_adjust: None,
         variation_settings: Vec::new(),
+        weight: 400,
+    italic: false,
     }];
     let mut lazy = LazyParsedFaces::new(&faces);
     let mut atlas = GlyphAtlas::new(ATLAS_DIM);
@@ -536,6 +544,8 @@ fn custom_palette_override_reaches_the_emitted_vertices() {
         (0.0, 0.0),
         Some(&selection),
         1.0,
+        400,
+        lumen_layout::FontStyle::Normal,
     );
 
     assert_eq!(out.len(), 12);
@@ -564,6 +574,8 @@ fn text_run_cache_skips_color_glyph_runs() {
         descent_override: None,
         size_adjust: None,
         variation_settings: Vec::new(),
+        weight: 400,
+    italic: false,
     }];
     let mut lazy = LazyParsedFaces::new(&faces);
     let mut atlas = GlyphAtlas::new(ATLAS_DIM);
@@ -591,6 +603,8 @@ fn text_run_cache_skips_color_glyph_runs() {
             (0.0, 0.0),
             None,
             1.0,
+            400,
+            lumen_layout::FontStyle::Normal,
         );
     }
     assert_eq!(out.len(), 12, "цветной глиф всё ещё даёт quad на слой");
@@ -617,6 +631,8 @@ fn text_run_cache_replays_identical_vertices() {
         descent_override: None,
         size_adjust: None,
         variation_settings: Vec::new(),
+        weight: 400,
+    italic: false,
     }];
     let mut lazy = LazyParsedFaces::new(&faces);
     let mut atlas = GlyphAtlas::new(ATLAS_DIM);
@@ -643,6 +659,8 @@ fn text_run_cache_replays_identical_vertices() {
             (0.0, 0.0),
             None,
             1.0,
+            400,
+            lumen_layout::FontStyle::Normal,
         );
         out
     };
@@ -1858,3 +1876,4 @@ fn partial_band_strips_match_full_redraw() {
     r.render_band_passes(&a, vec![(0.0, None)], &v3, W, H).unwrap();
     assert_ne!(read(&r, &t3), p2, "контроль: A и B обязаны различаться");
 }
+

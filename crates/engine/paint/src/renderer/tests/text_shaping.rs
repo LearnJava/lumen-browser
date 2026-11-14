@@ -29,6 +29,8 @@ fn lay_out(
         descent_override: None,
         size_adjust: None,
         variation_settings: Vec::new(),
+        weight: 400,
+    italic: false,
     }];
     let mut lazy = LazyParsedFaces::new(&faces);
     let mut atlas = GlyphAtlas::new(ATLAS_DIM);
@@ -52,6 +54,8 @@ fn lay_out(
         (letter_spacing, 0.0),
         None,
         1.0,
+        400,
+        lumen_layout::FontStyle::Normal,
     );
     (end_x, out.len() / 6)
 }

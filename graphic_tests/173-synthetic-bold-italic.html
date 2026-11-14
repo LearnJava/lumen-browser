@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 173 synthetic bold/italic</title>
+  <!--
+    TEST-173: TEXTQ-6 — синтетический жирный и курсив в GPU-пути (CSS Fonts L4 §5.5).
+    Семейство из ОДНОГО regular-файла: ни жирного, ни курсивного начертания нет —
+    движок обязан синтезировать оба (вторы́й квад со сдвигом для bold, наклон вершин
+    для italic), как это делает CPU-путь. True-bold/true-italic семейство для
+    сравнения не синтезируется.
+  -->
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #ff00ff; width: 1024px; height: 720px; }
+    .__f {
+      background: #12141c;
+      width: 1022px; height: 718px;
+      margin: 1px;
+      padding: 24px;
+      overflow: hidden;
+    }
+    /* Одно семейство из одного regular-файла БЕЗ дескрипторов: любой запрос
+       700/italic резолвится в этот face (weight 400, normal) — движок обязан
+       синтезировать жирный/курсив (CSS Fonts L4 §5.5). */
+    @font-face {
+      font-family: "OnlyRegular";
+      src: url("../assets/fonts/Inter-Regular.ttf");
+    }
+    /* Тот же файл, но с ОБЪЯВЛЕННЫМИ weight/style face-ами: bold/italic-текст
+       резолвится в них, синтез не включается — контрольная группа. */
+    @font-face {
+      font-family: "OnlyDeclared";
+      src: url("../assets/fonts/Inter-Regular.ttf");
+    }
+    @font-face {
+      font-family: "OnlyDeclared";
+      font-weight: 700;
+      src: url("../assets/fonts/Inter-Regular.ttf");
+    }
+    @font-face {
+      font-family: "OnlyDeclared";
+      font-style: italic;
+      src: url("../assets/fonts/Inter-Regular.ttf");
+    }
+    .r  { font-family: "OnlyRegular"; font-size: 26px; color: #f5f5f5; }
+    .rb { font-family: "OnlyRegular"; font-size: 26px; color: #6ad6ff; font-weight: 700; }
+    .ri { font-family: "OnlyRegular"; font-size: 26px; color: #ffd166; font-style: italic; }
+    .rbi{ font-family: "OnlyRegular"; font-size: 26px; color: #2ecc71; font-weight: 700; font-style: italic; }
+    .dn { font-family: "OnlyDeclared"; font-size: 26px; color: #cfcfcf; }
+    .db { font-family: "OnlyDeclared"; font-size: 26px; color: #e74c3c; font-weight: 700; }
+    .row { margin-top: 16px; }
+    .cap { font-size: 13px; color: #9aa7b0; margin-top: 8px; }
+  </style>
+</head>
+<body>
+<div class="__f">
+
+  <div class="cap">synthetic bold — second quad shift, no bold file in family:</div>
+  <div class="r row">Hamburgefonstiv 0123 regular</div>
+  <div class="rb">Hamburgefonstiv 0123 bold</div>
+
+  <div class="cap">synthetic italic — vertex shear, no italic file in family:</div>
+  <div class="ri row">Hamburgefonstiv 0123 italic</div>
+  <div class="rbi">Hamburgefonstiv 0123 bold italic</div>
+
+  <div class="cap">declared-weight faces of the same file — no synthesis on top:</div>
+  <div class="dn row">Golos regular text sample</div>
+  <div class="db">Golos bold text sample</div>
+
+</div>
+</body>
+</html>

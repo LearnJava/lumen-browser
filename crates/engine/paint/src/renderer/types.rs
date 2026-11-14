@@ -810,6 +810,14 @@ pub(crate) struct LoadedFace {
     /// побеждает по каждой оси отдельно) перед нормализацией через `fvar`/
     /// `avar` — см. `merge_variation_settings` в `glyph_raster.rs`.
     pub(crate) variation_settings: Vec<([u8; 4], f32)>,
+    /// TEXTQ-6: собственный вес face-а — `FaceRecord::weight` (`usWeightClass`
+    /// OS/2) для @font-face/системных face-ов, `400` для bundled. Гейтит
+    /// синтетический жирный: `font-weight >= 600` синтезируется вторым квадом
+    /// только когда выбранный face сам не жирный (CSS Fonts L4 §5.5).
+    pub(crate) weight: u16,
+    /// TEXTQ-6: у face-а есть собственный наклон (`FaceRecord::style` ≠
+    /// Normal — Italic/Oblique). Гейтит синтетический курсив.
+    pub(crate) italic: bool,
 }
 
 /// Owned-метрики face-а, независимые от лайфтайма `bytes`. Живут в
