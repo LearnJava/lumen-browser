@@ -61,6 +61,47 @@ pub fn validate_against_syntax(value: &str, syntax: &str) -> bool {
     cascade_validate_against_syntax(value, syntax).unwrap_or(true)
 }
 
+/// Whether the *stored* value of a registered custom property is the same
+/// computed value as the registration's `initial-value`.
+///
+/// The two sides are kept in different forms: the map holds a computed value
+/// (`0px`), while `initial-value` is the raw descriptor text (`0`). Comparing
+/// them as strings — the cheap fast path — misses exactly that pair, and the
+/// miss sends every node through the `inherits: false` reset in
+/// `compute_style`, which forks the whole custom-property map there. On
+/// github.com Primer registers `--dialog-scrollgutter { initial-value: 0 }`
+/// over a 2143-entry map, so the false miss cost 0.36 ms × 2077 nodes — 740 ms
+/// per layout pass, 40 % of the whole cascade (BUG-1794).
+///
+/// The equivalence is claimed only when it holds for **every** em basis: a
+/// value whose computed form depends on `font-size` (`2em` against a fixed
+/// `32px`) is not equivalent, and treating it as such would silently keep a
+/// value the `inherits: false` reset is required to drop.
+pub(crate) fn initial_value_equivalent(
+    value: &str,
+    initial: &str,
+    syntax: &str,
+    viewport: lumen_core::geom::Size,
+) -> bool {
+    if !validate_against_syntax(initial, syntax) {
+        return false;
+    }
+    if value == initial {
+        return true;
+    }
+    // Equal at two different em bases ⇒ no font-size dependence, so the
+    // computed value cannot differ either.
+    [16.0_f32, 32.0].into_iter().all(|em| {
+        match (
+            cascade_compute_registered_value(value, syntax, em, viewport),
+            cascade_compute_registered_value(initial, syntax, em, viewport),
+        ) {
+            (Some(a), Some(b)) => a == b,
+            _ => false,
+        }
+    })
+}
+
 /// CSS Properties and Values L1 §2.3: replaces the value of each registered custom
 /// property in `custom_props` by its computed form — `2em` → `20px`, `calc(1 + 2)` →
 /// `3` (BUG-1505). Runs once the element's own `font-size` is known; a value that

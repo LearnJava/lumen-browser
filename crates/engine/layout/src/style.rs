@@ -159,6 +159,7 @@ use adjust::{
     resolve_system_colors_in_style,
 };
 pub use property_syntax::validate_against_syntax;
+pub(crate) use property_syntax::initial_value_equivalent;
 use property_syntax::{apply_property_initial_values, compute_registered_values};
 // BUG-531: `CSS.registerProperty()` (`crates/js/src/css_properties_values_api.rs`)
 // is the only consumer outside `crate::style` — reachable only through this
