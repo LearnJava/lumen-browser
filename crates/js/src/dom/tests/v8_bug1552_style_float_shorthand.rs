@@ -59,6 +59,7 @@ fn css_float_and_border_shorthand_round_trip() {
             t('w34', function() { return ct('border: solid; border-style: dotted'); });
             t('w26', function() { return ct('border: 1px red;') + ct('border: red;'); });
             t('imageGet', function() { var e = mk(); e.style.border = '1px solid red'; return e.style.borderImage + '|' + e.style.borderImageSource; });
+            // CSSOM serialises <url> quoted (canon BUG-1551), whatever the authored form.
             t('imageRaw', function() { return ct('border-image: url(a.png) 30 / 10px round'); });
             t('dup', function() { return ct('color: red; margin: 1px; color: blue'); });
             return out.join('\\n');
@@ -98,7 +99,7 @@ w33=border-width: 1px; border-style: none; border-color: red currentcolor curren
 w34=border: dotted;\n\
 w26=border: 1px red;border: red;\n\
 imageGet=none|none\n\
-imageRaw=border-image: url(a.png) 30 / 10px round;\n\
+imageRaw=border-image: url(\"a.png\") 30 / 10px round;\n\
 dup=margin: 1px; color: blue;"
     );
 }

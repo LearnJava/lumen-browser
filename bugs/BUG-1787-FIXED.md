@@ -54,7 +54,7 @@
 
 `cargo test -p lumen-js --lib --features v8-backend` — пара зелёная в полном
 параллельном прогоне (2026-11-15: 5004 passed / 3 failed, ни одного из этой
-пары; 3 падения — pre-existing [BUG-1795](BUG-1795-OPEN.md) и
+пары; 3 падения — pre-existing [BUG-1795](BUG-1795-FIXED.md) и
 [BUG-1677](BUG-1677-OPEN.md)). Точечный прогон трёх тестов (пара + аудио-тест,
 который её ронял) зелёный.
 
