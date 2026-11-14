@@ -116,6 +116,24 @@ fn frame_message_delivery_targets_the_window() {
     assert!(is_true(&rt, "globalThis.__r === true"));
 }
 
+/// BUG-1790: Chrome reports `isTrusted === true` for a `message` event it
+/// dispatches on the postMessage path, and Cloudflare Turnstile drops every
+/// untrusted message (`e.isTrusted && …`) — so the widget hung without a token.
+#[test]
+fn post_message_and_frame_messages_are_trusted() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "globalThis.__t = []; \
+         window.addEventListener('message', function(e) { globalThis.__t.push(e.isTrusted); }); \
+         window.postMessage('x', '*');",
+    )
+    .unwrap();
+    assert!(is_true(&rt, "_lumen_tick_timers(); globalThis.__t[0] === true"));
+    rt.eval("_lumen_deliver_frame_message('y', 'https://other.test', null);")
+        .unwrap();
+    assert!(is_true(&rt, "globalThis.__t[1] === true"));
+}
+
 /// A page's own `window.dispatchEvent(new Event(...))` also targets the window.
 #[test]
 fn window_dispatch_event_sets_target() {
