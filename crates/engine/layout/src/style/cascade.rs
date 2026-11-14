@@ -43,7 +43,8 @@ use crate::style::{
     is_appearance_disabling_property, is_disableable_widget, strip_ua_appearance_box_styling,
     ua_font_family,
     ua_font_size_factor, ua_font_style, ua_font_weight, ua_link_color, ua_vertical_align,
-    parse_css_wide_keyword, ua_white_space, validate_against_syntax, with_front_cascade_index,
+    initial_value_equivalent, parse_css_wide_keyword, ua_white_space, validate_against_syntax,
+    with_front_cascade_index,
     AlignValue, ComputedStyle, CssContinue, CssWideKeyword, Display, FlexDirection, FlexWrap,
     WebkitBoxAlign, WebkitBoxDirection, WebkitBoxOrient, WebkitBoxPack,
     FieldSizing, FontPalette, FontSizeBasis, FontWeight, Length, Overflow,
@@ -285,12 +286,17 @@ pub(crate) fn compute_style_shareable(
     // descendant inherits it, so without this one `@property … { inherits:
     // false; initial-value: … }` (Primer's `--dialog-scrollgutter` on
     // github.com) copied the ~2000-entry map on every single node.
+    // BUG-1794: сравнение идёт по ВЫЧИСЛЕННЫМ значениям, а не по тексту:
+    // в карте лежит вычисленное `0px`, а `initial-value` дескриптора — сырое
+    // `0`, и текстовое неравенство заставляло каждый узел форкать карту
+    // custom-properties (github.com: 0.36 мс × 2077 узлов на проход).
     let resets_inherited = |key: &str, value: &str| {
         registry.get(key).is_some_and(|p| {
             !p.inherits
-                && !p.initial_value.as_deref().is_some_and(|iv| {
-                    iv == value && validate_against_syntax(iv, &p.syntax)
-                })
+                && !p
+                    .initial_value
+                    .as_deref()
+                    .is_some_and(|iv| initial_value_equivalent(value, iv, &p.syntax, viewport))
         })
     };
     // Walk the registry (a handful of `@property` rules), not the inherited map

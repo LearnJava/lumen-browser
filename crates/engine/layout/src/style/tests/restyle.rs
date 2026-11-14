@@ -490,6 +490,31 @@ use super::*;
     }
 
     #[test]
+    fn custom_props_non_inherited_registered_unitless_initial_value_stays_shared() {
+        // BUG-1794: Primer on github.com registers `--dialog-scrollgutter` with a
+        // unitless `initial-value: 0`, while the map keeps the computed form `0px`.
+        // Comparing the raw strings read that pair as "a different value" and forked
+        // the whole custom-property map on every node of the page — 740 ms per pass.
+        let doc = lumen_html_parser::parse("<div><p>x</p></div>");
+        let sheet = lumen_css_parser::parse(
+            "@property --sg { syntax: '<length>'; inherits: false; initial-value: 0; } \
+             div { --gap: 8px; }",
+        );
+        let vp = Size::new(800.0, 600.0);
+        let root_style = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let p = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root_style, vp, false);
+        let p_style = compute_style(&doc, p, &sheet, &div_style, vp, false);
+
+        assert_eq!(p_style.custom_props.get("--sg").map(String::as_str), Some("0px"));
+        assert!(
+            div_style.custom_props.ptr_eq(&p_style.custom_props),
+            "`0` and its computed `0px` are one value — the child must not fork the map"
+        );
+    }
+
+    #[test]
     fn custom_props_non_inherited_registered_resets_to_initial_in_child() {
         // The non-shared arm: a parent that declares a non-initial value still
         // must not leak it into the child.
