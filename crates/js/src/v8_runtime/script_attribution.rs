@@ -55,6 +55,24 @@ unsafe extern "C" {
     fn lumen_v8__Function__GetScriptStartPosition(this: *const v8::Function) -> i32;
 }
 
+/// Reads a V8 string through `String::WriteV2` (`i::String::WriteToFlat` — a
+/// cons-tree walk), not through `to_rust_string_lossy` (`v8::String::ValueView`).
+///
+/// Why: a cons string that V8 itself flags flat (`second == ""`) but whose
+/// `first` is still a cons reaches `SlowGetFlatContent`'s unguarded
+/// `TryGetFlatContentFromDirectString(...).value()` — the empty optional
+/// throws `std::bad_optional_access`, and V8 is built with `-fno-exceptions`,
+/// so its terminate handler aborts the whole process (BUG-1783: ea.com died
+/// there reading a function name). `WriteToFlat` walks any cons shape
+/// correctly and never touches the flat-content machinery; the price is one
+/// UTF-16 → UTF-8 conversion per read, which for the handful of LoAF
+/// attribution strings is noise.
+fn string_lossy_via_write(scope: &mut v8::PinScope, s: v8::Local<v8::String>) -> String {
+    let mut buf = vec![0u16; s.length()];
+    s.write_v2(scope, 0, &mut buf, v8::WriteFlags::empty());
+    String::from_utf16_lossy(&buf)
+}
+
 pub(crate) fn capture_call_site(
     scope: &mut v8::PinScope,
     args: &v8::FunctionCallbackArguments,
@@ -67,14 +85,15 @@ pub(crate) fn capture_call_site(
     let source_url = func
         .get_script_origin(scope)
         .resource_name()
-        .map(|v| v.to_rust_string_lossy(scope))
+        .and_then(|v| v.try_cast::<v8::String>().ok())
+        .map(|s| string_lossy_via_write(scope, s))
         .unwrap_or_default();
     // `rusty_v8` documents both as zero-indexed; the spec-adjacent field this
     // slice exposes (and `loaf-source-location.html` asserts) is 1-based, the
     // same convention as thrown-error stack frames.
     let source_line = func.get_script_line_number().map(|n| n + 1).unwrap_or(0);
     let source_column = func.get_script_column_number().map(|n| n + 1).unwrap_or(0);
-    let name = func.get_name(scope).to_rust_string_lossy(scope);
+    let name = string_lossy_via_write(scope, func.get_name(scope));
     // SAFETY: the callee only forwards the pointer to a non-virtual,
     // non-inline V8 member function that takes no arguments and touches no
     // Rust-owned memory. `&*func` is a live `v8::Function*` for as long as
@@ -105,4 +124,79 @@ pub(crate) fn capture_call_site(
     set(scope, obj, "sourceCharPosition", char_pos_val);
 
     rv.set(obj.into());
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::RwLock;
+
+    /// Guards concurrent test access — parallel reads are fine, init is
+    /// exclusive (same contract as `tests/cases/v8_smoke.rs`).
+    static PROCESS_LOCK: RwLock<()> = RwLock::new(());
+
+    use super::string_lossy_via_write;
+
+    /// BUG-1783: `to_rust_string_lossy` (`v8::String::ValueView`) aborts the
+    /// process on a V8 string shape that reaches the unguarded
+    /// `SlowGetFlatContent().value()`. The replacement reader must return the
+    /// correct content for every string shape constructable from the API
+    /// (sequential, cons, sliced, thin/internalized) without touching the
+    /// flat-content machinery at all — the process surviving the test is part
+    /// of the assertion.
+    #[test]
+    fn string_read_via_write_matches_content_for_every_shape() {
+        crate::v8_runtime::ensure_v8_platform();
+        let _guard = PROCESS_LOCK.read().unwrap();
+
+        let isolate = &mut v8::Isolate::new(Default::default());
+        v8::scope!(let scope, isolate);
+
+        let context = v8::Context::new(scope, Default::default());
+        let scope = &mut v8::ContextScope::new(scope, context);
+
+        // Sequential ("abc…") and the mixed-script string with a two-byte char.
+        let plain = v8::String::new(scope, "abcdefghij").unwrap();
+        let wide = v8::String::new(scope, "abcΩdef").unwrap();
+        assert_eq!(string_lossy_via_write(scope, plain), "abcdefghij");
+        assert_eq!(string_lossy_via_write(scope, wide), "abcΩdef");
+
+        // Cons, non-flat: two halves concatenated via the API (`String::Concat`
+        // → `NewConsString` — V8 keeps a real ConsString here).
+        let left = v8::String::new(scope, "abcdefghij").unwrap();
+        let right = v8::String::new(scope, "0123456789Ω").unwrap();
+        let cons = v8::String::concat(scope, left, right).unwrap();
+        assert_eq!(
+            string_lossy_via_write(scope, cons),
+            "abcdefghij0123456789Ω"
+        );
+
+        // Sliced + thin, produced by JS: `substring` yields a SlicedString over
+        // the flat parent; a property-key lookup internalizes (thin) a cons.
+        let source = v8::String::new(
+            scope,
+            r#"
+            (function () {
+                var s = "abcdefghij0123456789";
+                var sliced = s.substring(2, 18);
+                var key = sliced + "«tail»";
+                var obj = {};
+                obj[key] = 1;              // internalizes `key` → thin/flat
+                var probe = function inner() {};
+                probe;                     // inferred function name via V8
+                return [sliced, key, Object.keys(obj)[0]];
+            })()
+            "#,
+        )
+        .unwrap();
+        let script = v8::Script::compile(scope, source, None).unwrap();
+        let result = script.run(scope).expect("probe script must run");
+        let arr: v8::Local<v8::Array> = result.try_into().unwrap();
+        let mut read = |i: i32| {
+            let v = arr.get_index(scope, i as u32).unwrap();
+            string_lossy_via_write(scope, v.try_cast::<v8::String>().unwrap())
+        };
+        assert_eq!(read(0), "cdefghij01234567");
+        assert_eq!(read(1), "cdefghij01234567«tail»");
+        assert_eq!(read(2), "cdefghij01234567«tail»");
+    }
 }

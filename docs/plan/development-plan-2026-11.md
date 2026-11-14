@@ -37,7 +37,7 @@
 
 ### 2.2 Пустые страницы — часто один JS-разрыв, убивающий приложение целиком
 
-`Object.prototype.toString.call(<элемент>)` возвращает `[object Object]` вместо `[object HTMLDivElement]` — tippy.js не узнаёт элемент, React не монтируется ([BUG-1779](../../bugs/BUG-1779-FIXED.md), исправлен 2026-11-14). Рядом: `console.assert/time/...` отсутствовали ([BUG-1782](../../bugs/BUG-1782-FIXED.md), исправлен 2026-11-14), `fetch(blob:)` в Worker ([BUG-1781](../../bugs/BUG-1781-FIXED.md), исправлен 2026-11-14), краш V8 на ea.com ([BUG-1783](../../bugs/BUG-1783-OPEN.md)), петля автологина Сбер ID ([BUG-1780](../../bugs/BUG-1780-OPEN.md)). Каждый такой дефект стоит десятков сайтов и чинится за часы.
+`Object.prototype.toString.call(<элемент>)` возвращает `[object Object]` вместо `[object HTMLDivElement]` — tippy.js не узнаёт элемент, React не монтируется ([BUG-1779](../../bugs/BUG-1779-FIXED.md), исправлен 2026-11-14). Рядом: `console.assert/time/...` отсутствовали ([BUG-1782](../../bugs/BUG-1782-FIXED.md), исправлен 2026-11-14), `fetch(blob:)` в Worker ([BUG-1781](../../bugs/BUG-1781-FIXED.md), исправлен 2026-11-14), краш V8 на ea.com ([BUG-1783](../../bugs/BUG-1783-FIXED.md), исправлен 2026-11-14), петля автологина Сбер ID ([BUG-1780](../../bugs/BUG-1780-OPEN.md)). Каждый такой дефект стоит десятков сайтов и чинится за часы.
 
 ### 2.3 Конвейера правок вне релиза нет
 
