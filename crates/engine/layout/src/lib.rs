@@ -1185,6 +1185,14 @@ fn collect_computed_styles_parts(
             if seg.source_node.index() == 0 {
                 continue;
             }
+            // BUG-1784: a phantom empty-inline marker (BUG-1558) exists only so
+            // `getBoundingClientRect` can answer, and that path reads the run's
+            // segments straight from the box tree. Publishing the three-property
+            // text map under its element's key would claim the slot the BUG-1191
+            // boxless backfill needs — the element answered `display: ""`.
+            if seg.is_empty_inline_marker() {
+                continue;
+            }
             out.entry(seg.source_node.index() as u32)
                 .or_insert_with(|| selector_query::inline_segment_style_map(&seg.style).into());
             // BUG-488: publish the full property map for every plain inline

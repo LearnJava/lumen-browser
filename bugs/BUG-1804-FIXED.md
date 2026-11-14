@@ -39,7 +39,7 @@
 - `cargo test -p lumen-js --lib` **не компилируется**: `crates/js/src/dom/tests/v8_ux_selection_api.rs`
   — `use of undeclared type QualName/NodeId` (76 errors) — в тестовый файл попала правка без импортов.
 - `cargo test -p lumen-driver --test all`: `bug1191_boxless_computed_style` (уже задокументирован
-  в [BUG-1784](BUG-1784-OPEN.md)), `bug489_display_contents_computed_style`, `snapshot_cpu::cpu_snapshots_match_references`.
+  в [BUG-1784](BUG-1784-FIXED.md)), `bug489_display_contents_computed_style`, `snapshot_cpu::cpu_snapshots_match_references`.
 - `cargo test -p lumen-paint --lib`: `display_list::text_and_images::empty_cells_hide_ignored_under_border_collapse`
   (та же border-collapse семья).
 - `cargo test -p lumen-media-native --lib`: `hevc_hardware_matches_software` (аппаратно-зависимый ассерт).
