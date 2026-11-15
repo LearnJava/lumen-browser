@@ -1,11 +1,76 @@
 # BUG-1790 — Cloudflare Turnstile: челлендж-кадр работает, но не выдаёт токен (детект со стороны challenge)
 
-**Статус:** OPEN (срез 4 — пустой `TypeError` в обработчике `message` кадра челленджа:
-найден точный путь (`_lumen_deliver_frame_message` → `dispatchEvent` → обработчик страницы),
-попутно закрыт спек-дефолт `MessageEvent.ports`/`source`; остаток — стек этого исключения)
+**Статус:** OPEN (срез 5 — пустой `TypeError` опознан: собственный ассерт бандла кадра
+`typeof x === 'function'` на `contentWindow.eval`/`.Function` начального about:blank;
+фикс — изолят начального кадра, FRAME/[BUG-480], не P3)
 **Заведён:** 2026-11-06 (P3, остаток [BUG-1595](BUG-1595-FIXED.md))
 **Область:** js/shell — антибот-фингерпринт (`window.chrome`, `navigator.plugins`/`mimeTypes`),
 `MessageEvent.isTrusted`, `Node.parentElement`, начальный кадр `contentWindow` (UX-ANTIBOT)
+
+## Срез 5 (2026-11-15, P3)
+
+Цель среза — снять полный стек пустого `TypeError` и назвать отсутствующий API. Сделано.
+
+**Стек** (живая страница, realm кадра `…/turnstile/f/av0/…/new/normal`):
+
+```
+Uncaught TypeError
+    at hq (<anonymous>:1:301547)
+    at D (<anonymous>:1:20512)
+    at Ag (<anonymous>:1:364706)
+    at Ijb (<anonymous>:1:236690)
+    at b8 (<anonymous>:1:336894)
+    at E (<anonymous>:1:21378)
+    at hL (<anonymous>:1:279196)
+    at <anonymous>:1:163638
+    at xn (<anonymous>:1:600444)
+    at EJ (<anonymous>:1:44659)
+```
+
+Оффсеты живут в inline-`<script>` кадра (бандл меняется от запроса к запросу — имена и
+константы другие, поэтому сверять надо с тем же прогоном; временный дамп текста скрипта
+из `_lumen_report_exception` дал точную копию). Дизассемблирование по сохранённой копии:
+`hq`/`JJ(x)` — это **собственная проверка бандла** `if (typeof x !== 'function') throw new
+TypeError` (строка декодера `m9aTwInKks0=` = `function`); бросает не Lumen. Пустое
+сообщение — потому что `throw new TypeError` без аргумента.
+
+**Что за значение.** В момент броска в документе кадра ровно один `<iframe>` (без `src`;
+`document.getElementsByTagName('iframe').length === 1`), его `contentWindow` — фасад
+начального about:blank из среза 3, и `contentWindow.eval`/`.Function` там `undefined`.
+В Chrome тот же замер: `eval`/`Function` — функции (у начального about:blank есть
+настоящий realm). То есть проверка бандла падает на `contentWindow.eval` вставленного
+скриптом кадра — это ровно задокументированное отклонение среза 3, а не новый
+отсутствующий API.
+
+**Эксперимент (временный, откачен):** если фасаду начального кадра отдать `eval`/
+`Function` как функции (даже всегда бросающие), пустой `TypeError` исчезает и
+`300010`/`failure_retry` не наступают; челлендж уходит в следующий шаг — watchdog
+`300030` + `Ignored message from unexpected source for event: init/requestExtraParams/
+overrunBegin`. Это повторяет замер среза 3: функции хватает, чтобы пройти ассерт, но
+без настоящего realm'а дальше не идёт. Значит затыкать `eval` заглушкой нельзя —
+нужен изолят начального кадра.
+
+**Попутно измерено (не причина):** в realm кадра TT-политика создаётся
+(`trustedTypes.defaultPolicy.name === "default"`), но `eval('1+1')` и
+`new Function('return this')` дают `EvalError`: бандловый `createScript` возвращает
+вход только для `'this'`/`'return this'`, а наш codegen-хук отдаёт ему склеенный
+исходник `Function`-конструктора, и правило «exact source» его режет. Хук
+`_lumen_tt_get_compliant_script_for_codegen` в этой ситуации бросает `TypeError`
+и превращает его в `EvalError`; на пустой `TypeError` кадра это не влияет (там
+другой путь). Отдельно: Chrome в этом кадре `eval` строкой почему-то разрешает
+при том же заголовочном `require-trusted-types-for` (замер: `eval('1+1') === 2`,
+`innerHTML='<b>'` не бросает) — это надо разбирать в TRUSTEDTYPES, не здесь.
+
+**Остаток — FRAME:** начальный about:blank должен быть документом движка со своим
+V8-контекстом, который подхватывает загрузка shell'а, не заменяя (это и есть
+[BUG-480](BUG-480-OPEN.md)). После него `contentWindow.eval`/`.Function` станут
+функциями сами, и этот ассерт пройдёт. В P3 не чинится.
+
+Стенды среза: `.tmp/ts_capture.py` (живой прогон + GET бандла кадра),
+`.tmp/ts_dumpframe.py` (попытка снять HTML кадра через BiDi — getTree не отдаёт
+под-контексты), `.tmp/snap.js` + `.tmp/ts_chrome_snap.py` (снимок окружения кадра
+Lumen/Chrome по именам и `typeof`), `.tmp/mkgetters.py` (геттеры-логгеры на
+Chrome-only имена — кадр их не читает), `.tmp/ts_live.py` (токен).
 
 ## Срез 4 (2026-11-15, P3)
 
