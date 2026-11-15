@@ -1800,6 +1800,7 @@ mod bug1159_range_spec;
 mod compat_hang;
 mod bug935_child_edits;
 mod bug1198_opaque_frame;
+mod bug1812_frame_port;
 mod bug1231_frame_referrer;
 mod bug1811_preload;
 mod dom_suspend_focus;

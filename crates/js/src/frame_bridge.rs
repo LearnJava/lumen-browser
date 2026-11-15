@@ -545,6 +545,9 @@ pub(crate) struct PendingFrameMessage {
     pub(crate) source: SourceKind,
     /// Данные сообщения, уже сериализованные отправителем (`JSON.stringify`).
     pub(crate) data_json: String,
+    /// BUG-1812: id портов из списка передачи третьего аргумента
+    /// `postMessage` — получатель реифицирует их в `event.ports`.
+    pub(crate) ports: Vec<u32>,
 }
 
 /// Глобальный ящик «кто-то вызвал `facade.postMessage(...)`».
@@ -562,6 +565,44 @@ pub(crate) fn frame_outbox() -> &'static Mutex<Vec<PendingFrameMessage>> {
 /// Верхняя граница неотправленных сообщений во всём процессе.
 #[cfg(feature = "v8-backend")]
 const FRAME_OUTBOX_CAP: usize = 256;
+
+// ── Перенос MessagePort через кадровый мост (BUG-1812) ───────────────────────
+
+/// Одно сообщение, отправленное в перенесённый `MessagePort`, до разбора
+/// получателем.
+#[cfg(feature = "v8-backend")]
+pub(crate) struct PendingPortMessage {
+    /// Ключ документа-адресата (`Arc::as_ptr` его `Document`, тот же ключ, что
+    /// у [`PendingFrameMessage::target_doc`]).
+    pub(crate) target_key: usize,
+    /// Id порта из `_lumen_port_prepare_transfer`.
+    pub(crate) port_id: u32,
+    /// Данные, уже сериализованные отправителем (`JSON.stringify`).
+    pub(crate) data_json: String,
+}
+
+/// Маршрут перенесённого порта: `(ключ изолята, id порта)` → ключ изолята
+/// на другом конце канала.
+///
+/// Обе стороны пары пишутся в момент переноса, поэтому отправитель любого
+/// последующего сообщения находит адресата по СВОЕМУ ключу. Ключ изолята в
+/// ключе маршрута обязателен: `_lumen_next_port_id` — счётчик рантайма, и два
+/// независимых канала разных документов вправе носить один и тот же id.
+///
+/// shortcut: маршруты не удаляются при смерти документа — их число ограничено
+/// числом переносов портов за сессию; чистить, если это станет заметно.
+#[cfg(feature = "v8-backend")]
+fn port_routes() -> &'static Mutex<std::collections::HashMap<(usize, u32), usize>> {
+    static ROUTES: OnceLock<Mutex<std::collections::HashMap<(usize, u32), usize>>> = OnceLock::new();
+    ROUTES.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Ящик сообщений перенесённых портов. Ёмкость та же, что у [`frame_outbox`].
+#[cfg(feature = "v8-backend")]
+fn port_outbox() -> &'static Mutex<Vec<PendingPortMessage>> {
+    static OUTBOX: OnceLock<Mutex<Vec<PendingPortMessage>>> = OnceLock::new();
+    OUTBOX.get_or_init(|| Mutex::new(Vec::new()))
+}
 
 // ── Срезы 6–7: ящик синтетических событий через границу изолятов ─────────────
 
@@ -713,7 +754,15 @@ pub(crate) fn frame_transport_has_for(key: Option<usize>) -> bool {
     let evs = frame_event_outbox()
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    evs.iter().any(|e| Arc::as_ptr(&e.target_doc) as usize == key)
+    if evs.iter().any(|e| Arc::as_ptr(&e.target_doc) as usize == key) {
+        return true;
+    }
+    drop(evs);
+    port_outbox()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .any(|p| p.target_key == key)
 }
 
 /// BUG-1198: выдать идентичность нового непрозрачного происхождения —
@@ -1318,53 +1367,75 @@ pub(crate) fn install_frame_bridge_v8(
         let reg = Arc::clone(&registry);
         rt.register_native(
             "_lumen_f_post_message",
-            into_v8_fn3(move |bid: u32, data_json: String, target_origin: String| -> bool {
-                let reg = reg.lock().unwrap_or_else(|e| e.into_inner());
-                let Some(binding) = resolve_slot(&reg, bid) else {
-                    return false;
-                };
-                // HTML LS §9.2.9 шаг 3: '*' доставляет всегда, '/' — только
-                // same-origin (у нас это уже вычисленный shell'ом accessible),
-                // явная строка — совпадение с origin адресата.
-                // BUG-1198: непрозрачное происхождение адресата не равно
-                // никакому сериализованному — доставляет только '*'.
-                let matches = match target_origin.as_str() {
-                    "*" => true,
-                    _ if binding.opaque_id.is_some() => false,
-                    "/" | "" => binding.accessible,
-                    // targetOrigin — URL, сравниваются происхождения:
-                    // явный порт по умолчанию (`https://x:443`) — то же
-                    // происхождение, что `https://x` (HTML LS §9.2.9 шаг 3).
-                    o => crate::file_input::origin_for_url(o).eq_ignore_ascii_case(
-                        &binding_origin(&binding.url, &reg.self_origin),
-                    ),
-                };
-                if !matches {
-                    return false;
-                }
-                // Кто отправитель для получателя: постинг в фасад потомка —
-                // сам отправитель его родитель; постинг в фасад предка
-                // (PARENT_BID/TOP_BID) — отправитель потомок со своим ключом.
-                // bid фасада отправителя разрешит получатель у себя (take):
-                // в момент постановки реестр получателя недоступен.
-                let source = match bid {
-                    PARENT_BID | TOP_BID => SourceKind::ChildDoc(reg.self_key.unwrap_or(0)),
-                    b if b >= SIBLING_BASE => SourceKind::Sibling(reg.self_key.unwrap_or(0)),
-                    _ => SourceKind::Parent,
-                };
-                let target_doc = Arc::clone(&binding.doc);
-                let outbox = frame_outbox();
-                let mut outbox = outbox.lock().unwrap_or_else(|e| e.into_inner());
-                if outbox.len() >= FRAME_OUTBOX_CAP {
-                    return false;
-                }
-                outbox.push(PendingFrameMessage {
-                    target_doc,
-                    source,
-                    data_json,
-                });
-                true
-            }),
+            into_v8_fn4(
+                move |bid: u32,
+                      data_json: String,
+                      target_origin: String,
+                      ports_json: String|
+                      -> bool {
+                    let reg = reg.lock().unwrap_or_else(|e| e.into_inner());
+                    let Some(binding) = resolve_slot(&reg, bid) else {
+                        return false;
+                    };
+                    // HTML LS §9.2.9 шаг 3: '*' доставляет всегда, '/' — только
+                    // same-origin (у нас это уже вычисленный shell'ом accessible),
+                    // явная строка — совпадение с origin адресата.
+                    // BUG-1198: непрозрачное происхождение адресата не равно
+                    // никакому сериализованному — доставляет только '*'.
+                    let matches = match target_origin.as_str() {
+                        "*" => true,
+                        _ if binding.opaque_id.is_some() => false,
+                        "/" | "" => binding.accessible,
+                        // targetOrigin — URL, сравниваются происхождения:
+                        // явный порт по умолчанию (`https://x:443`) — то же
+                        // происхождение, что `https://x` (HTML LS §9.2.9 шаг 3).
+                        o => crate::file_input::origin_for_url(o).eq_ignore_ascii_case(
+                            &binding_origin(&binding.url, &reg.self_origin),
+                        ),
+                    };
+                    if !matches {
+                        return false;
+                    }
+                    // BUG-1812: список передачи уже разобран шимом
+                    // (`_lumen_port_prepare_transfer`); здесь только развоз
+                    // id по ящику и маршрут для последующих сообщений порта.
+                    let ports: Vec<u32> = serde_json::from_str(&ports_json).unwrap_or_default();
+                    // Кто отправитель для получателя: постинг в фасад потомка —
+                    // сам отправитель его родитель; постинг в фасад предка
+                    // (PARENT_BID/TOP_BID) — отправитель потомок со своим ключом.
+                    // bid фасада отправителя разрешит получатель у себя (take):
+                    // в момент постановки реестр получателя недоступен.
+                    let source = match bid {
+                        PARENT_BID | TOP_BID => SourceKind::ChildDoc(reg.self_key.unwrap_or(0)),
+                        b if b >= SIBLING_BASE => SourceKind::Sibling(reg.self_key.unwrap_or(0)),
+                        _ => SourceKind::Parent,
+                    };
+                    let target_key = Arc::as_ptr(&binding.doc) as usize;
+                    let target_doc = Arc::clone(&binding.doc);
+                    let source_key = reg.self_key.unwrap_or(0);
+                    drop(reg);
+                    let outbox = frame_outbox();
+                    let mut outbox = outbox.lock().unwrap_or_else(|e| e.into_inner());
+                    if outbox.len() >= FRAME_OUTBOX_CAP {
+                        return false;
+                    }
+                    outbox.push(PendingFrameMessage {
+                        target_doc,
+                        source,
+                        data_json,
+                        ports: ports.clone(),
+                    });
+                    drop(outbox);
+                    if !ports.is_empty() {
+                        let mut routes = port_routes().lock().unwrap_or_else(|e| e.into_inner());
+                        for id in ports {
+                            routes.insert((source_key, id), target_key);
+                            routes.insert((target_key, id), source_key);
+                        }
+                    }
+                    true
+                },
+            ),
         )?;
     }
     {
@@ -1456,10 +1527,74 @@ pub(crate) fn install_frame_bridge_v8(
                             "opaque": opaque,
                             "data": serde_json::from_str::<serde_json::Value>(&m.data_json)
                                 .unwrap_or(serde_json::Value::Null),
+                            "ports": m.ports,
                         })
                     })
                     .collect();
                 serde_json::to_string(&items).unwrap_or_else(|_| String::new())
+            }),
+        )?;
+    }
+
+    // ── BUG-1812: сообщения перенесённых MessagePort ─────────────────────────
+    // Постинг на порт, у которого «другой конец» в чужом изоляте (перенос через
+    // `facade.postMessage(…, transfer)`), кладётся в отдельный ящик; получатель
+    // разбирает его на своём тике в `_lumen_frame_pump_messages`.
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_port_post_frame",
+            into_v8_fn2(move |port_id: u32, json: String| {
+                let key = reg.lock().unwrap_or_else(|e| e.into_inner()).self_key;
+                let Some(key) = key else {
+                    return;
+                };
+                // Маршрут — (свой изолят, id порта); нет маршрута — канал мёртв
+                // (порт не переносили этим путём), сообщение теряется молча, как
+                // и поспеке у отсоединённого партнёра.
+                let target = port_routes()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(&(key, port_id))
+                    .copied();
+                let Some(target) = target else {
+                    return;
+                };
+                let outbox = port_outbox();
+                let mut outbox = outbox.lock().unwrap_or_else(|e| e.into_inner());
+                if outbox.len() < FRAME_OUTBOX_CAP {
+                    outbox.push(PendingPortMessage { target_key: target, port_id, data_json: json });
+                }
+            }),
+        )?;
+    }
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_frame_take_port_messages",
+            into_v8_fn0(move || -> String {
+                let key = match reg.lock().unwrap_or_else(|e| e.into_inner()).self_key {
+                    Some(k) => k,
+                    None => return String::new(),
+                };
+                let outbox = port_outbox();
+                let mut outbox = outbox.lock().unwrap_or_else(|e| e.into_inner());
+                let mut taken = Vec::new();
+                let mut rest = Vec::new();
+                for msg in outbox.drain(..) {
+                    if msg.target_key == key {
+                        taken.push(msg);
+                    } else {
+                        rest.push(msg);
+                    }
+                }
+                *outbox = rest;
+                if taken.is_empty() {
+                    return String::new();
+                }
+                let items: Vec<(u32, String)> =
+                    taken.into_iter().map(|m| (m.port_id, m.data_json)).collect();
+                crate::build_worker_messages_json(&items)
             }),
         )?;
     }
@@ -2700,20 +2835,34 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     // функции/символы клонировать нельзя — DataCloneError (TypeError там,
     // где DOMException ещё не установлен). Опущенный targetOrigin = '/'
     // (спечный дефолт), т.е. доставка только same-origin.
-    w.postMessage = function(message, targetOrigin) {
+    w.postMessage = function(message, targetOrigin, transfer) {
       if (typeof message === 'function' || typeof message === 'symbol') {
         throw (typeof DOMException === 'function')
           ? new DOMException('object could not be cloned', 'DataCloneError')
           : new TypeError('object could not be cloned');
       }
-      var json = (message === undefined) ? 'null' : JSON.stringify(message);
+      // BUG-1812: третий аргумент — список передачи. Машинерия переноса берется
+      // у page↔worker моста (`_lumen_port_prepare_transfer` в
+      // message_channel_shim.js): она отсоединяет переданный порт, привязывает
+      // его местного партнёра к id и отдаёт id для конверта. `bindFrame` велит
+      // партнёру ходить через `_lumen_port_post_frame`, а не в воркер.
+      var ports = (typeof _lumen_port_prepare_transfer === 'function')
+        ? _lumen_port_prepare_transfer(transfer, null, true)
+        : [];
+      // Порт внутри data заменяется sentinel'ом с его id — получатель
+      // развернёт его в тот же объект, что лежит в `event.ports` (HTML LS
+      // §9.2.9, структурированное клонирование с переносом).
+      var payload = (message === undefined) ? null
+        : ((typeof _lumen_port_walk_serialize === 'function')
+            ? _lumen_port_walk_serialize(message) : message);
+      var json = (payload === undefined) ? 'null' : JSON.stringify(payload);
       if (typeof json !== 'string') {
         throw (typeof DOMException === 'function')
           ? new DOMException('object could not be cloned', 'DataCloneError')
           : new TypeError('object could not be cloned');
       }
       var to = (targetOrigin === undefined || targetOrigin === null) ? '/' : String(targetOrigin);
-      _lumen_f_post_message(bid, json, to);
+      _lumen_f_post_message(bid, json, to, JSON.stringify(ports));
     };
     var proxied = wrapWinFacadeGlobals(w, bid);
     // GAP-ORIGIN: `Origin.from(contentWindow)` — only a same-origin window
@@ -2932,9 +3081,30 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
             if (m.bid !== null && m.bid !== undefined) {
               source = winFacade(m.bid);
             }
-            _lumen_deliver_frame_message(m.data, m.origin, source, m.opaque);
+            // BUG-1812: порты реифицируются ДО разбора data — sentinel внутри
+            // data должен разрешиться в тот же объект, что `ev.ports[k]`.
+            var ports = (m.ports && m.ports.length &&
+                         typeof _lumen_port_reify_list === 'function')
+              ? _lumen_port_reify_list(m.ports, null, true) : [];
+            var data = m.data;
+            if (ports.length && typeof _lumen_port_walk_deserialize === 'function') {
+              data = _lumen_port_walk_deserialize(data, null, true);
+            }
+            _lumen_deliver_frame_message(data, m.origin, source, m.opaque, ports);
           }
         }
+      }
+    }
+    // BUG-1812: сообщения, отправленные в перенесённый MessagePort и ждущие
+    // ЭТОТ изолят. Разбор — тем же `_lumen_deliver_port_messages`, что у
+    // page↔worker моста (`__lumen_C._lumen_deliver_port_messages`).
+    if (typeof _lumen_frame_take_port_messages === 'function' &&
+        typeof _lumen_deliver_port_messages === 'function') {
+      var rawPort = _lumen_frame_take_port_messages();
+      if (rawPort) {
+        var portMsgs;
+        try { portMsgs = JSON.parse(rawPort); } catch (e) { portMsgs = null; }
+        if (portMsgs && portMsgs.length) _lumen_deliver_port_messages(portMsgs);
       }
     }
     // ── Срезы 6–7: синтетические события из чужих фасадов ───────────────────
