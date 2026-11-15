@@ -2892,6 +2892,26 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     return m;
   })();
 
+  // BUG-1815: у кадра СО СВОИМ изолятом Chrome отдаёт `contentWindow.JSON`
+  // объектом того realm — методы живы. Через границу изолятов значение
+  // приходит плоской копией без методов (`JSON.parse` === undefined), поэтому
+  // встроенный объект отдаём из realm читателя (прецедент BUG-1813) — но
+  // только пока пир видит под этим именем НЕИЗМЕНЁННЫЙ встроенный: снимок
+  // значений берётся здесь, при установке шима, до скриптов страницы, и
+  // `peer_global_get` сверяет с ним прочитанное значение по идентичности.
+  // Собственное значение страницы под тем же именем в снимок не попадёт и
+  // уйдёт данными, как раньше. Список — встроенные объекты ECMAScript, которые
+  // не являются функциями (`Object`/`Array` и прочие конструкторы и так
+  // вызываемы через мост).
+  var pristineIntrinsics = (function() {
+    var m = Object.create(null);
+    ['JSON', 'Math', 'Reflect', 'Atomics', 'Intl'].forEach(function(n) {
+      if (n in globalThis) m[n] = globalThis[n];
+    });
+    return m;
+  })();
+  __lumen_C._lumen_pristine_intrinsics = pristineIntrinsics;
+
   // BUG-979: `w` above only ever answers the fixed IDL-property set it was
   // built with — same-origin script of the framed document can declare ANY
   // other global (a function, a plain variable), and until this wrapper
@@ -2912,6 +2932,12 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
           return Reflect.get(target, prop, receiver);
         }
         var r = _lumen_f_global_get(bid, String(prop));
+        // BUG-1815: встроенный объект кадра со своим изолятом — из realm
+        // читателя (в пире он неизменён, иначе тег не придёт).
+        if (r.kind === 'builtin') {
+          var bname = String(prop);
+          return pristineGlobals[bname] === 1 ? globalThis[bname] : undefined;
+        }
         if (r.kind === 'value') { return r.value; }
         if (r.kind === 'function') {
           return function() {

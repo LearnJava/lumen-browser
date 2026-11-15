@@ -76,11 +76,11 @@
  "generated": "2026-11-15",
  "counts": {
   "open": 322,
-  "fixed": 1423,
+  "fixed": 1425,
   "inprogress": 0,
   "wontfix": 4
  },
- "total_bugs": 1749,
+ "total_bugs": 1751,
  "phases": [
   {
    "id": "P0",
@@ -12003,10 +12003,10 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1814": {
+  "BUG-1816": {
    "status": "open",
-   "title": "Данные `postMessage`/`MessagePort` доезжают до адресата СЕРИАЛИЗОВАННЫМИ строкой вместо значения отправителя: `JSON.parse` в бандле reCAPTCHA (`recaptcha__en.js…",
-   "component": "js (`frame_bridge.rs` `w.postMessage`/`_lumen_f_post_message`/`_lumen_deliver_frame_message`, `shim/message_channel_shim.js` `_lumen_port_walk_serialize`/`_lumen_deliver_port_messages`, воркерный `Worker._deliver`)",
+   "title": "reCAPTCHA v3: JS-путь цел — `execute` резолвится за ~9 с без ошибок в stderr, но токен короткий (`HF…`, ~630 символов) и Google его отвергает: `verify.php` → `{…",
+   "component": "js/network (ветка сигналов бандла reCAPTCHA: `api2/webworker.js`, `Worker` в окне, `api.js ↔ anchor`)",
    "date": null,
    "debtor": false
   },
@@ -22006,10 +22006,24 @@
    "date": "2026-11-15",
    "debtor": false
   },
+  "BUG-1814": {
+   "status": "fixed",
+   "title": "`cargo test -p lumen-js --features v8-backend --lib -- v8_webworker::worker_message` 4/4, из них новые `worker_message_json_text_string_stays_a_string` и `worke…",
+   "component": "js (`crates/js/src/worker_shims.rs`, `crates/js/src/shared_worker.rs`, `dom/tests/v8_webworker.rs`)",
+   "date": "2026-11-15",
+   "debtor": false
+  },
   "BUG-1813": {
    "status": "fixed",
    "title": "`cargo test -p lumen-js --features v8-backend --lib -- initial_about_blank_frame_answers_builtin_globals` 1/1 и `frame_bridge_globals::tests::dead_peer_reads_as…",
    "component": "js (`crates/js/src/frame_bridge.rs`, `frame_bridge_globals.rs`, `v8_runtime/tests/mod.rs`)",
+   "date": "2026-11-15",
+   "debtor": false
+  },
+  "BUG-1815": {
+   "status": "fixed",
+   "title": "`cargo test -p lumen-js --lib --features v8-backend frame_bridge` 75/75, из них новые `a_frame_with_its_own_isolate_hands_builtin_objects_with_methods` (`.kind…",
+   "component": "js (`crates/js/src/frame_bridge.rs`, `v8_runtime/eval.rs`)",
    "date": "2026-11-15",
    "debtor": false
   }
@@ -22748,6 +22762,9 @@
   "js (`crates/js/src/frame_bridge.rs`, `shim/message_channel_shim.js`, `shim/web_api_shim_mid_b4.js`, `v8_runtime/tests/bug1812_frame_port.rs`)": [
    "BUG-1812"
   ],
+  "js (`crates/js/src/frame_bridge.rs`, `v8_runtime/eval.rs`)": [
+   "BUG-1815"
+  ],
   "js (`crates/js/src/generic_sensor.rs` — `GENERIC_SENSOR_SHIM`, конструктор `SensorErrorEvent`)": [
    "BUG-761"
   ],
@@ -23320,6 +23337,9 @@
   "js (`crates/js/src/worker.rs`, `shared_worker.rs` — глобал `caches`)": [
    "BUG-1746"
   ],
+  "js (`crates/js/src/worker_shims.rs`, `crates/js/src/shared_worker.rs`, `dom/tests/v8_webworker.rs`)": [
+   "BUG-1814"
+  ],
   "js (`crates/js/src/xhr.rs` `deliver`: последнее `progress` при `readyState` 3 до `_setReadyState(4)`; было: после)": [
    "BUG-1141"
   ],
@@ -23346,9 +23366,6 @@
   ],
   "js (`fetch_body_shim.js` — `Request.redirect`), core (`lumen_core::ext::JsFetchRequest`), network (`crates/network/src/js_providers.rs`, `cors.rs`)": [
    "BUG-1758"
-  ],
-  "js (`frame_bridge.rs` `w.postMessage`/`_lumen_f_post_message`/`_lumen_deliver_frame_message`, `shim/message_channel_shim.js` `_lumen_port_walk_serialize`/`_lumen_deliver_port_messages`, воркерный `Worker._deliver`)": [
-   "BUG-1814"
   ],
   "js (`grep -rn \"valueAsNumber\\": [
    "BUG-893"
@@ -23589,6 +23606,9 @@
   ],
   "js/network (`crates/js/src/v8_runtime/install/net.rs` — `_lumen_send_beacon`)": [
    "BUG-1770"
+  ],
+  "js/network (ветка сигналов бандла reCAPTCHA: `api2/webworker.js`, `Worker` в окне, `api.js ↔ anchor`)": [
+   "BUG-1816"
   ],
   "js/network граница (`crates/network/src/lib.rs::HttpClient::fetch_subresource_inner`; `crates/shell/src/page_load.rs`/`frames.rs`)": [
    "BUG-520"

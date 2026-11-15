@@ -1,8 +1,8 @@
 # BUG-1647 — reCAPTCHA v3: `grecaptcha.execute` не возвращает токен — «reCAPTCHA Timeout» и `TypeError … (reading 'length')` в `filter`
 
-**Статус:** OPEN (срез 5 — транспорт `postMessage`/порта сохраняет тип значения
-([BUG-1814](BUG-1814-FIXED.md)), остаток — встроенные объекты кадра со своим
-изолятом приходят копией без методов, [BUG-1815](BUG-1815-OPEN.md))
+**Статус:** OPEN (срез 6 — встроенные объекты кадра со своим изолятом отдаются
+из realm читателя ([BUG-1815](BUG-1815-FIXED.md)), остаток — Google отвергает
+выданный токен (`score: null`, `browser-error`, [BUG-1816](BUG-1816-OPEN.md))
 **Заведён:** 2026-10-19 (P2, COMPAT-CORPUS-4-BASE, `scripts/captcha_stand.py --arm lumen`)
 **Область:** js (исполнение `google.com/recaptcha/api2/anchor` в iframe, DOM-вызов внутри `Array.prototype.filter`-подобного хелпера)
 
@@ -163,7 +163,35 @@ base64url-строки (len 156/226/472/3611) и `"[object Object]"` из вор
 `JSON === window.JSON` (BUG-1813), а после загрузки кадра со своим изолятом —
 `JSON.parse`/`Math.max`/`Object.keys` **`undefined`**, `JSON !== window.JSON`:
 фасад отдаёт встроенный объект плоской копией данных, функции теряются. Это
-[BUG-1815](BUG-1815-OPEN.md) — следующий срез начинается с него.
+[BUG-1815](BUG-1815-FIXED.md) — следующий срез начинается с него.
+
+## Срез 6 (2026-11-15, P3) — встроенные объекты чужого realm живы; следующий блокер — Google отвергает токен
+
+**Починено.** [BUG-1815](BUG-1815-FIXED.md): шим бриджа снимает при установке
+значения встроенных объектов ECMAScript (`JSON`, `Math`, `Reflect`, `Atomics`,
+`Intl`) в контейнер, `peer_global_get` сверяет прочитанное значение со снимком
+по идентичности и на неизменённый встроенный отвечает тегом `builtin`, а фасад
+отдаёт одноимённый встроенный объект realm'а читателя (прецедент BUG-1813).
+Собственное значение страницы под тем же именем по-прежнему уходит данными.
+
+**Замеры после фикса** (бинарь ветки, `--maximized`, `LUMEN_NO_ADBLOCK=1`):
+
+- `.tmp/fr1815.py` (`<iframe srcdoc>`, свой изолят): после загрузки кадра
+  `parse:"function" mathMax:"function" same:true` (было `parse:"undefined"`);
+- `.tmp/pl1815.py` на странице стенда: `[unhandled-rejection]`/`TypeError` —
+  **0** (был `G.parse is not a function`), `reCAPTCHA Timeout` ушёл;
+- `.tmp/sc1815.py` (оракул стенда руками: `execute` → verify): токен и ответ
+  уложились в 9 с (срез 1 мерил 30,5 с по `execute-ms=30000`).
+
+**Что мешает дальше.** Токен короткий (`HF…`, ~630 символов; у Chrome
+`0cAFcWeA…`, ~1,5 КБ) и Google его отвергает:
+`{"success":false,"hostname":"","score":null,"action":"",
+"error-codes":["browser-error","hostname-mismatch","action-mismatch",
+"score-threshold-not-met", …]}`. Lumen тянет
+`GET https://www.google.com/recaptcha/api2/webworker.js`, Chrome — нет: бандл
+уходит в урезанную ветку сигналов через воркер. Это
+[BUG-1816](BUG-1816-OPEN.md) — следующий срез начинается с выбора ветки
+сигналов в `api.js`.
 
 ## Симптом
 
