@@ -1384,9 +1384,6 @@ pub(crate) fn parse_and_layout(
     let frame_env = frames::FrameLoadEnv {
         sink: Arc::clone(sink),
         cookie_jar: cookie_jar.clone(),
-        fetch_provider: fetch_provider.clone(),
-        ws_provider: ws_provider.clone(),
-        sse_provider: sse_provider.clone(),
         ls_store: ls_store.clone(),
         ss_store: ss_store.clone(),
         idb_backend: idb_backend.clone(),

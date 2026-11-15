@@ -1,7 +1,7 @@
 # BUG-1812 — `window.postMessage` не переносит `MessagePort`: список передачи молча отбрасывается, `event.ports` всегда пуст
 
 **Статус:** FIXED 2026-11-15 (P3)
-**Заведён:** 2026-11-15 (P3, срез 2 [BUG-1647](BUG-1647-OPEN.md))
+**Заведён:** 2026-11-15 (P3, срез 2 [BUG-1647](BUG-1647-FIXED.md))
 **Область:** js (`crates/js/src/frame_bridge.rs` — JS-шим фасада окна, натив
 `_lumen_f_post_message`, `_lumen_frame_pump_messages`, `_lumen_deliver_frame_message`;
 `crates/js/src/shim/message_channel_shim.js` — машинерия переноса;
@@ -90,5 +90,5 @@ Cloudflare Turnstile и hCaptcha: без `event.ports` канал не уста�
 ## Что ещё осталось (не в этом дефекте)
 
 `targetOrigin`, который не разбирается как URL, должен бросать `SyntaxError` (HTML LS §9.2.9
-шаг 3), а сейчас молча ничего не доставляет. Замечено при срезе 2 [BUG-1647](BUG-1647-OPEN.md)
+шаг 3), а сейчас молча ничего не доставляет. Замечено при срезе 2 [BUG-1647](BUG-1647-FIXED.md)
 вместе с исправленной нормализацией порта по умолчанию в сравнении происхождений.

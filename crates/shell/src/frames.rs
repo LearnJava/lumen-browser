@@ -2113,12 +2113,6 @@ pub(crate) struct FrameLoadEnv {
     pub(crate) sink: Arc<dyn EventSink>,
     /// Банка cookie сессии.
     pub(crate) cookie_jar: Option<DocCookieJar>,
-    /// Провайдер `window.fetch()` под-документа.
-    pub(crate) fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
-    /// Провайдер `new WebSocket()`.
-    pub(crate) ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
-    /// Провайдер `new EventSource()`.
-    pub(crate) sse_provider: Option<Arc<dyn lumen_core::ext::JsSseProvider>>,
     /// `localStorage` origin-а страницы.
     pub(crate) ls_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
     /// `sessionStorage` вкладки (BUG-836).

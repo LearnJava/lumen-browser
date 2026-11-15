@@ -784,7 +784,7 @@ wgpu-дефолт окна (CPU-путь скриншотов не измени�
   akamai-nike (1); первый кадр там 29–74 с против единиц секунд на остальных. Это главная причина «завис» у anubis/zillow/leboncoin.
 - `anubis-gnome-gitlab`, `ddosguard-site`, `cf-managed-challenge` — «завис» без PING-разрывов (gitlab: `rs=complete`, текст 0 симв.;
   ddosguard: `rs=interactive`) — причины не разобраны, отдельные срезы.
-**Заведённые баги:** [BUG-1646](../../bugs/BUG-1646-WONTFIX.md) (H2 PING), [BUG-1647](../../bugs/BUG-1647-OPEN.md) (reCAPTCHA v3).
+**Заведённые баги:** [BUG-1646](../../bugs/BUG-1646-WONTFIX.md) (H2 PING), [BUG-1647](../../bugs/BUG-1647-FIXED.md) (reCAPTCHA v3).
 Ночной прогон с `--baseline` и блокировкой релиза — на машине владельца (COMPAT-BIZ): `python scripts/captcha_stand.py --arm lumen
 --route home-direct --baseline docs/perf/runs/2026-10-19-captcha-lumen.json`.
 

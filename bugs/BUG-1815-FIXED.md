@@ -1,7 +1,7 @@
 # BUG-1815 — встроенные объекты кадра со своим изолятом приходят копией без методов: `G.parse is not a function` в бандле reCAPTCHA
 
-**Статус:** FIXED (2026-11-15, P3, срез 6 [BUG-1647](BUG-1647-OPEN.md))
-**Заведён:** 2026-11-15 (P3, срез 5 [BUG-1647](BUG-1647-OPEN.md), после
+**Статус:** FIXED (2026-11-15, P3, срез 6 [BUG-1647](BUG-1647-FIXED.md))
+**Заведён:** 2026-11-15 (P3, срез 5 [BUG-1647](BUG-1647-FIXED.md), после
 [BUG-1814](BUG-1814-FIXED.md))
 **Область:** js — фасад окна, чтение чужих глобалов через границу изолятов:
 `crates/js/src/frame_bridge.rs` (`wrapWinFacadeGlobals`, снимок встроенных),
@@ -85,4 +85,4 @@ parse=function` (`.tmp/pl1815.py`), `contentWindow` через
   `G.parse`/`Timeout` ушли, `grecaptcha.execute` резолвится быстро (~9 с против
   30,5 с), но Google отвергает токен — `score: null`,
   `error-codes: ["browser-error", …]`. Следующий блокер —
-  [BUG-1816](BUG-1816-OPEN.md).
+  [BUG-1816](BUG-1816-FIXED.md).

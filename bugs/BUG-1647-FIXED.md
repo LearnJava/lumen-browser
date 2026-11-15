@@ -1,8 +1,9 @@
 # BUG-1647 — reCAPTCHA v3: `grecaptcha.execute` не возвращает токен — «reCAPTCHA Timeout» и `TypeError … (reading 'length')` в `filter`
 
-**Статус:** OPEN (срез 6 — встроенные объекты кадра со своим изолятом отдаются
-из realm читателя ([BUG-1815](BUG-1815-FIXED.md)), остаток — Google отвергает
-выданный токен (`score: null`, `browser-error`, [BUG-1816](BUG-1816-OPEN.md))
+**Статус:** FIXED 2026-11-15 (срез 7): `grecaptcha.execute` отдаёт валидный
+токен, стенд `--only recaptcha-v3-score` — «пройдено», балл v3 `0.9`
+(как у Chrome); корень — документ-контекст сети под-документа
+([BUG-1816](BUG-1816-FIXED.md))
 **Заведён:** 2026-10-19 (P2, COMPAT-CORPUS-4-BASE, `scripts/captcha_stand.py --arm lumen`)
 **Область:** js (исполнение `google.com/recaptcha/api2/anchor` в iframe, DOM-вызов внутри `Array.prototype.filter`-подобного хелпера)
 
@@ -190,8 +191,29 @@ base64url-строки (len 156/226/472/3611) и `"[object Object]"` из вор
 "score-threshold-not-met", …]}`. Lumen тянет
 `GET https://www.google.com/recaptcha/api2/webworker.js`, Chrome — нет: бандл
 уходит в урезанную ветку сигналов через воркер. Это
-[BUG-1816](BUG-1816-OPEN.md) — следующий срез начинается с выбора ветки
+[BUG-1816](BUG-1816-FIXED.md) — следующий срез начинается с выбора ветки
 сигналов в `api.js`.
+
+## Срез 7 (2026-11-15, P3) — токен валиден, баг закрыт: сеть кадра брала документ-контекст страницы
+
+**Починено.** [BUG-1816](BUG-1816-FIXED.md): `FrameLoadEnv` отдавал
+под-документу провайдер сети СТРАНИЦЫ, поэтому `Origin`/`Referer`/
+`Sec-Fetch-Site` XHR из reCAPTCHA-anchor'а считались от верхней страницы:
+запрос кадра к СВОЕМУ origin выглядел `cross-site`, и Google отвечал `403`
+на `POST api2/reload` (токена в ответе не было). `frames/spawn.rs` теперь
+строит кадру собственный клиент с его `document_context` и его CSP.
+
+**Заодно снята неверная гипотеза среза 6:** Chrome тоже запрашивает
+`api2/webworker.js` (виден в netlog, но НЕ в page-level `Network.*` CDP) и
+Worker в обоих браузерах шлёт только `recaptcha-setup`.
+
+**Замер после фикса** (`--maximized`, `LUMEN_NO_ADBLOCK=1`):
+
+- `sc1815.py` → `{"success":true,"score":0.9,"action":"examples/v3scores"}`;
+- `captcha_stand.py --arm lumen --only recaptcha-v3-score` → `пройдено`,
+  балл v3 `0.9` (Chrome на той же странице — 0.9);
+- `reload` — `200 application/json` вместо `403`, токен `0cAFcWeA…`;
+- полный стенд: `recaptcha` `4/4`, прочие вендоры без регрессий.
 
 ## Симптом
 

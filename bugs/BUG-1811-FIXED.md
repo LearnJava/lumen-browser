@@ -1,7 +1,7 @@
 # BUG-1811 — `script.addPreloadScript` принимается, но не исполняется
 
 **Статус:** FIXED 2026-11-15 (P3)
-**Заведён:** 2026-11-15 (P3, попутно срез 1 [BUG-1647](BUG-1647-OPEN.md))
+**Заведён:** 2026-11-15 (P3, попутно срез 1 [BUG-1647](BUG-1647-FIXED.md))
 **Область:** driver (`crates/bidi-server/src/protocol.rs::script_add_preload`, `crates/driver/src/types.rs`, `crates/shell/src/app/automation_cmds.rs`, `crates/js/src/v8_runtime/overrides.rs`, `crates/js/src/v8_runtime.rs::install_dom`)
 
 ## Симптом
@@ -60,6 +60,6 @@ BUG-295) preload-скриптов не имел.
 
 ## Связи
 
-- Дорогу к этому багу проложил срез 1 [BUG-1647](BUG-1647-OPEN.md): без preload-логгера
+- Дорогу к этому багу проложил срез 1 [BUG-1647](BUG-1647-FIXED.md): без preload-логгера
   handshake `api.js ↔ anchor` не снять. Следующий срез BUG-1647 начинается с логгера, который
   теперь работает.
