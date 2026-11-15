@@ -14,6 +14,7 @@ pub mod interactivity;
 pub mod grid_cssom;
 pub mod grid_lanes;
 pub mod length;
+pub mod mask_cssom;
 pub mod misc;
 pub mod misc_cssom;
 pub mod multicol_cssom;
