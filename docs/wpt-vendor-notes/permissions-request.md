@@ -6,4 +6,9 @@
 
 ## Перепрогон 2026-09-25 (BUG-650 закрыт)
 
-`Permissions.prototype.request()` установлен (`crates/js/src/permissions.rs`). `run_report.py --all --root permissions-request --recursive`: **2/2 harness OK, 11/14 сабтестов**; `idlharness.any.html` зелёный целиком. Три оставшихся FAIL — `idlharness.any.worker.html`: в воркерах нет `navigator.permissions` ([BUG-1174](../../bugs/BUG-1174-OPEN.md)). Эталон `.ini` перегенерирован, `--check` — 0 регрессий.
+`Permissions.prototype.request()` установлен (`crates/js/src/permissions.rs`). `run_report.py --all --root permissions-request --recursive`: **2/2 harness OK, 11/14 сабтестов**; `idlharness.any.html` зелёный целиком. Три оставшихся FAIL — `idlharness.any.worker.html`: в воркерах нет `navigator.permissions` ([BUG-1174](../../bugs/BUG-1174-FIXED.md)). Эталон `.ini` перегенерирован, `--check` — 0 регрессий.
+
+## Перепрогон 2026-11-15 (BUG-1174 закрыт)
+
+`install_worker_scope_globals_v8` ставит `install_permissions_api_v8` во всех трёх видах воркеров, `permissions` — readonly-аксессор на `WorkerNavigator.prototype`. `run_report.py --all --root permissions-request --recursive`: **2/2 harness OK, 14/14 сабтестов**, `idlharness.any.worker.html` зелёный целиком; `.ini` для категории удалён (ожидаемых отклонений нет), `--check` — 0 регрессий.
+

@@ -550,6 +550,11 @@ pub(crate) fn install_worker_scope_globals_v8(
         rt.register_native(name, native)?;
     }
     rt.eval(crate::dom::CRYPTO_SHIM)?;
+    // BUG-1174: Permissions API is `[Exposed=(Window,Worker)]`. The shim needs
+    // `EventTarget`/`Event` and the `navigator` singleton, both installed by
+    // `install_worker_exposed_v8` above; it hangs `permissions` on
+    // `WorkerNavigator.prototype` itself (there is no finalize pass here).
+    crate::permissions::install_permissions_api_v8(rt)?;
     Ok(())
 }
 
@@ -2998,6 +3003,45 @@ mod tests_v8 {
             )
             .unwrap(),
             lumen_core::JsValue::Bool(true)
+        );
+    }
+
+    /// BUG-1174: the Permissions API is `[Exposed=(Window,Worker)]`, but the
+    /// worker scope used to get only the `NavigatorID` half of `navigator`.
+    #[test]
+    fn v8_worker_scope_installs_the_permissions_api() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_worker_globals_v8(
+            &rt, 0, Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())),
+            make_store(), None, "https://example.test/w.js", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)),
+            None,
+        ).unwrap();
+
+        for expr in [
+            "navigator.permissions instanceof Permissions",
+            "Object.prototype.toString.call(navigator.permissions) === '[object Permissions]'",
+            "typeof Permissions.prototype.query === 'function'",
+            // WebIDL shape: a readonly accessor on the interface prototype, not
+            // an own property of the singleton (there is no finalize pass in a
+            // worker, so the shim installs it this way directly).
+            "!Object.prototype.hasOwnProperty.call(navigator, 'permissions')",
+            "Object.getOwnPropertyDescriptor(WorkerNavigator.prototype, 'permissions').set === undefined",
+            "Object.getOwnPropertyDescriptor(WorkerNavigator.prototype, 'permissions').get !== undefined",
+            "Object.getOwnPropertyDescriptor(WorkerNavigator.prototype, 'permissions').get.name === 'get permissions'",
+        ] {
+            assert_eq!(rt.eval(expr).unwrap(), lumen_core::JsValue::Bool(true), "{expr}");
+        }
+
+        // A real answer, and `notifications` is `denied` because a worker has
+        // no Notifications API to mirror — not a silent `granted`.
+        rt.eval(
+            "var __states = []; \
+             navigator.permissions.query({name:'camera'}).then(function(s) { __states.push(s.state); }); \
+             navigator.permissions.query({name:'notifications'}).then(function(s) { __states.push(s.state); });",
+        ).unwrap();
+        assert_eq!(
+            rt.eval("__states.join(',')").unwrap(),
+            lumen_core::JsValue::String("denied,denied".to_string())
         );
     }
 
