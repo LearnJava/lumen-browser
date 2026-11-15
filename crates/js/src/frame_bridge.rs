@@ -1332,10 +1332,12 @@ pub(crate) fn install_frame_bridge_v8(
                     "*" => true,
                     _ if binding.opaque_id.is_some() => false,
                     "/" | "" => binding.accessible,
-                    o => o.eq_ignore_ascii_case(&binding_origin(
-                        &binding.url,
-                        &reg.self_origin,
-                    )),
+                    // targetOrigin — URL, сравниваются происхождения:
+                    // явный порт по умолчанию (`https://x:443`) — то же
+                    // происхождение, что `https://x` (HTML LS §9.2.9 шаг 3).
+                    o => crate::file_input::origin_for_url(o).eq_ignore_ascii_case(
+                        &binding_origin(&binding.url, &reg.self_origin),
+                    ),
                 };
                 if !matches {
                     return false;
