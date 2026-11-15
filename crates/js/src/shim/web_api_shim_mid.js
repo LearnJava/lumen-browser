@@ -2776,6 +2776,14 @@ var _LUMEN_BACKGROUND_PROPERTIES = {
     'border-image-outset': 1, 'border-image-repeat': 1,
 };
 
+// CSS Masking L1 longhands validated by the native `_lumen_css_canonical_mask`
+// (engine `style::values::mask_cssom`); the layer longhands share the `background-*`
+// grammar, `mask-origin`/`mask-clip`/`mask-composite`/`mask-mode` are keyword lists (BUG-1408).
+var _LUMEN_MASK_PROPERTIES = {
+    'mask-image': 1, 'mask-size': 1, 'mask-repeat': 1, 'mask-position': 1,
+    'mask-origin': 1, 'mask-clip': 1, 'mask-composite': 1, 'mask-mode': 1,
+};
+
 // CSS Text L3/L4 longhands with a length or multi-component grammar: the native
 // `_lumen_css_canonical_text` (engine `style::values::text_cssom`) validates the value and
 // returns its canonical serialization (BUG-1325).
@@ -3145,6 +3153,9 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     // computed-value quirk (`webkit_box_computed_display`, `selector_query.rs`).
     '-webkit-box-orient': ['horizontal', 'vertical'],
     'position':    ['static', 'relative', 'absolute', 'fixed', 'sticky'],
+    // CSS Masking L1 (BUG-1408): `mask-type` and the SVG `clip-rule` are plain keyword enums.
+    'mask-type':   ['luminance', 'alpha'],
+    'clip-rule':   ['nonzero', 'evenodd'],
     'isolation':   ['auto', 'isolate'],
     'mix-blend-mode': [
         'normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten',
@@ -3961,6 +3972,9 @@ function _lumen_canonicalize_longhand(key, strVal) {
     if (_LUMEN_BACKGROUND_PROPERTIES.hasOwnProperty(key)) {
         return _lumen_css_canonical_background(key, strVal);
     }
+    if (_LUMEN_MASK_PROPERTIES.hasOwnProperty(key)) {
+        return _lumen_css_canonical_mask(key, strVal);
+    }
     if (_LUMEN_KEYWORD_PROPERTIES.hasOwnProperty(key)) {
         var kw = _lumen_css_canonical_keyword(strVal, _LUMEN_KEYWORD_PROPERTIES[key]);
         // CSS Overflow L3 legacy value alias: `overlay` parses as `auto`
@@ -4168,6 +4182,21 @@ function _lumen_gap_rule_delete(obj, key) {
     }
     delete obj[key];
 }
+// CSSOM §6.7.4 "parse a CSS value": `;` is not a valid component value, so a value carrying an
+// unquoted/unparenthesized one is invalid and the declaration is dropped
+// (`mask-repeat = 'repeat; round'` must not store `repeat`).
+function _lumen_value_has_semicolon(v) {
+    var quote = '', depth = 0;
+    for (var i = 0; i < v.length; i++) {
+        var c = v[i];
+        if (quote) { if (c === '\\') i++; else if (c === quote) quote = ''; }
+        else if (c === '"' || c === "'") quote = c;
+        else if (c === '(') depth++;
+        else if (c === ')') { if (depth > 0) depth--; }
+        else if (c === ';' && depth === 0) return true;
+    }
+    return false;
+}
 CSSStyleDeclaration.prototype.setProperty = function(prop, val, priority) {
     var nid = this;
     var key = _lumen_camel_to_kebab(String(prop));
@@ -4197,6 +4226,7 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val, priority) {
         return;
     }
     obj = {};  // scratch: the longhands this one declaration expands to
+    if (_lumen_value_has_semicolon(strVal)) return; // invalid component value: declaration dropped
     if (_lumen_pending_substitution_value(strVal) === undefined) {
         var gapPairs = _lumen_gap_rule_expand(key, strVal);
         if (gapPairs === false) return; // invalid gap-decoration value: declaration dropped

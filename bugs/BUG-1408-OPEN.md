@@ -50,3 +50,26 @@ WPT-RUN-14 срез 18: `css-fonts/parsing/*-invalid.html` (25 файлов) и 
 setter-страница из `getComputedStyle`/`style`); `style.objectPosition = "10%"` читается `10%` (канон `10% center`). Затронуто (по сообщениям):
 `css-images/parsing/object-fit-{invalid,valid,computed}.html`, `object-position-{invalid,valid,computed}.html`, `image-rendering-invalid.html` —
 около 40 сабтестов из 546 «images прочее».
+
+## Срез 1 (2026-11-16, P3): CSS Masking
+
+Валидация и канон `element.style` для `mask-*` (`crates/engine/layout/src/style/values/mask_cssom.rs`,
+`canonical_specified_mask`, натив `_lumen_css_canonical_mask`, таблица `_LUMEN_MASK_PROPERTIES`):
+`mask-{image,size,repeat,position}` — та же грамматика, что `background-*` (делегирование
+`canonical_specified_background`), `mask-origin`/`mask-clip` — `<coord-box>`/`no-clip`,
+`mask-composite`, `mask-mode`; `mask-type`/`clip-rule` — одиночные ключевые слова через
+`_LUMEN_KEYWORD_PROPERTIES`. Трёхзначная `<position>` для `mask-position` отвергается
+(`right top 5px` и др. — `mask-position-invalid`), в отличие от `background-position`, где та же
+форма принимается. Попутно: `setProperty` со значением, содержащим `;` вне кавычек/скобок, теперь
+отбрасывает объявление (CSSOM §6.7.4 «parse a CSS value») — раньше `mask-repeat = "repeat; round"`
+усекалось до `repeat` при записи в `style=""`.
+
+Зелёные файлы (`css/css-masking/parsing/`, ожидания `.ini` удалены): `mask-repeat-{invalid,valid}`,
+`mask-size-{invalid,valid}`, `mask-position-{invalid,valid}`, `mask-composite-{invalid,valid}`,
+`mask-type-{invalid,valid}`, `clip-rule-{invalid,valid}` — 12 файлов, 0 неожиданных результатов.
+
+**Остаток среза:** шорткод `mask` (`mask-valid.sub.html`, `mask-invalid.html`) — нужна
+раскладка `<mask-layer>` по лонгхендам и сборка обратно; `clip`/`clip-path`
+(`clip-{invalid,valid,computed}.html`, `clip-path-*.html`) — `parse_clip_path` сводит
+`rect()`/`xywh()` к `inset()` и не является канонизатором указанного значения, нужен свой
+сериализатор; `css-fonts`-половина карточки (шрифтовые свойства) не тронута.

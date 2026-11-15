@@ -901,6 +901,16 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // Grammar + canonical form of the CSS Masking longhands in inline-`style`
+    // (`mask-{image,size,repeat,position*,origin,clip,composite,mode}`; BUG-1408).
+    // `None` — the assignment is dropped.
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_mask",
+        |prop: String, value: String| -> Option<String> {
+            lumen_layout::style::canonical_specified_mask(&prop, &value)
+        }
+    );
+
     // `text-transform` over a text string with the layout's own casing rules, so that
     // `innerText` matches what is painted (BUG-1329). `value` is the computed
     // `text-transform`, `lang` the element's `lang`/`xml:lang` ("" when unset).

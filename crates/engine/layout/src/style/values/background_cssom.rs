@@ -48,7 +48,7 @@ pub fn canonical_specified_background(prop: &str, value: &str) -> Option<String>
 const BOXES: &[&str] = &["border-box", "padding-box", "content-box"];
 
 /// Список через запятую: каждый элемент обязан пройти `item`, пустой элемент недопустим.
-fn list(v: &str, item: impl Fn(&str) -> Option<String>) -> Option<String> {
+pub(super) fn list(v: &str, item: impl Fn(&str) -> Option<String>) -> Option<String> {
     let parts: Vec<String> = crate::style::split_top_level_commas(v)
         .into_iter()
         .map(|p| item(p.trim()))
@@ -56,7 +56,7 @@ fn list(v: &str, item: impl Fn(&str) -> Option<String>) -> Option<String> {
     Some(parts.join(", "))
 }
 
-fn one_of(s: &str, words: &[&str]) -> Option<String> {
+pub(super) fn one_of(s: &str, words: &[&str]) -> Option<String> {
     let l = s.to_ascii_lowercase();
     words.contains(&l.as_str()).then_some(l)
 }
