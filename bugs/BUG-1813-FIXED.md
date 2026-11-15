@@ -1,7 +1,7 @@
 # BUG-1813 — начальный `about:blank`-кадр не отдаёт глобалы: `contentWindow.JSON === undefined`
 
 **Статус:** FIXED 2026-11-15 (P3)
-**Заведён:** 2026-11-15 (P3, срез 3 [BUG-1647](BUG-1647-OPEN.md))
+**Заведён:** 2026-11-15 (P3, срез 3 [BUG-1647](BUG-1647-FIXED.md))
 **Область:** js (`crates/js/src/frame_bridge.rs` — фасад окна для кадра без
 собственного изолята: `winFacade`/`wrapWinFacadeGlobals` →
 `_lumen_f_global_get`; `frame_bridge_globals.rs`; `_lumen_f_initial_frame`)
@@ -27,7 +27,7 @@ detached:              contentWindow === null (верно)
 `undefined`, и порт-канал якоря падал с
 `TypeError: Cannot read properties of undefined (reading 'parse'|'stringify')`
 (`.tmp/pl1812.py`, стек `<anonymous>:113:132` и `:562:337`). Найден при срезе 3
-[BUG-1647](BUG-1647-OPEN.md) после того, как перенос `MessagePort` заработал
+[BUG-1647](BUG-1647-FIXED.md) после того, как перенос `MessagePort` заработал
 ([BUG-1812](BUG-1812-FIXED.md)).
 
 ## Причина

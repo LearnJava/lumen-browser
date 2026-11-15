@@ -421,14 +421,49 @@ pub(crate) fn spawn_frame(
             },
         )
     });
+    // BUG-1816: под-документ получал провайдера сети СТРАНИЦЫ, а он привязан
+    // к её `document_context` — `fetch()`/`XMLHttpRequest` кадра уходили с
+    // `Origin`/`Referer`/`Sec-Fetch-Site` верхнего документа. Для кросс-
+    // ориентирного кадра (reCAPTCHA anchor на google.com внутри чужой
+    // страницы) запрос к СОБСТВЕННОМУ origin выглядел cross-site, и Google
+    // отвечал 403 на `api2/reload`. Свой клиент — по образцу top-level
+    // (`page_pipeline.rs`): тот же документ-контекст и его собственная CSP.
+    let (child_fetch, child_ws, child_sse) = match &child_base.kind {
+        ResourceBaseKind::Url(_) => {
+            let mut client = child_base.http_client_for_subresource_with_policy(
+                Arc::clone(sink),
+                cookie_jar.clone(),
+                crate::resource_base::document_referrer_policy(&child_doc),
+            );
+            if let Some((policies, original_policy)) =
+                crate::csp_enforce::document_csp_policy(&child_doc, child_doc.root())
+            {
+                let self_origin = child_base.origin();
+                client = client
+                    .with_connect_src_policy(policies.clone(), self_origin.clone(), original_policy.clone())
+                    .with_worker_src_policy(policies.clone(), self_origin.clone(), original_policy.clone())
+                    .with_object_src_policy(policies.clone(), self_origin.clone(), original_policy.clone())
+                    .with_media_src_policy(policies.clone(), self_origin.clone(), original_policy.clone())
+                    .with_element_src_policy(policies, self_origin, original_policy);
+            }
+            client = client.with_subresource_cache(Arc::new(crate::prefetch::SharedPrefetchCache));
+            let arc = Arc::new(client);
+            (
+                Some(Arc::clone(&arc) as Arc<dyn lumen_core::ext::JsFetchProvider>),
+                Some(Arc::clone(&arc) as Arc<dyn lumen_core::ext::JsWebSocketProvider>),
+                Some(arc as Arc<dyn lumen_core::ext::JsSseProvider>),
+            )
+        }
+        ResourceBaseKind::File(_) => (None, None, None),
+    };
     let _runtime_span = lumen_core::trace::span("frame-runtime", "js");
     let (child_doc_arc, child_nav, child_js) = run_scripts_with_dom(
         child_doc,
         info.sandbox,
         &child_url,
-        env.fetch_provider.clone(),
-        env.ws_provider.clone(),
-        env.sse_provider.clone(),
+        child_fetch,
+        child_ws,
+        child_sse,
         env.ls_store.clone().filter(|_| !opaque),
         env.ss_store.clone().filter(|_| !opaque),
         env.idb_backend.clone().filter(|_| !opaque),
