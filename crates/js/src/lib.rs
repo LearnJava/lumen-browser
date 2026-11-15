@@ -240,8 +240,10 @@ pub(crate) fn deterministic_patch_script(seed32: u32, monotonic_clock: bool) -> 
 
 /// Build a JSON array of `{ id, json }` objects from the drained worker message list.
 ///
-/// Each element is `{"id":<worker_id>,"json":<raw_json_value>}` so that
-/// `_lumen_deliver_worker_messages` can parse the payload without double-JSON-encoding.
+/// Each element is `{"id":<worker_id>,"json":<raw_json_value>}` — the payload is
+/// embedded as JSON, so on the JS side `m.json` is ALREADY the parsed value and
+/// must not be `JSON.parse`d again (a JSON-text string would become an object,
+/// BUG-1814).
 ///
 /// Only called from `v8_runtime`'s pump methods and `shared_worker`'s V8 test
 /// harness — unused (and unbuilt) without the `v8-backend` feature.
