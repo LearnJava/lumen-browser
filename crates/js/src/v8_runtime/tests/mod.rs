@@ -786,6 +786,52 @@ g.contentWindow === null && g.contentDocument === null
     ));
 }
 
+/// BUG-1813: у кадра без собственного изолята (начальный `about:blank`) глобалов
+/// кадра нет, но ВСТРОЕННЫЕ объекты Chrome отдаёт те же, что у читающего окна
+/// (`contentWindow.JSON === window.JSON`) — так обфусцированный бандл reCAPTCHA
+/// добывает «неиспорченный» `JSON`. Переменные страницы-читателя при этом не
+/// протекают, а `eval` остаётся скрытым (BUG-1790 срез 3).
+#[test]
+fn initial_about_blank_frame_answers_builtin_globals() {
+    let doc = make_doc();
+    let rt = runtime_with_dom(doc, "https://parent.example/index.html");
+    rt.register_frame_document(
+        2,
+        Arc::new(Mutex::new(lumen_dom::Document::new())),
+        "https://other.example/".to_owned(),
+        None,
+        false,
+        false,
+        None,
+    );
+    let out = rt
+        .eval(
+            r#"
+var f = document.createElement('iframe');
+document.body.appendChild(f);
+window.__leak = 1;
+var w = f.contentWindow;
+JSON.stringify({
+  json: w.JSON === window.JSON,
+  math: w.Math === window.Math,
+  object: w.Object === window.Object,
+  parse: typeof w.JSON.parse,
+  page: typeof w.__leak,
+  evalMissing: typeof w.eval === 'undefined',
+  crossOrigin: typeof _lumen_frame_content_window(2).JSON,
+})
+"#,
+        )
+        .unwrap();
+    assert_eq!(
+        out,
+        JsValue::String(
+            r#"{"json":true,"math":true,"object":true,"parse":"function","page":"undefined","evalMissing":true,"crossOrigin":"undefined"}"#
+                .to_owned()
+        )
+    );
+}
+
 /// BUG-480 срез 7: focus()/blur() через фасад документа обновляют
 /// `_lumen_last_focused_nid` ЭТОГО контекста (activeElement меняется сразу
 /// после пумпы), но НЕ ставят фокус-запрос шеллу — очередь рантайма фрейма

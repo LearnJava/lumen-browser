@@ -84,7 +84,7 @@ Cloudflare Turnstile и hCaptcha: без `event.ports` канал не уста�
 `parent-sent`, `parent-port-got:child-through-port`. До фикса `ports` был 0 и порт не
 доезжал. Стенд reCAPTCHA после фикса: порт доходит, но `grecaptcha.execute` по-прежнему
 без балла — следующий блокер
-[BUG-1813](BUG-1813-OPEN.md) (начальный `about:blank`-кадр не отдаёт глобалы:
+[BUG-1813](BUG-1813-FIXED.md) (начальный `about:blank`-кадр не отдаёт глобалы:
 `contentWindow.JSON === undefined`).
 
 ## Что ещё осталось (не в этом дефекте)
