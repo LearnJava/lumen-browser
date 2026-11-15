@@ -524,6 +524,12 @@ function MessageEvent(data, init) {
     this.data = data;
     this.origin = '';
     this.lastEventId = '';
+    // HTML LS §9.3.4 `MessageEventInit`: `ports` defaults to an empty
+    // sequence and `source` to null, so `event.ports[0]`/`event.source === null`
+    // feature checks answer like Chrome's instead of hitting `undefined`
+    // (found while tracing the challenge frame's `message` handler, BUG-1790).
+    this.ports = (init && init.ports !== undefined) ? init.ports : [];
+    this.source = (init && init.source !== undefined) ? init.source : null;
     // HTML LS §9.3.4 MessageEventInit.userActivation -- spec default is null,
     // not silently dropped (BUG-610).
     this.userActivation = (init && init.userActivation !== undefined) ? init.userActivation : null;

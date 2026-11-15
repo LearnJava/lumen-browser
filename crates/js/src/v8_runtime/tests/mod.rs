@@ -707,6 +707,39 @@ fn frame_post_message_self_delivery_through_install_dom() {
 /// BUG-1790 срез 3: у вставленного скриптом `<iframe>` вложенный контекст
 /// появляется СИНХРОННО (HTML LS §7.1: начальный about:blank в тике вставки),
 /// а не после асинхронной загрузки под-документа шеллом.
+/// HTML LS §9.3.4 `MessageEventInit`: `ports` defaults to an empty sequence
+/// and `source` to null. Found while tracing the Cloudflare challenge frame's
+/// `message` handler (BUG-1790): both were absent, so a page reading
+/// `event.ports`/`event.source` got `undefined` where Chrome answers `[]`/null.
+#[test]
+fn message_event_has_spec_defaults_for_ports_and_source() {
+    let doc = make_doc();
+    let rt = runtime_with_dom(doc, "https://parent.example/index.html");
+    let out = rt
+        .eval(
+            r#"
+var a = new MessageEvent('message', {});
+var b = new MessageEvent('message', { ports: [], source: null });
+JSON.stringify({
+  ports: Array.isArray(a.ports) && a.ports.length === 0,
+  source: a.source === null,
+  hasPorts: 'ports' in a,
+  hasSource: 'source' in a,
+  explicit: Array.isArray(b.ports) && b.ports.length === 0 && b.source === null,
+  tag: Object.prototype.toString.call(a),
+})
+"#,
+        )
+        .unwrap();
+    assert_eq!(
+        out,
+        JsValue::String(
+            r#"{"ports":true,"source":true,"hasPorts":true,"hasSource":true,"explicit":true,"tag":"[object MessageEvent]"}"#
+                .to_owned()
+        )
+    );
+}
+
 #[test]
 fn inserted_iframe_gets_initial_about_blank_window_synchronously() {
     let doc = make_doc();
