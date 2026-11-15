@@ -55,14 +55,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-11-13",
+ "generated": "2026-11-15",
  "counts": {
-  "open": 335,
-  "fixed": 1402,
+  "open": 323,
+  "fixed": 1420,
   "inprogress": 0,
   "wontfix": 4
  },
- "total_bugs": 1741,
+ "total_bugs": 1747,
  "phases": [
   {
    "id": "P0",
@@ -1172,6 +1172,13 @@
      "bugs": [
       "BUG-1560"
      ]
+    },
+    {
+     "id": "ENC-SINGLEBYTE",
+     "title": "Однобайтовые кодировки WHATWG и полная таблица меток (разведка WPT-ENC-SCOUT, кластеры E/F). Сейчас `lumen_encoding::Encoding` знает 8 кодировок (UTF-8/16LE/16BE/32LE/32BE, windows-1251, KOI8-R, IBM866; `crates/engine/encoding/src/lib.rs:41`); `from_label` (`lib.rs:105`) без таблицы меток Encoding Standard §4.2. **Сделать:** (1) таблица label→encoding целиком по спецификации (с обрезкой ASCII-пробелов по краям — см. BUG-1695 п. 1); (2) индексы однобайтовых кодировок (ISO-8859-2…16, windows-1250…1258, macintosh, x-mac-cyrillic, KOI8-U, IBM866, windows-874, ISO-8859-8-I) — таблицы генерировать скриптом из `index-*.txt` Encoding Standard в `crates/engine/encoding/src/tables/`, не добавлять `encoding_rs` (ADR-027); (3) декодирование документа и `TextDecoder` по всем этим кодировкам, `fatal` для неотображаемых байт. **Готово, когда:** `encoding/single-byte-decoder`, `textdecoder-fatal-single-byte`, `textdecoder-labels`, `textdecoder-mistakes`, `streams/decode-attributes` дают 100 % (ожидаемый прирост ≈40 баллов корпуса, 0.06 п.п.), юнит-тесты на каждую кодировку (байты 0x80–0xFF → скаляры по индексу).",
+     "status": "done",
+     "size": "M",
+     "note": "ЗАКРЫТ 2026-11-13 (ветка p1-enc-singlebyte, сессия P1): все однобайтовые кодировки WHATWG + полная таблица меток §4.2; таблицы и метки сгенерированы `crates/engine/encoding/gen_tables.py` из `index-*.txt`/`encodings.json` спецификации в `src/tables/` (encoding_rs не добавлялся, ADR-027); fatal-режим `TextDecoder` — наличие U+FFFD на неопределённых позициях. WPT (`--prefixes encoding`, dev-release): `single-byte-decoder.any?TextDecoder` 168/168, `textdecoder-fatal-single-byte` (7001 сабтестов, page+worker) — PASS, `streams/decode-attributes` 28/28 (page/worker/sharedworker; serviceworker — известный предел), `textdecoder-labels` 183/222 и `textdecoder-mistakes` 43/87 — остаток ровно метки/случаи многобайтовых (GBK, gb18030, Big5, EUC-*, Shift_JIS, ISO-2022-JP, x-user-defined) — скоуп ENC-CJK; `single-byte-decoder-iframe.window` ERROR→OK (сабтесты упираются в iframe-предел BUG-480); категория 5.62 % → **6.72 %**. Попутно: `ssl.wrap_socket` (удалён в Python 3.12+) пошимлен в `tools/serve/serve.py` и `tests/wpt/run_smoke.py` — wss-сервер снова стартует на Python 3.14. Детали — `docs/wpt-vendor-notes/encoding.md` §ENC-SINGLEBYTE."
     },
     {
      "id": "MULTICOL-VERTICAL-2",
@@ -9528,9 +9535,9 @@
       {
        "id": "COMPAT-NOPROXY",
        "title": "Правило «этот сайт без прокси»",
-       "status": "queued",
+       "status": "done",
        "size": "M",
-       "note": "Этап 2. Прокси и Tor есть, но глобально на процесс (cli_args.rs:488, :500-515; config.rs:351-364, :402-410), без UI и без исключений по сайту (no_proxy/bypass — 0 вхождений). С апреля 2026 Яндекс, VK, Ozon, WB, банки отказывают при VPN и иностранном IP. Объём: правило «этот сайт без прокси» по eTLD+1 (прямое соединение), пресеты «напрямую» (банки, Госуслуги, маркетплейсы), кнопка в плашке COMPAT-ERR-13, список в настройках; в Tor-профиле правило недоступно; VPN по умолчанию не включать. Приёмка: при --proxy сайт из правила идёт напрямую (IP на эхо-сервере), остальные — через прокси; в --tor кнопки нет. Этап 2. docs/research/site-compat/report.md §9 Р22, §8.4 COMPAT-ERR-13; areas/05 §8 PR-29"
+       "note": "ЗАКРЫТ 2026-11-13 (ветка `p1-compat-noproxy`): список сайтов в `settings.db` (`no_proxy_sites`, по eTLD+1 — `config::connection_site`); реестр `lumen_network::install_no_proxy_patterns`/`no_proxy_for_host` (суффикс-совпадение, как у protection-исключений), решение — по хосту запроса в единой точке `fetch_single`: правило сильнее и HTTP-прокси, и SOCKS5/Tor (пул и h2/h3-маршруты ключуются как прямые, Remote-DNS Tor не утеекает). Шелл пушит список при старте (`window_mode`) и после каждого изменения. UI: строки «Этот сайт без прокси» (переключатель текущего сайта) и «Пресеты „напрямую“» (`config::NO_PROXY_PRESETS` — банки, Госуслуги, маркетплейсы, массовое добавление) во всплывающем окне щитов (`#noProxyRow`/`#noProxyPresetRow`); в Tor-профиле (`config::no_proxy_rule_available`) строки не показываются. Тесты: network — правило отправляет покрытый сайт напрямую, остальные через прокси (макет-прокси отвечает своим телом); storage — add/remove/валидация; chrome — показ строк только при настроенном прокси вне Tor. Нет (остаток): отдельного редактора списка в настройках (управление — через поповер), кнопки в плашке сетевой ошибки — появится с COMPAT-ERR-13. Этап 2. Прокси и Tor есть, но глобально на процесс (cli_args.rs:488, :500-515; config.rs:351-364, :402-410), без UI и без исключений по сайту (no_proxy/bypass — 0 вхождений). С апреля 2026 Яндекс, VK, Ozon, WB, банки отказывают при VPN и иностранном IP. Объём: правило «этот сайт без прокси» по eTLD+1 (прямое соединение), пресеты «напрямую» (банки, Госуслуги, маркетплейсы), кнопка в плашке COMPAT-ERR-13, список в настройках; в Tor-профиле правило недоступно; VPN по умолчанию не включать. Приёмка: при --proxy сайт из правила идёт напрямую (IP на эхо-сервере), остальные — через прокси; в --tor кнопки нет. Этап 2. docs/research/site-compat/report.md §9 Р22, §8.4 COMPAT-ERR-13; areas/05 §8 PR-29"
       },
       {
        "id": "COMPAT-EME",
@@ -9644,7 +9651,7 @@
     {
      "id": "TEXTQ",
      "title": "Качество текста в живом окне",
-     "status": "active",
+     "status": "done",
      "note": "Дорожка «Качество текста в живом окне» (владелец — P1, назначено 2026-10-15). Текст в wgpu-пути заметно мыльнее Chrome и нашего же `--screenshot`: глиф растрируется в одном из 8 bin-ов размера (CSS px) и масштабируется билинейно, DPR не учитывается, квады на дробных координатах, нет гаммы/контраста покрытия, нет шейпинга и синтетического bold/italic. Порядок: TEXTQ-1 (точный размер в device px + привязка к сетке) → TEXTQ-2 (гамма) → TEXTQ-3 (прокрутка) → TEXTQ-4 (шейпинг в отрисовке) → TEXTQ-5 (шейпинг в раскладке) → TEXTQ-6 (синтетический bold/italic). Вне дорожки пока: хинтинг, ClearType.",
      "tasks": [
       {
@@ -9685,9 +9692,9 @@
       {
        "id": "TEXTQ-6",
        "title": "Синтетический жирный и курсив в GPU-пути",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Бриф — [docs/tasks/TEXTQ-6.md](docs/tasks/TEXTQ-6.md). Зависит от TEXTQ-1. Синтетический bold (двойной квад) и italic (наклон вершин) в wgpu, как в CPU-пути."
+       "note": "Бриф — [docs/tasks/TEXTQ-6.md](docs/tasks/TEXTQ-6.md). Зависит от TEXTQ-1. **Готово 2026-11-14 (p1-textq-6):** синтетический bold (второй квад со сдвигом `bold_offset`) и italic (наклон вершин квада на tan(14°)) в wgpu-пути (`push_glyph_quad`), как в CPU; синтез гейтится собственными весом/стилем face-а (`FaceCandidate.weight`/`italic` из `FaceRecord` или OS/2 `usWeightClass` + `post`/`fsSelection`): жирный/курсивный face не дублируется (CSS Fonts L4 §5.5). Граф-тест 173 (GPU_CAPTURE): один regular-файл без дескрипторов — синтез есть; с объявленными weight/style face-ами — синтеза нет."
       }
      ]
     },
@@ -11908,24 +11915,10 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1777": {
-   "status": "open",
-   "title": "Остаток WPT-DROP-1027-S3: `draw-element-image/css-backdrop-filter-and-mask` (reftest — ждёт BUG-1798). Внутри бага закрыты: `abspos-dialog-layout` 10/10 (setPro…",
-   "component": "layout / paint / shell — остаток",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1778": {
    "status": "open",
    "title": "cnn.com в живом окне держит поток движка задачей 25 с: `script.evaluate` отдаёт `engine thread busy: eval not run within 5.0 s (running task from about_to_wait.…",
    "component": "shell / js / layout (задача из `about_to_wait.rs:290` — `tick_timers` и пампы; что именно крутится — не локализовано)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1779": {
-   "status": "open",
-   "title": "SITES-TRIAGE-2: `Object.prototype.toString.call(<HTML-элемент>)` даёт `[object Object]` (SVG и `document` — верно) → tippy.js не узнаёт элементы и зовёт `queryS…",
-   "component": "js (обёртки DOM-узлов, `Symbol.toStringTag`)",
    "date": null,
    "debtor": false
   },
@@ -11936,34 +11929,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1781": {
-   "status": "open",
-   "title": "SITES-TRIAGE-2: `fetch(blob:…)` внутри Worker → `network error: unsupported scheme: blob`, приложение остаётся пустым. Сайты: b2b-center-ru, uchi-ru (вес 4).",
-   "component": "js / network (`worker_shims.rs`, `lib.rs:512`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1782": {
-   "status": "open",
-   "title": "SITES-TRIAGE-2: в `console` нет `assert/time/timeEnd/timeLog/count/group*/table/dir/trace/clear` → `console.assert is not a function`, пустая страница. Сайты: c…",
-   "component": "js (`web_api_shim_mid.js:11646`, `var console`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1783": {
-   "status": "open",
-   "title": "SITES-TRIAGE-2: ea.com — `bad_optional_access was thrown in -fno-exceptions mode`, окно умирает (DEAD, 2 из 2). Сайт: ea-com (вес 2).",
-   "component": "js (V8, `-fno-exceptions`) — не локализовано",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1784": {
-   "status": "open",
-   "title": "`getComputedStyle(#empty).display` отдаёт `\"\"` вместо `\"inline\"` — тест `cases::bug1191_boxless_computed_style` красный на чистом main (проверено stash-эксперим…",
-   "component": "layout / driver (getComputedStyle бокссового элемента)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1788": {
    "status": "open",
    "title": "Флака `bounded_document_lock_waits_out_another_thread`: при coarse-тике цикл просыпается за 15,6–31,2 мс и иногда выходит за бюджет 20 мс. Замер 2026-11-05: тот…",
@@ -11971,45 +11936,10 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1785": {
-   "status": "open",
-   "title": "Конфликт канонов url() в cssText: border-image сериализует `url(\"a.png\")`, тест BUG-1552 ждёт `url(a.png)` — единственное расхождение `css_float_and_border_shor…",
-   "component": "layout/style (`border_image.rs:151,502` vs тест BUG-1552)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1787": {
-   "status": "open",
-   "title": "Flaky-пара в полном параллельном прогоне lumen-js (merge-гейт WASM-V8-NATIVE-S1 `13ce99231`, стык S5×BUG-1786): по одному падению каждое, изолированный и повтор…",
-   "component": "js (`v8_runtime/tests/dom_suspend_focus.rs:975`, `video_bindings.rs:1195`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1790": {
    "status": "open",
    "title": "Cloudflare Turnstile после фикса BUG-1595: challenge iframe грузится и исполняется, postMessage доходит, но токен не выдаётся — error-callback `300030` (watchdo…",
-   "component": "js/shell — антибот-фингерпринт (`window.chrome`, `navigator.plugins`/`mimeTypes`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1791": {
-   "status": "open",
-   "title": "`navigator.getBattery` бросает «Battery Status API is not supported» в конструкторе Яндекс.Плеер SDK → ya.ru exception + a11y 36/63. Реализовать BatteryManager…",
-   "component": "js (`navigator` bindings, Battery Status API)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1792": {
-   "status": "open",
-   "title": "lenta.ru: стабильный `Uncaught TypeError: e.children is not iterable` в обоих прогонах compat-crawl, минимизированный код плеера/виджетов. Гипотеза: HTMLCollect…",
-   "component": "js/dom (`children` итерируемость на части интерфейсов)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1793": {
-   "status": "open",
-   "title": "rust-lang.org a11y 52/57, docs-rs 19/24: ссылки-логотипы/иконки без accessible name — accName не собирается из alt/title вложенных img/svg. Затрагивает и ya.ru…",
-   "component": "a11y (accname)",
+   "component": "js/shell — антибот-фингерпринт (`window.chrome`, `navigator.plugins`/`mimeTypes`), `MessageEvent.isTrusted`, `Node.parentElement`, начальный `contentWindow`",
    "date": null,
    "debtor": false
   },
@@ -12017,13 +11947,6 @@
    "status": "open",
    "title": "github.com HUNG в обоих прогонах compat-crawl: eval >5 с на загрузке, ready_s 47–63 с vs 4 с у Chrome, blank:near-empty. Сначала перепроверить dev-release, пото…",
    "component": "js/shell (производительность V8, `about_to_wait.rs:295`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1795": {
-   "status": "open",
-   "title": "`css_float_and_border_shorthand_round_trip` красный соло на чистой ветке: `border-image: url(\"a.png\")` вместо `url(a.png)` — кавычки добавляются при сериализаци…",
-   "component": "js/cssom (сериализация `border-image` в cssText)",
    "date": null,
    "debtor": false
   },
@@ -12036,15 +11959,8 @@
   },
   "BUG-1798": {
    "status": "open",
-   "title": "`canvas.drawElementImage(element, dx, dy)` — заглушка: только помечает canvas tainted/dirty, не рендерит элемент. Нужна реальная реализация: найти LayoutBox по…",
-   "component": "js (`crates/js/src/canvas2d.rs`, `crates/js/src/shim/web_api_shim_mid.js` — `drawElementImage`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1799": {
-   "status": "open",
-   "title": "workspace-clippy на чистом main красный: `rasterize_cpu` и `rasterize_cpu_with_fonts` (crates/engine/paint/src/cpu_raster.rs:217, :233) — `never used` под -D wa…",
-   "component": "paint (gate): мёртвый код после рефактора border-image (BUG-492, d6006b287f)",
+   "title": "`canvas.drawElementImage(element, dx, dy)` — была заглушка. Срез 1 (2026-11-14): полный конвейер subtree→display list→CPU-растр→blit — `layoutsubtree` (дети кан…",
+   "component": "js (`crates/js/src/canvas2d.rs`, `shim/web_api_shim_mid.js` — `drawElementImage`), layout (`layoutsubtree`), paint (`rasterize_cpu_element_image`), canvas (`draw_image_cropped`)",
    "date": null,
    "debtor": false
   },
@@ -12055,17 +11971,24 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1801": {
+  "BUG-1808": {
    "status": "open",
-   "title": "Нет `window.status`: bare `status` в скрипте ebay.com даёт uncaught `ReferenceError: status is not defined` во всех прогонах. Реализовать строковый геттер/сетте…",
-   "component": "js (`web_api_shim_mid.js` — глобальные окна)",
+   "title": "`createHTMLDocument('t')` отдаёт документ с интерфейсом `Document` (`[object Document]`, не проходит `instanceof HTMLDocument`), у Chrome — `HTMLDocument`. Един…",
+   "component": "js (`DOMImplementation.createHTMLDocument`, `web_api_shim_mid.js:6550` — прототип захардкожен `Document.prototype`)",
    "date": null,
    "debtor": false
   },
-  "BUG-1802": {
+  "BUG-1809": {
    "status": "open",
-   "title": "ebay.com: 65–69 кадров за прогон по 0.5–1.9 с в статье `sbar` при чистых операциях на кэшированных данных; система ≤41% CPU, вытеснение не объясняет. Требует би…",
-   "component": "shell (`redraw_requested.rs:740–810` — статья `sbar` кадра)",
+   "title": "`getComputedStyle().display` boxless-элементов = \"\" (вместо \"inline\"/\"contents\") — два детерминированных красных на чистом main `023241ed5` (соло и stash-прогон…",
+   "component": "driver (`bug1191_boxless_computed_style.rs:32`, `bug489_display_contents_computed_style.rs:32`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1810": {
+   "status": "open",
+   "title": "Own `opacity`/`mask-image`/`blend`/`transform` на replaced-боксах `Canvas`/`Video`/`Iframe`/`Audio` молча игнорируются — их нет в списке владельцев слоя краски…",
+   "component": "layout/paint (`stacking.rs::box_can_own_stacking_context`)",
    "date": null,
    "debtor": false
   },
@@ -12076,17 +11999,17 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1804": {
-   "status": "open",
-   "title": "16 unit-тестов `cargo test -p lumen-layout --lib` красные на чистом main `860aaab0d` (проверено stash 2026-11-13): одна семья border-collapse/border-spacing/таб…",
-   "component": "layout (`crates/engine/layout/src` — стили таблиц; merge не бисектился)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1805": {
    "status": "open",
    "title": "SITES-TRIAGE-3: нет `navigator.serviceWorker.startMessages()` (нестандартный Chrome-API контейнера) → `TypeError` убивает инициализацию rutube-ru, TIMEOUT 2/2 п…",
    "component": "js (`web_api_shim_mid_b.js` — `_sw_container`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1811": {
+   "status": "open",
+   "title": "`script.addPreloadScript` принят (id выдан, `PreloadScript` в `state.preload_scripts`), но ни один документ его не исполняет: после `navigate` `window.__pre ===…",
+   "component": "driver (`crates/bidi-server/src/protocol.rs::script_add_preload`)",
    "date": null,
    "debtor": false
   },
@@ -21931,6 +21854,132 @@
    "component": "layout (`crates/engine/layout/src/scoped_collect.rs`)",
    "date": "2026-11-09",
    "debtor": false
+  },
+  "BUG-1801": {
+   "status": "fixed",
+   "title": "3 рег-теста `crates/js/tests/cases/bug1801_window_status.rs` (начальное значение/резолв bare-идентификатора, roundtrip через bare и `window.status`, DOMString-к…",
+   "component": "js (`shim/web_api_shim_tail_b.js`)",
+   "date": "2026-11-13",
+   "debtor": false
+  },
+  "BUG-1804": {
+   "status": "fixed",
+   "title": "`cargo test -p lumen-layout --lib` 6005 passed / 0 failed (было 16 failed); clippy `-p lumen-layout --all-targets -D warnings` чистый; graphic 172: 9 FAIL = bas…",
+   "component": "layout (`style/cascade.rs` + 6 тестовых файлов)",
+   "date": "2026-11-13",
+   "debtor": false
+  },
+  "BUG-1779": {
+   "status": "fixed",
+   "title": "tippy.js снифил элементы через `{}.toString` и звал `querySelectorAll(<элемент>)` → `SyntaxError`, React не монтировался (mirtesen-ru, aviasales-ru, smi2-ru, ве…",
+   "component": "js (шим `web_api_shim_mid.js`, `web_api_shim_tail_b.js`, `video_element.js`, `mathml.rs`)",
+   "date": "2026-11-14",
+   "debtor": false
+  },
+  "BUG-1802": {
+   "status": "fixed",
+   "title": "68/65/69 кадров >500 мс за ebay-прогон (3 прогона 2026-11-12), кластеризация со штормом BUG-1800. Живая сверка (ebay закрыт антиботом — 403, свидетели как у BUG…",
+   "component": "shell/layout (`shell/src/lumen/media_controls.rs`, `layout/src/box_tree/{types,build}.rs`, `paint_eq.rs`, `incremental.rs`, `snapshot.rs`)",
+   "date": "2026-11-14",
+   "debtor": false
+  },
+  "BUG-1807": {
+   "status": "fixed",
+   "title": "Живое репро на фиксе: auto.ru + `LUMEN_VERIFY_INCR_CASCADE=1`, сессия 197 с (окно краша 20–180 с) — паники нет, verify-сверки идут. clippy workspace чистый; sco…",
+   "component": "shell (`app/about_to_wait.rs`)",
+   "date": "2026-11-14",
+   "debtor": false
+  },
+  "BUG-1781": {
+   "status": "fixed",
+   "title": "Тесты: `fetch_serves_blob_urls_from_the_shared_store` (байты+MIME, фрагмент, TypeError на отзыв/POST, сеть не видит запросов) и `v8_create_object_url_wrapper_re…",
+   "component": "js (`worker_net.rs`, `worker_shims.rs`, `worker.rs`)",
+   "date": "2026-11-14",
+   "debtor": false
+  },
+  "BUG-1782": {
+   "status": "fixed",
+   "title": "claude.ai падал на `console.assert is not a function` (текст 2/3678), kaspersky-ru — на `console.time is not a function`, ebay — Rive WASM не грузился без `cons…",
+   "component": "js (шим `shim/console_shim.js` — новый, `web_api_shim_mid.js`, `worker_shims.rs`, `shared_worker.rs`, `sw_worker.rs`, `dom.rs`)",
+   "date": "2026-11-14",
+   "debtor": false
+  },
+  "BUG-1777": {
+   "status": "fixed",
+   "title": "smoke: reftest PASS байт-в-байт (fuzzy 3900px@1 не задействован); регресс-тест `draw_image_cropped_1to1_preserves_every_row`; см. BUG-1798 срез 2",
+   "component": "layout / paint / shell / canvas (`crates/engine/canvas/src/lib.rs`)",
+   "date": "2026-11-14",
+   "debtor": false
+  },
+  "BUG-1806": {
+   "status": "fixed",
+   "title": "graphic 172 (IPC-hybrid): 22 FAIL = baseline среза 1 по составу и diff% до 4 знака, 18/61 — PASS; найдено P3 при гейте BUG-1804",
+   "component": "canvas (`crates/engine/canvas/src/lib.rs`)",
+   "date": "2026-11-14",
+   "debtor": false
+  },
+  "BUG-1799": {
+   "status": "fixed",
+   "title": "закрыто вместе с BUG-1798 срез 1",
+   "component": "paint (`crates/engine/paint/src/cpu_raster.rs`)",
+   "date": "2026-11-14",
+   "debtor": false
+  },
+  "BUG-1783": {
+   "status": "fixed",
+   "title": "SITES-TRIAGE-2: ea.com — `bad_optional_access was thrown in -fno-exceptions mode`, окно умирает (DEAD, 2 из 2). Локализовано 2026-11-14: `to_rust_string_lossy`…",
+   "component": "js (`crates/js/src/v8_runtime/script_attribution.rs`)",
+   "date": "2026-11-14",
+   "debtor": false
+  },
+  "BUG-1784": {
+   "status": "fixed",
+   "title": "`cargo test -p lumen-driver --test all bug1191` — оба теста зелёные (2026-11-14); scoped-гейт и dump_golden — без новых красных. Второй красный BUG-1809 (`bug48…",
+   "component": "layout (`crates/engine/layout/src/lib.rs` — `collect_computed_styles_parts`)",
+   "date": "2026-11-14",
+   "debtor": false
+  },
+  "BUG-1791": {
+   "status": "fixed",
+   "title": "`navigator.getBattery` бросал «Battery Status API is not supported» в конструкторе Яндекс.Плеер SDK → ya.ru exception + a11y 36/63. Фикс: rejected-promise стаб…",
+   "component": "js (`crates/js/src/battery_bindings.rs`)",
+   "date": "2026-11-14",
+   "debtor": false
+  },
+  "BUG-1792": {
+   "status": "fixed",
+   "title": "тесты `tests/cases/bug1792_html_collection_iterable.rs` (3: спред/`for..of`/`Array.from` по HTML/SVG/shadow-host, ShadowRoot/`template.content`/`Document`/`getE…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js`, `crates/js/src/dom/tests/mod.rs`)",
+   "date": "2026-11-14",
+   "debtor": false
+  },
+  "BUG-1793": {
+   "status": "fixed",
+   "title": "rust-lang.org a11y 52/57 и docs.rs 19/24: ссылки-логотипы/иконки без accessible name, разметка вида `<a rel=\"me\" href=\"https://social.rust-lang.org/@rust\"><img…",
+   "component": "a11y (`crates/engine/a11y/src/names.rs`, `tests/cases/ax_tree.rs`)",
+   "date": "2026-11-14",
+   "debtor": false
+  },
+  "BUG-1787": {
+   "status": "fixed",
+   "title": "`cargo test -p lumen-js --lib --features v8-backend`: 5004 passed / 3 failed, ни одного из пары (3 — pre-existing [BUG-1795](bugs/BUG-1795-FIXED.md)/[BUG-1677](…",
+   "component": "js (`v8_runtime/tests/dom_suspend_focus.rs`, `video_gif_store.rs`, `video_bindings.rs`, `audio_element.rs`)",
+   "date": "2026-11-15",
+   "debtor": false
+  },
+  "BUG-1795": {
+   "status": "fixed",
+   "title": "`cargo test -p lumen-js --features v8-backend --lib v8_bug1552` — 2/2 зелёные (2026-11-15)",
+   "component": "js (`crates/js/src/dom/tests/v8_bug1552_style_float_shorthand.rs`)",
+   "date": "2026-11-15",
+   "debtor": false
+  },
+  "BUG-1785": {
+   "status": "fixed",
+   "title": "см. BUG-1795",
+   "component": "layout/style (`border_image.rs:151,502`) vs js-тест",
+   "date": "2026-11-15",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -21961,11 +22010,11 @@
   "`tools/wptrunner/wptrunner/browsers/lumen.py` + `crates/shell/src/main.rs`": [
    "BUG-315"
   ],
+  "a11y (`crates/engine/a11y/src/names.rs`, `tests/cases/ax_tree.rs`)": [
+   "BUG-1793"
+  ],
   "a11y (`crates/engine/a11y/src/roles.rs::AXRole::parse`/`AXRole`; потребитель `crates/engine/a11y/src/lib.rs::resolve_role`)": [
    "BUG-764"
-  ],
-  "a11y (accname)": [
-   "BUG-1793"
   ],
   "a11y/shell (`a11y/platform/windows.rs`, `shell/platform/msaa_wndproc.rs`)": [
    "BUG-1627"
@@ -21981,6 +22030,9 @@
   ],
   "bidi-server/executor (`crates/shell/src/app/about_to_wait.rs` — `AutomationCommand::PointerMove`; `crates/js/src/v8_runtime/style_flush.rs`, `install/dom_core.rs` — зеркало `:hover` движкового потока)": [
    "BUG-1458"
+  ],
+  "canvas (`crates/engine/canvas/src/lib.rs`)": [
+   "BUG-1806"
   ],
   "chrome (`#sbTabs`/`.sb-tab`/`.sb-section-title`), layout (`box_tree.rs::lay_out_inner`)": [
    "BUG-425"
@@ -22248,6 +22300,12 @@
    "BUG-064",
    "BUG-112"
   ],
+  "driver (`bug1191_boxless_computed_style.rs:32`, `bug489_display_contents_computed_style.rs:32`)": [
+   "BUG-1809"
+  ],
+  "driver (`crates/bidi-server/src/protocol.rs::script_add_preload`)": [
+   "BUG-1811"
+  ],
   "driver (`crates/driver/src/session.rs:790` — `InProcessSession::navigate`, ветка `url.strip_prefix(\"file://\")`)": [
    "BUG-760"
   ],
@@ -22366,9 +22424,6 @@
   "js (V8 ESM, `crates/js/src/v8_esm.rs`)": [
    "BUG-459"
   ],
-  "js (V8, `-fno-exceptions`) — не локализовано": [
-   "BUG-1783"
-  ],
   "js (V8-раннер — вызов колбэков `setTimeout`/`setInterval`)": [
    "BUG-952"
   ],
@@ -22394,6 +22449,9 @@
   ],
   "js (`CSSStyleDeclaration`, `js/src/shim/web_api_shim_mid.js`)": [
    "BUG-1631"
+  ],
+  "js (`DOMImplementation.createHTMLDocument`, `web_api_shim_mid.js:6550` — прототип захардкожен `Document.prototype`)": [
+   "BUG-1808"
   ],
   "js (`DOMMatrix`/`DOMMatrixReadOnly`/`DOMQuad`; воркерный глобал)": [
    "BUG-1604"
@@ -22431,10 +22489,13 @@
   "js (`crates/js/src/audio_element.rs` — `patchAudioElement`; ср. `crates/js/src/video_bindings.rs:935/1069/1160`)": [
    "BUG-940"
   ],
+  "js (`crates/js/src/battery_bindings.rs`)": [
+   "BUG-1791"
+  ],
   "js (`crates/js/src/canvas2d.rs` — натив сеттера цвета), canvas (`crates/engine/canvas/src/color.rs`)": [
    "BUG-930"
   ],
-  "js (`crates/js/src/canvas2d.rs`, `crates/js/src/shim/web_api_shim_mid.js` — `drawElementImage`)": [
+  "js (`crates/js/src/canvas2d.rs`, `shim/web_api_shim_mid.js` — `drawElementImage`), layout (`layoutsubtree`), paint (`rasterize_cpu_element_image`), canvas (`draw_image_cropped`)": [
    "BUG-1798"
   ],
   "js (`crates/js/src/close_watcher.rs`, `CLOSE_WATCHER_SHIM`)": [
@@ -22597,6 +22658,9 @@
   ],
   "js (`crates/js/src/dom/tests/v8_bug1148_srcset_img_load.rs`, `v8_bug1158_raw_text_inner_html.rs`, `v8_bug1167_ce_wrapper_gc.rs`)": [
    "BUG-1241"
+  ],
+  "js (`crates/js/src/dom/tests/v8_bug1552_style_float_shorthand.rs`)": [
+   "BUG-1795"
   ],
   "js (`crates/js/src/dom/tests/v8_bug935_s59_style_skip.rs:176`)": [
    "BUG-1244"
@@ -22935,6 +22999,9 @@
   "js (`crates/js/src/shim/web_api_shim_mid.js`, `attachShadow`)": [
    "BUG-1727"
   ],
+  "js (`crates/js/src/shim/web_api_shim_mid.js`, `crates/js/src/dom/tests/mod.rs`)": [
+   "BUG-1792"
+  ],
   "js (`crates/js/src/shim/web_api_shim_mid.js`, `slotchange`, `assignedNodes({flatten})`)": [
    "BUG-1730"
   ],
@@ -23119,6 +23186,9 @@
   "js (`crates/js/src/v8_runtime/runtime.rs` — `pending_page_scrolls`/`page_scroll_y`; `install/platform.rs:349`)": [
    "BUG-949"
   ],
+  "js (`crates/js/src/v8_runtime/script_attribution.rs`)": [
+   "BUG-1783"
+  ],
   "js (`crates/js/src/v8_runtime/sheet_sync.rs::patched_cascade`)": [
    "BUG-1772"
   ],
@@ -23260,26 +23330,20 @@
   "js (`named_access.rs` — `lock_document_bounded`: `sleep(100 мкс)` поллинг против системного тика 15,6 мс)": [
    "BUG-1788"
   ],
-  "js (`navigator` bindings, Battery Status API)": [
-   "BUG-1791"
+  "js (`shim/web_api_shim_tail_b.js`)": [
+   "BUG-1801"
   ],
   "js (`streams_shim.js` — `TransformStream`)": [
    "BUG-1741"
   ],
-  "js (`v8_runtime/tests/dom_suspend_focus.rs:975`, `video_bindings.rs:1195`)": [
+  "js (`v8_runtime/tests/dom_suspend_focus.rs`, `video_gif_store.rs`, `video_bindings.rs`, `audio_element.rs`)": [
    "BUG-1787"
-  ],
-  "js (`web_api_shim_mid.js:11646`, `var console`)": [
-   "BUG-1782"
   ],
   "js (`web_api_shim_mid.js::_lumen_serialize_style`/`_lumen_shorthand_value`/`_lumen_parse_style`)": [
    "BUG-964"
   ],
   "js (`web_api_shim_mid.js` `_lumen_font_face_try_sources`)": [
    "BUG-1639"
-  ],
-  "js (`web_api_shim_mid.js` — глобальные окна)": [
-   "BUG-1801"
   ],
   "js (`web_api_shim_mid.js`, `createNodeIterator` только на главном `document`)": [
    "BUG-1732"
@@ -23305,6 +23369,9 @@
   "js (`worker.rs` `install_worker_scope_globals_v8`, `shared_worker.rs`)": [
    "BUG-1705"
   ],
+  "js (`worker_net.rs`, `worker_shims.rs`, `worker.rs`)": [
+   "BUG-1781"
+  ],
   "js (live DOM bindings)": [
    "BUG-279"
   ],
@@ -23326,9 +23393,6 @@
   "js (оболочка `TextDecoder` в шиме `crates/js/src/shim/web_api_shim_*.js`, не натив `_lumen_text_decode`)": [
    "BUG-1083"
   ],
-  "js (обёртки DOM-узлов, `Symbol.toStringTag`)": [
-   "BUG-1779"
-  ],
   "js (тесты `crates/js/src/dom/tests/v8_webworker.rs`, `crates/js/src/worker.rs::tests_v8` — фиксированный `sleep` вместо опроса с дедлайном)": [
    "BUG-1111"
   ],
@@ -23341,6 +23405,12 @@
   "js (шим `TextEncoder`/`TextEncoderStream`, `crates/js/src/shim/web_api_shim_*.js`, точное место не искалось)": [
    "BUG-1082"
   ],
+  "js (шим `shim/console_shim.js` — новый, `web_api_shim_mid.js`, `worker_shims.rs`, `shared_worker.rs`, `sw_worker.rs`, `dom.rs`)": [
+   "BUG-1782"
+  ],
+  "js (шим `web_api_shim_mid.js`, `web_api_shim_tail_b.js`, `video_element.js`, `mathml.rs`)": [
+   "BUG-1779"
+  ],
   "js (шим), layout (`zoom`)": [
    "BUG-943"
   ],
@@ -23352,9 +23422,6 @@
   ],
   "js / network (`id.sber.ru` SSO) — не локализовано": [
    "BUG-1780"
-  ],
-  "js / network (`worker_shims.rs`, `lib.rs:512`)": [
-   "BUG-1781"
   ],
   "js shim (`crates/js/src/shim/web_api_shim_mid.js` — `_LUMEN_WRAPPER_MEMBERS`)": [
    "BUG-494"
@@ -23392,17 +23459,11 @@
   "js/css-parser/layout (`CSSStyleDeclaration` specified-value reflection)": [
    "BUG-465"
   ],
-  "js/cssom (сериализация `border-image` в cssText)": [
-   "BUG-1795"
-  ],
   "js/dom": [
    "BUG-306"
   ],
   "js/dom (WebIDL Window, HTMLBodyElement)": [
    "BUG-1632"
-  ],
-  "js/dom (`children` итерируемость на части интерфейсов)": [
-   "BUG-1792"
   ],
   "js/dom (`crates/js/src/shim/web_api_shim_mid.js` `_lumen_make_range` — `[nid, offset]` без перепривязки)": [
    "BUG-1232"
@@ -23527,7 +23588,7 @@
   "js/shell граница (`crates/js/src/v8_runtime/install/platform.rs::install_scroll_state` — `_lumen_request_scroll`)": [
    "BUG-523"
   ],
-  "js/shell — антибот-фингерпринт (`window.chrome`, `navigator.plugins`/`mimeTypes`)": [
+  "js/shell — антибот-фингерпринт (`window.chrome`, `navigator.plugins`/`mimeTypes`), `MessageEvent.isTrusted`, `Node.parentElement`, начальный `contentWindow`": [
    "BUG-1790"
   ],
   "js/v8 (`v8_runtime/named_access.rs`, `v8_runtime/install/dom_core.rs`, `shim/web_api_shim_mid.js`)": [
@@ -24076,6 +24137,9 @@
   "layout (`crates/engine/layout/src/lib.rs::scrollable_extent_x`/`scrollable_extent_y`/`collect_scroll_containers_inner`)": [
    "BUG-960"
   ],
+  "layout (`crates/engine/layout/src/lib.rs` — `collect_computed_styles_parts`)": [
+   "BUG-1784"
+  ],
   "layout (`crates/engine/layout/src/scoped_collect.rs`)": [
    "BUG-1776"
   ],
@@ -24252,9 +24316,6 @@
   "layout (`crates/engine/layout/src/vertical.rs::wrap_inline_run_vertical`)": [
    "BUG-1275"
   ],
-  "layout (`crates/engine/layout/src` — стили таблиц; merge не бисектился)": [
-   "BUG-1804"
-  ],
   "layout (`crates/engine/layout/tests/snapshots/flex_*.txt`) + гейт `scripts/scoped-test.sh`": [
    "BUG-445"
   ],
@@ -24284,6 +24345,9 @@
   ],
   "layout (`style/apply/text.rs`, `style/parse/font_size.rs`; `selector_query.rs`)": [
    "BUG-1410"
+  ],
+  "layout (`style/cascade.rs` + 6 тестовых файлов)": [
+   "BUG-1804"
   ],
   "layout (`style/logical.rs::resolve_logical_properties`, `selector_query.rs`, `_lumen_css_supports_prop`)": [
    "BUG-1600"
@@ -24336,10 +24400,7 @@
   "layout / css-parser (`@color-profile`, `color()`)": [
    "BUG-282"
   ],
-  "layout / driver (getComputedStyle бокссового элемента)": [
-   "BUG-1784"
-  ],
-  "layout / paint / shell — остаток": [
+  "layout / paint / shell / canvas (`crates/engine/canvas/src/lib.rs`)": [
    "BUG-1777"
   ],
   "layout+paint": [
@@ -24508,6 +24569,9 @@
   "layout/paint (`crates/engine/layout/src/style/parse/transform.rs:236` `parse_filter_fn` — `grayscale`/`sepia` не ограничены 1)": [
    "BUG-1544"
   ],
+  "layout/paint (`stacking.rs::box_can_own_stacking_context`)": [
+   "BUG-1810"
+  ],
   "layout/paint (`style/apply/paint.rs`, `crates/engine/paint/src/display_list/walk.rs:49/87/138`, `style/values/color.rs::to_color_opt`)": [
    "BUG-1418"
   ],
@@ -24544,7 +24608,7 @@
   "layout/shell/js (привязка к snap и `scroll-padding` при программной прокрутке)": [
    "BUG-1574"
   ],
-  "layout/style (`border_image.rs:151,502` vs тест BUG-1552)": [
+  "layout/style (`border_image.rs:151,502`) vs js-тест": [
    "BUG-1785"
   ],
   "layout/text": [
@@ -24798,7 +24862,8 @@
   ],
   "paint (`crates/engine/paint/src/cpu_raster.rs`)": [
    "BUG-1337",
-   "BUG-1343"
+   "BUG-1343",
+   "BUG-1799"
   ],
   "paint (`crates/engine/paint/src/cpu_raster.rs`, `PushTransform` → `mat4_to_2d_affine`)": [
    "BUG-1290"
@@ -24883,9 +24948,6 @@
   ],
   "paint (font-metrics)": [
    "BUG-250"
-  ],
-  "paint (gate): мёртвый код после рефактора border-image (BUG-492, d6006b287f)": [
-   "BUG-1799"
   ],
   "paint (test-harness baseline, не движок)": [
    "BUG-287"
@@ -24984,6 +25046,9 @@
   ],
   "shell (`PageSource::from_arg`)": [
    "BUG-1636"
+  ],
+  "shell (`app/about_to_wait.rs`)": [
+   "BUG-1807"
   ],
   "shell (`chrome_ui.rs:365` `loading: …nav_start.is_some()` + спиннер вкладки, UX-LOADING)": [
    "BUG-1597"
@@ -25213,9 +25278,6 @@
   "shell (`page_load.rs::take_needed_web_fonts`, `web_font_usage.rs`)": [
    "BUG-1634"
   ],
-  "shell (`redraw_requested.rs:740–810` — статья `sbar` кадра)": [
-   "BUG-1802"
-  ],
   "shell (`redraw_requested.rs`, `about_to_wait.rs`)": [
    "BUG-1637"
   ],
@@ -25279,6 +25341,9 @@
   ],
   "shell/js (память `lumen.exe` под `wptrunner`; страница `normal-flow/crashtests/block-in-inline-ax-crash.html`)": [
    "BUG-1355"
+  ],
+  "shell/layout (`shell/src/lumen/media_controls.rs`, `layout/src/box_tree/{types,build}.rs`, `paint_eq.rs`, `incremental.rs`, `snapshot.rs`)": [
+   "BUG-1802"
   ],
   "shell/net (`crates/shell/src/subresources.rs`; `BackgroundImage::Url` не хранит модификаторы)": [
    "BUG-1661"
