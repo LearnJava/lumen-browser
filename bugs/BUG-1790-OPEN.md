@@ -1,8 +1,11 @@
 # BUG-1790 — Cloudflare Turnstile: челлендж-кадр работает, но не выдаёт токен (детект со стороны challenge)
 
-**Статус:** OPEN (срез 5 — пустой `TypeError` опознан: собственный ассерт бандла кадра
-`typeof x === 'function'` на `contentWindow.eval`/`.Function` начального about:blank;
-фикс — изолят начального кадра, FRAME/[BUG-480], не P3)
+**Статус:** OPEN (ДОРАБОТКА → FRAME/[BUG-480](BUG-480-OPEN.md) — срез 5 исчерпал
+очередь P3: остаток требует изолята начального about:blank, а BUG-480 сам помечен
+`OPEN (ДОРАБОТКА → FRAME)` и P3 его не берёт; указатель снят из `STATUS-P3.md`)
+**Срез 6+:** только P1 в рамках FRAME/[BUG-480](BUG-480-OPEN.md) — начальный about:blank
+должен стать документом движка со своим V8-контекстом; после этого `contentWindow.eval`
+станет функцией сама и ассерт бандла кадра пройдёт.
 **Заведён:** 2026-11-06 (P3, остаток [BUG-1595](BUG-1595-FIXED.md))
 **Область:** js/shell — антибот-фингерпринт (`window.chrome`, `navigator.plugins`/`mimeTypes`),
 `MessageEvent.isTrusted`, `Node.parentElement`, начальный кадр `contentWindow` (UX-ANTIBOT)
