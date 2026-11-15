@@ -467,6 +467,38 @@ fn add_preload_script_stores_globally() {
     assert_eq!(state.preload_script_count(), 1);
 }
 
+/// BUG-1811: без живого окна скрипт остаётся записью в состоянии и не
+/// исполняется ни в одном документе — регистрация обязана доехать до шелла,
+/// а снятие — доехать туда же.
+#[test]
+fn add_and_remove_preload_script_reach_the_live_window() {
+    let (live, log) = recording_live_session();
+    let mut state = BidiState::with_live_session(live, None);
+    new_session_ctx(&mut state);
+    let r = dispatch(
+        r#"{"id":1,"method":"script.addPreloadScript","params":{"functionDeclaration":"() => { window.__pre = 1; }"}}"#,
+        &mut state,
+    );
+    assert!(r.frames[0].contains("success"), "got: {}", r.frames[0]);
+    let script_id = parse(&r.frames[0])
+        .get("result")
+        .and_then(|x| x.get("script"))
+        .and_then(|x| x.as_str())
+        .expect("script id")
+        .to_owned();
+    let seen: Vec<String> = log.try_iter().collect();
+    assert!(
+        seen.iter().any(|c| c.contains("AddPreloadScript") && c.contains("window.__pre")),
+        "{seen:?}"
+    );
+
+    let cmd = format!(r#"{{"id":2,"method":"script.removePreloadScript","params":{{"script":"{script_id}"}}}}"#);
+    let r = dispatch(&cmd, &mut state);
+    assert!(r.frames[0].contains("success"), "got: {}", r.frames[0]);
+    let seen: Vec<String> = log.try_iter().collect();
+    assert!(seen.iter().any(|c| c.contains("RemovePreloadScript")), "{seen:?}");
+}
+
 #[test]
 fn add_preload_script_with_contexts_stores_per_context() {
     let mut state = BidiState::new();

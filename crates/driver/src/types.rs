@@ -644,6 +644,17 @@ pub enum AutomationCommand {
         /// Cookie name.
         name: String,
     },
+    /// Register a preload script (`script.addPreloadScript`, BUG-1811):
+    /// `function_declaration` runs in every document created from now on,
+    /// before any of that document's own scripts. Reply: `Ack`.
+    AddPreloadScript {
+        /// Opaque preload-script identifier (BiDi `script`).
+        id: String,
+        /// BiDi `functionDeclaration` — the source of a function to call.
+        function_declaration: String,
+    },
+    /// Drop a preload script by id (`script.removePreloadScript`). Reply: `Ack`.
+    RemovePreloadScript(String),
 }
 
 /// A cookie as exchanged with the live window (WebDriver BiDi `storage.Cookie`,

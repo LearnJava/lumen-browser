@@ -106,9 +106,9 @@ mod dom_touched;
 mod runtime;
 
 pub use overrides::{
-    identity_override_script, permission_override_script, set_global_permission_override,
-    set_global_timezone_override, set_global_user_agent_override,
-    timezone_override_script, user_agent_override_script,
+    identity_override_script, permission_override_script, remove_global_preload_script,
+    set_global_permission_override, set_global_preload_script, set_global_timezone_override,
+    set_global_user_agent_override, timezone_override_script, user_agent_override_script,
 };
 pub use dom_touched::{DomChanges, DomTouched};
 pub use runtime::{CustomPropertySnapshot, PseudoComputedStyles, V8JsRuntime};
@@ -120,6 +120,7 @@ pub(crate) use script_attribution::capture_call_site as script_attribution_captu
 use overrides::global_timezone_override;
 pub(crate) use overrides::global_user_agent_override;
 pub(crate) use overrides::global_permission_overrides;
+pub(crate) use overrides::global_preload_scripts;
 use runtime::pairs_from_flat;
 
 // ── S3: DOM-core native registration ─────────────────────────────────────────
@@ -1335,6 +1336,19 @@ impl V8JsRuntime {
         // now; move them onto `Navigator.prototype` in one pass. Before the
         // BUG-378 seal, which must stay last.
         install_v8!(navigator_bindings::finalize_navigator_interface_v8);
+        // BUG-1811: WebDriver BiDi preload scripts (`script.addPreloadScript`)
+        // run once per new document — after every shim that registered above
+        // (so the script may use any API), but still before the caller runs
+        // the page's own scripts (`run_scripts_with_dom` does that only after
+        // `install_dom` returns). Before the BUG-378 seal, so a preload script
+        // can still reach the `_lumen_*` natives. Best-effort, like the
+        // installs above: a throwing preload script must not abort DOM
+        // bootstrap.
+        for js in global_preload_scripts() {
+            if let Err(e) = self.eval(&js) {
+                eprintln!("v8: preload script failed: {e}");
+            }
+        }
         // BUG-378: must be the LAST install step — it hides every internal
         // `_lumen_*` global from enumeration and freezes the function-valued
         // ones, so anything registering a native or patching one afterwards

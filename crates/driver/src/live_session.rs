@@ -110,6 +110,22 @@ impl LiveWindowSession {
         Ok(())
     }
 
+    /// Register a preload script in the live window (`script.addPreloadScript`,
+    /// BUG-1811): it runs in every document created after this call.
+    pub fn add_preload_script(&self, id: &str, function_declaration: &str) -> Result<()> {
+        self.execute(AutomationCommand::AddPreloadScript {
+            id: id.to_owned(),
+            function_declaration: function_declaration.to_owned(),
+        })?;
+        Ok(())
+    }
+
+    /// Drop a preload script by id (`script.removePreloadScript`, BUG-1811).
+    pub fn remove_preload_script(&self, id: &str) -> Result<()> {
+        self.execute(AutomationCommand::RemovePreloadScript(id.to_owned()))?;
+        Ok(())
+    }
+
     /// Send `command` and unwrap the expected reply variant, mapping
     /// `AutomationReply::Error` and any other unexpected reply to `Err`.
     fn execute(&self, command: AutomationCommand) -> Result<AutomationReply> {

@@ -1801,6 +1801,7 @@ mod compat_hang;
 mod bug935_child_edits;
 mod bug1198_opaque_frame;
 mod bug1231_frame_referrer;
+mod bug1811_preload;
 mod dom_suspend_focus;
 mod bug1752_platform_queue;
 mod wasm_streaming;
