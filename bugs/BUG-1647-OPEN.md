@@ -1,8 +1,52 @@
 # BUG-1647 — reCAPTCHA v3: `grecaptcha.execute` не возвращает токен — «reCAPTCHA Timeout» и `TypeError … (reading 'length')` в `filter`
 
-**Статус:** OPEN
+**Статус:** OPEN (срез 1 — `TypeError` в anchor-кадре больше не воспроизводится; токен
+выдаётся через ~30 с и Google отвечает на него `success:false`)
 **Заведён:** 2026-10-19 (P2, COMPAT-CORPUS-4-BASE, `scripts/captcha_stand.py --arm lumen`)
 **Область:** js (исполнение `google.com/recaptcha/api2/anchor` в iframe, DOM-вызов внутри `Array.prototype.filter`-подобного хелпера)
+
+## Срез 1 (2026-11-15, P3) — симптом сменился: токен приходит, но невалиден
+
+**Повторный замер.** `python scripts/captcha_stand.py --arm lumen --only recaptcha-v3-score
+--exe target/dev-release/lumen.exe` на `main` `d71c1c09b` (бинарь собран 06:36, кодовых
+коммитов после него нет): verdict `не_отрисован`, но **`TypeError … (reading 'length')` в логе
+больше нет** — остались только `[unhandled-rejection] Error: reCAPTCHA Timeout (C)` и `(z)`
+(по два раза, v3 и enterprise-варианты). Плечо Chrome на тех же страницах/окне —
+`пройдено`, балл 0.9.
+
+**Что происходит (`.tmp/cap1647.py`, BiDi, логгер `window.postMessage`/`message`):**
+
+- anchor-кадр грузится (`api2/anchor?…&anchor-ms=20000&execute-ms=30000`), тянет
+  `recaptcha__en.js`, `styles__ltr.css`, `logo_48.png` и **`api2/webworker.js`**;
+- `grecaptcha.execute(...)` резолвится **через 30,5 с после вызова** (`__t.ok − __t.call`),
+  токен короткий (632 символа). Это ровно собственный `execute-ms=30000` из URL anchor'а:
+  api.js отдаёт токен после своего таймаута, а не по готовности кадра;
+- выданный токен уходит в `recaptcha-v3-verify.php`, и Google отвечает
+  `{"success": false, "hostname": "", "challenge_ts": "", "score": null, "action": "", …}` —
+  токен невалиден. Страница при этом отрисовывает «Received token from reCAPTCHA service…»
+  и «Received response from our backend:», то есть JS-путь самой страницы цел.
+
+**Дифф сети против Chrome** (`.tmp/cap1647_chrome.py` — CDP `Network.*` на том же URL):
+Chrome **не** запрашивает `api2/webworker.js` и получает длинный токен (`0cAFcWeA…`, ~1.5 КБ)
+за ~1 с; Lumen уходит в worker-ветку сигналов и получает короткий (`HF…`) после таймаута.
+Chrome дополнительно делает `POST api2/clr?k=…`; у Lumen запрос `clr` в stderr есть, но метод
+не виден — `crates/shell/src/event_sink.rs:27` печатает `→ GET` для любого метода.
+
+**Следующий срез — handshake `api.js ↔ anchor`.** 30-секундное ожидание означает, что
+родитель не получает от кадра сигнал готовности/токен вовремя. Для этого нужен логгер,
+установленный **до** `api.js`; `script.addPreloadScript` в этой сессии не сработал
+(принимается, но не исполняется — [BUG-1811](BUG-1811-OPEN.md)), так что срез 2 начинать
+с него.
+
+**Попутно проверено (не причина BUG-1647):**
+
+- `child.postMessage → parent` для **кросс-ориентирного** `<iframe>` доставляется
+  (`.tmp/pm_cross.py`: `origin`, `source`, `isTrusted` верные), `load` у обоих кадров есть;
+- у **same-origin** `<iframe>` `contentDocument === null`, сообщения в родителя не доходят,
+  хотя `load` срабатывает — это семья [BUG-480](BUG-480-OPEN.md), а не этот баг;
+- `element.textContent = …` на `<pre>` доходит до `innerText` в статической странице
+  (`.tmp/pre_innertext.html`, `--dump-layout`), так что пустые `<pre>` в живой пробе — стейл
+  раскладки при чтении `innerText` до принудительного reflow, а не дефект `innerText`.
 
 ## Симптом
 
