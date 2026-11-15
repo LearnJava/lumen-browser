@@ -82,13 +82,11 @@ const PAYMENT_REQUEST_SHIM: &str = r#"(function() {
   // Payment Method Identifiers §validity: URL-based (https, no credentials)
   // or standardized `part *("-" part)`, part = lower-alpha *(lower-alpha / DIGIT).
   var STD_PMI = /^[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*$/;
-  // The basic URL parser without a base fails on anything lacking a scheme;
-  // `new URL(x)` here resolves such input against `location.href` instead
-  // (BUG-1173), so a schemeless PMI must not be offered to it.
-  var URL_SCHEME = /^[\x00-\x20]*[A-Za-z][A-Za-z0-9+.\-\t\n\r]*:/;
+  // `new URL(x)` without a base throws on anything lacking a scheme
+  // (BUG-1173), so a schemeless PMI lands in the standardized-identifier arm.
   function isValidPmi(pmi) {
     var url = null;
-    if (URL_SCHEME.test(pmi) && typeof URL === 'function') {
+    if (typeof URL === 'function') {
       try { url = new URL(pmi); } catch (e) { url = null; }
     }
     if (url) {

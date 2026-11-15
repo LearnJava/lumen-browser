@@ -322,6 +322,38 @@
     }
 
     #[test]
+    fn constructor_resolves_a_relative_url_against_the_document_base() {
+        // BUG-1173: `new URL(url)` alone now throws on a relative string, so
+        // the shim must pass the API base URL (spec §6.2 step 2) explicitly.
+        let rt = V8JsRuntime::new().unwrap();
+        let doc = Arc::new(Mutex::new(Document::new()));
+        rt.install_dom(
+            doc,
+            "https://example.com/dir/page",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+        )
+        .unwrap();
+        super::install_webtransport_v8(&rt, None).unwrap();
+        check(
+            &rt,
+            "(function() { \
+                try { new WebTransport('/wt'); return true; } \
+                catch (e) { return false; } \
+            })()",
+        );
+    }
+
+    #[test]
     fn constructor_accepts_https_and_exposes_spec_shape() {
         let rt = rt_with_webtransport();
         check(

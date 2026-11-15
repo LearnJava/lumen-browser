@@ -423,8 +423,12 @@ const WEBTRANSPORT_SHIM: &str = r#"(function() {
   // ── URL validation (spec §5.1 "Create a WebTransport" steps 1-4) ─────────
   function parseWebTransportUrl(url) {
     var parsed;
+    // Spec §6.2 step 2: the url is parsed against this's API base URL, so a
+    // relative string is valid. `new URL(url)` alone rejects one (BUG-1173).
+    var base = typeof _lumen_document_base_url === 'function'
+      ? _lumen_document_base_url() : '';
     try {
-      parsed = new URL(url);
+      parsed = new URL(url, base || undefined);
     } catch (e) {
       throw new DOMException(
         "Failed to construct 'WebTransport': '" + String(url) + "' is not a valid URL.",
