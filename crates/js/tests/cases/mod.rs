@@ -11,6 +11,7 @@
 
 mod activation_target;
 mod bug1147_frame_facade_style;
+mod bug1235_textdecoder_buffer_source;
 mod bug1173_url_ctor_no_base;
 mod bug1208_window_origin;
 mod bug1792_html_collection_iterable;

@@ -1407,9 +1407,13 @@ impl Lumen {
                     if self.stream_image_events_fired.insert((nid, req.url.clone())) {
                         fires.push((nid, Some((w, h))));
                         if let Some(image) = self.stream_image_pixels.get(&req.url) {
-                            let tainted = doc_base
-                                .as_ref()
-                                .is_some_and(|b| crate::subresources::is_cross_origin_url(b, &req.url));
+                            // A `<img crossorigin>` that got pixels here went
+                            // through `decode_image_cors` above, i.e. its CORS
+                            // check passed - do not taint that canvas (BUG-1235).
+                            let tainted = req.crossorigin.is_none()
+                                && doc_base
+                                    .as_ref()
+                                    .is_some_and(|b| crate::subresources::is_cross_origin_url(b, &req.url));
                             bitmap_regs.push((nid, Arc::clone(image), tainted));
                         }
                     }
@@ -1673,6 +1677,16 @@ impl Lumen {
                 let _ = self.load_proxy.send_event(LoadEvent::ImageDecodeFailed { src: req.url });
                 continue;
             }
+            // GAP-CANVASORIGIN slice 2 (BUG-941): `<img crossorigin>` on a
+            // cross-origin URL must run the CORS protocol here too. This
+            // producer used the plain no-cors fetch, so a CORS-approved image
+            // was still tainted by `apply_stream_intrinsic_sizes`'s URL-only
+            // test and every `getImageData()` on its canvas threw
+            // `SecurityError` (BUG-1235).
+            let cors_mode = req
+                .crossorigin
+                .filter(|_| crate::subresources::is_cross_origin_url(&base, &req.url));
+            let cors_origin = self_origin.clone();
             let base = base.clone();
             let sink = Arc::clone(&self.event_sink);
             let cookie_jar = self.active_cookie_jar();
@@ -1684,9 +1698,30 @@ impl Lumen {
                 // Ключ кэша — сырой `req.url` (его знают layout/рендерер);
                 // апгрейд меняет только адрес запроса (срез 43).
                 let fetch_url: &str = upgraded.as_deref().unwrap_or(&req.url);
-                let decoded = image_cache::IMAGE_CACHE.get_or_decode(generation, &req.url, || {
-                    decode_image(fetch_url, &base, &sink, Some(DocCookieJar::for_base(cookie_jar, &base)), target, referrer_policy)
-                });
+                let decoded = match (cors_mode, cors_origin.as_ref()) {
+                    (Some(mode), Some(origin)) => image_cache::IMAGE_CACHE.get_or_decode(
+                        generation,
+                        &crate::subresources::cors_cache_key(&resolved_url, mode),
+                        || {
+                            crate::subresources::decode_image_cors(
+                                crate::subresources::CorsImageFetch {
+                                    resolved_url: &resolved_url,
+                                    raw_src: &req.url,
+                                    self_origin: origin,
+                                    mode,
+                                    base: &base,
+                                    sink: &sink,
+                                    cookie_jar: Some(DocCookieJar::for_base(cookie_jar, &base)),
+                                    target,
+                                    referrer_policy,
+                                },
+                            )
+                        },
+                    ),
+                    _ => image_cache::IMAGE_CACHE.get_or_decode(generation, &req.url, || {
+                        decode_image(fetch_url, &base, &sink, Some(DocCookieJar::for_base(cookie_jar, &base)), target, referrer_policy)
+                    }),
+                };
                 match decoded {
                     // BUG-1048: was a silent drop ("streaming best-effort: финальный
                     // pipeline залогирует/применит") — true for the streaming
