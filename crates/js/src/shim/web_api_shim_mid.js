@@ -9373,6 +9373,11 @@ var _LUMEN_WRAPPER_MEMBERS = {
         get localName()      { var nid = this.__nid__; return _lumen_u2n(_lumen_get_local_name(nid)); },
         get prefix()         { var nid = this.__nid__; return null; },
         get nodeType()       { var nid = this.__nid__; return _lumen_is_text_node(nid) ? (_lumen_is_cdata_section(nid) ? 4 : 3) : (_lumen_is_comment_node(nid) ? 8 : (_lumen_is_processing_instruction_node(nid) ? 7 : 1)); },
+        // DOM §4.4: `null` on every node kind that is not CharacterData/Attr,
+        // i.e. Element and DocumentFragment (ShadowRoot inherits it); the
+        // setter is a spec no-op, not a throw (BUG-1074).
+        get nodeValue()      { return null; },
+        set nodeValue(v)     { },
         // DOM LS §4.9.1: XHTML namespace for HTML elements, `null` for non-element nodes
         // (text/comment). react-dom's root-listening bootstrap (BUG-281) reads this.
         get namespaceURI()   { var nid = this.__nid__; return _lumen_u2n(_lumen_get_namespace_uri(nid)); },
@@ -11316,7 +11321,7 @@ var _LUMEN_WRAPPER_ON_DESCRIPTORS = Object.getOwnPropertyDescriptors(_LUMEN_WRAP
 // Element members from HTMLElement/HTMLDialogElement/form-control ones, and
 // SVG/MathML elements rely on reaching them through `Element.prototype`.
 var _LUMEN_NODE_MEMBER_NAMES = [
-    'nodeType', 'nodeName', 'parentNode', 'parentElement', 'childNodes',
+    'nodeType', 'nodeName', 'nodeValue', 'parentNode', 'parentElement', 'childNodes',
     'firstChild', 'lastChild', 'previousSibling', 'nextSibling', 'ownerDocument',
     'isConnected', 'textContent', 'appendChild', 'insertBefore', 'removeChild',
     'replaceChild', 'cloneNode', 'isSameNode', 'isEqualNode', 'getRootNode',
