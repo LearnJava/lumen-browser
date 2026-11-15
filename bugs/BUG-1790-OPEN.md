@@ -1,8 +1,51 @@
 # BUG-1790 — Cloudflare Turnstile: челлендж-кадр работает, но не выдаёт токен (детект со стороны challenge)
 
-**Статус:** OPEN (срез 1 — исправлены два дефекта ниже, токен всё ещё не выдаётся)
+**Статус:** OPEN (срез 2 — починен `Node.parentElement` в shadow-дереве: локальный стенд на
+always-pass ключе выдаёт токен; живая страница упирается в остаток [BUG-480](BUG-480-OPEN.md))
 **Заведён:** 2026-11-06 (P3, остаток [BUG-1595](BUG-1595-FIXED.md))
-**Область:** js/shell — антибот-фингерпринт (`window.chrome`, `navigator.plugins`/`mimeTypes`), `MessageEvent.isTrusted` (UX-ANTIBOT)
+**Область:** js/shell — антибот-фингерпринт (`window.chrome`, `navigator.plugins`/`mimeTypes`),
+`MessageEvent.isTrusted`, `Node.parentElement` (UX-ANTIBOT)
+
+## Срез 2 (2026-11-15, P3)
+
+Трассировка бриджа (`_lumen_f_post_message`/`_lumen_frame_take_messages`, временный
+env-гейт `LUMEN_DEBUG_FPOST`, в коммит не пошёл) сняла подозрение срезa 1: ответ
+родителя **доставляется** — `[fpost] bid=0 to="https://challenges.cloudflare.com"
+matches=true`, у кадра `[ftake] … ev=["extraParams","execute"]`. Блокер был на
+стороне родителя, в обработчике `requestExtraParams`.
+
+**Дефект: `Node.parentElement` отдавал `ShadowRoot`.** `api.js` строит снимок
+видимости виджета (`ui()` → `en()` → `ii()`): `for (var l = e.parentElement; l; …)`
+и на каждом звене `ni()` → `ri()` → `l.getBoundingClientRect()`. Для элемента —
+корня shadow-дерева — `parentElement` по DOM §4.4 должен быть `null` (родитель —
+`ShadowRoot`, не элемент), а шим возвращал интернированную обёртку shadow root.
+Итог: `Uncaught TypeError: e.getBoundingClientRect is not a function`, обработчик
+`requestExtraParams` обрывался до `ve(...)` — кадр не получал `extraParams`,
+`complete` не приходил, watchdog `300030`.
+
+Исправлено (`crates/js/src/shim/web_api_shim_mid.js`, геттер `parentElement`):
+`null`, если родитель — shadow root или `DocumentFragment` (документ уже отсекался
+по BUG-557). Тест: `parent_element_is_null_inside_a_shadow_root`
+(`crates/js/src/dom/tests/v8_bug1130_shadow_root_members.rs`) — без фикса падает
+(`[object ShadowRoot]`/`[object Element]` вместо `null`).
+
+Проверка: `.tmp/turnstile.html` (ключ `1x00000000000000000000AA`) — `TOKEN` за
+~6 с (до фикса `ERROR 300030` через ~40 с). Прогон с tee stderr —
+`.tmp/ts_run.py` (пишет `.tmp/ts_run.log`).
+
+Остаток — **живая страница** `https://peet.ws/turnstile-test/non-interactive.html`
+(реальный ключ `0x4AAAAAAABS7vwvV6VFfMcD`, `.tmp/ts_live.py`, эталон Chrome —
+`.tmp/ts_live_chrome.py`: токен за ~6 с): токена нет, в кадре челленджа
+`Uncaught TypeError: Cannot read properties of null (reading 'eval')`
+(`[Cloudflare Turnstile] Unhandled error`, затем `300010` и `failure_retry`).
+Это известный остаток [BUG-480](BUG-480-OPEN.md) (см. оговорку в
+[BUG-1176](BUG-1176-FIXED.md)): челлендж пробует `iframe.contentWindow.eval(...)`,
+а у вставленного скриптом `<iframe>` `contentWindow === null` даже после
+`appendChild` (проба `.tmp/probe_cw.html`: `before=null after=null`). В Chrome
+это cross-origin `SecurityError`, который челлендж переживает, у нас — `TypeError`,
+который обрывает bootstrap. Чинится в BUG-480 (синхронный `about:blank`-WindowProxy).
+Побочно на retry-виджете после этого: `Ignored message from unexpected source`
+для `init`/`requestExtraParams` — следствие сорванного bootstrap, отдельно не чинить.
 
 ## Срез 1 (2026-11-15, P3)
 
@@ -68,17 +111,24 @@
 1. ~~**`window.chrome` отсутствует**~~ — сделано в срезе 1 (форма Chrome без `runtime`).
 2. ~~**`navigator.plugins`/`mimeTypes` пусты**~~ — сделано в срезе 1 (PDF-набор Chrome).
 3. ~~**`MessageEvent.isTrusted === false`**~~ — сделано в срезе 1.
-4. Открыто: ответ родителя (`extraParams`) не доходит до кадра или не принимается им — см. «Срез 1».
+4. ~~**Ответ родителя (`extraParams`) не доходит до кадра**~~ — срез 2: доходит;
+   обрывался обработчик `requestExtraParams` на `parentElement` → `ShadowRoot`
+   (см. «Срез 2»).
+5. Открыто: живой челлендж на реальном ключе — `contentWindow === null` у
+   вставленного скриптом `<iframe>` (остаток [BUG-480](BUG-480-OPEN.md)).
 
 ## Как проверять
 
 - Стенд: `python .tmp/turnstile_verify.py <path-to-lumen.exe>` (прогон ~90 с, ждёт `cf-turnstile-response`/callback).
+- С трассировкой: `.tmp/ts_run.py` (`TS_PAGE=...`, пишет stderr в `.tmp/ts_run.log`).
+- Живая страница: `.tmp/ts_live.py` (Lumen) против `.tmp/ts_live_chrome.py` (Chrome for Testing).
 - Дифф-проба: снять тот же набор фингерпринтов в Chrome for Testing и в Lumen (`navigator.webdriver`, `window.chrome`, `plugins`, `mimeTypes`, `userAgentData`, `hardwareConcurrency`, `deviceMemory`, WebGL UNMASKED_*) и сравнить.
 - Если фингерпринт выровняется, а токен всё равно не приходит — смотреть heartbeat-ack: `food`-сообщения доходят, но ответ кадра может теряться на `postMessage` targetOrigin/origin-проверках (у sandbox-кадра opaque origin).
 
 ## Связи
 
 - Родитель: [BUG-1595](BUG-1595-FIXED.md) — iframe в shadow root.
+- Блокирует остаток: [BUG-480](BUG-480-OPEN.md) — `contentWindow` вставленного скриптом iframe (`null.eval` в челлендже).
 - Смежно: [BUG-754](BUG-754-FIXED.md) (`window.chrome`), UX-ANTIBOT-дорожка.
 
 ## Источник: сайты (дополнение SITES-TRIAGE-3, 2026-11-13)
