@@ -1293,8 +1293,9 @@ pub struct NodeRestyleIndex<'a> {
     /// any `:has()` result ([`Self::change_can_flip_has`]).
     has_deps: AncestorDeps,
     /// The document has an author shadow root. Shadow-tree sheets are not scanned
-    /// and `:has()` does not cross the boundary, so with a `:has()` in the sheet
-    /// the whole document is restyled, as before.
+    /// and `:has()` does not cross the boundary, so a change a shadow sheet can
+    /// observe (a host, a slotted child, a node inside a shadow tree) restyles the
+    /// whole document, as before — see `restyle::node_change::change_can_reach_shadow_sheets`.
     has_in_shadow_doc: bool,
     /// BUG-935 срез 60 — the non-subject compounds a child-list change can flip
     /// ([`collect_structure_sensitive_compounds`]).

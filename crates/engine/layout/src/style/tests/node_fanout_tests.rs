@@ -274,6 +274,32 @@
     }
 
     #[test]
+    fn a_change_no_shadow_sheet_can_observe_stays_narrow_with_a_has_sheet() {
+        // BUG-1794 срез 4: an author shadow root keeps the index `conservative`, but the
+        // document-wide widening is only needed for a change a shadow sheet can see — a
+        // host (`:host()`), a direct light child of one (`::slotted()`), or a node inside a
+        // shadow tree (`:has()` there). A change deeper in the light tree cannot reach them.
+        let mut doc = parse_html(
+            r#"<div id="host"><b id="slotted">x</b></div><ul id="menu"><li id="a" class="item">a</li></ul>"#,
+        );
+        let host = doc.find_by_id("host").expect("#host");
+        doc.attach_shadow(host, lumen_dom::ShadowRootMode::Open);
+        let sheet = parse_css("li:has(.item) { color: green; }");
+        let index = restyle_node_index(&doc, &sheet);
+        assert!(index.is_conservative(), "the shadow root still disables the shallow path");
+        let a = doc.find_by_id("a").expect("#a");
+        let got = restyle_root_set_for_node_change(&doc, [(a, NodeChange::Attr("data-x"))], &index);
+        assert!(!got.contains(&doc.root()), "a light-tree change is invisible to a shadow sheet: {got:?}");
+        assert!(!got.is_empty());
+        let slotted = doc.find_by_id("slotted").expect("#slotted");
+        assert_eq!(
+            restyle_root_set_for_node_change(&doc, [(slotted, NodeChange::Attr("class"))], &index),
+            [doc.root()].into_iter().collect::<HashSet<_>>(),
+            "`::slotted()` reads the attributes of a direct light child of the host",
+        );
+    }
+
+    #[test]
     fn nth_child_of_selector_it_cannot_model_disables_narrowing() {
         // `:nth-child(2 of .item)` makes one element's match depend on which of
         // its *siblings* carry `.item` — sibling reach with no combinator to
