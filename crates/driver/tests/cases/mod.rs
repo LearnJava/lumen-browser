@@ -11,6 +11,7 @@
 
 mod antidetect_surface_api;
 mod bug489_display_contents_computed_style;
+mod bug1671_inline_rects;
 mod bug1191_boxless_computed_style;
 mod bug1480_display_inline_computed;
 mod bug1425_color_space_computed;
