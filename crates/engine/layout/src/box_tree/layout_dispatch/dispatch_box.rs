@@ -1302,7 +1302,7 @@ pub(in crate::box_tree) fn dispatch_box(
             // runs are laid out start-aligned and the row is shifted as a unit
             // in phase 2 (`align_lines` alone sees only the run's own width).
             let row_align = match (b.style.text_align, b.style.direction == Direction::Rtl) {
-                (TextAlign::Center, _) => Some(TextAlign::Center),
+                (TextAlign::Center | TextAlign::WebkitCenter, _) => Some(TextAlign::Center),
                 (TextAlign::Right, _) | (TextAlign::End, false) | (TextAlign::Start, true) => {
                     Some(TextAlign::Right)
                 }

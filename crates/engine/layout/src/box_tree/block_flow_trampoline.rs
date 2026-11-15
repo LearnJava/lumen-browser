@@ -1100,6 +1100,31 @@ fn finish_frame(
     }
 }
 
+/// HTML Rendering §15.3.3: `text-align: -webkit-center` (`<center>`, `align=center`) centres a
+/// block-level child whose `justify-self` leaves it at its normal position — unlike plain `center`,
+/// which only aligns the inline content. An explicit `justify-self`/`justify-items` (`start`,
+/// `stretch`, …) still wins; only the default `auto`/`normal` is replaced by the centre.
+fn webkit_center_alignment(
+    parent: &ComputedStyle,
+    child: &ComputedStyle,
+    rev: bool,
+) -> Option<super::self_align::Alignment> {
+    if parent.text_align != TextAlign::WebkitCenter {
+        return None;
+    }
+    let value = if matches!(child.justify_self, AlignValue::Auto) {
+        parent.justify_items
+    } else {
+        child.justify_self
+    };
+    matches!(value, AlignValue::Auto | AlignValue::Normal).then_some(super::self_align::Alignment {
+        align: AlignValue::Center,
+        safe: false,
+        hull: None,
+        rev,
+    })
+}
+
 /// CSS Box Alignment L3 §5.2 / §6.3 — `justify-self` (or, for `auto`, the parent's
 /// `justify-items`) of a finished in-flow block-level child: the margin box moves inside the
 /// containing block's content box to its inline-start / centre / inline-end. `start`/`end`
@@ -1116,7 +1141,7 @@ fn align_justify_self_child(frame: &mut Frame, idx: usize, viewport: Size) {
     let content_width = frame.init.content_width;
     let child = &mut frame.b.children[idx];
     let cs = &child.style;
-    if !matches!(child.kind, BoxKind::Block | BoxKind::FlowRoot)
+    if !matches!(child.kind, BoxKind::Block | BoxKind::FlowRoot | BoxKind::Table)
         || cs.margin_left.is_auto()
         || cs.margin_right.is_auto()
         || matches!(cs.float_side, FloatSide::Left | FloatSide::Right)
@@ -1124,7 +1149,11 @@ fn align_justify_self_child(frame: &mut Frame, idx: usize, viewport: Size) {
     {
         return;
     }
-    let Some(align) = super::self_align::inline_alignment(parent, cs, true, rev) else { return };
+    let Some(align) = super::self_align::inline_alignment(parent, cs, true, rev)
+        .or_else(|| webkit_center_alignment(parent, cs, rev))
+    else {
+        return;
+    };
     let em = cs.font_size;
     let ml = cs.margin_left.resolve_or_zero(em, content_width, viewport);
     let mr = cs.margin_right.resolve_or_zero(em, content_width, viewport);
@@ -1159,6 +1188,8 @@ fn align_rtl_overconstrained_child(frame: &mut Frame, idx: usize, viewport: Size
         || matches!(cs.position, Position::Absolute | Position::Fixed)
         || !matches!(cs.justify_self, AlignValue::Auto | AlignValue::Normal | AlignValue::Stretch)
         || !matches!(frame.init.s.justify_items, AlignValue::Auto | AlignValue::Normal | AlignValue::Stretch)
+        // `-webkit-center` уже центрировал бокс — не перебивать его краем строки.
+        || webkit_center_alignment(&frame.init.s, cs, true).is_some()
     {
         return;
     }

@@ -1544,6 +1544,8 @@ pub(crate) fn align_one_line(
     direction: Direction,
 ) {
     let is_rtl = direction == Direction::Rtl;
+    // HTML Rendering §15.3.3: `-webkit-center` центрит строку так же, как `center`.
+    let text_align = if text_align == TextAlign::WebkitCenter { TextAlign::Center } else { text_align };
     {
         // CSS Text L3 §7.2: last line uses text-align-last.
         // Auto → text-align, но `justify` последней строки — это `start` (§7.1).

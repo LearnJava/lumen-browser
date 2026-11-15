@@ -420,7 +420,7 @@ use ua::{
     apply_ua_text_decoration, apply_ua_vtt,
     default_display, is_appearance_disabling_property, is_disableable_widget,
     strip_ua_appearance_box_styling, ua_font_family, ua_font_size_factor,
-    ua_font_style, ua_font_weight, ua_link_color, ua_vertical_align, ua_white_space,
+    ua_font_style, ua_font_weight, ua_link_color, ua_text_align, ua_vertical_align, ua_white_space,
 };
 pub use ua::ua_form_element_colors;
 // Восемь `pub` item-ов — публичная поверхность крейта (`pub mod style` в

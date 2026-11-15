@@ -143,6 +143,22 @@ fn css_text_longhands_are_serialised() {
     assert_eq!(get("#r", "letter-spacing").as_deref(), Some("normal"));
 }
 
+/// BUG-1669: `<center>` (UA) и `text-align: -webkit-center` (author) отдают это значение в
+/// computed-стиле, а не `center` — по нему отличают центрирование блочных потомков.
+#[test]
+fn webkit_center_is_serialised() {
+    let (doc, tree) = layout_tree(
+        r#"<center id="c"><div id="d" style="text-align:-webkit-center">x</div></center>"#,
+        "",
+    );
+    let get = |sel: &str| {
+        computed_style_to_map(&find_box_by_selector(&tree, &doc, sel).expect("box").style)
+            .get("text-align").cloned()
+    };
+    assert_eq!(get("#c").as_deref(), Some("-webkit-center"));
+    assert_eq!(get("#d").as_deref(), Some("-webkit-center"));
+}
+
 /// BUG-1438: a percentage in `letter-spacing`/`word-spacing` stays a percentage in the
 /// computed value, and a number-valued `calc()` in `tab-size` is evaluated.
 #[test]

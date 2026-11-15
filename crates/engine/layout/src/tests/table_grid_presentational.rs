@@ -1050,7 +1050,7 @@ fn img_border_zero_no_style() {
     );
 }
 
-/// `<div align="center">` → text-align: center.
+/// `<div align="center">` → text-align: -webkit-center (HTML Rendering §15.3.3).
 #[test]
 fn div_align_center_attr() {
     let root = lay("<body><div align=\"center\">x</div></body>", "");
@@ -1058,8 +1058,8 @@ fn div_align_center_attr() {
     let div = first_element_child(body);
     assert_eq!(
         div.style.text_align,
-        crate::style::TextAlign::Center,
-        "div align=center должен задавать text-align: center"
+        crate::style::TextAlign::WebkitCenter,
+        "div align=center должен задавать text-align: -webkit-center"
     );
 }
 
@@ -1076,7 +1076,7 @@ fn p_align_right_attr() {
     );
 }
 
-/// `<h1 align="middle">` → text-align: center (middle = center alias).
+/// `<h1 align="middle">` → text-align: -webkit-center (middle = center alias, §15.3.3).
 #[test]
 fn h1_align_middle_is_center() {
     let root = lay("<body><h1 align=\"middle\">x</h1></body>", "");
@@ -1084,8 +1084,8 @@ fn h1_align_middle_is_center() {
     let h1 = first_element_child(body);
     assert_eq!(
         h1.style.text_align,
-        crate::style::TextAlign::Center,
-        "align=middle должен давать text-align: center"
+        crate::style::TextAlign::WebkitCenter,
+        "align=middle должен давать text-align: -webkit-center"
     );
 }
 

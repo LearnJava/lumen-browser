@@ -113,6 +113,9 @@ pub(in crate::style) fn apply_decl_text(
                 "center" => TextAlign::Center,
                 "right" => TextAlign::Right,
                 "justify" => TextAlign::Justify,
+                // Legacy value of HTML Rendering §15.3.3 (`<center>`, `align=center`): центрит
+                // и блочных потомков (`block_flow_trampoline::align_justify_self_child`).
+                "-webkit-center" => TextAlign::WebkitCenter,
                 // CSS Text L3 §7.1: `justify-all` — shorthand над `text-align` и
                 // `text-align-last: justify`.
                 "justify-all" => {
