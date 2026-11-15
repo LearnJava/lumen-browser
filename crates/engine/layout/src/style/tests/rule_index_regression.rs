@@ -83,6 +83,26 @@
         assert_eq!((s.color.r, s.color.g, s.color.b), (0, 0, 255));
     }
 
+    /// BUG-1794 срез 3: a subject that is only `:where()`/`:is()` used to sit in the
+    /// universal bucket. It is now keyed by its argument subjects, so the rule must
+    /// still reach every node the pseudo can match — through the class argument and
+    /// through the type argument — and only those.
+    #[test]
+    fn where_and_is_subject_still_apply_through_the_index() {
+        let red = (255, 0, 0);
+        let of = |html: &str| {
+            let s = first_child_style(html, ":where(.a, h2) { color: red } :is(.c) { color: red }");
+            (s.color.r, s.color.g, s.color.b)
+        };
+        assert_eq!(of(r#"<div class="a"></div>"#), red, "class argument must match");
+        assert_eq!(of("<h2>t</h2>"), red, "type argument must match");
+        assert_eq!(of(r#"<div class="c"></div>"#), red, ":is() argument must match");
+        assert_ne!(of(r#"<div class="zz"></div>"#), red, "no argument matches");
+        assert_ne!(of("<h3>t</h3>"), red, "a type neither argument names must not match");
+        let s = first_child_style(r#"<div class="d"></div>"#, ":where(:where(.d)) { color: red }");
+        assert_eq!((s.color.r, s.color.g, s.color.b), red, "nested :where() must match");
+    }
+
     #[test]
     fn specificity_order_preserved() {
         // `.card` (0,1,0) overrides `div` (0,0,1).

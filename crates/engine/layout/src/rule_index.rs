@@ -13,7 +13,7 @@
 //! dominant cascade cost (observed: ~1.1ms/node, ~1.3s for a ~1100-node page).
 
 use std::collections::HashMap;
-use lumen_css_parser::{CompoundSelector, Rule, SimpleSelector, Stylesheet};
+use lumen_css_parser::{CompoundSelector, PseudoClass, Rule, SimpleSelector, Stylesheet};
 use lumen_dom::Attribute;
 
 /// Opaque index into `Stylesheet.rules`.
@@ -63,7 +63,7 @@ fn subject(c: &lumen_css_parser::ComplexSelector) -> &CompoundSelector {
 /// node further but cannot waive a sibling `.class`. Primer writes almost
 /// every component rule as `.prc-X:where(..)`, and those ~3000 rules were
 /// being matched against every node on github.com.
-fn subject_key(comp: &CompoundSelector) -> SubjectKey<'_> {
+fn direct_subject_key(comp: &CompoundSelector) -> SubjectKey<'_> {
     for p in &comp.parts {
         if let SimpleSelector::Id(s) = p {
             return SubjectKey::Id(s);
@@ -93,6 +93,41 @@ enum SubjectKey<'a> {
     Type(&'a str),
     Attr(&'a str),
     Universal,
+}
+
+/// The keys a subject compound constrains the node by: the direct discriminator
+/// when it has one, otherwise the union of the subjects of its `:is()`/`:where()`
+/// arguments. `None` means nothing in the compound gives a key (`*`, a bare
+/// `:hover`/`:not()`/`:has()`, a bare pseudo-element, …) and the rule has to stay
+/// in [`RuleIndex::universal`].
+///
+/// Soundness rests on every part being a *necessary* condition: `:is(X, Y)`
+/// matches only when one of its arguments matches, and an argument matches only
+/// when its subject compound does, so the node carries the key of at least one
+/// argument subject. An argument without a discriminator can match any node and
+/// waives the whole list; the other parts only add conditions, so dropping them
+/// keeps the candidate set a superset. The descent recurses, so
+/// `:where(:where(.a))` still keys on `.a`.
+fn subject_keys(comp: &CompoundSelector) -> Option<Vec<SubjectKey<'_>>> {
+    let direct = direct_subject_key(comp);
+    if !matches!(direct, SubjectKey::Universal) {
+        return Some(vec![direct]);
+    }
+    let mut keys = Vec::new();
+    // Any other part (`*`, `:hover`, `:not()`, `:has()`, a pseudo-element, …) is one
+    // more necessary condition this index cannot bucket on. Ignoring it keeps the
+    // candidate set a superset: a matching node still carries the keys of the parts
+    // that did produce one, and a compound whose parts yield none falls back to the
+    // universal bucket below.
+    for part in &comp.parts {
+        if let SimpleSelector::PseudoClass(PseudoClass::Is(args) | PseudoClass::Where(args)) = part
+        {
+            for arg in args {
+                keys.append(&mut subject_keys(subject(arg))?);
+            }
+        }
+    }
+    if keys.is_empty() { None } else { Some(keys) }
 }
 
 // ── RuleIndex ─────────────────────────────────────────────────────────────────
@@ -142,21 +177,26 @@ impl RuleIndex {
         let mut idx = Self::empty();
         for (rule_idx, rule) in rules {
             for sel in &rule.selectors {
-                match subject_key(subject(sel)) {
-                    SubjectKey::Id(id) => {
-                        idx.by_id.entry(id.to_owned()).or_default().push(rule_idx);
-                    }
-                    SubjectKey::Class(cls) => {
-                        idx.by_class.entry(cls.to_owned()).or_default().push(rule_idx);
-                    }
-                    SubjectKey::Type(tag) => {
-                        idx.by_type.entry(tag.to_owned()).or_default().push(rule_idx);
-                    }
-                    SubjectKey::Attr(name) => {
-                        idx.by_attr.entry(name.to_owned()).or_default().push(rule_idx);
-                    }
-                    SubjectKey::Universal => {
-                        idx.universal.push(rule_idx);
+                let keys = subject_keys(subject(sel));
+                let keys: &[SubjectKey<'_>] =
+                    keys.as_deref().unwrap_or(&[SubjectKey::Universal]);
+                for key in keys {
+                    match key {
+                        SubjectKey::Id(id) => {
+                            idx.by_id.entry((*id).to_owned()).or_default().push(rule_idx);
+                        }
+                        SubjectKey::Class(cls) => {
+                            idx.by_class.entry((*cls).to_owned()).or_default().push(rule_idx);
+                        }
+                        SubjectKey::Type(tag) => {
+                            idx.by_type.entry((*tag).to_owned()).or_default().push(rule_idx);
+                        }
+                        SubjectKey::Attr(name) => {
+                            idx.by_attr.entry((*name).to_owned()).or_default().push(rule_idx);
+                        }
+                        SubjectKey::Universal => {
+                            idx.universal.push(rule_idx);
+                        }
                     }
                 }
             }
@@ -355,9 +395,48 @@ mod tests {
         assert_eq!(idx.candidates("a", None, ["btn"].into_iter(), &[]), vec![0]);
         assert!(idx.candidates("a", None, ["other"].into_iter(), &[]).is_empty());
 
-        // Only a functional pseudo in the subject — nothing to key on.
+        // Only a functional pseudo in the subject — keyed by its argument subject.
         let idx = build(":where(.a) { color: red }");
-        assert!(!idx.universal.is_empty());
+        assert!(idx.by_class.contains_key("a"));
+        assert!(idx.universal.is_empty());
+        assert_eq!(idx.candidates("span", None, ["a"].into_iter(), &[]), vec![0]);
+        assert!(idx.candidates("span", None, ["b"].into_iter(), &[]).is_empty());
+    }
+
+    /// A subject that is only `:is()`/`:where()` is bucketed by the subjects of
+    /// its arguments: matching the pseudo needs one argument to match, so the
+    /// node carries that argument subject's key. A bare `:not()` gives no key
+    /// (a node matches by *not* having the argument), and one argument that can
+    /// match anything (`*`, `:not()`) waives the whole list.
+    #[test]
+    fn is_where_subject_keys_on_its_argument_subjects() {
+        let idx = build(
+            ":where(.a, h2) { color: red } \
+             :is(.b) { color: blue } \
+             :where(:where(.c)) { color: green } \
+             :where(div > .d) { color: navy } \
+             :where(.e):hover { color: teal }",
+        );
+        assert!(idx.universal.is_empty(), "every rule here is keyable");
+        let cands = |tag: &str, class: &str| idx.candidates(tag, None, [class].into_iter(), &[]);
+        assert_eq!(cands("span", "a"), vec![0]);
+        assert_eq!(cands("h2", "z"), vec![0], "type argument keys the rule too");
+        assert_eq!(cands("p", "b"), vec![1]);
+        assert_eq!(cands("i", "c"), vec![2], "nested :where() descends");
+        assert_eq!(cands("em", "d"), vec![3], "the argument's subject compound keys it");
+        assert_eq!(cands("b", "e"), vec![4], "a sibling part does not waive the key");
+        assert!(cands("span", "nope").is_empty());
+
+        // `:not()` — a node matches by *not* having `.x`, nothing to bucket on.
+        let idx = build(":not(.x) { color: red } :where(.a):not(.x) { color: blue }");
+        assert_eq!(idx.universal, vec![0], "a bare :not() stays universal");
+        assert_eq!(idx.candidates("p", None, ["a"].into_iter(), &[]), vec![0, 1]);
+        assert_eq!(idx.candidates("p", None, ["x"].into_iter(), &[]), vec![0]);
+
+        // One argument that can match anything waives the list.
+        let idx = build(":where(.a, *) { color: red } :where(.b, :not(.c)) { color: blue }");
+        assert_eq!(idx.universal, vec![0, 1], "an unconstrained argument keeps the rule universal");
+        assert!(idx.by_class.is_empty());
     }
 
     /// `*` → universal bucket; attribute-only `[hidden]` → `by_attr` by name.
