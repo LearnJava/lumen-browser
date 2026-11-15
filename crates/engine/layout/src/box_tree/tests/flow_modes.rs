@@ -184,6 +184,20 @@ fn margin_auto_no_explicit_width_fills_container() {
     assert_eq!(b.rect.width, 800.0, "width without explicit must fill 800px, got {}", b.rect.width);
 }
 
+#[test]
+fn margin_auto_centers_block_clamped_by_max_width() {
+    // BUG-1668 / CSS 2.2 §10.4: `max-width` shrinks an auto-width block, then
+    // §10.3.3 runs again — the leftover space goes to the auto margins.
+    let html = r#"<div id="box">x</div>"#;
+    let css = "body{margin:0}#box { max-width: 400px; margin: 0 auto; }";
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(css);
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    let b = super::find_by_id_all(&root, &doc, "box").expect("box not found");
+    assert_eq!(b.rect.width, 400.0, "width clamped to max-width, got {}", b.rect.width);
+    assert_eq!(b.rect.x, 200.0, "centered x expected 200, got {}", b.rect.x);
+}
+
 // ── CSS Box Alignment L3 §5.2 — block-level justify-self ──────────────────
 
 fn layout_box_width(css: &str) -> f32 {
