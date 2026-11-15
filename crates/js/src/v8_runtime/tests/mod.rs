@@ -704,6 +704,55 @@ fn frame_post_message_self_delivery_through_install_dom() {
     ));
 }
 
+/// BUG-1790 срез 3: у вставленного скриптом `<iframe>` вложенный контекст
+/// появляется СИНХРОННО (HTML LS §7.1: начальный about:blank в тике вставки),
+/// а не после асинхронной загрузки под-документа шеллом.
+#[test]
+fn inserted_iframe_gets_initial_about_blank_window_synchronously() {
+    let doc = make_doc();
+    let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
+    let out = rt
+        .eval(
+            r#"
+var f = document.createElement('iframe');
+var before = f.contentWindow;
+document.body.appendChild(f);
+var w = f.contentWindow;
+var d = f.contentDocument;
+JSON.stringify({
+  before: before === null,
+  win: typeof w,
+  body: d && d.body ? d.body.tagName : null,
+  docEl: d && d.documentElement ? d.documentElement.tagName : null,
+  same: f.contentWindow === w,
+  evalMissing: typeof w.eval === 'undefined',
+  len: window.length,
+  idx: window[0] === w,
+  url: d && d.URL,
+})
+"#,
+        )
+        .unwrap();
+    let lumen_core::JsValue::String(out) = out else {
+        panic!("expected JSON string, got {out:?}");
+    };
+    assert_eq!(
+        out,
+        r#"{"before":true,"win":"object","body":"BODY","docEl":"HTML","same":true,"evalMissing":true,"len":1,"idx":true,"url":"about:blank"}"#
+    );
+    // Отсоединённый iframe вложенного контекста не имеет (HTML LS §4.8.5).
+    assert!(matches!(
+        rt.eval(
+            r#"
+var g = document.createElement('iframe');
+g.contentWindow === null && g.contentDocument === null
+"#
+        )
+        .unwrap(),
+        JsValue::Bool(true)
+    ));
+}
+
 /// BUG-480 срез 7: focus()/blur() через фасад документа обновляют
 /// `_lumen_last_focused_nid` ЭТОГО контекста (activeElement меняется сразу
 /// после пумпы), но НЕ ставят фокус-запрос шеллу — очередь рантайма фрейма
