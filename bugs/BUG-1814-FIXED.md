@@ -1,8 +1,31 @@
 # BUG-1814 — данные `postMessage`/`MessagePort` доезжают строкой (`base64url`, `[object Object]`) вместо значения отправителя: `JSON.parse` в бандле reCAPTCHA падает
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-11-15 (P3, срез 5 [BUG-1647](BUG-1647-OPEN.md))
 **Заведён:** 2026-11-15 (P3, срез 4 [BUG-1647](BUG-1647-OPEN.md), после
 [BUG-1813](BUG-1813-FIXED.md))
+
+## Исправлено (2026-11-15, срез 5 BUG-1647)
+
+**Причина.** `build_worker_messages_json` встраивает полезную нагрузку как
+JSON-значение (`{"id":N,"json":<value>}`), то есть на JS-стороне `m.json` —
+уже разобранное значение. Получатели же разбирали его ещё раз:
+`Worker.prototype._deliver` (`worker_shims.rs`), `_lumen_deliver_port_messages`
+(там же) и `_deliver` клиентского порта `SharedWorker` (`shared_worker.rs`).
+Для объекта/массива повторный `JSON.parse` бросал и срабатывал `catch`
+(значение выживало), но строка, которая сама является JSON-текстом
+(`'{"a":1}'`, а протокол reCAPTCHA гоняет именно JSON-текст), превращалась
+в объект — тип терялся, `typeof data === 'string'` на приёме давал false.
+
+**Починено.** Все три получателя берут `m.json` как есть; `JSON.parse`
+остался только там, где Rust действительно передаёт текст (воркерный
+`_lumen_worker_deliver_port_message`, вход `_lumen_worker_dispatch_message`).
+Фикс не трогает `build_worker_messages_json` — на «сырое» встраивание
+опираются `BroadcastChannel` и `_deliverError` (конверт ошибок).
+
+**Тесты** (`cargo test -p lumen-js --features v8-backend --lib --
+v8_webworker::worker_message`): `worker_message_json_text_string_stays_a_string`
+и `worker_message_port_json_text_string_stays_a_string` — без фикса падают
+(`Object([("n", Number(1.0))])` вместо `String("{\"n\":1}")`).
 **Область:** js — транспорт сообщений между изолятами и в воркер:
 `crates/js/src/frame_bridge.rs` (`w.postMessage`, `_lumen_f_post_message`,
 `_lumen_deliver_frame_message`), `crates/js/src/shim/message_channel_shim.js`

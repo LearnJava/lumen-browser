@@ -476,9 +476,9 @@ const SHARED_WORKER_SHIM: &str = r#"(function() {
           if (i !== -1) this._listeners.splice(i, 1);
         }
       },
-      _deliver: function(json) {
-        var data;
-        try { data = JSON.parse(json); } catch(e) { data = json; }
+      // `data` is the already parsed structured-clone value — parsing it again
+      // would turn a JSON-text string payload into an object (BUG-1814).
+      _deliver: function(data) {
         // Lumen's MessageEvent constructor takes (data, init) — see dom.rs shim.
         var ev;
         try { ev = new MessageEvent(data, { bubbles: false, cancelable: false, ports: [] }); }

@@ -1,8 +1,8 @@
 # BUG-1647 — reCAPTCHA v3: `grecaptcha.execute` не возвращает токен — «reCAPTCHA Timeout» и `TypeError … (reading 'length')` в `filter`
 
-**Статус:** OPEN (срез 4 — глобалы начального `about:blank`-кадра починены,
-остаток — данные `postMessage`/порта доезжают строкой вместо значения,
-[BUG-1814](BUG-1814-OPEN.md))
+**Статус:** OPEN (срез 5 — транспорт `postMessage`/порта сохраняет тип значения
+([BUG-1814](BUG-1814-FIXED.md)), остаток — встроенные объекты кадра со своим
+изолятом приходят копией без методов, [BUG-1815](BUG-1815-OPEN.md))
 **Заведён:** 2026-10-19 (P2, COMPAT-CORPUS-4-BASE, `scripts/captcha_stand.py --arm lumen`)
 **Область:** js (исполнение `google.com/recaptcha/api2/anchor` в iframe, DOM-вызов внутри `Array.prototype.filter`-подобного хелпера)
 
@@ -137,6 +137,33 @@ base64url-строки (len 156/226/472/3611) и `"[object Object]"` из вор
 `Worker._deliver` — то есть транспорт `postMessage`/`MessagePort` превращает
 значение в строку там, где Chrome сохраняет его тип. Это
 [BUG-1814](BUG-1814-OPEN.md) — следующий срез начинается с него.
+
+## Срез 5 (2026-11-15, P3) — транспорт сохраняет тип; следующий блокер — встроенные объекты чужого realm
+
+**Починено.** [BUG-1814](BUG-1814-FIXED.md): `build_worker_messages_json`
+встраивает нагрузку как JSON-значение, а получатели (`Worker.prototype._deliver`,
+`_lumen_deliver_port_messages`, порт `SharedWorker`) разбирали его ещё раз —
+строка-JSON-текст превращалась в объект. Теперь берут значение как есть; для
+объектов/массивов поведение не изменилось (раньше спасал `catch`).
+
+**Замеры после фикса** (бинарь ветки, `--maximized`, `LUMEN_NO_ADBLOCK=1`):
+
+- `.tmp/pl1814.py` (логгер `JSON.parse` в каждом документе) — **0** падений
+  (было 5 за прогон: base64url-строки 156/226/472/3611 и `"[object Object]"`);
+- `python scripts/captcha_stand.py --arm lumen --only recaptcha-v3-score` —
+  `не_отрисован`, вместо `SyntaxError: Unexpected token 'B'` новый класс:
+  `TypeError: G.parse is not a function` (`recaptcha__en.js:113:132`, через
+  `451:477`/`451:318`), плюс прежний `reCAPTCHA Timeout`.
+
+**Что мешает дальше.** Все документы стенда (anchor, страница, `about:blank`)
+в своём realm отдают `JSON.parse` (`.tmp/pl1815.py`), `contentWindow` на этом
+пути бандл не читает — значит `G` это встроенный объект ЧУЖОГО кадра со своим
+изолятом. Проба `.tmp/fr1815.py` (`<iframe srcdoc>`): у начального
+`about:blank`-кадра `contentWindow.JSON.parse` — `function`,
+`JSON === window.JSON` (BUG-1813), а после загрузки кадра со своим изолятом —
+`JSON.parse`/`Math.max`/`Object.keys` **`undefined`**, `JSON !== window.JSON`:
+фасад отдаёт встроенный объект плоской копией данных, функции теряются. Это
+[BUG-1815](BUG-1815-OPEN.md) — следующий срез начинается с него.
 
 ## Симптом
 

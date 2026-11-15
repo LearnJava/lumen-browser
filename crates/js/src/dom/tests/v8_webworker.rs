@@ -131,6 +131,27 @@ fn worker_roundtrip_message_via_pump() {
 }
 
 #[test]
+fn worker_message_json_text_string_stays_a_string() {
+    // BUG-1814: the page-side `_deliver` parsed the payload it already got
+    // parsed, so a JSON-text string payload arrived as an object. A plain
+    // string that happens to be valid JSON must survive both directions.
+    let rt = v8_runtime_with_dom(make_doc());
+    let script = "data:text/javascript,onmessage%20%3D%20function(e)%7BpostMessage(e.data)%3B%7D";
+    rt.eval(&format!(
+        "var w = new Worker('{}'); var got = null; \
+         w.onmessage = function(e){{ got = e.data; }}; \
+         w.postMessage('{{\"n\":1}}');",
+        script
+    ))
+    .unwrap();
+    pump_until(&rt, "got !== null", false);
+    assert_eq!(
+        rt.eval("got").unwrap(),
+        lumen_core::JsValue::String("{\"n\":1}".into())
+    );
+}
+
+#[test]
 fn worker_import_scripts_preserves_strict_global_declarations() {
     let rt = v8_runtime_with_dom(make_doc());
     rt.eval(
@@ -235,6 +256,55 @@ fn worker_message_port_transfer_page_to_worker_round_trip() {
     assert_eq!(
         rt.eval("log[1]").unwrap(),
         lumen_core::JsValue::String("pong:ping".into())
+    );
+}
+
+#[test]
+fn worker_message_port_json_text_string_stays_a_string() {
+    use std::time::Duration;
+    // BUG-1814 through the port route too: `_lumen_deliver_port_messages`
+    // parsed an already parsed payload.
+    let rt = v8_runtime_with_dom(make_doc());
+    let worker_src = "onmessage = function(e) {\
+        if (e.ports.length === 1) {\
+            var p = e.ports[0];\
+            p.onmessage = function(e2) { p.postMessage(e2.data); };\
+            postMessage('got-port');\
+        }\
+    };";
+    rt.eval(&format!(
+        "var workerUrl = URL.createObjectURL(new Blob([\"{worker_src}\"], {{type: 'text/javascript'}})); \
+         var w = new Worker(workerUrl); \
+         var log = []; \
+         w.onmessage = function(e) {{ log.push(e.data); }}; \
+         var ch = new MessageChannel(); \
+         ch.port2.onmessage = function(e2) {{ log.push(e2.data); }}; \
+         w.postMessage('init', [ch.port1]);"
+    ))
+    .unwrap();
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        rt.pump_workers();
+        if rt.eval("log.length").unwrap() == lumen_core::JsValue::Number(1.0) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(rt.eval("log[0]").unwrap(), lumen_core::JsValue::String("got-port".into()));
+
+    rt.eval("ch.port2.postMessage('{\"n\":2}');").unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        rt.pump_workers();
+        if rt.eval("log.length").unwrap() == lumen_core::JsValue::Number(2.0) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        rt.eval("log[1]").unwrap(),
+        lumen_core::JsValue::String("{\"n\":2}".into())
     );
 }
 

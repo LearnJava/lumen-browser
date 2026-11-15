@@ -773,9 +773,10 @@ pub(crate) const WORKER_SHIM: &str = r#"(function() {
   };
 
   // Internal: deliver a message from the worker thread to this Worker instance.
-  Worker.prototype._deliver = function(json) {
-    var raw;
-    try { raw = JSON.parse(json); } catch(e) { raw = json; }
+  // `raw` is the ALREADY PARSED structured-clone value: `build_worker_messages_json`
+  // embeds each payload as raw JSON, so parsing it again would turn a string
+  // payload that happens to be JSON text into an object (BUG-1814).
+  Worker.prototype._deliver = function(raw) {
     // BUG-868 GAP-WORKERSCOPE срез 2: a message carrying transferred
     // `MessagePort`s arrives wrapped in `{__lumen_msg__:true, data, ports}` —
     // see `Worker.prototype.postMessage`. `ports` reifies to `ev.ports` in
@@ -893,8 +894,8 @@ pub(crate) const WORKER_SHIM: &str = r#"(function() {
       var m = msgs[i];
       var p = _lumenPortRegistry[m.id];
       if (!p) continue;
-      var data;
-      try { data = JSON.parse(m.json); } catch(e) { data = m.json; }
+      // `m.json` is already the parsed value (see `build_worker_messages_json`).
+      var data = m.json;
       if (typeof _lumen_port_walk_deserialize === 'function') data = _lumen_port_walk_deserialize(data, null);
       p._deliverOrQueue({ type: 'message', data: data, target: p,
                           currentTarget: p, bubbles: false, cancelable: false });
