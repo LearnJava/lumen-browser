@@ -27,6 +27,7 @@ use crate::mathml::MathStyle;
 use crate::ruby::{RubyAlign, RubyMerge, RubyPosition};
 use crate::scroll_timeline::ScrollAxis;
 use lumen_core::ColorSpace;
+use lumen_core::geom::Size;
 
 // Типы значений и табличные дефолты остаются в `style.rs` и его потомках;
 // путь `crate::style::<Имя>` работает и для тех имён, которые донор сам
@@ -86,6 +87,16 @@ pub struct LogicalMinMaxSizes {
 /// `(inline-axis, block-axis)` radii of the four flow-relative corners, in the order
 /// start-start, start-end, end-start, end-end (CSS Logical Properties L1 §3.3).
 pub type LogicalCornerRadii = [Option<(Length, Length)>; 4];
+
+/// A property whose value the cascade resolves to px, although it may contain a `cq*` unit that
+/// only the container pass can resolve: the specified `Length` is kept in
+/// [`ComputedStyle::cq_lengths`] and re-resolved there (BUG-1664).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CqLengthProp {
+    TabSize,
+    LetterSpacing,
+    WordSpacing,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComputedStyle {
@@ -774,6 +785,12 @@ pub struct ComputedStyle {
     /// В пикселях если length; для integer хранится как число × 8 (default
     /// 8 spaces — стандартный default). Default 8 spaces = 64px при 8px-space.
     pub tab_size: f32,
+    /// Значения `tab-size`/`letter-spacing`/`word-spacing` с `cq*`-единицей: при каскаде
+    /// контейнера ещё нет, поэтому посчитанный px — лишь fallback по viewport. Проход
+    /// контейнеров перерезолвит их, когда размер контейнера известен (BUG-1664).
+    /// Не наследуется: вычисленный px родителя уже абсолютен. Третий элемент — значение
+    /// с числовой размерностью (`tab-size: calc(10 + sign(…)*5)`), а не длина.
+    pub cq_lengths: Vec<(CqLengthProp, Length, bool)>,
     /// CSS UI L4 §6.3 — `caret-color: auto | <color>`. Inherited.
     /// `None` = auto (каретка следует `color`). `Some(CssColor)` — явный цвет:
     /// `currentcolor` / `color()` / системные цвета сохраняются как есть и
@@ -1371,6 +1388,59 @@ impl ComputedStyle {
     /// превращает любое значение в `none` — inert-бокс не бывает целью указателя.
     pub fn effective_pointer_events(&self) -> PointerEvents {
         if self.interactivity == Interactivity::Inert { PointerEvents::None } else { self.pointer_events }
+    }
+
+    /// Records the specified `len` for `prop`: kept for the container pass when it carries a
+    /// `cq*` unit, dropped otherwise (a later declaration of the same property wins the cascade).
+    /// `number` — the value has a numeric dimension (`tab-size: calc(…)` without units).
+    pub fn note_cq_length(&mut self, prop: CqLengthProp, len: &Length, number: bool) {
+        self.cq_lengths.retain(|(p, _, _)| *p != prop);
+        if len.contains_cq_unit() {
+            self.cq_lengths.push((prop, len.clone(), number));
+        }
+    }
+
+    /// Re-resolves the recorded `cq*`-lengths against a container's content size, given as the
+    /// `(inline, block)` basis [`crate::style::set_cq_axes`] installs (BUG-1664).
+    pub fn resolve_cq_lengths(&mut self, axes: (Option<f32>, Option<f32>), viewport: Size) {
+        if self.cq_lengths.is_empty() {
+            return;
+        }
+        let entries = std::mem::take(&mut self.cq_lengths);
+        let prev = crate::style::cq_axes();
+        crate::style::set_cq_axes(axes.0, axes.1);
+        let em = self.font_size;
+        for (prop, len, number) in &entries {
+            match prop {
+                CqLengthProp::TabSize => {
+                    if let Some(v) = len.resolve(em, None, viewport) {
+                        if *number {
+                            self.tab_size = (v * 8.0).max(0.0);
+                            self.text_extra.tab_size_number = Some(v.max(0.0));
+                        } else {
+                            self.tab_size = v.max(0.0);
+                            self.text_extra.tab_size_number = None;
+                        }
+                    }
+                }
+                CqLengthProp::LetterSpacing => {
+                    if let Some(base) = len.resolve(em, Some(0.0), viewport) {
+                        let unit = len.resolve(em, Some(1.0), viewport).unwrap_or(base);
+                        self.letter_spacing = base + (unit - base) * em;
+                        self.letter_spacing_pct = unit - base;
+                    }
+                }
+                CqLengthProp::WordSpacing => {
+                    if let Some(base) = len.resolve(em, Some(0.0), viewport) {
+                        let unit = len.resolve(em, Some(1.0), viewport).unwrap_or(base);
+                        self.word_spacing = base;
+                        self.word_spacing_pct = unit - base;
+                    }
+                }
+            }
+        }
+        crate::style::restore_cq_axes(prev);
+        self.cq_lengths = entries;
     }
 
     /// Used value `caret-color` (CSS UI L4 §6.3): `auto` и `currentcolor`

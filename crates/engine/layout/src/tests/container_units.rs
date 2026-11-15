@@ -100,3 +100,39 @@ fn nested_inline_size_container_takes_block_axis_from_outer_size_container() {
         assert_eq!(m.get("width").map(String::as_str), Some("40px"), "rule={rule}");
     }
 }
+
+/// BUG-1664 — properties the cascade resolves to px (`tab-size`, `letter-spacing`) must be
+/// re-resolved with the container's size, not the viewport they fell back to at cascade time.
+#[test]
+fn cascade_resolved_props_see_the_container() {
+    let html = r#"<div class="c"><div id="t"></div></div>"#;
+    let css = ".c { container-type: inline-size; width: 100px; }
+        #t { font-size: 40px;
+             tab-size: calc(10 + (sign(2cqw - 10px) * 5));
+             letter-spacing: 2cqw; }";
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(css);
+    let vp = Size::new(1024.0, 768.0);
+    let root = crate::layout(&doc, &sheet, vp);
+    let nid = crate::find_first_dom_node_by_selector(&doc, "#t").expect("#t").index() as u32;
+    let styles = crate::collect_computed_styles(&root, &doc, None, vp);
+    let m = &styles[&nid];
+    let prop = |n: &str| m.get(n).map_or("<absent>", String::as_str);
+    assert_eq!(prop("tab-size"), "5", "tab-size");
+    assert_eq!(prop("letter-spacing"), "2px", "letter-spacing");
+}
+
+/// The `<length>` form of the same property stays a length and resolves to px.
+#[test]
+fn tab_size_length_with_cq_resolves_against_container() {
+    let html = r#"<div class="c"><div id="t"></div></div>"#;
+    let css = ".c { container-type: inline-size; width: 100px; }
+        #t { tab-size: calc(10px + (sign(2cqw - 10px) * 5px)); }";
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(css);
+    let vp = Size::new(1024.0, 768.0);
+    let root = crate::layout(&doc, &sheet, vp);
+    let nid = crate::find_first_dom_node_by_selector(&doc, "#t").expect("#t").index() as u32;
+    let styles = crate::collect_computed_styles(&root, &doc, None, vp);
+    assert_eq!(styles[&nid].get("tab-size").map(String::as_str), Some("5px"));
+}

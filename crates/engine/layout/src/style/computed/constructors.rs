@@ -238,6 +238,7 @@ impl ComputedStyle {
             overscroll_behavior_inline: OverscrollBehavior::Auto,
             // CSS Text typography defaults.
             tab_size: 64.0,  // 8 spaces × 8px-space-width default.
+            cq_lengths: Vec::new(),
             caret_color: None,  // `auto`.
             caret_shape: CaretShape::Auto,
             caret_animation: CaretAnimation::Auto,
@@ -688,6 +689,9 @@ impl ComputedStyle {
             border_spacing_v: inherited.border_spacing_v,
             // CSS Text typography — все inherited.
             tab_size: inherited.tab_size,
+            // The parent's px is already absolute; a `cq*` value is re-resolved for the
+            // element that declared it, never inherited (BUG-1664).
+            cq_lengths: Vec::new(),
             caret_color: inherited.caret_color,
             caret_shape: inherited.caret_shape,
             caret_animation: inherited.caret_animation,

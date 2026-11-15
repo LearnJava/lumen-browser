@@ -15,6 +15,7 @@ use crate::ruby::{RubyAlign, RubyMerge, RubyPosition};
 use crate::style::values::typography::match_unicode_bidi;
 use crate::style::{
     ComputedStyle,
+    CqLengthProp,
     Content,
     CssColor,
     CssContinue,
@@ -69,7 +70,7 @@ use crate::style::{
     split_top_level_commas,
 };
 use crate::style::values::length::split_top_level_ws;
-use crate::style::parse::box_sides::{resolve_box_length, resolve_svg_length};
+use crate::style::parse::box_sides::resolve_svg_length;
 use crate::style::parse::color::parse_css_color_legacy;
 use crate::style::parse::content::parse_content_items;
 use crate::style::parse::counters::{parse_counter_list, parse_quotes};
@@ -403,12 +404,15 @@ pub(in crate::style) fn apply_decl_text(
             if val.trim() == "normal" {
                 style.letter_spacing = 0.0;
                 style.letter_spacing_pct = 0.0;
+                style.note_cq_length(CqLengthProp::LetterSpacing, &Length::Px(0.0), false);
             } else if let Some(len) = parse_length_q(val, is_quirks)
                 && let Some(base) = len.resolve(em_basis, Some(0.0), viewport)
             {
                 let unit = len.resolve(em_basis, Some(1.0), viewport).unwrap_or(base);
                 style.letter_spacing = base;
                 style.letter_spacing_pct = unit - base;
+                // `cq*` resolved without a container — the container pass redoes it (BUG-1664).
+                style.note_cq_length(CqLengthProp::LetterSpacing, &len, false);
             }
         }
         "word-spacing" => {
@@ -418,12 +422,14 @@ pub(in crate::style) fn apply_decl_text(
             if val.trim() == "normal" {
                 style.word_spacing = 0.0;
                 style.word_spacing_pct = 0.0;
+                style.note_cq_length(CqLengthProp::WordSpacing, &Length::Px(0.0), false);
             } else if let Some(len) = parse_length_q(val, is_quirks)
                 && let Some(base) = len.resolve(em_basis, Some(0.0), viewport)
             {
                 let unit = len.resolve(em_basis, Some(1.0), viewport).unwrap_or(base);
                 style.word_spacing = base;
                 style.word_spacing_pct = unit - base;
+                style.note_cq_length(CqLengthProp::WordSpacing, &len, false);
             }
         }
         "text-transform" => {
@@ -712,10 +718,23 @@ pub(in crate::style) fn apply_decl_text(
                 if n >= 0.0 && n.is_finite() {
                     style.tab_size = n * 8.0;
                     style.text_extra.tab_size_number = Some(n);
+                    style.note_cq_length(CqLengthProp::TabSize, &Length::Px(0.0), false);
                 }
-            } else if let Some(px) = resolve_box_length(trimmed, em_basis, viewport, is_quirks) {
-                style.tab_size = px.max(0.0);
-                style.text_extra.tab_size_number = None;
+            } else if let Some(len) = parse_length_q(trimmed, is_quirks)
+                && let Some(px) = len.resolve(em_basis, None, viewport)
+            {
+                // `tab-size: calc(10 + sign(…) * 5)` has a numeric dimension: a `<number>`,
+                // not a length, and it is scaled by the 8px-per-space heuristic.
+                let number = crate::style::math_value::numeric_math_is_number(trimmed, em_basis, viewport) == Some(true);
+                if number {
+                    style.tab_size = (px * 8.0).max(0.0);
+                    style.text_extra.tab_size_number = Some(px.max(0.0));
+                } else {
+                    style.tab_size = px.max(0.0);
+                    style.text_extra.tab_size_number = None;
+                }
+                // `cq*` resolved without a container — the container pass redoes it (BUG-1664).
+                style.note_cq_length(CqLengthProp::TabSize, &len, number);
             }
         }
         "overflow-wrap" | "word-wrap" => {

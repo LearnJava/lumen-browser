@@ -15,7 +15,9 @@ use serde::{Deserialize, Serialize};
 use lumen_core::geom::Size;
 
 use crate::style::math_value::canonical_math_length;
-use crate::style::calc::{calc_node_contains_percent, looks_like_function_call, parse_math_function_value};
+use crate::style::calc::{
+    calc_node_contains_cq, calc_node_contains_percent, looks_like_function_call, parse_math_function_value,
+};
 use crate::style::values::misc::OverflowClipMarginBox;
 use crate::style::{note_cq_unit, CalcNode, CONTAINER_CQ, FONT_CH_EX, FONT_LH, ROOT_FONT_METRICS, ROOT_FONT_SIZE};
 
@@ -170,6 +172,17 @@ impl Length {
         match self {
             Length::Percent(_) => true,
             Length::Calc(node) => calc_node_contains_percent(node),
+            _ => false,
+        }
+    }
+
+    /// `true` для `cq*`-единицы (в том числе внутри `calc()`): такое значение пришлось
+    /// посчитать без контейнера — его нужно перерезолвить в проходе контейнеров (BUG-1664).
+    pub fn contains_cq_unit(&self) -> bool {
+        match self {
+            Length::Cqw(_) | Length::Cqh(_) | Length::Cqi(_) | Length::Cqb(_)
+            | Length::Cqmin(_) | Length::Cqmax(_) => true,
+            Length::Calc(node) => calc_node_contains_cq(node),
             _ => false,
         }
     }
@@ -433,6 +446,13 @@ fn cq_unit(num: &str, make: fn(f32) -> Length) -> Option<Length> {
     let len = num.trim().parse::<f32>().ok().map(make)?;
     note_cq_unit();
     Some(len)
+}
+
+/// `true` if `v` textually mentions a container unit (`cqw`, `cqmin`, …) — a value whose
+/// resolution has to wait for the container pass (BUG-1664).
+pub(in crate::style) fn contains_cq_unit_text(v: &str) -> bool {
+    let l = v.to_ascii_lowercase();
+    ["cqmin", "cqmax", "cqw", "cqh", "cqi", "cqb"].iter().any(|u| l.contains(u))
 }
 
 pub fn parse_length(s: &str) -> Option<Length> {

@@ -69,6 +69,17 @@ pub fn clear_cq_context() {
     CONTAINER_CQ.with(|c| c.set(None));
 }
 
+/// The currently installed `cq*` basis, for a caller that resolves one box under its own
+/// container and must put the ambient one back ([`restore_cq_axes`]).
+pub fn cq_axes() -> Option<(Option<f32>, Option<f32>)> {
+    CONTAINER_CQ.with(|c| c.get())
+}
+
+/// Restores the `cq*` basis returned by [`cq_axes`].
+pub fn restore_cq_axes(axes: Option<(Option<f32>, Option<f32>)>) {
+    CONTAINER_CQ.with(|c| c.set(axes));
+}
+
 /// Whether a `cq*` resolution context is currently installed (BUG-802).
 ///
 /// A `cq*` length resolves against this hidden thread-local rather than against

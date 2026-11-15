@@ -34,4 +34,4 @@ WPT: `css/css-text/parsing/letter-spacing-computed.html` (4), `word-spacing-comp
 - Функция, не закрытая к концу значения, закрывается там (CSS Syntax L3 §5.4.7): `calc(10px - (5% + 10%)` ≡ `calc(10px - (5% + 10%))` (`style/calc.rs::parse_math_function_value`).
 - Числовой `calc()` в `tab-size` без `cq*` уже вычислялся (BUG-1430), покрыт тестом.
 
-Остаток: `cq*` в `tab-size` (2 сабтеста `tab-size-computed`) — [BUG-1664](BUG-1664-OPEN.md).
+Остаток: `cq*` в `tab-size` (2 сабтеста `tab-size-computed`) — [BUG-1664](BUG-1664-FIXED.md) (исправлен 2026-11-15).

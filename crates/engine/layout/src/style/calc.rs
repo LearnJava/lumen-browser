@@ -694,6 +694,23 @@ pub(in crate::style) fn calc_node_contains_percent(node: &CalcNode) -> bool {
     }
 }
 
+/// `true` if the expression contains a `cq*` unit: its value was resolved without a container
+/// and must be resolved again when the container pass knows the size (BUG-1664).
+pub(in crate::style) fn calc_node_contains_cq(node: &CalcNode) -> bool {
+    match node {
+        CalcNode::Length(l) => l.contains_cq_unit(),
+        CalcNode::Number(_) => false,
+        CalcNode::Add(a, b) | CalcNode::Sub(a, b) | CalcNode::Mul(a, b) | CalcNode::Div(a, b) => {
+            calc_node_contains_cq(a) || calc_node_contains_cq(b)
+        }
+        CalcNode::Min(args) | CalcNode::Max(args) => args.iter().any(calc_node_contains_cq),
+        CalcNode::Clamp(mn, val, mx) => {
+            calc_node_contains_cq(mn) || calc_node_contains_cq(val) || calc_node_contains_cq(mx)
+        }
+        CalcNode::Func(_, args) => args.iter().any(calc_node_contains_cq),
+    }
+}
+
 // ──────────────── calc() лексер + парсер ────────────────
 
 #[derive(Debug, Clone, PartialEq)]
