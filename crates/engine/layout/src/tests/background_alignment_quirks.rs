@@ -596,6 +596,23 @@ fn quirks_table_font_size_resets_to_initial() {
     );
 }
 
+/// BUG-1670: `font-family` в quirks-reset `<table>` не входит (HTML §15.3.7) —
+/// таблица и её ячейки наследуют семейство от родителя.
+#[test]
+fn quirks_table_font_family_inherits() {
+    let root = lay(
+        "<body><table><tr><td>x</td></tr></table></body>",
+        "body { font-family: Verdana; }",
+    );
+    let table = first_element_child(&root);
+    assert_eq!(
+        table.style.font_family,
+        vec!["Verdana".to_string()],
+        "table в Quirks должен наследовать font-family, получено {:?}",
+        table.style.font_family
+    );
+}
+
 /// В Standards mode (`<!DOCTYPE html>`) `<table>` наследует font-size
 /// от родителя как обычный элемент.
 #[test]

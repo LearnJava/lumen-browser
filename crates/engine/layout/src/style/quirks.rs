@@ -9,8 +9,8 @@
 use lumen_dom::{Document, DocumentMode, NodeData, NodeId};
 
 use crate::style::{
-    default_font_family, Color, ComputedStyle, FontStretch, FontStyle, FontVariantCaps,
-    FontWeight, Length, TextAlign, WhiteSpace, ROOT_FONT_SIZE,
+    Color, ComputedStyle, FontStretch, FontStyle, FontVariantCaps, FontWeight, Length, TextAlign,
+    WhiteSpace, ROOT_FONT_SIZE,
 };
 
 /// CSS Quirks Mode — UA-rule только для Quirks-mode: элемент `<table>`
@@ -28,13 +28,14 @@ use crate::style::{
 ///     color: -webkit-text;
 ///     text-align: -webkit-auto;
 ///     white-space: normal;
-///     font-family: -webkit-default;
 /// }
 /// ```
 ///
-/// Эффект: classics 90-х/2000-х с `<body style="font: 20px serif; color:
-/// blue">` + table-layout не «протекают» в таблицу — таблица отрисовывается
-/// дефолтным шрифтом / цветом. В Standards / LimitedQuirks таблица
+/// `font-family` в списке нет (HTML §15.3.7) — таблица его наследует
+/// (BUG-1670: HN в quirks-режиме). Эффект: classics 90-х/2000-х с
+/// `<body style="font: 20px serif; color: blue">` + table-layout не
+/// «протекают» в таблицу — таблица отрисовывается дефолтными размерами /
+/// цветом. В Standards / LimitedQuirks таблица
 /// наследует обычно. Author CSS поверх Quirks-reset выигрывает: spec
 /// §UA-stylesheet — это самый низкий cascade origin.
 pub(in crate::style) fn apply_quirks_table_reset(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
@@ -51,7 +52,6 @@ pub(in crate::style) fn apply_quirks_table_reset(doc: &Document, node: NodeId, s
     style.line_height = 1.2;
     style.line_height_is_relative = true;
     style.line_height_is_normal = true;
-    style.font_family = default_font_family();
     style.font_style = FontStyle::Normal;
     style.font_oblique_angle = None;
     style.font_variant_caps = FontVariantCaps::Normal;
