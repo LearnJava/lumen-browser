@@ -72,4 +72,35 @@ setter-страница из `getComputedStyle`/`style`); `style.objectPosition 
 раскладка `<mask-layer>` по лонгхендам и сборка обратно; `clip`/`clip-path`
 (`clip-{invalid,valid,computed}.html`, `clip-path-*.html`) — `parse_clip_path` сводит
 `rect()`/`xywh()` к `inset()` и не является канонизатором указанного значения, нужен свой
-сериализатор; `css-fonts`-половина карточки (шрифтовые свойства) не тронута.
+сериализатор; `css-fonts`-половина карточки (шрифтовые свойства) тронута только ключевыми
+свойствами (срез 2), см. ниже.
+
+## Срез 2 (2026-11-16, P3): CSS Fonts, ключевые свойства
+
+Валидация и канон `element.style` для ключевых свойств CSS Fonts
+(`crates/engine/layout/src/style/values/font_cssom.rs::canonical_specified_font`, натив
+`_lumen_css_canonical_font`, таблица `_LUMEN_FONT_PROPERTIES`):
+
+- одиночные ключевые слова: `font-kerning` (`auto|normal|none`), `font-optical-sizing`
+  (`auto|none`), `font-variant-caps`, `font-variant-position`, `font-variant-emoji`;
+- `font-palette`: `normal|light|dark|<dashed-ident>`, идентификатор сохраняет регистр;
+- `font-variant-{ligatures,numeric,east-asian}` — по одному значению из каждой группы,
+  запись в порядке спецификации (`slashed-zero ordinal stacked-fractions proportional-nums
+  lining-nums` → `lining-nums proportional-nums stacked-fractions ordinal slashed-zero`);
+- `font-synthesis` — `none | [weight || style || small-caps || position]`, канон
+  `weight style small-caps position` (`oblique-only` на месте `style`) и его четыре
+  лонгхенда (по отдельному ключу, без раскладки по лонгхендам).
+
+Зелёные файлы (`css/css-fonts/parsing/`, ожидания `.ini` удалены): `font-kerning-{invalid,valid}`,
+`font-optical-sizing-{invalid,valid}`, `font-palette-{invalid,valid}`,
+`font-variant-{caps,ligatures,numeric,east-asian,position,emoji}-{invalid,valid}`,
+`font-synthesis-{invalid,valid}`, `font-synthesis-{weight,style,small-caps,position}-{invalid,valid}` —
+28 файлов, 0 неожиданных результатов. Ожидание карточки для `fontLanguageOverride` (`"ENG"` →
+`"ENG "`) устарело: WPT `font-language-override-valid.html` требует кратчайшую запись
+(`"ENG"` → `"ENG"`, хвостовые пробелы снимаются).
+
+**Остаток среза 2:** `font-family`, `font-size`, `font-width`, `font-size-adjust` (числа и
+`calc()`), `font-feature-settings`/`font-variation-settings` (теги с раскрытием escape-последовательностей),
+`font-variant-alternates` (`styleset()`/`character-variant()`), `font-language-override`,
+шорткоды `font`/`font-variant`, `font-kerning-computed` и остальные `*-computed.html`
+(это `getComputedStyle`, BUG-1407/1278).
