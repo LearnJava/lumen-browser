@@ -57,8 +57,8 @@
 {
  "generated": "2026-11-15",
  "counts": {
-  "open": 322,
-  "fixed": 1425,
+  "open": 311,
+  "fixed": 1436,
   "inprogress": 0,
   "wontfix": 4
  },
@@ -10221,20 +10221,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1074": {
-   "status": "open",
-   "title": "`Element.nodeValue`/`DocumentFragment.nodeValue` возвращают `undefined` вместо спекового `null` (DOM §4.4) — свойство отсутствует в дескрипторах обёртки, тогда…",
-   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — элементная обёртка/`DocumentFragment`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1077": {
-   "status": "open",
-   "title": "Побочный эффект BUG-1059 (закрыт 2026-09-19, починил рендер): плавающая dev-панель `#demoBar` (CC-18, \"не часть Lumen\") теперь всегда видна в живом окне, а `mse…",
-   "component": "тулинг графтестов / shell chrome (`assets/chrome/chrome.html` `.demo-bar`; `crates/shell/src/chrome_ui.rs`/`chrome_float.rs`)",
-   "date": null,
-   "debtor": true
-  },
   "BUG-1235": {
    "status": "open",
    "title": "Остаток [BUG-1097](bugs/BUG-1097-FIXED.md): `script-tag` (141), `sharedworker-classic` (12), `a-tag` (3) в `referrer-policy/4K*` падают с `promise_test: Unhandl…",
@@ -10295,20 +10281,6 @@
    "status": "open",
    "title": "Под холодной сборкой `-j 8` рядом `run_report.py --processes 4` не начинает ни одного теста: `lumen` поднялись, но раннер не доходит до `init_succeeded` за 30 с…",
    "component": "WPT-харнесс (`tools/wptrunner/wptrunner/testrunner.py` — `init_timeout`; `LumenBrowser` берёт 30 с из `browsers/base.py:104`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1173": {
-   "status": "open",
-   "title": "`new URL(x)` без второго аргумента резолвит `x` относительно `location.href` вместо того, чтобы бросить `TypeError` на строке без схемы (URL Standard: base не п…",
-   "component": "js (`crates/js/src/shim/url_shim.js:254` `URL`, `:166` `_url_resolve`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1174": {
-   "status": "open",
-   "title": "`WorkerNavigator.permissions` отсутствует: Permissions API (`[Exposed=(Window,Worker)]`) не установлен в воркерах, `navigator.permissions === undefined` в `Dedi…",
-   "component": "js (`crates/js/src/permissions.rs` ставится только в окно; воркерный глобал)",
    "date": null,
    "debtor": false
   },
@@ -11187,13 +11159,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1647": {
-   "status": "open",
-   "title": "`grecaptcha.execute` не возвращает токен: балла v3 нет (Chrome — 0.9); v2 рисуется. Срез 1 (2026-11-15): `TypeError` в anchor-кадре больше не воспроизводится. С…",
-   "component": "js (reCAPTCHA v3, anchor-кадр; `frame_bridge.rs::_lumen_f_post_message`, `shim/message_channel_shim.js`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1648": {
    "status": "open",
    "title": "Оверлей не знает каскадного происхождения значения: `!important` в таблице стилей должен перебивать `@keyframes`, а он перебивается (`css-animations/important-r…",
@@ -11292,45 +11257,10 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1664": {
-   "status": "open",
-   "title": "`cq*`-единицы в заранее резолвимых при каскаде свойствах (`tab-size: calc(10 + (sign(2cqw - 10px) * 5))`, `font-size: 5cqw`, `letter-spacing: 2cqw`) не видят ко…",
-   "component": "layout (`crates/engine/layout/src/box_tree/container_anchor.rs:30`, `style/apply/text.rs` — `tab-size`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1667": {
    "status": "open",
    "title": "`getComputedStyle(el, '::marker')`: маркер без бокса (`list-style: none`, `content: none`) и `::marker` у не-`list-item` отдают пустую строку вместо `none`/`aut…",
    "component": "layout/js (`crates/engine/layout/src/lib.rs::collect_pseudo_computed_styles_box`, `inject_marker`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1668": {
-   "status": "open",
-   "title": "`margin: 0 auto` не центрирует блок, ширину которого ограничил `max-width`: auto-поля получают 0 до применения ограничения (example.com `body`, MDN). Найден geo…",
-   "component": "layout (ширина блока в потоке)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1669": {
-   "status": "open",
-   "title": "`<center>` не центрирует блочного потомка (таблицу `width:50%`): нет `text-align: -webkit-center` для блочных детей (HN). Найден geom_diff (TEST-11), [отчёт](do…",
-   "component": "layout/UA-стили (`center`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1670": {
-   "status": "open",
-   "title": "Quirks-режим: таблица сбрасывает `font-family` к `serif`, а не наследует его (HN: Verdana у body → Times в ячейках). Найден geom_diff (TEST-11), [отчёт](docs/qu…",
-   "component": "layout/UA-стили (quirks `table`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1671": {
-   "status": "open",
-   "title": "`getBoundingClientRect` = `0,0,0,0` у пустого inline (`<span><\/span>` между текстом) и у inline с блочным потомком. Найден geom_diff (TEST-11), [отчёт](docs/qua…",
-   "component": "js/layout (rect строчного элемента)",
    "date": null,
    "debtor": false
   },
@@ -11982,13 +11912,6 @@
    "status": "open",
    "title": "Own `opacity`/`mask-image`/`blend`/`transform` на replaced-боксах `Canvas`/`Video`/`Iframe`/`Audio` молча игнорируются — их нет в списке владельцев слоя краски…",
    "component": "layout/paint (`stacking.rs::box_can_own_stacking_context`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1816": {
-   "status": "open",
-   "title": "reCAPTCHA v3: JS-путь цел — `execute` резолвится за ~9 с без ошибок в stderr, но токен короткий (`HF…`, ~630 символов) и Google его отвергает: `verify.php` → `{…",
-   "component": "js/network (ветка сигналов бандла reCAPTCHA: `api2/webworker.js`, `Worker` в окне, `api.js ↔ anchor`)",
    "date": null,
    "debtor": false
   },
@@ -22002,15 +21925,96 @@
    "date": "2026-11-15",
    "debtor": false
   },
+  "BUG-1816": {
+   "status": "fixed",
+   "title": "",
+   "component": "",
+   "date": "2026-11-15",
+   "debtor": false
+  },
+  "BUG-1647": {
+   "status": "fixed",
+   "title": "",
+   "component": "",
+   "date": "2026-11-15",
+   "debtor": false
+  },
   "BUG-1815": {
    "status": "fixed",
    "title": "`cargo test -p lumen-js --lib --features v8-backend frame_bridge` 75/75, из них новые `a_frame_with_its_own_isolate_hands_builtin_objects_with_methods` (`.kind…",
    "component": "js (`crates/js/src/frame_bridge.rs`, `v8_runtime/eval.rs`)",
    "date": "2026-11-15",
    "debtor": false
+  },
+  "BUG-1669": {
+   "status": "fixed",
+   "title": "`cargo test -p lumen-layout` 6021 passed, из них новые `bug1669_webkit_center` (`<center>`/`div align=center` с таблицей 400px в 800px → x=200, plain `text-alig…",
+   "component": "layout/UA-стили (`crates/engine/layout/src/style/ua.rs`, `style/presentational.rs`, `box_tree/block_flow_trampoline.rs`)",
+   "date": "2026-11-15",
+   "debtor": false
+  },
+  "BUG-1668": {
+   "status": "fixed",
+   "title": "`cargo test -p lumen-layout --lib` 6015 passed, из них новый `flow_modes::margin_auto_centers_block_clamped_by_max_width` (800 → w=400, x=200; без фикса x=0); `…",
+   "component": "layout (`crates/engine/layout/src/box_tree/layout_dispatch/dispatch_box.rs`)",
+   "date": "2026-11-15",
+   "debtor": false
+  },
+  "BUG-1670": {
+   "status": "fixed",
+   "title": "`cargo test -p lumen-layout` 6023 passed, из них новый `quirks_table_font_family_inherits` (quirks `body{font-family:Verdana}` → у `table` `Verdana`, без фикса…",
+   "component": "layout/UA-стили (`crates/engine/layout/src/style/quirks.rs`)",
+   "date": "2026-11-15",
+   "debtor": false
+  },
+  "BUG-1664": {
+   "status": "fixed",
+   "title": "`cargo test -p lumen-layout --lib` 6025 passed, из них новые `container_units::cascade_resolved_props_see_the_container` (`tab-size: 5`, `letter-spacing: 2px`)…",
+   "component": "layout (`crates/engine/layout/src/box_tree/container_anchor.rs`, `style/apply/text.rs`, `style/apply.rs`, `style/computed.rs`, `style/env.rs`, `style/math_value.rs`)",
+   "date": "2026-11-15",
+   "debtor": false
+  },
+  "BUG-1671": {
+   "status": "fixed",
+   "title": "`getBoundingClientRect` = `0,0,0,0` у пустого inline (`<span><\/span>` между текстом) и у inline с блочным потомком (`<a><div>`); на сайтах HN/crates.io скрипты,…",
+   "component": "js/layout (rect строчного элемента)",
+   "date": "2026-11-15",
+   "debtor": false
+  },
+  "BUG-1173": {
+   "status": "fixed",
+   "title": "`new URL(\"0\")`/`new URL(\"a--b\")`/`new URL(\"../x\")`/`new URL(\"/abs\")` на https-странице возвращали `https://…` вместо `TypeError`, из-за чего все проверки «это а…",
+   "component": "js (`crates/js/src/webtransport.rs`, `crates/js/src/payment_request.rs`, `crates/js/src/shim/url_shim.js`)",
+   "date": "2026-11-15",
+   "debtor": false
+  },
+  "BUG-1174": {
+   "status": "fixed",
+   "title": "`install_worker_scope_globals_v8` (общая точка всех трёх видов воркеров) ставит шим сразу после `install_worker_exposed_v8`; так как в воркере нет прохода `fina…",
+   "component": "js (`crates/js/src/worker.rs`, `crates/js/src/permissions.rs`)",
+   "date": "2026-11-15",
+   "debtor": false
+  },
+  "BUG-1074": {
+   "status": "fixed",
+   "title": "Пара аксессоров `nodeValue` добавлена в `_LUMEN_WRAPPER_MEMBERS`, имя внесено в `_LUMEN_NODE_MEMBER_NAMES`, поэтому геттер ставится на `Node.prototype` и достаё…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js`)",
+   "date": "2026-11-15",
+   "debtor": false
+  },
+  "BUG-1077": {
+   "status": "fixed",
+   "title": "`#demoBar` (CC-18) стала видимой в живом окне побочным эффектом BUG-1059 и перекрывала нижний левый угол страницы, которого нет в эталоне Edge: `demo_panel_hidd…",
+   "component": "тулинг графтестов / shell chrome (`crates/shell/src/chrome_float.rs`, `graphic_tests/run.py`)",
+   "date": "2026-11-15",
+   "debtor": true
   }
  },
  "unlinked": {
+  "": [
+   "BUG-1647",
+   "BUG-1816"
+  ],
   "CI (`scripts/check_file_sizes.py`, job `file-size`, `docs/lint-policy.md` §5.1)": [
    "BUG-1002"
   ],
@@ -22780,9 +22784,6 @@
   "js (`crates/js/src/offscreen_canvas.rs` — `transferToImageBitmap`/`createImageBitmap`)": [
    "BUG-933"
   ],
-  "js (`crates/js/src/permissions.rs` ставится только в окно; воркерный глобал)": [
-   "BUG-1174"
-  ],
   "js (`crates/js/src/permissions_policy.rs:37-44` — `FeaturePolicy.prototype.allowsFeature`)": [
    "BUG-697"
   ],
@@ -22848,9 +22849,6 @@
   ],
   "js (`crates/js/src/shim/url_parse_shim.js::_lumen_parse_url`)": [
    "BUG-904"
-  ],
-  "js (`crates/js/src/shim/url_shim.js:254` `URL`, `:166` `_url_resolve`)": [
-   "BUG-1173"
   ],
   "js (`crates/js/src/shim/video_element.js:286` `VTTCue`)": [
    "BUG-1751"
@@ -23017,10 +23015,8 @@
   "js (`crates/js/src/shim/web_api_shim_mid.js` — фабрики коллекций `getElementsByTagName`/`getElementsByClassName`/`querySelectorAll`/`children`)": [
    "BUG-994"
   ],
-  "js (`crates/js/src/shim/web_api_shim_mid.js` — элементная обёртка/`DocumentFragment`)": [
-   "BUG-1074"
-  ],
   "js (`crates/js/src/shim/web_api_shim_mid.js`)": [
+   "BUG-1074",
    "BUG-1392",
    "BUG-463",
    "BUG-474",
@@ -23304,6 +23300,9 @@
   "js (`crates/js/src/webgpu.rs` — `WEBGPU_SHIM`)": [
    "BUG-712"
   ],
+  "js (`crates/js/src/webtransport.rs`, `crates/js/src/payment_request.rs`, `crates/js/src/shim/url_shim.js`)": [
+   "BUG-1173"
+  ],
   "js (`crates/js/src/worker.rs::WORKER_SHIM`) / shell (`crates/shell/src/lumen/bfcache.rs::park_current_page`)": [
    "BUG-988"
   ],
@@ -23315,6 +23314,9 @@
   ],
   "js (`crates/js/src/worker.rs` — `run_worker_thread_v8`)": [
    "BUG-937"
+  ],
+  "js (`crates/js/src/worker.rs`, `crates/js/src/permissions.rs`)": [
+   "BUG-1174"
   ],
   "js (`crates/js/src/worker.rs`, `shared_worker.rs` — глобал `caches`)": [
    "BUG-1746"
@@ -23414,9 +23416,6 @@
   ],
   "js (live DOM bindings)": [
    "BUG-279"
-  ],
-  "js (reCAPTCHA v3, anchor-кадр; `frame_bridge.rs::_lumen_f_post_message`, `shim/message_channel_shim.js`)": [
-   "BUG-1647"
   ],
   "js (shell)": [
    "BUG-233"
@@ -23588,9 +23587,6 @@
   ],
   "js/network (`crates/js/src/v8_runtime/install/net.rs` — `_lumen_send_beacon`)": [
    "BUG-1770"
-  ],
-  "js/network (ветка сигналов бандла reCAPTCHA: `api2/webworker.js`, `Worker` в окне, `api.js ↔ anchor`)": [
-   "BUG-1816"
   ],
   "js/network граница (`crates/network/src/lib.rs::HttpClient::fetch_subresource_inner`; `crates/shell/src/page_load.rs`/`frames.rs`)": [
    "BUG-520"
@@ -23867,11 +23863,11 @@
   "layout (`crates/engine/layout/src/box_tree/container_anchor.rs:30` — раннее возвращение при `sheet.container_rules.is_empty()`; `crates/engine/layout/src/style/env.rs` `CONTAINER_CQ`)": [
    "BUG-1499"
   ],
-  "layout (`crates/engine/layout/src/box_tree/container_anchor.rs:30`, `style/apply/text.rs` — `tab-size`)": [
-   "BUG-1664"
-  ],
   "layout (`crates/engine/layout/src/box_tree/container_anchor.rs` — выбор контейнера по `container-type`/имени/осям)": [
    "BUG-1498"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/container_anchor.rs`, `style/apply/text.rs`, `style/apply.rs`, `style/computed.rs`, `style/env.rs`, `style/math_value.rs`)": [
+   "BUG-1664"
   ],
   "layout (`crates/engine/layout/src/box_tree/entry.rs::canvas_background_color`)": [
    "BUG-1103"
@@ -24041,6 +24037,9 @@
   "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs`)": [
    "BUG-1348",
    "BUG-466"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/layout_dispatch/dispatch_box.rs`)": [
+   "BUG-1668"
   ],
   "layout (`crates/engine/layout/src/box_tree/line_break.rs`, `inline_wrap.rs` — для класса SA возможностей переноса нет; `lang` не используется)": [
    "BUG-1331"
@@ -24434,9 +24433,6 @@
   "layout (самостоятельный SVG-документ верхнего уровня: `parse_xml_flavoured` + UA-стили `body`)": [
    "BUG-1659"
   ],
-  "layout (ширина блока в потоке)": [
-   "BUG-1668"
-  ],
   "layout / css-parser (`@color-profile`, `color()`)": [
    "BUG-282"
   ],
@@ -24450,7 +24446,10 @@
   "layout/UA-стили (SVG) и js": [
    "BUG-1672"
   ],
-  "layout/UA-стили (`center`)": [
+  "layout/UA-стили (`crates/engine/layout/src/style/quirks.rs`)": [
+   "BUG-1670"
+  ],
+  "layout/UA-стили (`crates/engine/layout/src/style/ua.rs`, `style/presentational.rs`, `box_tree/block_flow_trampoline.rs`)": [
    "BUG-1669"
   ],
   "layout/UA-стили (`html.css`)": [
@@ -24458,9 +24457,6 @@
   ],
   "layout/UA-стили (`template`)": [
    "BUG-1675"
-  ],
-  "layout/UA-стили (quirks `table`)": [
-   "BUG-1670"
   ],
   "layout/chrome (`.modal` в `assets/chrome/chrome.html`; flex column + `max-height:82%`)": [
    "BUG-1607"
@@ -25516,7 +25512,7 @@
   "тулинг WPT (`tools/wptrunner/wptrunner/browsers/lumen.py::env_options` — `browser_host = \"localhost\"`; движок `origin.rs::is_loopback_host` прав)": [
    "BUG-1285"
   ],
-  "тулинг графтестов / shell chrome (`assets/chrome/chrome.html` `.demo-bar`; `crates/shell/src/chrome_ui.rs`/`chrome_float.rs`)": [
+  "тулинг графтестов / shell chrome (`crates/shell/src/chrome_float.rs`, `graphic_tests/run.py`)": [
    "BUG-1077"
   ]
  }
