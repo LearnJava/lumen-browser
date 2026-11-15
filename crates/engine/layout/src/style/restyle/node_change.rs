@@ -125,8 +125,9 @@ impl OwnedNodeChange {
 /// [`NodeRestyleIndex::has_reach_roots`]. BUG-349 first widened every change to
 /// the whole document; BUG-935 s58 replaced that with this index, because on a
 /// real page every forced reflow restyled and re-collected all of it. A
-/// document with an author shadow root (shadow sheets are not scanned) still
-/// widens to the whole document.
+/// document with an author shadow root (shadow sheets are not scanned) widens
+/// to the whole document only for a change those sheets can observe — BUG-1794
+/// срез 4, [`change_can_reach_shadow_sheets`].
 ///
 /// **Known gap, same family:** `:indeterminate` on a radio group and
 /// `:default` on a form's submit button read *other* elements' `name`/`checked`/
@@ -134,6 +135,11 @@ impl OwnedNodeChange {
 /// document-shaped rather than subtree-shaped, so neither the pre-S17
 /// widen-to-parent nor S17's narrowing expresses it — pre-existing, not
 /// introduced here.
+///
+/// BUG-1794 срез 4 — a document with author shadow roots used to widen *every* change to
+/// the whole document while the sheet has a `:has()`. The shadow sheets are indeed not
+/// scanned, but they only see their own tree and the host, so only a change
+/// [`change_can_reach_shadow_sheets`] names can reach them.
 pub fn restyle_root_set_for_node_change<'a>(
     doc: &Document,
     changes: impl IntoIterator<Item = (NodeId, NodeChange<'a>)>,
@@ -157,6 +163,24 @@ pub struct RestyleRoots {
     /// root's written token for: each is recascaded on its own (`RestyleDelta::point_roots`),
     /// the rest of the shallow root's subtree is left alone.
     pub point: HashSet<NodeId>,
+}
+
+/// BUG-1794 срез 4 — whether a change on `n` can flip a match in a shadow tree's own
+/// sheet, the part of the cascade [`NodeRestyleIndex`] does not scan.
+///
+/// A shadow sheet's selectors see only its own tree and the host: `:host(…)` reads the
+/// host's attributes, `::slotted(…)` reads a *direct* light child of the host
+/// ([`is_slotted_element`]), the rest match shadow-tree nodes. A change anywhere else in
+/// the light tree — not a host, not a slotted child, not inside a shadow tree — is
+/// therefore invisible to those sheets, and the parent-only widening plus
+/// [`NodeRestyleIndex::has_reach_roots`] covers it exactly as on a shadow-free page.
+/// Non-`Element` nodes (a text node reported for a data change) read nothing themselves;
+/// their parent chain is what decides.
+fn change_can_reach_shadow_sheets(doc: &Document, n: NodeId) -> bool {
+    matches!(doc.get(n).data, NodeData::ShadowRoot { .. })
+        || doc.is_shadow_host(n)
+        || doc.enclosing_shadow_host(n).is_some()
+        || doc.get(n).parent.is_some_and(|p| doc.is_shadow_host(p))
 }
 
 /// BUG-935 срез 60 — like [`restyle_root_set_for_node_change`], but a
@@ -236,14 +260,18 @@ fn root_set_impl<'a>(
     allow_shallow: bool,
     has_style: Option<&dyn Fn(NodeId) -> bool>,
 ) -> RestyleRoots {
-    if index.has_dependent && index.has_in_shadow_doc {
-        return RestyleRoots { deep: changes.into_iter().map(|_| doc.root()).collect(), ..RestyleRoots::default() };
-    }
     let mut roots = RestyleRoots::default();
     let shallow_ok = allow_shallow && !index.conservative;
     // Containers whose every element child was asked `child_needs_deep_restyle`.
     let mut scanned_all: HashSet<NodeId> = HashSet::new();
     for (n, change) in changes {
+        // BUG-1794 срез 4 — a change no shadow sheet can observe keeps the narrowed roots
+        // (the shadow sheets are unscanned, not unreachable); only one that can needs the
+        // whole document, as before.
+        if index.has_dependent && index.has_in_shadow_doc && change_can_reach_shadow_sheets(doc, n) {
+            roots.deep.insert(doc.root());
+            continue;
+        }
         // BUG-935 срез 82: a node the cascade has no style for is recascaded in full when
         // its parent's child list change reaches it.
         if shallow_ok

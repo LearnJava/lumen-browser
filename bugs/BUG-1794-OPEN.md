@@ -1,8 +1,9 @@
 # BUG-1794 — github.com: сталл движка на загрузке — eval >5 с, страница blank
 
-**Статус:** OPEN (срез 3 — живой путь измерен целиком: готовность держат каскадные
-флеши с deep-корнем всего документа, не отдельная стадия; `:is()`/`:where()` в
-индексе субъекта дают `cs_match` −30 %)
+**Статус:** OPEN (срез 4 — страж `has_in_shadow_doc` сужен: весь документ
+рестайлится только для изменения, наблюдаемого листом теневого дерева; сумма
+флешей 20.6 → 16.1 с, готовность не двигается — остаток в `:has()`-кандидатах
+`html`/`#node`)
 **Заведён:** 2026-11-06 (P3, находка compat-crawl 10 сайтов)
 **Область:** js/shell — производительность V8 на тяжёлом JS (Primer/React), `about_to_wait.rs`
 
@@ -29,6 +30,51 @@
 
 - Compat-crawl отчёт: `.tmp/compat-crawl/20261106-170917/summary.md` (не коммитится, `.tmp/`).
 - Близкие места: `crates/shell/src/app/about_to_wait.rs:295` (eval-сталл watchdog), engine-thread pump (`relayout.rs::pump_raf_engine_thread`).
+
+## Срез 4 (2026-11-15, P3): страж `has_in_shadow_doc` сужен до изменения, которое видит shadow-лист
+
+**Фикс.** `restyle/node_change.rs::change_can_reach_shadow_sheets` — вместо «в документе
+есть авторский shadow-root → любое изменение рестайлит весь документ» документный
+корень ставится только когда изменение вообще наблюдаемо листом теневого дерева:
+узел — shadow host (`:host(…)` читает его атрибуты), прямой светлый ребёнок хоста
+(`::slotted(…)`, `matching.rs::is_slotted_element`), узел внутри теневого дерева
+(`enclosing_shadow_host`) или сам shadow root. Остальное — та же починка, что и на
+странице без теней: parent-widening плюс `has_reach_roots`; `conservative` (родитель
+вместо узла) сохраняется, поэтому сужение не включает незвучащий shallow-путь.
+Тест `a_change_no_shadow_sheet_can_observe_stays_narrow_with_a_has_sheet`
+(`style/tests/node_fanout_tests.rs`): светлое изменение — не корень документа,
+запись на `::slotted`-ребёнке — по-прежнему `doc.root()`; прежний
+`has_with_a_shadow_root_in_the_document_still_widens_to_the_whole_document` (запись
+на хосте) остаётся зелёным.
+
+**Звуковость на живом github:** прогон с `LUMEN_VERIFY_INCR_CASCADE=1` — шесть
+`[verify] incr cascade: 2081/2086/2087 styles, equal to a full cascade`.
+
+**A/B на живом github** (dev-release, `--maximized`, `LUMEN_NO_ADBLOCK=1`,
+`LUMEN_FRAME_LOG=1`, compat `--only github`, `.tmp/compat-s4-old` против
+`.tmp/compat-s4-new`, временный env-переключатель стража снят):
+
+| метрика | страж как был | сужен |
+|---|---|---|
+| флеши за загрузку | 8 (2 full + 6 incr) | 9 (2 full + 7 incr) |
+| сумма флешей | 20.6 с | 16.1 с |
+| худший флеш | 5.2 с | 4.6 с |
+| полных пересчётов документа (2086–2087 узлов) | 4 | 2 (+ один 2099) |
+| узких флешей | 0 | 3 (14/10/0 пересчитанных узлов) |
+| `ready_s` | 23.14 | 23.53 |
+| text_len | 0 (DEGRADED) | 0 (DEGRADED) |
+
+**Что осталось держать полный документ** (видно в том же логе): `:has()`-кандидат
+структурно матчит `html`/`#node` → `has_reach_roots` ставит их deep-корнем, потому
+что перечисление субъектов по `SubjectIndex` (BUG-1800 срез 6) включается только при
+`shallow_ok`, а его снимает `conservative` от того же shadow-root; и
+`#node:ChildListEnds` (изменение списка детей документа) по построению даёт корень
+`#node`. Следующий рычаг — отвязать s6-перечисление от `shallow_ok` (шумный и
+рискованный шаг: `conservative` существует ради `:nth-child(… of S)`, к
+перечислению субъектов `:has()` отношения не имеющего).
+
+**Гейт:** `cargo clippy -p lumen-layout --all-targets -- -D warnings` чист;
+`cargo test -p lumen-layout --lib` 6014 зелёных, 4 ignored.
 
 ## Срез 3 (2026-11-15, P3): живой путь целиком — что держит 24.5 с; `:is()`/`:where()` в индексе субъекта
 
