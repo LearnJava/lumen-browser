@@ -120,6 +120,13 @@ mod tests {
     ) {
         let child_rt = Arc::new(V8JsRuntime::new().unwrap());
         child_rt.eval("var window = globalThis;").unwrap();
+        // Шим бриджа ставится в каждый контекст движка до скриптов страницы —
+        // здесь он нужен ребёнку ради снимка встроенных (BUG-1815).
+        install_frame_bridge_v8(
+            &child_rt,
+            Arc::new(Mutex::new(FrameDocSlots::default())),
+        )
+        .unwrap();
         child_rt.eval(child_script).unwrap();
 
         let parent_rt = V8JsRuntime::new().unwrap();
@@ -169,6 +176,35 @@ mod tests {
     fn absent_global_reads_as_absent_not_a_thrown_error() {
         with_parent_and_child("", true, |rt| {
             assert_eq!(eval_str(rt, "_lumen_f_global_get(0, 'nope').kind"), "absent");
+        });
+    }
+
+    /// BUG-1815: у кадра СО СВОИМ изолятом встроенные объекты приходят копией
+    /// без методов (`JSON.parse` === undefined) — читатель подставляет свои
+    /// (методы живы), а собственное значение страницы по-прежнему приходит
+    /// данными.
+    #[test]
+    fn a_frame_with_its_own_isolate_hands_builtin_objects_with_methods() {
+        with_parent_and_child("window.own = { a: 1 };", true, |rt| {
+            assert_eq!(eval_str(rt, "_lumen_f_global_get(0, 'JSON').kind"), "builtin");
+            assert!(eval_bool(
+                rt,
+                "_lumen_frame_content_window(7).JSON.parse('{\"a\":1}').a === 1"
+            ));
+            assert!(eval_bool(
+                rt,
+                "_lumen_frame_content_window(7).Math.max(1, 2) === 2"
+            ));
+            assert!(eval_bool(rt, "_lumen_frame_content_window(7).own.a === 1"));
+        });
+    }
+
+    /// BUG-1815: страница кадра переопределила встроенное имя — это уже её
+    /// собственное значение, оно уходит данными, а не встроенным читателя.
+    #[test]
+    fn a_page_value_shadowing_a_builtin_name_stays_data() {
+        with_parent_and_child("window.JSON = { parse: 'page-own' };", true, |rt| {
+            assert_eq!(eval_str(rt, "_lumen_f_global_get(0, 'JSON').kind"), "value");
         });
     }
 

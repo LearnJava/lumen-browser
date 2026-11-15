@@ -611,6 +611,37 @@ impl V8JsRuntime {
 
 use crate::frame_peer_bridge::{FramePeerBridge, envelope_error, envelope_tag, envelope_value};
 
+/// BUG-1815: `name` в изоляте пира всё ещё указывает на неизменённый встроенный
+/// объект ECMAScript (идентичность со снимком, который шим бриджа снял при
+/// установке — `_lumen_pristine_intrinsics` в контейнере). Такой объект не
+/// пересекает границу изолятов с методами: читатель получает свой одноимённый
+/// встроенный (`frame_bridge.rs` `wrapWinFacadeGlobals`, прецедент BUG-1813).
+#[cfg(feature = "v8-backend")]
+fn names_pristine_intrinsic<'s>(
+    scope: &v8::PinScope<'s, '_>,
+    ctx: v8::Local<'s, v8::Context>,
+    name: &str,
+    val: v8::Local<'s, v8::Value>,
+) -> bool {
+    let Some(container) = crate::internal_globals::container(scope, ctx) else {
+        return false;
+    };
+    let Some(key) = v8::String::new(scope, "_lumen_pristine_intrinsics") else {
+        return false;
+    };
+    let Some(map) = container.get(scope, key.into()) else {
+        return false;
+    };
+    let Ok(map) = v8::Local::<v8::Object>::try_from(map) else {
+        return false;
+    };
+    let Some(key) = v8::String::new(scope, name) else {
+        return false;
+    };
+    map.get(scope, key.into())
+        .is_some_and(|snapshot| snapshot.strict_equals(val))
+}
+
 impl FramePeerBridge for V8JsRuntime {
     fn peer_global_get(&self, name: &str) -> JsValue {
         let name = name.to_owned();
@@ -630,6 +661,14 @@ impl FramePeerBridge for V8JsRuntime {
                 };
                 if val.is_undefined() {
                     return envelope_tag("absent");
+                }
+                // BUG-1815: встроенный объект realm'а пира отдаётся не копией,
+                // а тегом — читатель подставит свой одноимённый встроенный.
+                if val.is_object()
+                    && !val.is_function()
+                    && names_pristine_intrinsic(tc, ctx, &name, val)
+                {
+                    return envelope_tag("builtin");
                 }
                 if val.is_function() {
                     return envelope_tag("function");
