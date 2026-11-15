@@ -1,10 +1,44 @@
 # BUG-1790 — Cloudflare Turnstile: челлендж-кадр работает, но не выдаёт токен (детект со стороны challenge)
 
-**Статус:** OPEN (срез 2 — починен `Node.parentElement` в shadow-дереве: локальный стенд на
-always-pass ключе выдаёт токен; живая страница упирается в остаток [BUG-480](BUG-480-OPEN.md))
+**Статус:** OPEN (срез 3 — синхронный initial about:blank у вставленного скриптом `<iframe>`:
+`null.eval` в кадре челленджа закрыт, живая страница упирается в отсутствие ИЗОЛЯТА начального
+кадра — остаток [BUG-480](BUG-480-OPEN.md), FRAME-задача)
 **Заведён:** 2026-11-06 (P3, остаток [BUG-1595](BUG-1595-FIXED.md))
 **Область:** js/shell — антибот-фингерпринт (`window.chrome`, `navigator.plugins`/`mimeTypes`),
-`MessageEvent.isTrusted`, `Node.parentElement` (UX-ANTIBOT)
+`MessageEvent.isTrusted`, `Node.parentElement`, начальный кадр `contentWindow` (UX-ANTIBOT)
+
+## Срез 3 (2026-11-15, P3)
+
+Живая страница падала на `Cannot read properties of null (reading 'eval')` **в кадре
+челленджа** (`doc=https://challenges.cloudflare.com/…/new/normal`): скрипт создаёт
+`<iframe>` без `src` и читает `contentWindow` **синхронно в тике вставки** (временный лог
+`[cw-null] src=null` в геттере; в коммит не пошёл). У Chrome это initial about:blank —
+вложенный контекст по HTML LS §7.1 существует сразу, и `eval` в нём разрешён
+(same-origin).
+
+Сделано: `contentWindow`/`contentDocument` заводят начальный about:blank **на первом
+чтении**, если shell ещё не зарегистрировал под-документ (`frame_bridge.rs`:
+`_lumen_f_initial_frame` + `about_blank_document`; шим — `ensureInitialFrame`). Документ
+несёт скелет `html/head/body` (иначе `documentElement`/`body` фасада — `null`), биндинг
+`accessible: true` (about:blank наследует origin), `url = "about:blank"`; detached-элемент
+по-прежнему `null` (HTML LS §4.8.5), cross-origin гейт не тронут. `upsert_binding`
+сохраняет индекс, поэтому фасад переживает замену placeholder'а настоящим документом
+(`contentWindow === contentWindow` до и после загрузки). Тест
+`inserted_iframe_gets_initial_about_blank_window_synchronously`.
+
+Замер: `null.eval` больше не бросается, локальный стенд по-прежнему `TOKEN`, живая
+страница уходит в `300030` (watchdog «widget hung») без запроса `chl_api_ni` — челлендж
+доходит до проверки `contentWindow.eval`, находит её (свойство есть) и ждёт **настоящего
+realm** кадра. Подделка `eval` в изоляте читателя (и отложенный `eval` в изолят
+под-документа после его загрузки) проверена и откачена: код уходит в ветку, которая молча
+висит, — `300030` вместо `300010`, то есть хуже. Поэтому `eval` у начального кадра остаётся
+`undefined` (отклонение задокументировано в шиме).
+
+Остаток — **изолят начального кадра**: начальный about:blank должен быть документом
+движка (его же подхватывает загрузка shell'а, не заменяя) со своим V8-контекстом. Это
+FRAME-работа ([BUG-480](BUG-480-OPEN.md)), не P3-багфикс. Побочное отклонение того же
+корня: всё, что страница успела записать в начальный документ до регистрации настоящего
+(`document.write`, вставленные узлы), при замене документа теряется.
 
 ## Срез 2 (2026-11-15, P3)
 

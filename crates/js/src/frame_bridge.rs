@@ -496,6 +496,27 @@ fn bury_detached_bindings(slots: &mut FrameDocSlots) {
 #[cfg(feature = "v8-backend")]
 pub(crate) type FrameDocRegistry = Arc<Mutex<FrameDocSlots>>;
 
+/// BUG-1790 срез 3: пустой документ `about:blank` — начальный документ
+/// вложенного browsing context до того, как за `src` кто-то сходил.
+///
+/// HTML LS §7.1: вложенный контекст создаётся СИНХРОННО при вставке
+/// `<iframe>` и сразу получает about:blank; у Chrome `contentWindow`/
+/// `contentDocument` непусты уже в том же тике. Скелет (`html`/`head`/`body`)
+/// строится здесь же — `docFacade` фасада читает `documentElement`/`body`
+/// нативами бриджа, на пустом корне они дали бы `null`.
+#[cfg(feature = "v8-backend")]
+fn about_blank_document() -> Arc<Mutex<lumen_dom::Document>> {
+    let mut doc = lumen_dom::Document::new();
+    let root = doc.root();
+    let html = doc.create_element(lumen_dom::QualName::html("html"));
+    let head = doc.create_element(lumen_dom::QualName::html("head"));
+    let body = doc.create_element(lumen_dom::QualName::html("body"));
+    doc.append_child(root, html);
+    doc.append_child(html, head);
+    doc.append_child(html, body);
+    Arc::new(Mutex::new(doc))
+}
+
 // ── Срез 4: исходящий ящик кросс-фреймовых postMessage ───────────────────────
 
 /// Отправитель сообщения в [`PendingFrameMessage`] — как получатель строит
@@ -1074,6 +1095,65 @@ pub(crate) fn install_frame_bridge_v8(
                     .iter()
                     .position(|b| b.host_nid == host_nid)
                     .map(|i| i as u32)
+            }),
+        )?;
+    }
+    // BUG-1790 срез 3: начальный about:blank вложенного контекста. Натив
+    // зовётся из `ensureInitialFrame` (шим бриджа), когда биндинга у хоста
+    // ещё нет: shell грузит под-документ асинхронно, а Chrome отдаёт
+    // непустой `contentWindow` уже в тике вставки. `None` — не iframe /
+    // не подключён к документу / это не наш документ: у detached-элемента
+    // вложенного контекста нет (HTML LS §4.8.5).
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_f_initial_frame",
+            into_v8_fn1(move |host_nid: u32| -> Option<u32> {
+                if let Some(i) = reg
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .frames
+                    .iter()
+                    .position(|b| b.host_nid == host_nid)
+                {
+                    return Some(i as u32);
+                }
+                let self_doc = {
+                    let slots = reg.lock().unwrap_or_else(|e| e.into_inner());
+                    slots.self_doc.clone()?
+                };
+                // Замок документа берём ПОСЛЕ реестра и отпускаем до записи
+                // нового биндинга: `bury_detached_bindings` запирает их в том
+                // же порядке, только документ — `try_lock`.
+                let name = {
+                    let doc = self_doc.lock().unwrap_or_else(|e| e.into_inner());
+                    let host = lumen_dom::NodeId::from_index(host_nid as usize);
+                    if !doc.contains_id(host) || !doc.is_connected(host) {
+                        return None;
+                    }
+                    let node = doc.get(host);
+                    if node.element_name().map(|n| n.local.as_str()) != Some("iframe") {
+                        return None;
+                    }
+                    node.get_attr("name").map(str::to_owned)
+                };
+                let mut slots = reg.lock().unwrap_or_else(|e| e.into_inner());
+                // Биндинг мог появиться, пока документ был занят (навигация
+                // фрейма регистрируется на этом же JS-потоке, но порядок
+                // замков не гарантирует, что нас не обогнали).
+                if let Some(i) = slots.frames.iter().position(|b| b.host_nid == host_nid) {
+                    return Some(i as u32);
+                }
+                let binding = FrameDocBinding {
+                    host_nid,
+                    doc: about_blank_document(),
+                    url: "about:blank".to_owned(),
+                    name,
+                    accessible: true,
+                    opaque_id: None,
+                    peer: None,
+                };
+                Some(upsert_binding(&mut slots, binding) as u32)
             }),
         )?;
     }
@@ -2011,6 +2091,24 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     return (bid === null || bid === undefined) ? null : bid;
   }
 
+  // BUG-1790 срез 3: у только что вставленного `<iframe>` биндинга ещё нет —
+  // shell грузит под-документ на следующем тике. Спека требует, чтобы
+  // вложенный контекст существовал СИНХРОННО (about:blank), поэтому на
+  // первом чтении `contentWindow`/`contentDocument` заводим его здесь.
+  // Индексные/именованные доступники окна ставим сразу же — `upsert_binding`
+  // сохранит индекс, когда shell зарегистрирует настоящий документ.
+  function ensureInitialFrame(hostNid) {
+    var bid = bidOrNull(hostNid);
+    if (bid !== null) return bid;
+    if (typeof _lumen_f_initial_frame !== 'function') return null;
+    var nb = _lumen_f_initial_frame(hostNid);
+    if (nb === null || nb === undefined) return null;
+    if (typeof _lumen_frame_install_index === 'function') {
+      try { _lumen_frame_install_index(nb); } catch (e) {}
+    }
+    return nb;
+  }
+
   function isAncestorBid(bid) { return bid === PARENT_BID || bid === TOP_BID; }
   function isSiblingBid(bid) { return bid >= SIBLING_BASE && bid < SELF_BID; }
 
@@ -2670,18 +2768,25 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
             return cr.value;
           };
         }
+        // BUG-1790 срез 3: у initial about:blank нет собственного изолята
+        // (peer отсутствует). Chrome разрешает `.eval` в таком кадре (он
+        // same-origin, около-пустой realm), но подделать realm в изоляте
+        // читателя нельзя: код, исполненный здесь, не увидит собственных
+        // глобалов кадра, и обрыв вылезет позже — измерено на живой странице
+        // Cloudflare Turnstile (срез 3 карточки BUG-1790), поэтому `eval`
+        // остаётся `undefined`. Изолят начального кадра — FRAME-задача.
         return undefined;
       },
     });
   }
 
   __lumen_C._lumen_frame_content_document = function(hostNid) {
-    var bid = bidOrNull(hostNid);
+    var bid = ensureInitialFrame(hostNid);
     if (bid === null || !_lumen_f_accessible(bid)) return null;
     return docFacade(bid);
   };
   __lumen_C._lumen_frame_content_window = function(hostNid) {
-    var bid = bidOrNull(hostNid);
+    var bid = ensureInitialFrame(hostNid);
     if (bid === null) return null;
     return winFacade(bid);
   };

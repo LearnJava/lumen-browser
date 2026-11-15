@@ -1800,3 +1800,19 @@ shell 1610+2 ok (без изменений — новый путь не имее
 ## Повторное измерение: WPT-STREAMS-SCOUT (2026-10-27)
 
 `streams`: 5 id упираются в `iframe.contentWindow === null` у динамически созданного `<iframe>` — `readable-streams/global.html` (ERROR, `reading 'ReadableStream'`), `readable-streams/cross-realm-crash.window.html` (`reading 'ReadableStreamDefaultReader'`), `queuing-strategies-size-function-per-global.window.html` (0/2), `transform-streams/invalid-realm.tentative.window.html` (0/1), `transferable/deserialize-error.window.html` (ERROR, `reading 'postMessage'`). Потолок 5 баллов. См. `docs/wpt-vendor-notes/streams.md`, кластер R.
+
+## Начальный about:blank (2026-11-15, P3, BUG-1790 срез 3)
+
+Созданный скриптом `<iframe>` теперь получает вложенный контекст СИНХРОННО: на первом
+чтении `contentWindow`/`contentDocument` бридж заводит пустой документ `about:blank`
+(`crates/js/src/frame_bridge.rs`: `_lumen_f_initial_frame`, `about_blank_document`).
+Фасад тот же (индекс `bid` сохраняется при регистрации настоящего документа), detached —
+по-прежнему `null`, cross-origin гейт не тронут. Это закрывает `iframe.contentWindow ===
+null` для элементов без `src`/`srcdoc` из перечисленных выше выборок (проверено тестом, не
+прогоном WPT).
+
+Не закрыто: у начального кадра **нет своего изолята** — `contentWindow.eval(...)` в нём
+`undefined` (в Chrome работает, about:blank same-origin). Живой Cloudflare Turnstile
+проверяет наличие `eval` и ждёт сообщений от этого realm. Следующий срез — документ
+начального кадра принадлежит движку (загрузка shell'а его подхватывает, а не заменяет) и
+имеет собственный V8-контекст.
