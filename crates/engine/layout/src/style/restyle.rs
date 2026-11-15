@@ -1680,6 +1680,14 @@ impl<'a> NodeRestyleIndex<'a> {
             "id" => old.is_some_and(|old| !deps.id_write_hits(old, current("id"))),
             "style" => true,
             "href" => !deps.link_state && tag_is(doc, node, &["a", "area"]),
+            // BUG-1794: `popover`/`inert` are the two attributes a popover-driven UI
+            // (github.com's Primer menus) rewrites on its containers. Both are read on
+            // the element they sit on — the UA `[popover]` rules, Lumen's own
+            // `data-lumen-popover-open` state cache, the top-layer/inert machinery — and
+            // nothing passes them to a descendant: no pseudo-class in
+            // `pseudo_class_read_attr_names` reads them, and an `[popover] .x` /
+            // `[inert] .x` selector lands in `deps.attrs` above and keeps the deep path.
+            "popover" | "inert" => true,
             n => n.starts_with("data-") || n.starts_with("aria-") || resource_attr_is_inert(doc, node, n),
         }
     }

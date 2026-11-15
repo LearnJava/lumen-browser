@@ -453,3 +453,28 @@
         assert!(got.deep.is_empty(), "{got:?}");
         assert!(got.shallow.contains(&a), "{got:?}");
     }
+
+    /// BUG-1794: Primer rewrites `popover`/`inert` on its menu containers, and
+    /// a deep root there recascaded github.com's whole 2000-element body per
+    /// write. Both attributes reach a descendant only through an
+    /// ancestor-position `[popover]`/`[inert]` selector — with none in the
+    /// sheet the write stays on the changed node and its direct children.
+    #[test]
+    fn a_popover_or_inert_write_stays_local_unless_a_selector_reads_it_from_above() {
+        let doc = fixture();
+        let a = doc.find_by_id("a").expect("#a");
+        let menu = doc.find_by_id("menu").expect("#menu");
+        let sheet = parse_css(".item { color: black; } .item .icon { color: red; }");
+        let index = restyle_node_index(&doc, &sheet);
+        for attr in ["popover", "inert"] {
+            let got = restyle_roots_for_node_changes(&doc, [(a, NodeChange::AttrFrom { name: attr, old: "" })], &index);
+            assert!(got.deep.is_empty(), "{attr}: {got:?}");
+            assert!(got.shallow.contains(&a), "{attr}: {got:?}");
+        }
+        // A selector that reads it from an ancestor position keeps the deep path
+        // (`affected_descendants` models no `popover`/`inert` readers).
+        let sheet = parse_css("[popover] .item { color: green; }");
+        let index = restyle_node_index(&doc, &sheet);
+        let got = restyle_roots_for_node_changes(&doc, [(a, NodeChange::AttrFrom { name: "popover", old: "" })], &index);
+        assert!(got.deep.contains(&a) || got.deep.contains(&menu), "{got:?}");
+    }
