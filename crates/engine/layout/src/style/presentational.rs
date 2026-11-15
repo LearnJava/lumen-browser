@@ -494,7 +494,9 @@ pub(in crate::style) fn apply_align_presentational_hint(doc: &Document, node: No
         let ta = match val.trim().to_ascii_lowercase().as_str() {
             "left" => TextAlign::Left,
             "right" => TextAlign::Right,
-            "center" | "middle" => TextAlign::Center,
+            // HTML Rendering §15.3.3: `align=center` даёт `-webkit-center` — центрит и
+            // блочных потомков (`<div align=center><table>`), как Chrome.
+            "center" | "middle" => TextAlign::WebkitCenter,
             _ => return,
         };
         style.text_align = ta;

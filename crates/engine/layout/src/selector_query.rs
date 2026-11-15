@@ -1766,6 +1766,7 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         TextAlign::Left => "left",
         TextAlign::Right => "right",
         TextAlign::Center => "center",
+        TextAlign::WebkitCenter => "-webkit-center",
         TextAlign::Justify => "justify",
         // Не резолвлен каскадом (стиль собран в обход `compute_style`): ведёт себя как `start`.
         TextAlign::MatchParent => "start",

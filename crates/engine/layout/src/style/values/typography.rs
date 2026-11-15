@@ -84,6 +84,9 @@ pub enum TextAlign {
     /// родителя (`start`/`end` пересчитываются по `direction` родителя) либо `start` для корня
     /// (CSS Text L3 §7.1); до этого шага и в обход каскада layout ведёт себя как `start`.
     MatchParent,
+    /// Legacy `-webkit-center` (HTML Rendering §15.3.3, `<center>` и `align=center`): как
+    /// `center` для строчного содержимого, но ещё и центрирует блочных потомков.
+    WebkitCenter,
 }
 
 /// CSS Text L3 §7.2 — `text-align-last`. NOT inherited. Initial: `Auto`.

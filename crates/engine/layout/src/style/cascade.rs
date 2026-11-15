@@ -42,7 +42,7 @@ use crate::style::{
     resolve_overscroll_behavior_logical_properties, resolve_system_colors_in_style,
     is_appearance_disabling_property, is_disableable_widget, strip_ua_appearance_box_styling,
     ua_font_family,
-    ua_font_size_factor, ua_font_style, ua_font_weight, ua_link_color, ua_vertical_align,
+    ua_font_size_factor, ua_font_style, ua_font_weight, ua_link_color, ua_text_align, ua_vertical_align,
     initial_value_equivalent, parse_css_wide_keyword, ua_white_space, validate_against_syntax,
     with_front_cascade_index,
     AlignValue, ComputedStyle, CssContinue, CssWideKeyword, Display, FlexDirection, FlexWrap,
@@ -336,6 +336,10 @@ pub(crate) fn compute_style_shareable(
     }
     if let Some(fw) = ua_font_weight(doc, node) {
         style.font_weight = fw;
+    }
+    // UA stylesheet: <center> → text-align: -webkit-center. HTML Rendering §15.3.3.
+    if let Some(ta) = ua_text_align(doc, node) {
+        style.text_align = ta;
     }
     // UA stylesheet: <pre>/<code>/<kbd>/<samp>/<tt> → font-family: monospace.
     if let Some(fam) = ua_font_family(doc, node) {

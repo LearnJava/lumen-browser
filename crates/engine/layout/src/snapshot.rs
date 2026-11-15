@@ -267,6 +267,9 @@ fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
         TextAlign::Start | TextAlign::MatchParent => {}
         TextAlign::End => out.push_str(" text-align=end"),
         TextAlign::Center => out.push_str(" text-align=center"),
+        // Дампа-формат: `-webkit-center` ведёт себя как `center` для строк, отдельного
+        // маркера не заводим (goldens не меняются).
+        TextAlign::WebkitCenter => out.push_str(" text-align=center"),
         TextAlign::Right => out.push_str(" text-align=right"),
         TextAlign::Justify => out.push_str(" text-align=justify"),
     }

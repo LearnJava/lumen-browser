@@ -281,6 +281,14 @@ pub(in crate::style) fn ua_vertical_align(
     });
     Some(hinted.unwrap_or(if matches!(tag, "td" | "th") { inherited_va } else { VerticalAlign::Middle }))
 }
+/// UA stylesheet: `<center>` → `text-align: -webkit-center` (HTML Rendering §15.3.3): строчное
+/// содержимое центрируется, а блочные потомки (таблица с ограниченной шириной) — тоже.
+pub(in crate::style) fn ua_text_align(doc: &Document, node: NodeId) -> Option<TextAlign> {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return None;
+    };
+    (name.local.as_str() == "center").then_some(TextAlign::WebkitCenter)
+}
 /// UA stylesheet для font-weight: `<b>`, `<strong>`, `<th>`, `<h1>`–`<h6>`
 /// получают bold по умолчанию (HTML §15.3.3).
 pub(in crate::style) fn ua_font_weight(doc: &Document, node: NodeId) -> Option<FontWeight> {

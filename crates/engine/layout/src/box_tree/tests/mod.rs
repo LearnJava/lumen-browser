@@ -580,3 +580,4 @@ mod textq5_shaped_measure;
 mod align_self_wpt;
 mod align_content_block;
 mod abs_static_align;
+mod bug1669_webkit_center;
