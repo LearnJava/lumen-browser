@@ -6,4 +6,9 @@
 
 ## Перепрогон 2026-09-25 (BUG-652 закрыт)
 
-`Permissions.prototype.revoke()` установлен (`crates/js/src/permissions.rs`). `run_report.py --all --root permissions-revoke --recursive`: 8/14 → **2/2 harness OK, 11/14 сабтестов**; `idlharness.any.html` зелёный целиком. Три оставшихся FAIL — `idlharness.any.worker.html`: в воркерах нет `navigator.permissions` ([BUG-1174](../../bugs/BUG-1174-OPEN.md)). Эталон `.ini` перегенерирован, `--check` — 0 регрессий.
+`Permissions.prototype.revoke()` установлен (`crates/js/src/permissions.rs`). `run_report.py --all --root permissions-revoke --recursive`: 8/14 → **2/2 harness OK, 11/14 сабтестов**; `idlharness.any.html` зелёный целиком. Три оставшихся FAIL — `idlharness.any.worker.html`: в воркерах нет `navigator.permissions` ([BUG-1174](../../bugs/BUG-1174-FIXED.md)). Эталон `.ini` перегенерирован, `--check` — 0 регрессий.
+
+## Перепрогон 2026-11-15 (BUG-1174 закрыт)
+
+`Permissions` установлен во всех видах воркеров ([BUG-1174](../../bugs/BUG-1174-FIXED.md)); заодно исправлена WebIDL-форма интерфейсов (non-writable `prototype`, `PermissionStatus` наследует `EventTarget`, аксессоры с именами `get <attribute>`), на которой `idlharness` падал и в странице. `run_report.py --all --root permissions-revoke --recursive`: **2/2 harness OK, 14/14 сабтестов**; `.ini` категории удалён (ожидаемых отклонений нет), `--check` — 0 регрессий.
+

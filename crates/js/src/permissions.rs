@@ -59,12 +59,18 @@
 //! into a readonly accessor on `Navigator.prototype` at the end of
 //! `install_dom` ([BUG-624]), together with every other `navigator` member.
 //!
+//! `[Exposed=(Window,Worker)]`: `install_worker_scope_globals_v8` installs the
+//! same shim into every `WorkerGlobalScope` ([BUG-1174]). There the singleton is
+//! a `WorkerNavigator`, which has no finalize pass, so the accessor goes
+//! straight onto `WorkerNavigator.prototype`.
+//!
 //! [BUG-385]: ../../../bugs/BUG-385-FIXED.md
 //! [BUG-624]: ../../../bugs/BUG-624-FIXED.md
 //! [BUG-650]: ../../../bugs/BUG-650-FIXED.md
 //! [BUG-652]: ../../../bugs/BUG-652-FIXED.md
 
-/// Install the Permissions API.
+/// Install the Permissions API — in the page (`install_dom`) and in every
+/// worker flavour ([`crate::worker::install_worker_scope_globals_v8`]).
 ///
 /// Must run after the core DOM install: the shim extends `WEB_API_SHIM`'s
 /// `EventTarget` and builds its `change` events with its `Event`.
@@ -214,9 +220,21 @@ const PERMISSIONS_SHIM: &str = r#"(function() {
       value: fn, writable: true, enumerable: true, configurable: true });
   }
 
+  // WebIDL §3.7.7: an attribute's accessors carry the names `get <name>` and
+  // `set <name>` — idlharness reads them off `Function.prototype.name`.
+  function named(fn, name) {
+    if (typeof fn === 'function') {
+      try {
+        Object.defineProperty(fn, 'name', { value: name, configurable: true });
+      } catch (e) {}
+    }
+    return fn;
+  }
+
   function defAttr(obj, name, get, set) {
     Object.defineProperty(obj, name, {
-      get: get, set: set, enumerable: true, configurable: true });
+      get: named(get, 'get ' + name), set: named(set, 'set ' + name),
+      enumerable: true, configurable: true });
   }
 
   function defTag(obj, tag) {
@@ -236,6 +254,11 @@ const PERMISSIONS_SHIM: &str = r#"(function() {
   PermissionStatus.prototype = Object.create(ET.prototype);
   def(PermissionStatus.prototype, 'constructor', PermissionStatus);
   defTag(PermissionStatus.prototype, 'PermissionStatus');
+  // WebIDL §3.7.2/§3.7.4: an interface object's `[[Prototype]]` is its parent
+  // interface object (`PermissionStatus` inherits `EventTarget`), and its
+  // `prototype` property is non-writable.
+  Object.setPrototypeOf(PermissionStatus, ET);
+  Object.defineProperty(PermissionStatus, 'prototype', { writable: false });
 
   function slots(o) {
     var s = SLOTS.get(o);
@@ -326,6 +349,7 @@ const PERMISSIONS_SHIM: &str = r#"(function() {
 
   function Permissions() { throw new TypeError('Illegal constructor'); }
   defTag(Permissions.prototype, 'Permissions');
+  Object.defineProperty(Permissions, 'prototype', { writable: false });
 
   // §5.2 step 2 — WebIDL conversion of the PermissionDescriptor. Every failure
   // here is a rejection rather than a synchronous throw, because `query` is
@@ -426,12 +450,28 @@ const PERMISSIONS_SHIM: &str = r#"(function() {
 
   var permissions = Object.create(Permissions.prototype);
 
-  // Non-writable: the whole point of the container is that a script cannot
-  // swap it out and answer for the engine (BUG-366 class).
-  try {
-    Object.defineProperty(navigator, 'permissions', {
-      value: permissions, writable: false, enumerable: true, configurable: true });
-  } catch (e) { navigator.permissions = permissions; }
+  // In a worker the singleton is a `WorkerNavigator`, and there is no
+  // `finalize_navigator_interface_v8` pass to move the member onto the
+  // prototype afterwards (BUG-1174) — so it is installed in the IDL shape
+  // right away. `notifications` cannot be asked from here either: a worker has
+  // no `Notification`, so LIVE's type guard answers `denied` and `request()`
+  // never reaches ASK.
+  if (typeof WorkerNavigator === 'function' && navigator instanceof WorkerNavigator) {
+    function getPermissions() {
+      if (!(this instanceof WorkerNavigator)) throw new TypeError('Illegal invocation');
+      return permissions;
+    }
+    Object.defineProperty(WorkerNavigator.prototype, 'permissions', {
+      get: named(getPermissions, 'get permissions'),
+      enumerable: true, configurable: true });
+  } else {
+    // Non-writable: the whole point of the container is that a script cannot
+    // swap it out and answer for the engine (BUG-366 class).
+    try {
+      Object.defineProperty(navigator, 'permissions', {
+        value: permissions, writable: false, enumerable: true, configurable: true });
+    } catch (e) { navigator.permissions = permissions; }
+  }
 
   // WebIDL interface objects are non-enumerable own properties of the global.
   def(globalThis, 'Permissions', Permissions);
@@ -692,6 +732,25 @@ mod tests {
                 "Object.getOwnPropertyDescriptor(globalThis, 'Permissions').enumerable === false && \
                  Object.getOwnPropertyDescriptor(globalThis, 'PermissionStatus').enumerable === false"
             ));
+        });
+    }
+
+    /// BUG-1174: the WebIDL shape `idlharness` reads off the interface objects:
+    /// a non-writable `prototype`, `PermissionStatus` chained to `EventTarget`,
+    /// and accessors named `get <attribute>`.
+    #[test]
+    fn interfaces_have_the_shape_idlharness_reads() {
+        with_permissions(|rt| {
+            for expr in [
+                "Object.getOwnPropertyDescriptor(Permissions, 'prototype').writable === false",
+                "Object.getOwnPropertyDescriptor(PermissionStatus, 'prototype').writable === false",
+                "Object.getPrototypeOf(PermissionStatus) === EventTarget",
+                "Object.getOwnPropertyDescriptor(PermissionStatus.prototype, 'state').get.name === 'get state'",
+                "Object.getOwnPropertyDescriptor(PermissionStatus.prototype, 'name').get.name === 'get name'",
+                "Object.getOwnPropertyDescriptor(PermissionStatus.prototype, 'onchange').get.name === 'get onchange'",
+            ] {
+                assert!(bool_eval(rt, expr), "{expr}");
+            }
         });
     }
 
