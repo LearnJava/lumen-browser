@@ -150,8 +150,11 @@ pub(in crate::style) fn apply_declaration(
     }
     // BUG-1430: math functions with a number / angle / time result (`calc(1s + 1s)`,
     // `abs(-3)`, `calc(pi)`) are evaluated to a literal before the property parser, which
-    // has no notion of a typed `calc()`.
-    let math_literal = substitute_numeric_math(prop, val, em_basis, viewport);
+    // has no notion of a typed `calc()`. A `cq*`-unit value is left as written: its number
+    // depends on the container, which only the container pass knows (BUG-1664).
+    let math_literal = (prop != "tab-size" || !crate::style::values::length::contains_cq_unit_text(val))
+        .then(|| substitute_numeric_math(prop, val, em_basis, viewport))
+        .flatten();
     let val: &str = math_literal.as_deref().unwrap_or(val);
     // `zoom` scales these after the cascade (`apply_zoom_to_lengths`), but an `em`
     // length is baked to px right here against the already-zoomed `font_size` —

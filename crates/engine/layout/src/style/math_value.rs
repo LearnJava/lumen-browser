@@ -483,6 +483,16 @@ fn number_literal(v: f64) -> String {
     format!("{rounded}")
 }
 
+/// Whether the math function `expr` evaluates to a plain `<number>` rather than a length.
+/// `tab-size` needs it: a unitless `calc()` computes to a number, a length-valued one to px
+/// (BUG-1664). `None` — not a single math call, or it can't be evaluated.
+pub(in crate::style) fn numeric_math_is_number(expr: &str, em_basis: f32, viewport: Size) -> Option<bool> {
+    let toks = tokenize_calc(expr)?;
+    let mut ev = Eval { toks: &toks, pos: 0, em: em_basis, viewport, relative_units: true, soft: false };
+    let r = ev.expr()?;
+    (ev.pos == toks.len()).then_some(r.d == NUM)
+}
+
 /// Подставляет в значение `val` литералы вместо внешних вызовов math-функций с
 /// числовым, угловым или временным результатом. `None` — подставлять нечего.
 pub(in crate::style) fn substitute_numeric_math(

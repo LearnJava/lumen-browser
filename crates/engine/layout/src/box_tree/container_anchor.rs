@@ -42,6 +42,30 @@ fn is_query_container(style: &ComputedStyle) -> bool {
     is_typed_container(style) || !style.container_name.is_empty()
 }
 
+/// The `cq*` basis of a container chain (CSS Conditional 5 §container-lengths): the content
+/// width of the nearest container that contains its inline size, the content height of the
+/// nearest one that contains its block size — two different containers when an `inline-size`
+/// one sits inside a `size` one. `None` — no such container, the small viewport is used.
+fn cq_axes_of(ctx: Option<&ContainerContext>) -> (Option<f32>, Option<f32>) {
+    let (mut width, mut height) = (None, None);
+    let mut cur = ctx;
+    while let Some(c) = cur {
+        if c.kinds.size && !c.kinds.ineligible {
+            if width.is_none() {
+                width = Some(c.width);
+            }
+            if height.is_none() {
+                height = c.height;
+            }
+            if width.is_some() && height.is_some() {
+                break;
+            }
+        }
+        cur = c.parent.as_deref();
+    }
+    (width, height)
+}
+
 /// CSS Container Queries L1: second-pass after layout.
 ///
 /// Walks the laid-out box tree looking for elements that establish containers
@@ -163,17 +187,24 @@ fn apply_container_inner(
                 box_context(b, viewport, parent_h, (content_w, content_h_val), true, propagating, parent)
                     .with_rule_hits(sheet),
             );
+            // `cq*` in the restyle below resolves against this container, not the viewport.
+            let axes = cq_axes_of(Some(&ctx));
+            set_cq_axes(axes.0, axes.1);
             // Re-apply container rules to all direct + indirect descendants.
             if let Some(sweep) = sweep {
                 sweep.run(b, Some(Arc::clone(&ctx)), content_h_val, boxless, pending);
-            } else if !sheet.container_rules.is_empty() {
+            } else {
                 let mut seen = SeenBoxes::default();
                 for child in &mut b.children {
-                    re_style_subtree(child, doc, sheet, &ctx, viewport, dark_mode, shadowed, &mut seen);
+                    re_style_subtree(child, doc, sheet, &ctx, viewport, dark_mode, shadowed, &mut seen, axes);
                 }
-                restyle_boxless(doc, sheet, counters, b.node, &seen, &ctx, viewport, dark_mode, boxless);
+                restyle_boxless(
+                    doc, sheet, counters, b.node, &seen, &ctx, viewport, dark_mode, boxless, axes,
+                    !sheet.container_rules.is_empty(),
+                );
             }
             if !size_container {
+                clear_cq_context();
                 // A scroll-state-only container does not contain its size: the queries
                 // restyle the subtree, but the box tree below keeps its first-pass geometry
                 // (re-laying out a block stack here would drop margin collapsing, floats and
@@ -196,7 +227,6 @@ fn apply_container_inner(
             };
             // Expose this container's dimensions to cq* unit resolution during re-layout.
             let size_h = content_h.or(size_h);
-            set_cq_axes(Some(content_w), size_h);
             let mut child_y = content_y;
             for child in &mut b.children {
                 if matches!(child.style.position, Position::Absolute | Position::Fixed) {
@@ -605,6 +635,7 @@ fn re_style_subtree(
     dark_mode: bool,
     shadowed: &HashSet<NodeId>,
     seen: &mut SeenBoxes,
+    cq_axes: (Option<f32>, Option<f32>),
 ) {
     let mut stack: Vec<&mut LayoutBox> = vec![b];
     while let Some(b) = stack.pop() {
@@ -614,6 +645,11 @@ fn re_style_subtree(
             let rules = if shadowed.contains(&b.node) { Vec::new() } else { matching_container_rules(doc, b.node, sheet, ctx) };
             if !rules.is_empty() {
                 apply_matched_container_rules(Arc::make_mut(&mut b.style), &rules, doc, b.node, viewport, dark_mode);
+            }
+            // `cq*` in `tab-size`/`letter-spacing`/`word-spacing` computed against the viewport
+            // during the cascade: the container's size is known now (BUG-1664).
+            if !b.style.cq_lengths.is_empty() {
+                Arc::make_mut(&mut b.style).resolve_cq_lengths(cq_axes, viewport);
             }
         }
         // Don't propagate into nested containers — they'll build their own context.
@@ -684,6 +720,8 @@ fn restyle_boxless(
     viewport: Size,
     dark_mode: bool,
     out: &mut HashMap<NodeId, Arc<ComputedStyle>>,
+    cq_axes: (Option<f32>, Option<f32>),
+    record_all: bool,
 ) {
     // `(node, reached)`: `reached` is false below a box-less query container.
     let mut stack: Vec<(NodeId, bool)> = doc.get(container).children.iter().rev().map(|&c| (c, true)).collect();
@@ -701,15 +739,25 @@ fn restyle_boxless(
             if is_typed_container(&style) {
                 below_reached = false;
             }
+            let mut changed = false;
             if reached {
                 let rules = matching_container_rules(doc, id, sheet, ctx);
                 if !rules.is_empty() {
                     apply_matched_container_rules(Arc::make_mut(&mut style), &rules, doc, id, viewport, dark_mode);
+                    changed = true;
                 }
+            }
+            if !style.cq_lengths.is_empty() {
+                Arc::make_mut(&mut style).resolve_cq_lengths(cq_axes, viewport);
+                changed = true;
             }
             // Every box-less element below a container is recorded, matched or not: the
             // snapshot collectors read their style (and custom properties) from here.
-            out.insert(id, style);
+            // Without a container rule the pass exists only for `cq*` (BUG-1664), and an
+            // untouched style needs no entry.
+            if changed || record_all {
+                out.insert(id, style);
+            }
         }
         stack.extend(doc.get(id).children.iter().rev().map(|&c| (c, below_reached)));
     }
@@ -856,6 +904,9 @@ impl StyleSweep<'_> {
                     );
                 }
             }
+            if !b.style.cq_lengths.is_empty() {
+                Arc::make_mut(&mut b.style).resolve_cq_lengths(cq_axes_of(pc.as_deref()), self.viewport);
+            }
             // An anonymous or pseudo-element box shares its element's node: the context stays.
             let is_element = b.node != parent_node && matches!(self.doc.get(b.node).data, NodeData::Element { .. });
             if is_element && is_query_container(&b.style) {
@@ -907,6 +958,9 @@ impl StyleSweep<'_> {
                             Arc::make_mut(&mut style), &rules, self.doc, id, self.viewport, self.dark_mode,
                         );
                     }
+                }
+                if !style.cq_lengths.is_empty() {
+                    Arc::make_mut(&mut style).resolve_cq_lengths(cq_axes_of(pc.as_deref()), self.viewport);
                 }
                 child_ctx = match pc {
                     Some(pc) if !is_typed_container(&style) => Some(Arc::new(self.boxless_context(&style, pc))),

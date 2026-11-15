@@ -73,7 +73,7 @@ mod zoom;
 // Это центральный тип публичной поверхности крейта: `lib.rs` реэкспортирует его
 // наружу, а по репозиторию его зовут по старому пути `lumen_layout::style::
 // ComputedStyle`, поэтому реэкспорт обязателен (правило §2.1).
-pub use computed::{ComputedStyle, SvgColorInterpolation};
+pub use computed::{ComputedStyle, CqLengthProp, SvgColorInterpolation};
 // SPLIT-ST8: сама `apply_declaration` вместе со своим `match prop` уехала в
 // `style::apply`; вызыватели в этом файле остались на прежнем имени.
 use apply::apply_declaration;
@@ -344,8 +344,9 @@ use parse::font_size::{FontSizeBasis, apply_font_size};
 // по старому пути), поэтому реэкспорт обязателен даже там, где вызывателя
 // внутри `style.rs` нет (правило §2.1).
 pub use env::{
-    clear_animated_heights, clear_cq_context, clear_interactive_state, cq_context_active, cq_units_seen,
+    clear_animated_heights, clear_cq_context, clear_interactive_state, cq_axes, cq_context_active, cq_units_seen,
     forced_colors_active, pop_ch_ex_context, pop_lh_context, pop_root_font_metrics, push_root_font_metrics, root_font_metrics, print_media_active, push_ch_ex_context, push_lh_context,
+    restore_cq_axes,
     set_animated_heights, set_cq_axes, set_cq_context, set_forced_colors, set_interactive_state,
     set_print_media, StyleEnvSnapshot, set_device_pixel_ratio, device_pixel_ratio,
 };
