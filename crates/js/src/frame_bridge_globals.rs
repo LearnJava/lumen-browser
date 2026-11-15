@@ -36,8 +36,11 @@ fn resolve_peer(
         return Err(envelope_tag("absent"));
     }
     // BUG-1682: фрейм, которого shell уже выбросил, — такой же «нет рантайма».
+    // BUG-1813: отдельный тег — доступ ЕСТЬ, а изолята кадра нет (начальный
+    // about:blank, HTML LS §7.1): шиму есть куда отступить (встроенные объекты
+    // своего изолята), а `absent` он по-прежнему отдаёт как `undefined`.
     let Some(peer) = binding.peer.as_ref().and_then(std::sync::Weak::upgrade) else {
-        return Err(envelope_tag("absent"));
+        return Err(envelope_tag("nopeer"));
     };
     let from = reg.self_key.unwrap_or(0);
     let to = Arc::as_ptr(&binding.doc) as usize;
@@ -314,9 +317,10 @@ mod tests {
     }
 
     /// BUG-1682: биндинг рантайма, которого уже нет, отвечает как биндинг
-    /// без рантайма, а не падает.
+    /// без рантайма, а не падает. BUG-1813: это `nopeer` (доступ есть,
+    /// изолята нет), а не `absent` — не-доступный биндинг отличает сам шим.
     #[test]
-    fn dead_peer_reads_as_absent() {
+    fn dead_peer_reads_as_nopeer() {
         let parent_rt = V8JsRuntime::new().unwrap();
         parent_rt.eval("var window = globalThis;").unwrap();
         let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
@@ -333,7 +337,7 @@ mod tests {
             peer: Some(Arc::downgrade(&child_rt) as std::sync::Weak<dyn crate::frame_peer_bridge::FramePeerBridge>),
         });
         drop(child_rt);
-        assert_eq!(eval_str(&parent_rt, "_lumen_f_global_get(0, 'mark').kind"), "absent");
+        assert_eq!(eval_str(&parent_rt, "_lumen_f_global_get(0, 'mark').kind"), "nopeer");
     }
 
     /// BUG-1682: регистрация нового фрейма хоронит биндинг хоста, вынутого из

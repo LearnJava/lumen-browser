@@ -2880,6 +2880,18 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     return proxied;
   }
 
+  // BUG-1813: у кадра без собственного изолята (начальный about:blank) глобалов
+  // самого кадра нет и подделать их нечем — но его ВСТРОЕННЫЕ объекты в Chrome
+  // принадлежат тому же изоляту, что и у читающего окна
+  // (`contentWindow.JSON === window.JSON`), а обфусцированный бандл reCAPTCHA
+  // добывает «неиспорченный» JSON именно так. Снимок имён — при установке шима,
+  // до скриптов страницы, поэтому переменные страницы читателя сюда не попадают.
+  var pristineGlobals = (function() {
+    var m = Object.create(null);
+    Object.getOwnPropertyNames(globalThis).forEach(function(n) { m[n] = 1; });
+    return m;
+  })();
+
   // BUG-979: `w` above only ever answers the fixed IDL-property set it was
   // built with — same-origin script of the framed document can declare ANY
   // other global (a function, a plain variable), and until this wrapper
@@ -2926,6 +2938,14 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
         // глобалов кадра, и обрыв вылезет позже — измерено на живой странице
         // Cloudflare Turnstile (срез 3 карточки BUG-1790), поэтому `eval`
         // остаётся `undefined`. Изолят начального кадра — FRAME-задача.
+        //
+        // BUG-1813: всё остальное встроенное — отдаём из своего изолята: у
+        // такого кадра нет ни собственных скриптов, ни page-переменных, а
+        // встроенные объекты в Chrome у него те же самые.
+        if (r.kind === 'nopeer') {
+          var name = String(prop);
+          if (name !== 'eval' && pristineGlobals[name] === 1) return globalThis[prop];
+        }
         return undefined;
       },
     });

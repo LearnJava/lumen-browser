@@ -76,11 +76,11 @@
  "generated": "2026-11-15",
  "counts": {
   "open": 322,
-  "fixed": 1420,
+  "fixed": 1423,
   "inprogress": 0,
   "wontfix": 4
  },
- "total_bugs": 1746,
+ "total_bugs": 1749,
  "phases": [
   {
    "id": "P0",
@@ -11207,8 +11207,8 @@
   },
   "BUG-1647": {
    "status": "open",
-   "title": "`grecaptcha.execute` не возвращает токен: `TypeError: Cannot read properties of undefined (reading 'length')` в `filter` и `reCAPTCHA Timeout`; балла v3 нет (Ch…",
-   "component": "js (reCAPTCHA v3, anchor-кадр)",
+   "title": "`grecaptcha.execute` не возвращает токен: балла v3 нет (Chrome — 0.9); v2 рисуется. Срез 1 (2026-11-15): `TypeError` в anchor-кадре больше не воспроизводится. С…",
+   "component": "js (reCAPTCHA v3, anchor-кадр; `frame_bridge.rs::_lumen_f_post_message`, `shim/message_channel_shim.js`)",
    "date": null,
    "debtor": false
   },
@@ -12003,6 +12003,13 @@
    "date": null,
    "debtor": false
   },
+  "BUG-1814": {
+   "status": "open",
+   "title": "Данные `postMessage`/`MessagePort` доезжают до адресата СЕРИАЛИЗОВАННЫМИ строкой вместо значения отправителя: `JSON.parse` в бандле reCAPTCHA (`recaptcha__en.js…",
+   "component": "js (`frame_bridge.rs` `w.postMessage`/`_lumen_f_post_message`/`_lumen_deliver_frame_message`, `shim/message_channel_shim.js` `_lumen_port_walk_serialize`/`_lumen_deliver_port_messages`, воркерный `Worker._deliver`)",
+   "date": null,
+   "debtor": false
+  },
   "BUG-1803": {
    "status": "open",
    "title": "Lumen игнорирует системный прокси Windows: у пользователя с ProxyEnable=1 Lumen всегда напрямую, маршрут отличается от Chrome (наблюдение на ebay: Chrome через…",
@@ -12014,13 +12021,6 @@
    "status": "open",
    "title": "SITES-TRIAGE-3: нет `navigator.serviceWorker.startMessages()` (нестандартный Chrome-API контейнера) → `TypeError` убивает инициализацию rutube-ru, TIMEOUT 2/2 п…",
    "component": "js (`web_api_shim_mid_b.js` — `_sw_container`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1811": {
-   "status": "open",
-   "title": "`script.addPreloadScript` принят (id выдан, `PreloadScript` в `state.preload_scripts`), но ни один документ его не исполняет: после `navigate` `window.__pre ===…",
-   "component": "driver (`crates/bidi-server/src/protocol.rs::script_add_preload`)",
    "date": null,
    "debtor": false
   },
@@ -21991,6 +21991,27 @@
    "component": "layout/style (`border_image.rs:151,502`) vs js-тест",
    "date": "2026-11-15",
    "debtor": false
+  },
+  "BUG-1811": {
+   "status": "fixed",
+   "title": "`cargo test -p lumen-js --features v8-backend --lib -- bug1811` 1/1; `cargo test -p lumen-bidi-server` 125/125 (новый `add_and_remove_preload_script_reach_the_l…",
+   "component": "driver/shell/js (`crates/driver/src/types.rs`, `live_session.rs`; `crates/shell/src/app/automation_cmds.rs`; `crates/js/src/v8_runtime/overrides.rs`, `v8_runtime.rs`; `crates/bidi-server/src/protocol.rs`)",
+   "date": "2026-11-15",
+   "debtor": false
+  },
+  "BUG-1812": {
+   "status": "fixed",
+   "title": "`cargo test -p lumen-js --features v8-backend --lib -- bug1812_frame_port` 4/4 (эхо через кросс-оригинную границу в обе стороны, `ports=1`, идентичность `data.p…",
+   "component": "js (`crates/js/src/frame_bridge.rs`, `shim/message_channel_shim.js`, `shim/web_api_shim_mid_b4.js`, `v8_runtime/tests/bug1812_frame_port.rs`)",
+   "date": "2026-11-15",
+   "debtor": false
+  },
+  "BUG-1813": {
+   "status": "fixed",
+   "title": "`cargo test -p lumen-js --features v8-backend --lib -- initial_about_blank_frame_answers_builtin_globals` 1/1 и `frame_bridge_globals::tests::dead_peer_reads_as…",
+   "component": "js (`crates/js/src/frame_bridge.rs`, `frame_bridge_globals.rs`, `v8_runtime/tests/mod.rs`)",
+   "date": "2026-11-15",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -22314,9 +22335,6 @@
   "driver (`bug1191_boxless_computed_style.rs:32`, `bug489_display_contents_computed_style.rs:32`)": [
    "BUG-1809"
   ],
-  "driver (`crates/bidi-server/src/protocol.rs::script_add_preload`)": [
-   "BUG-1811"
-  ],
   "driver (`crates/driver/src/session.rs:790` — `InProcessSession::navigate`, ветка `url.strip_prefix(\"file://\")`)": [
    "BUG-760"
   ],
@@ -22332,6 +22350,9 @@
   ],
   "driver/shell (`WinitSession::scroll`, `InProcessSession::scroll`, `navigate_fragment`)": [
    "BUG-338"
+  ],
+  "driver/shell/js (`crates/driver/src/types.rs`, `live_session.rs`; `crates/shell/src/app/automation_cmds.rs`; `crates/js/src/v8_runtime/overrides.rs`, `v8_runtime.rs`; `crates/bidi-server/src/protocol.rs`)": [
+   "BUG-1811"
   ],
   "encoding": [
    "BUG-162"
@@ -22720,6 +22741,12 @@
   ],
   "js (`crates/js/src/frame_bridge.rs` — фасад `d.referrer` документа `<iframe>`)": [
    "BUG-1231"
+  ],
+  "js (`crates/js/src/frame_bridge.rs`, `frame_bridge_globals.rs`, `v8_runtime/tests/mod.rs`)": [
+   "BUG-1813"
+  ],
+  "js (`crates/js/src/frame_bridge.rs`, `shim/message_channel_shim.js`, `shim/web_api_shim_mid_b4.js`, `v8_runtime/tests/bug1812_frame_port.rs`)": [
+   "BUG-1812"
   ],
   "js (`crates/js/src/generic_sensor.rs` — `GENERIC_SENSOR_SHIM`, конструктор `SensorErrorEvent`)": [
    "BUG-761"
@@ -23320,6 +23347,9 @@
   "js (`fetch_body_shim.js` — `Request.redirect`), core (`lumen_core::ext::JsFetchRequest`), network (`crates/network/src/js_providers.rs`, `cors.rs`)": [
    "BUG-1758"
   ],
+  "js (`frame_bridge.rs` `w.postMessage`/`_lumen_f_post_message`/`_lumen_deliver_frame_message`, `shim/message_channel_shim.js` `_lumen_port_walk_serialize`/`_lumen_deliver_port_messages`, воркерный `Worker._deliver`)": [
+   "BUG-1814"
+  ],
   "js (`grep -rn \"valueAsNumber\\": [
    "BUG-893"
   ],
@@ -23386,7 +23416,7 @@
   "js (live DOM bindings)": [
    "BUG-279"
   ],
-  "js (reCAPTCHA v3, anchor-кадр)": [
+  "js (reCAPTCHA v3, anchor-кадр; `frame_bridge.rs::_lumen_f_post_message`, `shim/message_channel_shim.js`)": [
    "BUG-1647"
   ],
   "js (shell)": [

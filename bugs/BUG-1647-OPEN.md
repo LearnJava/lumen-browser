@@ -1,8 +1,8 @@
 # BUG-1647 — reCAPTCHA v3: `grecaptcha.execute` не возвращает токен — «reCAPTCHA Timeout» и `TypeError … (reading 'length')` в `filter`
 
-**Статус:** OPEN (срез 3 — перенос `MessagePort` починен, `event.ports` доезжает;
-остаток — начальный `about:blank`-кадр не отдаёт глобалы,
-[BUG-1813](BUG-1813-OPEN.md))
+**Статус:** OPEN (срез 4 — глобалы начального `about:blank`-кадра починены,
+остаток — данные `postMessage`/порта доезжают строкой вместо значения,
+[BUG-1814](BUG-1814-OPEN.md))
 **Заведён:** 2026-10-19 (P2, COMPAT-CORPUS-4-BASE, `scripts/captcha_stand.py --arm lumen`)
 **Область:** js (исполнение `google.com/recaptcha/api2/anchor` в iframe, DOM-вызов внутри `Array.prototype.filter`-подобного хелпера)
 
@@ -100,7 +100,7 @@ BiDi не виден (`browsingContext.getTree` подкадра не отдаё
 В Lumen такой кадр отдаёт `contentWindow.JSON === undefined` (проба `.tmp/blank1812.py`:
 `appended-blank: json:"undefined"`, в Chrome — тот же объект, что `window.JSON`), потому что
 у кадра без собственного изолята нет `peer` и `_lumen_f_global_get` молчит для ВСЕХ
-глобалов. Это [BUG-1813](BUG-1813-OPEN.md) — следующий срез начинается с него.
+глобалов. Это [BUG-1813](BUG-1813-FIXED.md) — починено срезом 4.
 
 **Замер после фикса.** `python scripts/captcha_stand.py --arm lumen --only
 recaptcha-v3-score`: `не_отрисован`, балла v3 нет; в stderr вместо `reCAPTCHA Timeout`
@@ -115,6 +115,28 @@ recaptcha-v3-score`: `не_отрисован`, балла v3 нет; в stderr 
 - `element.textContent = …` на `<pre>` доходит до `innerText` в статической странице
   (`.tmp/pre_innertext.html`, `--dump-layout`), так что пустые `<pre>` в живой пробе — стейл
   раскладки при чтении `innerText` до принудительного reflow, а не дефект `innerText`.
+
+## Срез 4 (2026-11-15, P3) — глобалы `about:blank`-кадра починены; следующий блокер — данные сообщений
+
+**Починено.** [BUG-1813](BUG-1813-FIXED.md): начальный `about:blank`-кадр
+(HTML LS §7.1) отдаёт через фасад окна встроенные объекты — `contentWindow.JSON
+=== window.JSON`, то же у `Math`/`Object`/…; переменные страницы-читателя не
+протекают, `eval` по-прежнему `undefined` (решение среза 3 BUG-1790).
+Живая проба `.tmp/blank1812.py`: `json:"object" sameJson:true
+parse:"function" evalT:"undefined"`.
+
+**Замер после фикса.** `python scripts/captcha_stand.py --arm lumen --only
+recaptcha-v3-score` → `не_отрисован`, балла нет; `TypeError … ('parse'|
+'stringify')` из бандла ушёл, вместо него
+`SyntaxError: Unexpected token 'B', "Beq-BFi86J"... is not valid JSON` из
+`G.parse(L)` (`recaptcha__en.js:113:132`).
+
+**Что мешает дальше.** Логгер `.tmp/pl1814.py` (preload оборачивает
+`JSON.parse` в каждом документе) показывает, что до парсера доходят
+base64url-строки (len 156/226/472/3611) и `"[object Object]"` из воркерного
+`Worker._deliver` — то есть транспорт `postMessage`/`MessagePort` превращает
+значение в строку там, где Chrome сохраняет его тип. Это
+[BUG-1814](BUG-1814-OPEN.md) — следующий срез начинается с него.
 
 ## Симптом
 
