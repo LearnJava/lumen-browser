@@ -1,11 +1,49 @@
 # BUG-1790 — Cloudflare Turnstile: челлендж-кадр работает, но не выдаёт токен (детект со стороны challenge)
 
-**Статус:** OPEN (срез 3 — синхронный initial about:blank у вставленного скриптом `<iframe>`:
-`null.eval` в кадре челленджа закрыт, живая страница упирается в отсутствие ИЗОЛЯТА начального
-кадра — остаток [BUG-480](BUG-480-OPEN.md), FRAME-задача)
+**Статус:** OPEN (срез 4 — пустой `TypeError` в обработчике `message` кадра челленджа:
+найден точный путь (`_lumen_deliver_frame_message` → `dispatchEvent` → обработчик страницы),
+попутно закрыт спек-дефолт `MessageEvent.ports`/`source`; остаток — стек этого исключения)
 **Заведён:** 2026-11-06 (P3, остаток [BUG-1595](BUG-1595-FIXED.md))
 **Область:** js/shell — антибот-фингерпринт (`window.chrome`, `navigator.plugins`/`mimeTypes`),
 `MessageEvent.isTrusted`, `Node.parentElement`, начальный кадр `contentWindow` (UX-ANTIBOT)
+
+## Срез 4 (2026-11-15, P3)
+
+Живая страница (`peet.ws/turnstile-test/non-interactive.html`) сейчас проходит дальше среза 3:
+виджет стартует, `init`/`food` доходят в обе стороны, `null.eval` не повторяется. Токена нет:
+родитель получает `[Cloudflare Turnstile] Unhandled error: ` **с пустым сообщением** и debug info,
+затем `300010`, затем watchdog `300030`.
+
+**Что выяснено (временная диагностика `_lumen_report_exception`, откачена):**
+
+* Пустой `TypeError` (`name=TypeError`, `msg=""`, стек есть, `Error.stackTraceLimit=10`) приходит
+  из **обработчика `message` в realm кадра челленджа**
+  (`challenges.cloudflare.com/.../turnstile/f/av0/.../new/normal`), а не из нативных вызовов:
+  ни один `_lumen_*` не бросал (обёртка всех нативов молчит), `_lumen_run_classic_script` и
+  `eval_and_report`/модульные пути тоже молчат. Путь вызова — `_lumen_deliver_frame_message` →
+  `dispatchEvent` → слушатель страницы; сообщение, на котором он падает, — `init` **от родителя**.
+* После этого Cloudflare заводит НОВЫЙ кадр `failure_retry` (`upsert_binding`: `host=35 had=false`
+  → индекс `1`, тогда как исходный кадр — `host=29` → `0`) и отбрасывает его сообщения
+  (`Ignored message from unexpected source for event: init/requestExtraParams/overrunBegin`):
+  `api.js` проверяет `event.source === iframe.contentWindow` (`function Su`). Это **следствие**
+  ретрая по `300010`, а не причина — гоняться за идентичностью фасада бессмысленно.
+* Стеки в Lumen работают (кадры видны), в лог они попадают отдельными строками после
+  `[JS error]`, поэтому в прошлых прогонах выглядели пустыми.
+
+**Исправлено попутно (спек-несоответствие, найдено по пути):** у `MessageEvent` не было дефолтов
+`MessageEventInit` — `event.ports` был `undefined` (HTML LS §9.3.4: пустой `sequence`), `event.source`
+— `undefined` (спека: `null`), `'ports' in event`/`'source' in event` — `false`. Chrome отвечает
+`[]`/`null`. Тест `message_event_has_spec_defaults_for_ports_and_source`
+(`crates/js/src/v8_runtime/tests/mod.rs`).
+
+**Следующий шаг:** снять полный стек этого `TypeError` (первый кадр — точка броска в бандле кадра) и
+сопоставить с бандлом `turnstile/f/av0/...` (HTML кадра — одна строка ~610 КБ, одна inline-`<script>`;
+качается обычным GET, см. `.tmp/chframe.html`), чтобы назвать отсутствующий API. Альтернатива —
+диф окружения кадра против Chrome (`.tmp/ts_chrome_diag.py` — эталонная рука с console/pageerror).
+
+Стенды: `.tmp/ts_live.py` (Lumen, живая страница), `.tmp/ts_tree.py` (контексты + проба окружения),
+`.tmp/ts_chrome_diag.py` (Chrome for Testing, console/pageerror по кадрам), `.tmp/q_probe.py`
+(одноразовая проба realm-свойств).
 
 ## Срез 3 (2026-11-15, P3)
 
