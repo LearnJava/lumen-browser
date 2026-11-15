@@ -1,7 +1,8 @@
 # BUG-1647 — reCAPTCHA v3: `grecaptcha.execute` не возвращает токен — «reCAPTCHA Timeout» и `TypeError … (reading 'length')` в `filter`
 
-**Статус:** OPEN (срез 2 — сообщения якорь→родитель доходят; остаток — перенос
-`MessagePort`, [BUG-1812](BUG-1812-OPEN.md))
+**Статус:** OPEN (срез 3 — перенос `MessagePort` починен, `event.ports` доезжает;
+остаток — начальный `about:blank`-кадр не отдаёт глобалы,
+[BUG-1813](BUG-1813-OPEN.md))
 **Заведён:** 2026-10-19 (P2, COMPAT-CORPUS-4-BASE, `scripts/captcha_stand.py --arm lumen`)
 **Область:** js (исполнение `google.com/recaptcha/api2/anchor` в iframe, DOM-вызов внутри `Array.prototype.filter`-подобного хелпера)
 
@@ -78,6 +79,32 @@ BiDi не виден (`browsingContext.getTree` подкадра не отдаё
 третьего аргумента `postMessage` не поддержан, поэтому порт `MessageChannel` (api.js отдаёт
 его якорю, якорь отвечает по нему) до адресата не доезжает — handshake не закрывается.
 Это отдельный дефект Web API: [BUG-1812](BUG-1812-OPEN.md). Следующий срез начинается с него.
+
+## Срез 3 (2026-11-15, P3) — перенос `MessagePort` починен; следующий блокер — глобалы `about:blank`-кадра
+
+**Починено.** [BUG-1812](BUG-1812-FIXED.md): третий аргумент `postMessage` принимается и в
+фасаде окна, и в собственном окне; id портов едут в конверте, получатель реифицирует их в
+`event.ports`, объект порта внутри `data` приходит тем же объектом, а сообщения в
+перенесённый порт идут между изолятами кадров по маршруту `(изолят, id) → получатель`.
+Живая проверка формы (`.tmp/xo1812.py`, родитель `http://localhost:P`, кадр
+`http://127.0.0.1:P`): лента родителя `parent-got:child-hello:ports=1`,
+`parent-childport-got:child-reply`, `parent-port-got:child-through-port` — обе стороны
+канала работают. Якорь reCAPTCHA теперь тоже получает порт api.js.
+
+**Что мешает дальше (логгер `.tmp/pl1812.py`, preload-скрипт BUG-1811).** В кадре/странице
+появился новый класс ошибок — `TypeError: Cannot read properties of undefined (reading
+'parse')` и `… ('stringify')` (`recaptcha__en.js`, `<anonymous>:113:132` и `:562:337`).
+Строка `<anonymous>:451:477` бандла объясняет причину: код сохраняет
+`Object.prototype.toJSON`/`Array.prototype.toJSON`, удаляет их и читает **`N.JSON` у свежего
+`about:blank`-кадра** (`N` — его `contentWindow`), чтобы взять «неиспорченный» `JSON`.
+В Lumen такой кадр отдаёт `contentWindow.JSON === undefined` (проба `.tmp/blank1812.py`:
+`appended-blank: json:"undefined"`, в Chrome — тот же объект, что `window.JSON`), потому что
+у кадра без собственного изолята нет `peer` и `_lumen_f_global_get` молчит для ВСЕХ
+глобалов. Это [BUG-1813](BUG-1813-OPEN.md) — следующий срез начинается с него.
+
+**Замер после фикса.** `python scripts/captcha_stand.py --arm lumen --only
+recaptcha-v3-score`: `не_отрисован`, балла v3 нет; в stderr вместо `reCAPTCHA Timeout`
+теперь `TypeError … ('parse'|'stringify')` из бандла.
 
 **Попутно проверено (не причина BUG-1647):**
 

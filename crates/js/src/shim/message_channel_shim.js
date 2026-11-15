@@ -60,7 +60,13 @@ MessagePort.prototype.postMessage = function(message) {
         var clone = structuredClone(message);
         var json;
         try { json = JSON.stringify(clone); } catch (e) { return; }
-        if (this._remoteWorkerId !== null && this._remoteWorkerId !== undefined) {
+        if (this._remoteFrame) {
+            // BUG-1812: другой конец — порт в чужом КАДРЕ; маршрут id → документ
+            // получателя известен `frame_bridge` (записан при переносе).
+            if (typeof _lumen_port_post_frame === 'function') {
+                _lumen_port_post_frame(this._lumenPortId, json);
+            }
+        } else if (this._remoteWorkerId !== null && this._remoteWorkerId !== undefined) {
             if (typeof _lumen_port_post_to_worker === 'function') {
                 _lumen_port_post_to_worker(this._remoteWorkerId, this._lumenPortId, json);
             }
@@ -168,14 +174,23 @@ var _lumenPortRegistry = {};
 // destination worker id when called from the page's `Worker.prototype.
 // postMessage`; `null`/`undefined` from a worker's own `postMessage` (a
 // worker has exactly one parent, so replies need no destination id — see
-// `postMessage`'s `_remoteWorkerId` branch above). Returns the ids in
-// transfer-list order, for the outgoing envelope's `ports` field.
-function _lumen_port_prepare_transfer(transfer, bindWorkerId) {
+// `postMessage`'s `_remoteWorkerId` branch above). `bindFrame` (BUG-1812)
+// instead marks the partner as living in another FRAME, so its posts route
+// through `_lumen_port_post_frame` by id. Returns the ids in transfer-list
+// order, for the outgoing envelope's `ports` field.
+function _lumen_port_prepare_transfer(transfer, bindWorkerId, bindFrame) {
     var ids = [];
     if (!transfer) return ids;
     for (var i = 0; i < transfer.length; i++) {
         var port = transfer[i];
         if (!(port instanceof MessagePort)) continue;
+        // HTML LS §9.2.9: уже отсоединённый порт в списке передачи —
+        // DataCloneError, а не тихий пропуск.
+        if (port._neutered) {
+            throw (typeof DOMException === 'function')
+                ? new DOMException('object could not be cloned', 'DataCloneError')
+                : new TypeError('object could not be cloned');
+        }
         var id = port._lumenPortId;
         if (id === undefined) {
             id = (typeof _lumen_next_port_id === 'function') ? _lumen_next_port_id() : 0;
@@ -185,6 +200,7 @@ function _lumen_port_prepare_transfer(transfer, bindWorkerId) {
         if (partner) {
             partner._lumenPortId   = id;
             partner._remoteBound   = true;
+            partner._remoteFrame   = !!bindFrame;
             partner._remoteWorkerId = (bindWorkerId === undefined) ? null : bindWorkerId;
             partner._other = null;
             _lumenPortRegistry[id] = partner;
@@ -199,13 +215,15 @@ function _lumen_port_prepare_transfer(transfer, bindWorkerId) {
 // Find (or, on first sight, create) the local endpoint for bridge id `id` on
 // the RECEIVING side of a transfer. First message wins: the object created
 // here is what both `ev.ports` and any sentinel embedded in `data` resolve
-// to, preserving identity the way structured clone requires.
-function _lumen_port_get_or_create(id, remoteWorkerId) {
+// to, preserving identity the way structured clone requires. `isFrame`
+// (BUG-1812) marks the object as bridged to another frame.
+function _lumen_port_get_or_create(id, remoteWorkerId, isFrame) {
     var p = _lumenPortRegistry[id];
     if (p) return p;
     p = new MessagePort();
     p._lumenPortId    = id;
     p._remoteBound    = true;
+    p._remoteFrame    = !!isFrame;
     p._remoteWorkerId = (remoteWorkerId === undefined) ? null : remoteWorkerId;
     _lumenPortRegistry[id] = p;
     return p;
@@ -213,10 +231,10 @@ function _lumen_port_get_or_create(id, remoteWorkerId) {
 
 // Build `ev.ports` (transfer-list order) for an incoming envelope's
 // `ports: [id, ...]` field.
-function _lumen_port_reify_list(ids, remoteWorkerId) {
+function _lumen_port_reify_list(ids, remoteWorkerId, isFrame) {
     var out = [];
     for (var i = 0; i < (ids || []).length; i++) {
-        out.push(_lumen_port_get_or_create(ids[i], remoteWorkerId));
+        out.push(_lumen_port_get_or_create(ids[i], remoteWorkerId, isFrame));
     }
     return out;
 }
@@ -225,20 +243,20 @@ function _lumen_port_reify_list(ids, remoteWorkerId) {
 // found while walking already-parsed message data with the matching
 // registered `MessagePort`, so a reference embedded in `data` shares
 // identity with the corresponding entry in `ev.ports`.
-function _lumen_port_walk_deserialize(obj, remoteWorkerId) {
+function _lumen_port_walk_deserialize(obj, remoteWorkerId, isFrame) {
     if (!obj || typeof obj !== 'object') return obj;
     if (obj.__lumen_sentinel__ === '__lumen_message_port__') {
-        return _lumen_port_get_or_create(obj.portId, remoteWorkerId);
+        return _lumen_port_get_or_create(obj.portId, remoteWorkerId, isFrame);
     }
     if (Array.isArray(obj)) {
         var arr = [];
-        for (var i = 0; i < obj.length; i++) arr.push(_lumen_port_walk_deserialize(obj[i], remoteWorkerId));
+        for (var i = 0; i < obj.length; i++) arr.push(_lumen_port_walk_deserialize(obj[i], remoteWorkerId, isFrame));
         return arr;
     }
     var out = {};
     for (var k in obj) {
         if (Object.prototype.hasOwnProperty.call(obj, k)) {
-            out[k] = _lumen_port_walk_deserialize(obj[k], remoteWorkerId);
+            out[k] = _lumen_port_walk_deserialize(obj[k], remoteWorkerId, isFrame);
         }
     }
     return out;

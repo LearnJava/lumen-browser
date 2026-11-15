@@ -2213,12 +2213,42 @@ var window = {
     /// (a parse failure throws `SyntaxError`, per spec — a mismatch just
     /// silently drops the message, it is not an error). `message` is
     /// structured-cloned, not passed by reference (BUG-717).
-    postMessage: function(message, targetOrigin) {
+    postMessage: function(message, targetOrigin, transfer) {
         if (targetOrigin !== null && typeof targetOrigin === 'object') {
+            // Параметры-опции: `(message, { targetOrigin, transfer })`.
+            if ('transfer' in targetOrigin) transfer = targetOrigin.transfer;
             targetOrigin = ('targetOrigin' in targetOrigin) ? targetOrigin.targetOrigin : '/';
         } else if (targetOrigin === undefined) {
             targetOrigin = '/';
         }
+        // BUG-1812: `window.postMessage(msg, origin, [port])` в СВОЁ окно —
+        // другой конец остаётся в этом же изоляте, поэтому мост не нужен:
+        // переданный порт отсоединяется, а событие несёт НОВЫЙ объект,
+        // сцепленный с его прежним партнёром (HTML LS §9.2.9).
+        var ports = [];
+        if (transfer) {
+            for (var ti = 0; ti < transfer.length; ti++) {
+                var tp = transfer[ti];
+                if (typeof MessagePort !== 'function' || !(tp instanceof MessagePort)) continue;
+                if (tp._neutered) {
+                    throw new DOMException(
+                        "Failed to execute 'postMessage' on 'Window': " +
+                        "MessagePort at index " + ti + " is already detached.", 'DataCloneError');
+                }
+                var partner = tp._other;
+                tp._neutered = true;
+                tp._other = null;
+                var reified = new MessagePort();
+                if (partner && !partner._closed) {
+                    partner._other = reified;
+                    reified._other = partner;
+                }
+                ports.push(reified);
+            }
+        }
+        // shortcut: порт внутри `message` в этом (самооконном) пути не
+        // переносится — structuredClone ниже клонирует его как обычный объект;
+        // upgrade, если понадобится: разворачивать sentinel'ы и здесь.
         var origin = location.origin;
         if (targetOrigin !== '*') {
             var target;
@@ -2248,7 +2278,7 @@ var window = {
         // reports `isTrusted === true` even though a script called
         // `postMessage` — Cloudflare Turnstile drops every untrusted message
         // (BUG-1790).
-        var ev = new MessageEvent(structuredClone(message), { isTrusted: true });
+        var ev = new MessageEvent(structuredClone(message), { isTrusted: true, ports: ports });
         ev.origin = origin;
         ev.source = window;
         // GAP-ORIGIN: a delivered event's real origin — the sender is this
@@ -2279,8 +2309,8 @@ for (var _wohi = 0; _wohi < _LUMEN_EVENT_HANDLER_ATTRS.length; _wohi++) {
 // фреймов (frame_bridge::_lumen_frame_pump_messages). Данные уже разобраны,
 // source — фасад окна отправителя или null. Тот же порядок, что у локального
 // window.postMessage выше: сначала onmessage, затем addEventListener('message').
-__lumen_C._lumen_deliver_frame_message = function(data, origin, source, opaqueId) {
-    var ev = new MessageEvent(data, { isTrusted: true });
+__lumen_C._lumen_deliver_frame_message = function(data, origin, source, opaqueId, ports) {
+    var ev = new MessageEvent(data, { isTrusted: true, ports: ports || [] });
     ev.origin = origin || '';
     if (source !== null && source !== undefined) ev.source = source;
     // GAP-ORIGIN: the sender's origin as the frame bridge computed it; empty

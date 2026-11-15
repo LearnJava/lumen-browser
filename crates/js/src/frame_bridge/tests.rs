@@ -787,7 +787,7 @@
         let (_rt_parent, rt_child) = with_parent_child_pair(true, true);
         assert!(eval_bool(
             &rt_child,
-            "_lumen_f_post_message(99, '1', '*') === false"
+            "_lumen_f_post_message(99, '1', '*', '[]') === false"
         ));
     }
 
@@ -1848,7 +1848,7 @@
             // Принятый source — рабочее окно: постинг обратно доходит до ребёнка.
             assert!(eval_bool(
                 sibling,
-                &format!("_lumen_f_post_message({bid}, '\"back\"', '*')"),
+                &format!("_lumen_f_post_message({bid}, '\"back\"', '*', '[]')"),
             ));
         });
     }
