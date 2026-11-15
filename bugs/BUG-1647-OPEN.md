@@ -1,7 +1,7 @@
 # BUG-1647 — reCAPTCHA v3: `grecaptcha.execute` не возвращает токен — «reCAPTCHA Timeout» и `TypeError … (reading 'length')` в `filter`
 
-**Статус:** OPEN (срез 1 — `TypeError` в anchor-кадре больше не воспроизводится; токен
-выдаётся через ~30 с и Google отвечает на него `success:false`)
+**Статус:** OPEN (срез 2 — сообщения якорь→родитель доходят; остаток — перенос
+`MessagePort`, [BUG-1812](BUG-1812-OPEN.md))
 **Заведён:** 2026-10-19 (P2, COMPAT-CORPUS-4-BASE, `scripts/captcha_stand.py --arm lumen`)
 **Область:** js (исполнение `google.com/recaptcha/api2/anchor` в iframe, DOM-вызов внутри `Array.prototype.filter`-подобного хелпера)
 
@@ -37,6 +37,47 @@ Chrome дополнительно делает `POST api2/clr?k=…`; у Lumen �
 установленный **до** `api.js`; `script.addPreloadScript` в этой сессии не сработал
 ([BUG-1811](BUG-1811-FIXED.md)) — починен 2026-11-15 (P3), срез 2 начинается с логгера
 `message`/`postMessage` через preload-скрипт.
+
+## Срез 2 (2026-11-15, P3) — причина молчания кадра найдена: `targetOrigin` с явным портом по умолчанию
+
+**Логгер (`.tmp/cap1647c.py`, `.tmp/cap1647d.py`).** Preload-скрипт (BUG-1811) пишет в
+`window.__pl` каждого документа: `message` (origin/type/keys/source/ports), вызовы
+`window.postMessage`, `Worker`/`MessageChannel`, `error`/`unhandledrejection`; каждый кадр
+пересылает свою ленту родителю (`parent.postMessage(..., '*')`), потому что realm кадра из
+BiDi не виден (`browsingContext.getTree` подкадра не отдаёт вообще — отдельный пробел).
+
+**До фикса.** Верхняя страница за 45 с получила **ноль** сообщений от якоря; в ленте только
+собственный `MessageChannel`+self-`postMessage` из `api.js` (t≈1 с). Тот же anchor-документ,
+открытый **верхним** (`cap1647e.py`), в своём realm шлёт `parent.postMessage` c `ports: 1`
+(targetOrigin `https://recaptcha-demo.appspot.com:443`) — то есть кадр живой и молчит не он.
+
+**Причина.** `crates/js/src/frame_bridge.rs::_lumen_f_post_message` сравнивал строку
+`targetOrigin` с сериализованным origin получателя
+(`o.eq_ignore_ascii_case(&binding_origin(...))`). Якорь постит на
+`https://recaptcha-demo.appspot.com:443`, а origin получателя сериализуется без порта
+(`https://recaptcha-demo.appspot.com`) — сравнение строк не совпадало, и **каждое**
+сообщение кадр→родитель молча отбрасывалось. По HTML LS §9.2.9 шаг 3 `targetOrigin` —
+это URL, и сравниваются происхождения (порт по умолчанию снимается разбором URL), а не
+строки. Живая проверка формы: `.tmp/xo4_1647.py` (родитель на `http://localhost`, ребёнок на
+`http://127.0.0.1`, ребёнок постит на `http://localhost:80`) — до фикса сообщение не
+доходило, self-`postMessage` с тем же targetOrigin доходил (главный путь `window.postMessage`
+порт нормализует, путь фасада — нет).
+
+**Починено.** `o => crate::file_input::origin_for_url(o).eq_ignore_ascii_case(&binding_origin(…))`
+— targetOrigin разбирается как URL (`origin_for_url` снимает порт по умолчанию и приводит
+хост к нижнему регистру), плюс юнит-тест
+`frame_bridge::tests::explicit_default_port_target_origin_matches`
+(`cargo test -p lumen-js --features v8-backend --lib -- frame_bridge::tests` — 61/61).
+
+**Замер после фикса.** `cap1647c.py`, тот же стенд: верхняя страница получает сообщения от
+`https://www.google.com` на t≈2,0 с и t≈21,4 с (раньше — ни одного). Токен по-прежнему
+приходит через ~36 с (собственный `execute-ms=30000`), Google отвечает на него
+`success:false, score:null`.
+
+**Остаток — перенос `MessagePort`.** Оба сообщения приходят с `ports: 0`: список передачи
+третьего аргумента `postMessage` не поддержан, поэтому порт `MessageChannel` (api.js отдаёт
+его якорю, якорь отвечает по нему) до адресата не доезжает — handshake не закрывается.
+Это отдельный дефект Web API: [BUG-1812](BUG-1812-OPEN.md). Следующий срез начинается с него.
 
 **Попутно проверено (не причина BUG-1647):**
 

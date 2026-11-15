@@ -749,6 +749,20 @@
     }
 
     #[test]
+    fn explicit_default_port_target_origin_matches() {
+        // HTML LS §9.2.9 шаг 3: targetOrigin — это URL, а сравниваются
+        // происхождения. `https://parent.example:443` и `https://parent.example`
+        // — одно происхождение (порт по умолчанию снимает разбор URL), поэтому
+        // сообщение доставляется. reCAPTCHA-якорь постит родителю ровно так.
+        let (rt_parent, rt_child) = with_parent_child_pair(false, true);
+        rt_child
+            .eval("window.parent.postMessage('x', 'https://parent.example:443')")
+            .unwrap();
+        rt_parent.eval("_lumen_frame_pump_messages()").unwrap();
+        assert_eq!(msg_count(&rt_parent), 1);
+    }
+
+    #[test]
     fn slash_target_origin_follows_accessibility_flag() {
         // same-origin пара: '/' доставляет…
         let (rt_parent, rt_child) = with_parent_child_pair(true, true);
