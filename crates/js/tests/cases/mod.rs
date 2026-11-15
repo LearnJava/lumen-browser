@@ -16,6 +16,7 @@ mod bug1208_window_origin;
 mod bug1792_html_collection_iterable;
 mod bug1801_window_status;
 mod bug1083_textdecoder_stream_bom;
+mod bug1074_node_value;
 mod bug518_mixin_cssom;
 mod bug534_highlight_api;
 mod bug569_img_decode;

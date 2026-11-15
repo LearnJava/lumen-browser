@@ -693,8 +693,8 @@ fn wrapper_members_still_shadow_the_interface_prototype() {
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
 
-// Text/Comment wrappers get the CharacterData half of the bundle and
-// elements do not, exactly as the old per-node branch decided.
+// Text/Comment wrappers get the CharacterData half of the bundle; an element
+// gets the plain `Node.nodeValue` (`null`, DOM §4.4), not a data accessor.
 #[test]
 fn wrapper_character_data_members_are_text_only() {
     let rt = v8_runtime_with_dom(make_doc());
@@ -705,7 +705,7 @@ fn wrapper_character_data_members_are_text_only() {
                      var e = document.createElement('div'); \
                      t.data === 'hi' && t.nodeValue === 'hi' && \
                      (t.data = 'ho', t.textContent === 'ho') && \
-                     c.data === 'x' && e.nodeValue === undefined && \
+                     c.data === 'x' && e.nodeValue === null && \
                      t instanceof Text && c instanceof Comment && \
                      t.onclick === undefined",
         )
