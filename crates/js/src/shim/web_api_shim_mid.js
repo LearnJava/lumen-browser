@@ -11019,6 +11019,12 @@ _lumen_canvas_define_dim('height', 1, 150);
             // "element" and gave every `while (el) el = el.parentElement` walk
             // one extra, meaningless iteration.
             if (pid === _lumen_root_nid) return null;
+            // DOM §4.4: a tree-root node's parent is the shadow root or the
+            // document fragment — a node, not an element, so `parentElement` is
+            // null there (Cloudflare Turnstile walked the widget's shadow tree
+            // with `while (el.parentElement)` and called `getBoundingClientRect`
+            // on the ShadowRoot it got back, BUG-1790).
+            if (_lumen_is_shadow_root(pid) || _lumen_is_document_fragment(pid)) return null;
             return _lumen_make_element(pid);
         },
         enumerable: false, configurable: true,

@@ -101,6 +101,29 @@ fn node_attributes_of_a_shadow_root() {
     assert_eq!(s(&rt, "sr.isConnected"), "false");
 }
 
+/// DOM §4.4: `parentElement` answers only when the parent *is an element* — a
+/// tree root's parent is the shadow root or a fragment, so the answer is null
+/// (BUG-1790: Cloudflare Turnstile walked the widget's shadow tree with
+/// `while (el.parentElement)` and then called `getBoundingClientRect` on the
+/// `ShadowRoot` it got back: `TypeError`, `requestExtraParams` never answered,
+/// widget hung with 300030).
+#[test]
+fn parent_element_is_null_inside_a_shadow_root() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(SETUP).unwrap();
+    assert_eq!(
+        s(
+            &rt,
+            "(function(){ var c = document.createElement('i'); sr.appendChild(c); \
+              var f = document.createDocumentFragment(); var g = document.createElement('u'); \
+              f.appendChild(g); \
+              return [c.parentElement, c.parentNode === sr, g.parentElement, \
+                      sr.parentElement, typeof c.parentElement].join(); })()"
+        ),
+        ",true,,,object"
+    );
+}
+
 /// `ShadowRoot`'s own attributes (DOM §4.8) reflect the `attachShadow` init.
 #[test]
 fn shadow_root_init_attributes() {
