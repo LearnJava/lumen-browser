@@ -826,6 +826,16 @@ fn computed_map_border_width_style_shorthands() {
 }
 
 #[test]
+fn computed_map_webkit_text_stroke_bug1050() {
+    // BUG-1050 симптом 2: `-webkit-text-stroke-width` не было в карте вовсе;
+    // WPT `webkit-text-stroke-computed.html` читает каждое из трёх написаний.
+    let m = div_computed_map("<div>x</div>", "div { -webkit-text-stroke: 2px blue; }");
+    assert_eq!(m.get("-webkit-text-stroke-width").map(String::as_str), Some("2px"));
+    assert_eq!(m.get("-webkit-text-stroke-color").map(String::as_str), Some("rgb(0, 0, 255)"));
+    assert_eq!(m.get("-webkit-text-stroke").map(String::as_str), Some("2px rgb(0, 0, 255)"));
+}
+
+#[test]
 fn computed_map_background_per_layer_longhands() {
     let m = div_computed_map(
         "<div>x</div>",
