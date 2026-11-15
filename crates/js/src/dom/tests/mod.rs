@@ -376,6 +376,7 @@ mod v8_bug1535_table_cssom;
 mod v8_bug1297_background_cssom;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1408_mask_cssom;
+mod v8_bug1408_font_cssom;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1551_misc_cssom;
 #[cfg(feature = "v8-backend")]

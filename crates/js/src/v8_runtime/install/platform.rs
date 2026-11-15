@@ -903,11 +903,22 @@ pub(crate) fn install_css_supports_and_lazy_images(
 
     // Grammar + canonical form of the CSS Masking longhands in inline-`style`
     // (`mask-{image,size,repeat,position*,origin,clip,composite,mode}`; BUG-1408).
-    // `None` — the assignment is dropped.
+    // `None` - the assignment is dropped.
     reg!(scope, ctx, store,
         "_lumen_css_canonical_mask",
         |prop: String, value: String| -> Option<String> {
             lumen_layout::style::canonical_specified_mask(&prop, &value)
+        }
+    );
+
+    // Grammar + canonical form of the CSS Fonts keyword properties in inline-`style`
+    // (`font-kerning`, `font-optical-sizing`, `font-palette`, `font-synthesis*`,
+    // `font-variant-{caps,ligatures,numeric,east-asian,position,emoji}`; BUG-1408).
+    // `None` - the assignment is dropped.
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_font",
+        |prop: String, value: String| -> Option<String> {
+            lumen_layout::style::canonical_specified_font(&prop, &value)
         }
     );
 

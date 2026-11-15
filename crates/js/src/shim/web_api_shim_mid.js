@@ -2784,6 +2784,17 @@ var _LUMEN_MASK_PROPERTIES = {
     'mask-origin': 1, 'mask-clip': 1, 'mask-composite': 1, 'mask-mode': 1,
 };
 
+// CSS Fonts L4 keyword properties validated by the native `_lumen_css_canonical_font`
+// (engine `style::values::font_cssom`): single keywords and per-axis keyword lists whose
+// canonical form is fixed by the spec order (BUG-1408).
+var _LUMEN_FONT_PROPERTIES = {
+    'font-kerning': 1, 'font-optical-sizing': 1, 'font-palette': 1, 'font-synthesis': 1,
+    'font-synthesis-weight': 1, 'font-synthesis-style': 1, 'font-synthesis-small-caps': 1,
+    'font-synthesis-position': 1,
+    'font-variant-caps': 1, 'font-variant-ligatures': 1, 'font-variant-numeric': 1,
+    'font-variant-east-asian': 1, 'font-variant-position': 1, 'font-variant-emoji': 1,
+};
+
 // CSS Text L3/L4 longhands with a length or multi-component grammar: the native
 // `_lumen_css_canonical_text` (engine `style::values::text_cssom`) validates the value and
 // returns its canonical serialization (BUG-1325).
@@ -3975,6 +3986,9 @@ function _lumen_canonicalize_longhand(key, strVal) {
     if (_LUMEN_MASK_PROPERTIES.hasOwnProperty(key)) {
         return _lumen_css_canonical_mask(key, strVal);
     }
+    if (_LUMEN_FONT_PROPERTIES.hasOwnProperty(key)) {
+        return _lumen_css_canonical_font(key, strVal);
+    }
     if (_LUMEN_KEYWORD_PROPERTIES.hasOwnProperty(key)) {
         var kw = _lumen_css_canonical_keyword(strVal, _LUMEN_KEYWORD_PROPERTIES[key]);
         // CSS Overflow L3 legacy value alias: `overlay` parses as `auto`
@@ -4314,6 +4328,8 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val, priority) {
         _LUMEN_SCROLL_OFFSET_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_TEXT_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_BACKGROUND_PROPERTIES.hasOwnProperty(key) ||
+        _LUMEN_MASK_PROPERTIES.hasOwnProperty(key) ||
+        _LUMEN_FONT_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_KEYWORD_PROPERTIES.hasOwnProperty(key) ||
         key === 'scrollbar-color' ||
         key === 'scroll-snap-type' ||
