@@ -1427,9 +1427,27 @@ fn script_add_preload(id: i64, params: &JsonValue, state: &mut BidiState) -> Dis
     let script_id = state.next_id(0xaaaa);
     state.preload_scripts.push(PreloadScript {
         id: script_id.clone(),
-        source,
-        contexts,
+        source: source.clone(),
+        contexts: contexts.clone(),
     });
+
+    // BUG-1811: hand the script to the live window, which applies it in every
+    // document it creates from now on (`install_dom` → `lumen_js`'s global
+    // preload registry).
+    //
+    // shortcut: `contexts` is bookkeeping only — the live window is one
+    // browsing context, and BiDi context ids do not map onto its tabs, so a
+    // script registered with `contexts` still applies window-wide; upgrade
+    // when a per-tab registry exists.
+    if let Some(live) = &state.live
+        && let Err(e) = live.add_preload_script(&script_id, &source)
+    {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "unknown error",
+            &format!("addPreloadScript: {e}"),
+        ));
+    }
 
     let mut result = BTreeMap::new();
     result.insert("script".into(), JsonValue::String(script_id));
@@ -1454,6 +1472,17 @@ fn script_remove_preload(id: i64, params: &JsonValue, state: &mut BidiState) -> 
             Some(id),
             "no such script",
             &format!("unknown preload script: {script_id}"),
+        ));
+    }
+    // BUG-1811: same live hand-off as registration; failure here means the
+    // script stays registered in the window's realm registry, so report it.
+    if let Some(live) = &state.live
+        && let Err(e) = live.remove_preload_script(script_id)
+    {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "unknown error",
+            &format!("removePreloadScript: {e}"),
         ));
     }
     DispatchResult::single(make_success(id, empty_obj()))

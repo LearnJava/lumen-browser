@@ -142,6 +142,56 @@ pub fn timezone_override_script(timezone_id: &str) -> String {
     )
 }
 
+/// Preload scripts registered through WebDriver BiDi `script.addPreloadScript`
+/// (BUG-1811): `(id, functionDeclaration)` in registration order.
+///
+/// Process-global for the same reason as [`GLOBAL_UA_OVERRIDE`] — the shell
+/// builds a fresh `V8JsRuntime` per document, so there is no instance to carry
+/// a registration across navigations.
+static GLOBAL_PRELOAD_SCRIPTS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+/// Register (or replace, by id) a preload script for every document created
+/// after this call. `function_declaration` is BiDi's `functionDeclaration`:
+/// the source of a function, evaluated and called once per new realm.
+pub fn set_global_preload_script(id: &str, function_declaration: &str) {
+    if let Ok(mut guard) = GLOBAL_PRELOAD_SCRIPTS.lock() {
+        guard.retain(|(existing, _)| existing != id);
+        guard.push((id.to_owned(), function_declaration.to_owned()));
+    }
+}
+
+/// Drop a preload script by id. `false` = no such id was registered.
+pub fn remove_global_preload_script(id: &str) -> bool {
+    match GLOBAL_PRELOAD_SCRIPTS.lock() {
+        Ok(mut guard) => {
+            let before = guard.len();
+            guard.retain(|(existing, _)| existing != id);
+            guard.len() != before
+        }
+        Err(_) => false,
+    }
+}
+
+/// Ready-to-run sources for every registered preload script, in registration
+/// order: evaluate the declaration, then call the resulting function (BiDi
+/// §10.2.1). `channel` arguments are not implemented — the call takes none.
+pub(crate) fn global_preload_scripts() -> Vec<String> {
+    GLOBAL_PRELOAD_SCRIPTS
+        .lock()
+        .map(|guard| {
+            guard
+                .iter()
+                .map(|(_, declaration)| {
+                    format!(
+                        "(function() {{ var __lumen_preload = ({declaration}\n); \
+                         if (typeof __lumen_preload === 'function') __lumen_preload(); }})();"
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Process-global embedder permission states (WebDriver BiDi
 /// `permissions.setPermission`, BUG-1014): permission name → `granted` /
 /// `denied` / `prompt`.

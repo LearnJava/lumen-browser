@@ -517,6 +517,30 @@ impl Lumen {
                     };
                     let _ = reply_tx.send(reply);
                 }
+                AutomationCommand::AddPreloadScript { id, function_declaration } => {
+                    // BUG-1811 (`script.addPreloadScript`): recorded
+                    // process-globally and applied by every later
+                    // `install_dom` — the next navigation's fresh runtime and
+                    // every sub-document/iframe realm alike, before that
+                    // document's own first script line.
+                    #[cfg(feature = "v8")]
+                    lumen_js::v8_runtime::set_global_preload_script(&id, &function_declaration);
+                    #[cfg(not(feature = "v8"))]
+                    let _ = (&id, &function_declaration);
+                    let _ = reply_tx.send(AutomationReply::Ack);
+                }
+                AutomationCommand::RemovePreloadScript(id) => {
+                    #[cfg(feature = "v8")]
+                    let known = lumen_js::v8_runtime::remove_global_preload_script(&id);
+                    #[cfg(not(feature = "v8"))]
+                    let known = true;
+                    let reply = if known {
+                        AutomationReply::Ack
+                    } else {
+                        AutomationReply::Error(format!("unknown preload script: {id}"))
+                    };
+                    let _ = reply_tx.send(reply);
+                }
             }
         }
     }
