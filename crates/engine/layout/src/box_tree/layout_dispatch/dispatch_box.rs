@@ -440,6 +440,10 @@ pub(in crate::box_tree) fn dispatch_box(
             + s.border_left_width + s.border_right_width,
         BoxSizing::BorderBox => v,
     };
+    // CSS 2.2 §10.4: a `max-width` that shrinks the tentative (`auto`) width makes
+    // the box re-run §10.3.3 with `width = max-width`, so auto margins get the
+    // leftover space (BUG-1668: `max-width: 400px; margin: 0 auto` stayed at x=8).
+    let mut clamped_by_max = false;
     if let Some(max_len) = &s.max_width {
         let max_bb = if matches!(max_len, Length::Stretch) {
             Some((available_width - margin_left - margin_right).max(0.0))
@@ -449,6 +453,7 @@ pub(in crate::box_tree) fn dispatch_box(
             max_len.resolve(em, Some(cb), viewport).map(|v| outer_horiz(v).max(0.0))
         };
         if let Some(max_w) = max_bb {
+            clamped_by_max = max_w < b.rect.width;
             b.rect.width = b.rect.width.min(max_w);
         }
     }
@@ -542,7 +547,7 @@ pub(in crate::box_tree) fn dispatch_box(
     let ml_is_auto = s.margin_left.is_auto();
     let mr_is_auto = s.margin_right.is_auto();
     if (ml_is_auto || mr_is_auto)
-        && s.width.is_some()
+        && (s.width.is_some() || clamped_by_max)
         && !is_replaced
         && !matches!(
             s.display,
