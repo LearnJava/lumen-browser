@@ -141,8 +141,14 @@ TextDecoder.prototype.decode = function(buf, options) {
     var input;
     if (buf === undefined || buf === null) {
         input = new Uint8Array(0);
+    } else if (ArrayBuffer.isView(buf)) {
+        // Any ArrayBufferView is a BufferSource — `Uint8ClampedArray` (canvas
+        // ImageData.data) and `DataView` used to fall through to an empty buffer.
+        input = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+    } else if (buf instanceof ArrayBuffer) {
+        input = new Uint8Array(buf);
     } else {
-        input = buf instanceof Uint8Array ? buf : new Uint8Array(buf instanceof ArrayBuffer ? buf : new ArrayBuffer(0));
+        throw new TypeError("Failed to execute 'decode' on 'TextDecoder': parameter 1 is not of type 'BufferSource'.");
     }
     var bytes;
     if (this._pending && this._pending.length > 0) {

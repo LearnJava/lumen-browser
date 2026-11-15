@@ -900,20 +900,20 @@ pub(crate) fn decode_image(
 /// identical `<img crossorigin>` elements share one request and one decode.
 /// Bundles [`decode_image_cors`]'s inputs — plain positional params would
 /// trip `clippy::too_many_arguments` at eight.
-struct CorsImageFetch<'a> {
-    resolved_url: &'a str,
-    raw_src: &'a str,
-    self_origin: &'a lumen_network::Origin,
-    mode: lumen_layout::CrossOriginMode,
-    base: &'a ResourceBase,
-    sink: &'a Arc<dyn EventSink>,
-    cookie_jar: Option<DocCookieJar>,
-    target: lumen_core::ColorSpace,
-    referrer_policy: lumen_network::ReferrerPolicy,
+pub(crate) struct CorsImageFetch<'a> {
+    pub(crate) resolved_url: &'a str,
+    pub(crate) raw_src: &'a str,
+    pub(crate) self_origin: &'a lumen_network::Origin,
+    pub(crate) mode: lumen_layout::CrossOriginMode,
+    pub(crate) base: &'a ResourceBase,
+    pub(crate) sink: &'a Arc<dyn EventSink>,
+    pub(crate) cookie_jar: Option<DocCookieJar>,
+    pub(crate) target: lumen_core::ColorSpace,
+    pub(crate) referrer_policy: lumen_network::ReferrerPolicy,
 }
 
 /// Ключ CORS-слота в `IMAGE_CACHE` (BUG-1150): `(resolved URL, crossorigin mode)`.
-fn cors_cache_key(resolved_url: &str, mode: lumen_layout::CrossOriginMode) -> String {
+pub(crate) fn cors_cache_key(resolved_url: &str, mode: lumen_layout::CrossOriginMode) -> String {
     let m = match mode {
         lumen_layout::CrossOriginMode::Anonymous => 'a',
         lumen_layout::CrossOriginMode::UseCredentials => 'c',
@@ -935,7 +935,7 @@ mod cors_key_tests {
     }
 }
 
-fn decode_image_cors(req: CorsImageFetch<'_>) -> Option<image_cache::DecodedImage> {
+pub(crate) fn decode_image_cors(req: CorsImageFetch<'_>) -> Option<image_cache::DecodedImage> {
     let CorsImageFetch {
         resolved_url, raw_src, self_origin, mode, base, sink, cookie_jar, target, referrer_policy,
     } = req;
