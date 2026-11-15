@@ -99,7 +99,7 @@ computed-значения ширины бордеров/аутлайнов по 
 
    Живая проверка также вскрыла **три отдельных, не связанных с un-zoom
    дефекта**, вынесенные в собственные карточки, а не смешанные сюда
-   (`docs/probe-method.md` §8): [BUG-1050](BUG-1050-OPEN.md)
+   (`docs/probe-method.md` §8): [BUG-1050](BUG-1050-FIXED.md)
    (`getComputedStyle()` пропускает несколько шортхендов/свойств и
    неверно сериализует `box-shadow`/`text-shadow`/`filter` —
    `svg-computed-style.html` 22/88), [BUG-1051](BUG-1051-FIXED.md)

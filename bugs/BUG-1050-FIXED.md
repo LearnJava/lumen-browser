@@ -1,6 +1,6 @@
 # BUG-1050 — `getComputedStyle()` пропускает несколько box-model шортхендов и трёх свойств, неверно сериализует `box-shadow`/`text-shadow`/`filter`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-11-15 (P3) — все пять симптомов закрыты багами-преемниками, см. «Закрытие» в конце
 **Заведён:** 2026-09-13 (BUG-532 срез P3, живой прогон `css/css-viewport/zoom/svg-computed-style.html`)
 **Область:** layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`)
 **Владелец:** P3/P4
@@ -59,3 +59,28 @@
 ## Повторное измерение: WPT-RUN-14 срез 23 (2026-10-08)
 
 `text-decoration-thickness` и `text-underline-offset` теперь **есть** в карте `getComputedStyle`, но значение неверное: `text-underline-offset: 1em` при `font-size:40px` — `16px` (разрешено от 16 px, не от размера элемента), `calc(10px - 8px)` — `auto`, `text-decoration-thickness: 200%` — `2%`. Остальное перечисленное здесь и ещё `shape-outside`/`shape-margin`/`shape-image-threshold`/`text-decoration`/`text-emphasis*`/`text-underline-position` — BUG-1515.
+
+## Закрытие (P3, 2026-11-15)
+
+Замер по коду и юнит-тестам `lumen-layout`, без WPT-прогона (dev-release не
+собирался): пять исходных симптомов закрыты багами-преемниками, сам BUG-1050
+перестал быть отдельным дефектом.
+
+| Симптом | Чем закрыт | Тест |
+|---|---|---|
+| (1) шортхенды `margin`/`padding`/`inset`/`border-width`/`scroll-margin`/`scroll-padding` | срез 1 (P6) + `crates/engine/layout/src/selector_query.rs:2647` | `computed_map_box_shorthands_bug1050`, `computed_map_border_width_style_shorthands` |
+| (2) `-webkit-text-stroke-width` | `eeb4036565` (COMPAT-CSS-TEXT-STROKE) + `selector_query.rs:1890` | `computed_map_webkit_text_stroke_bug1050` (добавлен этим закрытием) |
+| (2) `text-decoration-thickness`/`text-underline-offset` | BUG-1515 (`2ca00eb72`) | `computed_map_text_decoration_and_shapes_bug1515` |
+| (3) цвет `box-shadow`/`text-shadow` первым | срез 1 (P6) | `computed_map_box_shadow_and_text_shadow`, `computed_map_box_shadow_color_and_border_radius` |
+| (4) `filter: drop-shadow()` не резолвится | BUG-1540 (`6b93784e9`) + BUG-1541 (`c1fbc9c7f`) | `computed_map_backdrop_filter_and_filter_canonical_forms`, `computed_map_filter_invalid_value_is_dropped` |
+| (5) unitless `line-height` | срез 1 (P6), ratio → px от `font-size` (`selector_query.rs:1723`) | `computed_map_box_shorthands_bug1050` (`line-height: 20px`), `style/tests/cascade.rs` (zoom ×2) |
+
+`cargo test -p lumen-layout --lib selector_query::tests` — 158/158 (включая
+новый `computed_map_webkit_text_stroke_bug1050`).
+
+Вне объёма этого бага и остаётся открытым: zoom-масштаб
+`width`/`height`/`min-*`/`max-*` на SVG — BUG-1592 срез 2 (закрыл размеры SVG
+под `zoom`), каноническая запись `shape-outside` — ROADMAP
+`SHAPE-OUTSIDE-COMPUTED`. Пересчёт `svg-computed-style.html.ini` по-прежнему
+требует отдельного WPT-прогона и закрытием здесь не заявляется.
+
