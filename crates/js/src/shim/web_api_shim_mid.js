@@ -2189,6 +2189,12 @@ function _lumen_parse_decl_into(obj, prop, val) {
             Object.keys(txtLonghands).forEach(function(k) { obj[k] = txtLonghands[k]; });
             return;
         }
+        if (prop === 'font-variant') {
+            var fvLonghands = _lumen_expand_font_variant(val);
+            if (fvLonghands === false) return; // invalid declaration: dropped, not stored
+            fvLonghands.forEach(function(kv) { obj[kv[0]] = kv[1]; });
+            return;
+        }
         var canon = _lumen_canonicalize_longhand(prop, val);
         if (canon === null || canon === undefined) return; // invalid declaration: dropped, not stored
         obj[prop] = canon;
@@ -2685,6 +2691,16 @@ function _lumen_serialize_style(obj) {
         shorthandOf[lh[0]] = sh;
         shorthandOf[lh[1]] = sh;
     });
+    // `font-variant` collapses only when every one of its six longhands is declared.
+    if (_LUMEN_FONT_VARIANT_LONGHANDS.every(function(lh) {
+        return Object.prototype.hasOwnProperty.call(obj, lh) && !shorthandOf[lh];
+    })) {
+        var fvVal = _lumen_font_variant_value(obj);
+        if (fvVal) {
+            shorthandVal['font-variant'] = fvVal;
+            _LUMEN_FONT_VARIANT_LONGHANDS.forEach(function(lh) { shorthandOf[lh] = 'font-variant'; });
+        }
+    }
     // CSSOM §6.7.2: a shorthand is only emitted when all its longhands carry the same priority.
     var shorthandPriority = {};  // shorthand name -> 'all' | 'none' | 'mixed'
     keys.forEach(function(k) {
@@ -2799,6 +2815,35 @@ var _LUMEN_FONT_PROPERTIES = {
     // CSS Fonts L3/L4 lists of OpenType tags and `font-variant-alternates` (BUG-1408 slice 4).
     'font-feature-settings': 1, 'font-variation-settings': 1, 'font-variant-alternates': 1,
 };
+
+// CSS Fonts L4 §9: `font-variant` is a shorthand over these six longhands. Inline-`style` keeps
+// the expanded longhands (so `style.fontVariantCaps` reads back) and composes the shorthand from
+// them on read (BUG-1408 slice 5).
+var _LUMEN_FONT_VARIANT_LONGHANDS = [
+    'font-variant-ligatures', 'font-variant-caps', 'font-variant-alternates',
+    'font-variant-numeric', 'font-variant-east-asian', 'font-variant-position',
+];
+// Longhand/value pairs of `font-variant: strVal`, or `false` when the value is invalid.
+function _lumen_expand_font_variant(strVal) {
+    var r = JSON.parse(_lumen_css_expand_font_variant(strVal));
+    return r.k === 'ok' ? r.l : false;
+}
+// Shorthand serialization from the expanded longhands; `undefined` when none is declared.
+// Оси в умолчании (`normal`) опускаются. `ligatures: none` не представим рядом с другими
+// осями — тогда шорткод не сериализуется (пустая строка, CSSOM §serialize a shorthand).
+function _lumen_font_variant_value(obj) {
+    var parts = [], any = false;
+    _LUMEN_FONT_VARIANT_LONGHANDS.forEach(function(lh) {
+        var v = obj[lh];
+        if (v === undefined) return;
+        any = true;
+        if (v !== 'normal') parts.push(v);
+    });
+    if (!any) return undefined;
+    if (!parts.length) return 'normal';
+    if (parts.length > 1 && parts.indexOf('none') !== -1) return '';
+    return parts.join(' ');
+}
 
 // CSS Text L3/L4 longhands with a length or multi-component grammar: the native
 // `_lumen_css_canonical_text` (engine `style::values::text_cssom`) validates the value and
@@ -4129,6 +4174,7 @@ function _lumen_shorthand_longhands_other(key) {
     if (key === 'overflow') return ['overflow-x', 'overflow-y'];
     if (key === 'block-step') return ['block-step-size', 'block-step-insert', 'block-step-align', 'block-step-round'];
     if (_LUMEN_2V_SHORTHANDS.hasOwnProperty(key)) return _LUMEN_2V_SHORTHANDS[key];
+    if (key === 'font-variant') return _LUMEN_FONT_VARIANT_LONGHANDS;
     return _lumen_border_longhands(key) || [];
 }
 CSSStyleDeclaration.prototype.getPropertyValue = function(prop) {
@@ -4154,6 +4200,10 @@ CSSStyleDeclaration.prototype.getPropertyValue = function(prop) {
     if (_LUMEN_TEXT_SHORTHANDS.hasOwnProperty(key)) {
         var txtSh = _lumen_text_shorthand_value(obj, key);
         if (txtSh !== undefined) return txtSh;
+    }
+    if (key === 'font-variant') {
+        var fvSh = _lumen_font_variant_value(obj);
+        if (fvSh !== undefined) return fvSh;
     }
     if (_lumen_gap_rule_key_re.test(key)) {
         var gapSh = _lumen_css_gap_rule_shorthand(key, JSON.stringify(obj));
@@ -4317,6 +4367,13 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val, priority) {
         _lumen_style_commit_decl(nid, realObj, obj, prio === 'important');
         return;
     }
+    if (key === 'font-variant') {
+        var fvExpanded = _lumen_expand_font_variant(strVal);
+        if (fvExpanded === false) return; // invalid shorthand value: whole declaration dropped
+        fvExpanded.forEach(function(kv) { obj[kv[0]] = kv[1]; });
+        _lumen_style_commit_decl(nid, realObj, obj, prio === 'important');
+        return;
+    }
     // Срез 10: color/length/line-width/sizing/keyword grammars all
     // go through the shared `_lumen_canonicalize_longhand` dispatch
     // (also used by `_lumen_parse_style` above) instead of one
@@ -4394,6 +4451,7 @@ CSSStyleDeclaration.prototype.getPropertyPriority = function getPropertyPriority
     else if (key === 'block-step') longhands = ['block-step-size', 'block-step-insert', 'block-step-align', 'block-step-round'];
     else if (_LUMEN_2V_SHORTHANDS.hasOwnProperty(key)) longhands = _LUMEN_2V_SHORTHANDS[key];
     else if (_LUMEN_TEXT_SHORTHANDS.hasOwnProperty(key)) longhands = _LUMEN_TEXT_SHORTHANDS[key];
+    else if (key === 'font-variant') longhands = _LUMEN_FONT_VARIANT_LONGHANDS;
     else if (_lumen_gap_rule_key_re.test(key)) longhands = JSON.parse(_lumen_css_gap_rule_longhands(key));
     else longhands = _lumen_border_longhands(key);
     if (!longhands || !longhands.length) return '';
