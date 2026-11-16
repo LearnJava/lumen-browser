@@ -13,7 +13,7 @@ use super::background_cssom::one_of;
 use super::length::split_top_level_ws;
 use super::misc_cssom::canonical_specified_misc;
 use super::text_cssom::canonical_specified_text;
-use crate::style::math_value::canonical_specified_numeric_math;
+use crate::style::math_value::{canonical_math_order, canonical_specified_numeric_math};
 
 /// Шесть лонгхендов `font-variant` в порядке спецификации (CSS Fonts L4 §9).
 const FONT_VARIANT_LONGHANDS: [&str; 6] = [
@@ -94,10 +94,12 @@ pub fn canonical_specified_font(prop: &str, value: &str) -> Option<String> {
             v,
             &["normal"],
             &[
+                // WPT/css-fonts (поведение браузеров): full-width/half-width/
+                // proportional-width — одна группа, jis*/simplified/traditional
+                // и `ruby` — отдельные (`jis78 proportional-width` валидно).
                 &["jis78", "jis83", "jis90", "jis04"],
                 &["simplified", "traditional"],
-                &["full-width"],
-                &["proportional-width"],
+                &["full-width", "half-width", "proportional-width"],
                 &["ruby"],
             ],
         ),
@@ -381,11 +383,14 @@ const VARIANT_NUMERIC_GROUPS: &[&[&str]] = &[
     &["slashed-zero"],
 ];
 
+/// WPT/css-fonts (поведение браузеров): trio `full-width`/`half-width`/
+/// `proportional-width` — одна группа; jis*, simplified/traditional и `ruby` —
+/// отдельные (`jis78 proportional-width` валидно, `full-width
+/// proportional-width` — нет).
 const VARIANT_EAST_ASIAN_GROUPS: &[&[&str]] = &[
     &["jis78", "jis83", "jis90", "jis04"],
     &["simplified", "traditional"],
-    &["full-width"],
-    &["proportional-width"],
+    &["full-width", "half-width", "proportional-width"],
     &["ruby"],
 ];
 
@@ -450,7 +455,9 @@ fn font_size_adjust(v: &str) -> Option<String> {
         // тоже принимается как написано, так что `calc(1px)` проходит валидацию; отвергать
         // его — вместе с настоящей проверкой размерности в `canonical_numeric_math`.
         match canonical_specified_numeric_math("font-size-adjust", value).as_str() {
-            "" | "!" => value.to_string(),
+            // Свёртка не удалась (`sign()` с относительными единицами) —
+            // множители произведения в канонический порядок (BUG-1408).
+            "" | "!" => canonical_math_order(value).unwrap_or_else(|| value.to_string()),
             canon => canon.to_string(),
         }
     } else {
@@ -773,6 +780,7 @@ mod tests {
             value(v, "font-variant-numeric"),
             "tabular-nums stacked-fractions"
         );
+        // jis-семейство и trio ширины — разные группы, запись по группам
         assert_eq!(
             value(v, "font-variant-east-asian"),
             "jis83 proportional-width"
@@ -789,6 +797,8 @@ mod tests {
             "lining-nums oldstyle-nums",
             "stylistic(flowing) stylistic(flowing)",
             "sub super",
+            // trio ширины — одна группа, два значения ширины невалидны (WPT)
+            "full-width proportional-width",
             "bogus",
         ] {
             assert!(expand_font_variant(v).is_none(), "{v}");

@@ -9,7 +9,7 @@
 
 use super::length::{canonical_specified_length as canonical_length, split_top_level_ws};
 use super::typography::{CaseLang, FontStretch, FontStyle, FontWeight, TextTransformExtra};
-use crate::style::math_value::canonical_specified_numeric_math;
+use crate::style::math_value::{canonical_math_order, canonical_specified_numeric_math};
 use crate::style::parse::font::parse_font_weight;
 
 /// Каноническая запись значения `value` свойства `prop` либо `None`, если оно не соответствует
@@ -119,6 +119,9 @@ fn font_stretch(v: &str) -> Option<String> {
         // `calc(100% + 100%)` сводится к `calc(200%)`; значение без процента не подходит —
         // грамматика свойства процентная.
         let canon = canonical_length_sorted(v, false, true).unwrap_or_else(|| v.to_string());
+        // Свёртка не удалась (`sign()` с относительными единицами) — множители
+        // произведения в канонический порядок (BUG-1408).
+        let canon = canonical_math_order(&canon).unwrap_or(canon);
         return canon.contains('%').then_some(canon);
     }
     let pct = kw.strip_suffix('%')?;

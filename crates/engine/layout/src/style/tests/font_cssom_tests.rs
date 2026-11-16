@@ -60,6 +60,8 @@
             Some("simplified full-width ruby")
         );
         assert_eq!(canon("font-variant-east-asian", "jis78 jis83"), None);
+        // trio ширины — одна группа (WPT/css-fonts)
+        assert_eq!(canon("font-variant-east-asian", "full-width proportional-width"), None);
         assert_eq!(canon("font-variant-east-asian", "normal ruby"), None);
     }
 
