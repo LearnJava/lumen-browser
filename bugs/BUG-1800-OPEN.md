@@ -796,3 +796,74 @@ status OK, лог `.tmp/perf-audit/20261116-235548`, не коммитится):
 **Осталось:** каноничный живой ebay-замер (когда сайт откроется); пункты (a)
 has-reach-диф и (c) fanout-sib суммы — механизмы классов выше (срез 13, (a) —
 только с перф-протоколом уровня BUG-341).
+
+## Срез 15 (P3, 2026-11-17) — перепись (c): fanout-sib на github не срабатывает ни разу — при `conservative` (любой author shadow root) весь narrowing-слой выключен; гипотеза «fanout-sib суммы» была артефактом чтения `widest=` — рычаг пуст, механизм не строился
+
+**Проба** (временная, `LUMEN_S15_PROBE=1`, снята до коммита, дерево бит-в-байт
+HEAD): реестр «первый источник каждого deep-корня `root_set_impl`» —
+`probe_note` на всех семи местах вставки deep-корней (`node_change.rs`:
+shadow-guard, childlist-orphan, nth-of-parent, fanout-sib, parent-widen,
+deep-self; `restyle.rs`: has-reach, has-reach-cap, struct-reach), drain во
+flush (`style_flush.rs`) и в relayout (UI-поток). Печать раз в флаш —
+`[engine] s15 roots: deep=N changes=M union=U тег=корней/сумма-размеров/макс`
+по 11 корзинам; union — честная площадь union корней, суммы считают
+пересекающиеся поддеревья с повтором. Смок на локальной странице (10 записей
+`a`→`z` при селекторе `.a ~ .b`, узел + следующие соседи) — формат
+воспроизводится, `fanout-sib=10/10/1`. Попутная ловушка смока: запись
+`a`→`a is-open` корня fanout не даёт — `class_write_hits` честно признаёт
+запись «немой» (токен `a` сохранён), корень остаётся shallow.
+
+**Числа** (живой github, homepage, compat-crawl, dev-release ветки `5c748cf72`,
+репро карточки, `LUMEN_FRAME_LOG=1`; лог `.tmp/perf-audit/20261117-s15-probe`,
+не коммитится; в логе две сессии — перезапуск после DIFF[a11y], состав
+идентичен; 32 incr-флаша, 27 с deep-корнями, union_sum 51 381 за обе):
+**fanout-sib = 0 корней за сессию**. Остальные корзины:
+
+| источник | корней | size_sum | доля от union_sum |
+|---|---|---|---|
+| has-reach (прямой deep, без перечисления) | 359 | 251 954 | 490 % (пересечения) |
+| parent-widen | 145 | 11 645 | 22,7 % |
+| shadow-guard (doc-root) | 8 | 21 966 | 42,8 % |
+| has-reach-cap / struct-reach / deep-self / nth-of / childlist-orphan / sheet / state | 0 | 0 | — |
+
+Большой флаш (deep=59, changes=97, union=2961 — тот же, что в переписи
+срезов 12–13): has-reach 53 корня (size_sum 25 435, макс 2960 — корни размера
+документа: `html.(2692)`, `react-app`, `div.logged-out` переписи срез 13),
+parent-widen 6 корней (16), union = весь документ. parent-widen-хвост —
+`relative-time:Attr(format/tense/precision/format-style/datetime)` (родители —
+форм-секции ~277), `img:Attr(style)`, SVG-геометрия (`width`/`height`/
+`viewBox`/`d`), 4 `input:Unattributed` (те же `el.checked` среза 14); суммы
+331–406 на флаш против union 2700 — шум.
+
+**Почему рычаг пуст.** `build_node_index` ставит
+`conservative = has_in_shadow_doc` — на github есть author shadow root, поэтому
+**во всех 32 флашах** (`shallow=0`, `has_dependency=true` в каждом)
+`shallow_ok=false` и `needs_fanout` принудительно true: ветка fanout-sib
+(`needs_fanout && written.is_some() && shallow_ok && attr_narrowing &&
+parent.is_some()`) не срабатывает ни разу, именованные записи идут в
+parent-widen, has-reach кандидаты вставляются глубокими корнями напрямую
+(`narrow=false` — без SubjectIndex-перечисления и cap-проверки срез 6).
+Гипотеза (c) среза 13 («fanout-sib суммы class-записей») была артефактом
+чтения `widest=`-печатей без источников: корни среднего размера — это
+conservative parent-widen, не fanout-sib. Перепись подтверждается данными
+срезов 12–13 (те же doc-размерные has-reach корни, тот же флаш 59/102).
+
+**Вердикт:** (c) закрыт — рычаг пуст по построению: срез 83 работает только
+поверх narrowing-слоя, который на github выключен консервативным режимом, а
+сам консерватизм уже дважды пытались снять (срез 12, срез 13 — оба отката по
+S32/S36). Держатель union на github — has-reach прямые глубокие корни +
+shadow-guard, то есть пункт (a), который остаётся под перф-протоколом уровня
+BUG-341 (срез 13). Незакрытых негейтованных рычагов у бага не осталось:
+(b) — срез 14, (c) — этот срез; каноничный ebay-замер заблокирован 403.
+Цель на github остаётся целью [PERF-INVALIDATION](../docs/tasks/PERF-INVALIDATION.md)
+(S1-инвалидационные наборы — архитектурный класс того же механизма).
+
+**Гейт:** `clippy -p lumen-layout -p lumen-js --features v8-backend -p
+lumen-shell --all-targets -D warnings` чистый (код пробы снят, дерево
+бит-в-байт HEAD); `scripts/scoped-test.sh` + `dump_golden.py` — без расхождений
+с базой. Коммит — только документация.
+
+**Осталось:** каноничный живой ebay-замер (когда сайт откроется); пункт (a)
+has-reach-диф — только с перф-протоколом уровня BUG-341 (срез 13); lift
+консервативизма — третьей попытки без новых фактов не предпринимать (срезы
+12/13, прецедент срез 5 BUG-1794).
