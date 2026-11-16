@@ -11,7 +11,35 @@
 
 use super::background_cssom::one_of;
 use super::length::split_top_level_ws;
+use super::misc_cssom::canonical_specified_misc;
+use super::text_cssom::canonical_specified_text;
 use crate::style::math_value::canonical_specified_numeric_math;
+
+/// Шесть лонгхендов `font-variant` в порядке спецификации (CSS Fonts L4 §9).
+const FONT_VARIANT_LONGHANDS: [&str; 6] = [
+    "font-variant-ligatures",
+    "font-variant-caps",
+    "font-variant-alternates",
+    "font-variant-numeric",
+    "font-variant-east-asian",
+    "font-variant-position",
+];
+
+/// Лонгхенды шорткода `font` (CSS Fonts L4 §6.10): семь групп, раскрытых по порядку.
+const FONT_SHORTHAND_LONGHANDS: [&str; 12] = [
+    "font-style",
+    "font-variant-ligatures",
+    "font-variant-caps",
+    "font-variant-alternates",
+    "font-variant-numeric",
+    "font-variant-east-asian",
+    "font-variant-position",
+    "font-weight",
+    "font-stretch",
+    "font-size",
+    "line-height",
+    "font-family",
+];
 
 /// `normal | light | dark | <dashed-ident>`; идентификатор сохраняется как записан (регистр
 /// значим), ключевые слова — в нижнем регистре.
@@ -115,14 +143,7 @@ pub fn canonical_specified_font(prop: &str, value: &str) -> Option<String> {
 /// Лонгхенды, а не строка: `style.fontVariantCaps` после `style.fontVariant = 'small-caps'`
 /// обязан читаться, а CSSOM при чтении шорткода собирает его обратно из лонгхендов.
 pub fn expand_font_variant(value: &str) -> Option<Vec<(&'static str, String)>> {
-    const NAMES: [&str; 6] = [
-        "font-variant-ligatures",
-        "font-variant-caps",
-        "font-variant-alternates",
-        "font-variant-numeric",
-        "font-variant-east-asian",
-        "font-variant-position",
-    ];
+    const NAMES: [&str; 6] = FONT_VARIANT_LONGHANDS;
     let v = value.trim();
     if v.is_empty() {
         return None;
@@ -194,6 +215,146 @@ pub fn expand_font_variant(value: &str) -> Option<Vec<(&'static str, String)>> {
         (NAMES[4], join(&ea)),
         (NAMES[5], pos.unwrap_or_else(|| "normal".into())),
     ])
+}
+
+/// CSS Fonts L4 §6.10: `font` = `[ [ <'font-style'> || <font-variant-css2> || <'font-weight'> ||
+/// <font-stretch-css3> ]? <'font-size'> [ / <'line-height'> ]? <'font-family'> ]`. Возвращает
+/// пары `(лонгхенд, каноническое значение)`; `None` — значение не по грамматике (объявление
+/// отбрасывается). `normal` в ведущей секции занимает любую свободную позицию, поэтому пяти
+/// `normal` подряд не хватает места (четыре компонента максимум).
+///
+/// System-font и CSS-wide keywords сюда не доходят: шим раскрывает их иначе.
+pub fn expand_font(value: &str) -> Option<Vec<(&'static str, String)>> {
+    let v = value.trim();
+    if v.is_empty() {
+        return None;
+    }
+    let tokens = crate::style::parse::font_size::split_font_shorthand_tokens(v);
+    let mut style: Option<String> = None;
+    let mut small_caps = false;
+    let mut weight: Option<String> = None;
+    let mut stretch: Option<String> = None;
+    let mut normals = 0usize;
+    let mut i = 0;
+    // Ведущая секция: компоненты в любом порядке, до первого `<font-size>`.
+    while i < tokens.len() {
+        let tok = tokens[i].as_str();
+        if canonical_specified_misc("font-size", tok).is_some() {
+            break;
+        }
+        if tok.eq_ignore_ascii_case("normal") {
+            normals += 1;
+        } else if let Some(fs) = font_style_component(&tokens, &mut i) {
+            style.replace(fs).is_none().then_some(())?;
+        } else if tok.eq_ignore_ascii_case("small-caps") {
+            if small_caps {
+                return None;
+            }
+            small_caps = true;
+        } else if let Some(w) = canonical_specified_text("font-weight", tok) {
+            weight.replace(w).is_none().then_some(())?;
+        } else {
+            let s = canonical_specified_text("font-stretch", tok)?;
+            stretch.replace(s).is_none().then_some(())?;
+        }
+        i += 1;
+    }
+    let used = normals
+        + usize::from(style.is_some())
+        + usize::from(small_caps)
+        + usize::from(weight.is_some())
+        + usize::from(stretch.is_some());
+    if used > 4 {
+        return None;
+    }
+    let size = canonical_specified_misc("font-size", tokens.get(i)?)?;
+    i += 1;
+    let mut line_height = "normal".to_string();
+    if tokens.get(i).map(String::as_str) == Some("/") {
+        i += 1;
+        line_height = canonical_specified_text("line-height", tokens.get(i)?)?;
+        i += 1;
+    }
+    if i >= tokens.len() {
+        return None;
+    }
+    let family = canonical_specified_misc("font-family", &tokens[i..].join(" "))?;
+    Some(vec![
+        ("font-style", style.unwrap_or_else(|| "normal".into())),
+        (FONT_VARIANT_LONGHANDS[0], "normal".into()),
+        (FONT_VARIANT_LONGHANDS[1], if small_caps { "small-caps".into() } else { "normal".into() }),
+        (FONT_VARIANT_LONGHANDS[2], "normal".into()),
+        (FONT_VARIANT_LONGHANDS[3], "normal".into()),
+        (FONT_VARIANT_LONGHANDS[4], "normal".into()),
+        (FONT_VARIANT_LONGHANDS[5], "normal".into()),
+        ("font-weight", weight.unwrap_or_else(|| "normal".into())),
+        ("font-stretch", stretch.unwrap_or_else(|| "normal".into())),
+        ("font-size", size),
+        ("line-height", line_height),
+        ("font-family", family),
+    ])
+}
+
+/// `<font-style>` в ведущей секции: `italic`/`oblique`, за `oblique` — необязательный угол;
+/// `0deg` даёт `normal`. `None` — токен не стиль; `i` сдвигается на угол, если он был.
+fn font_style_component(tokens: &[String], i: &mut usize) -> Option<String> {
+    let tok = tokens.get(*i)?;
+    let lower = tok.to_ascii_lowercase();
+    if lower != "italic" && lower != "oblique" {
+        return None;
+    }
+    if lower == "oblique"
+        && let Some(next) = tokens.get(*i + 1)
+        && let Some(angle) = canonical_specified_text("font-style", &format!("oblique {next}"))
+    {
+        *i += 1;
+        return Some(angle);
+    }
+    canonical_specified_text("font-style", &lower)
+}
+
+/// Каноническая запись шорткода `font` из раскрытых лонгхендов (CSSOM §serialize a shorthand):
+/// компоненты в порядке грамматики, `normal` опускается, `line-height: normal` — без `/`.
+/// `None` — заданы не все лонгхенды либо `font-variant` не сводится к `normal`/`small-caps`
+/// (шорткод не сериализуется).
+pub fn font_shorthand_value(get: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    let vals: Vec<String> = FONT_SHORTHAND_LONGHANDS
+        .iter()
+        .map(|n| get(n))
+        .collect::<Option<_>>()?;
+    // CSS Cascade L4 §7.1: общий CSS-wide keyword сериализуется сам.
+    if is_css_wide(&vals[0]) && vals.iter().all(|v| v == &vals[0]) {
+        return Some(vals[0].clone());
+    }
+    let (style, caps, weight, stretch) = (&vals[0], &vals[2], &vals[7], &vals[8]);
+    let (size, line_height, family) = (&vals[9], &vals[10], &vals[11]);
+    // Индексы 1 и 3..=6 — остальные оси `font-variant`; шорткод выражает только `small-caps`.
+    for k in [1, 3, 4, 5, 6] {
+        if vals[k] != "normal" {
+            return None;
+        }
+    }
+    let variant = match caps.as_str() {
+        "normal" => None,
+        "small-caps" => Some("small-caps"),
+        _ => return None,
+    };
+    let mut parts: Vec<&str> = Vec::new();
+    parts.extend((style != "normal").then_some(style.as_str()));
+    parts.extend(variant);
+    parts.extend((weight != "normal").then_some(weight.as_str()));
+    parts.extend((stretch != "normal").then_some(stretch.as_str()));
+    let mut size_part = size.clone();
+    if line_height != "normal" {
+        size_part = format!("{size} / {line_height}");
+    }
+    parts.push(&size_part);
+    parts.push(family);
+    Some(parts.join(" "))
+}
+
+fn is_css_wide(v: &str) -> bool {
+    matches!(v, "inherit" | "initial" | "unset" | "revert" | "revert-layer" | "revert-rule")
 }
 
 const VARIANT_LIGATURE_GROUPS: &[&[&str]] = &[
