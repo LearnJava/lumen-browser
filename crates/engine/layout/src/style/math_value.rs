@@ -685,6 +685,9 @@ fn expected_dims(prop: &str) -> Option<&'static [Dim]> {
         "filter" | "backdrop-filter" => Some(&[NUM, PCT]),
         "rotate" | "font-style-angle" => Some(&[ANG]),
         "font-weight" => Some(&[NUM]),
+        // CSS Fonts L5 §3: `font-size-adjust` — `<number [0,∞]>` (внутри math-функции
+        // отрицательное значение допустимо и сохраняется как есть).
+        "font-size-adjust" => Some(&[NUM]),
         _ => None,
     }
 }

@@ -32,7 +32,7 @@ pub fn canonical_specified_text(prop: &str, value: &str) -> Option<String> {
         "text-indent" => text_indent(v),
         "font-weight" => font_weight(v),
         "font-style" => font_style(v),
-        "font-stretch" => font_stretch(v),
+        "font-stretch" | "font-width" => font_stretch(v),
         "line-height" => line_height(v),
         "baseline-shift" => baseline_shift(v),
         "vertical-align" => vertical_align(v),
@@ -116,7 +116,10 @@ fn font_stretch(v: &str) -> Option<String> {
         return Some(kw);
     }
     if is_math_call(v) {
-        return Some(v.to_string());
+        // `calc(100% + 100%)` сводится к `calc(200%)`; значение без процента не подходит —
+        // грамматика свойства процентная.
+        let canon = canonical_length_sorted(v, false, true).unwrap_or_else(|| v.to_string());
+        return canon.contains('%').then_some(canon);
     }
     let pct = kw.strip_suffix('%')?;
     let n = pct.parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 0.0)?;

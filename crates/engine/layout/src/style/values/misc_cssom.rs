@@ -21,7 +21,7 @@ pub fn canonical_specified_misc(prop: &str, value: &str) -> Option<String> {
     match prop {
         "list-style-image" => canonical_specified_image(v),
         "font-size" => font_size(v),
-        "font-family" => Some(font_family(v)),
+        "font-family" => font_family(v),
         "content" => Some(content(v)),
         _ => None,
     }
@@ -114,9 +114,9 @@ fn is_quoted(tok: &str) -> bool {
     tok.len() >= 2 && (tok.starts_with('"') || tok.starts_with('\'')) && consume_css_string(tok, 0).1 == tok.len()
 }
 
-const GENERIC_FAMILIES: [&str; 11] = [
+const GENERIC_FAMILIES: [&str; 13] = [
     "serif", "sans-serif", "cursive", "fantasy", "monospace", "system-ui", "math", "ui-serif", "ui-sans-serif",
-    "ui-monospace", "ui-rounded",
+    "ui-monospace", "ui-rounded", "emoji", "fangsong",
 ];
 const WIDE_KEYWORDS: [&str; 6] = ["initial", "inherit", "unset", "revert", "revert-layer", "default"];
 
@@ -139,21 +139,42 @@ fn family_needs_quotes(name: &str) -> bool {
 }
 
 /// `font-family`: список через запятую; имена из идентификаторов — без кавычек, остальные —
-/// в двойных; обобщённые семейства и несколько слов без кавычек пишутся как есть (пробелы сжаты).
-fn font_family(v: &str) -> String {
-    let items: Vec<String> = split_outside(v, Some(','))
-        .into_iter()
-        .map(|item| {
-            let item = item.trim();
-            if is_quoted(item) {
-                let name = consume_css_string(item, 0).0;
-                if family_needs_quotes(&name) { css_string(&name) } else { name }
-            } else {
-                split_outside(item, None).join(" ")
+/// в двойных; обобщённые семейства и несколько слов без кавычек пишутся как есть (пробелы сжаты),
+/// обобщённое семейство — в нижнем регистре. `None` — значение не по грамматике
+/// (`[ <family-name> | <generic-family> ]#`): пустой элемент списка, не-идентификатор,
+/// ключевое слово внутри имени (`cursive serif`).
+fn font_family(v: &str) -> Option<String> {
+    let mut items = Vec::new();
+    for item in split_outside(v, Some(',')) {
+        let item = item.trim();
+        if is_quoted(item) {
+            let name = consume_css_string(item, 0).0;
+            if name.is_empty() {
+                return None;
             }
-        })
-        .collect();
-    items.join(", ")
+            items.push(if family_needs_quotes(&name) { css_string(&name) } else { name });
+            continue;
+        }
+        let words = split_outside(item, None);
+        if words.is_empty() || !words.iter().all(|w| is_ident(w)) {
+            return None;
+        }
+        let keyword = |w: &&str| {
+            let lower = w.to_ascii_lowercase();
+            GENERIC_FAMILIES.contains(&lower.as_str()) || WIDE_KEYWORDS.contains(&lower.as_str())
+        };
+        if words.len() > 1 {
+            // Ключевое слово не входит в многословное имя (`cursive serif` невалидно).
+            if words.iter().any(keyword) {
+                return None;
+            }
+        } else if WIDE_KEYWORDS.iter().any(|k| words[0].eq_ignore_ascii_case(k)) {
+            return None;
+        }
+        let name = words.join(" ");
+        items.push(if words.len() == 1 && keyword(&words[0]) { name.to_ascii_lowercase() } else { name });
+    }
+    (!items.is_empty()).then(|| items.join(", "))
 }
 
 /// `content`: строки — в двойных кавычках, `url()` — со строкой, `counter()`/`counters()` без

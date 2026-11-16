@@ -83,3 +83,32 @@
         assert_eq!(canon("font-synthesis-style", "none oblique-only"), None);
         assert_eq!(canon("font-synthesis-position", "auto none"), None);
     }
+
+    #[test]
+    fn font_size_adjust_metric_and_number() {
+        assert_eq!(canon("font-size-adjust", "none").as_deref(), Some("none"));
+        assert_eq!(canon("font-size-adjust", "0.5").as_deref(), Some("0.5"));
+        assert_eq!(canon("font-size-adjust", "ex-height 0.5").as_deref(), Some("0.5"));
+        assert_eq!(canon("font-size-adjust", "cap-height 0.8").as_deref(), Some("cap-height 0.8"));
+        assert_eq!(canon("font-size-adjust", "ic-height from-font").as_deref(), Some("ic-height from-font"));
+        assert_eq!(canon("font-size-adjust", "calculate").as_deref(), None);
+        assert_eq!(canon("font-size-adjust", "from-font from-font"), None);
+        assert_eq!(canon("font-size-adjust", "cap-height calc(0.5 + 1)").as_deref(), Some("cap-height calc(1.5)"));
+        assert_eq!(canon("font-size-adjust", "-10"), None);
+        assert_eq!(canon("font-size-adjust", "none 0.5"), None);
+        assert_eq!(canon("font-size-adjust", "ch 0.5"), None);
+    }
+
+    #[test]
+    fn font_language_override_string() {
+        assert_eq!(canon("font-language-override", "normal").as_deref(), Some("normal"));
+        assert_eq!(canon("font-language-override", "\"KSW\"").as_deref(), Some("\"KSW\""));
+        assert_eq!(canon("font-language-override", "\"ENG \"").as_deref(), Some("\"ENG\""));
+        assert_eq!(canon("font-language-override", "' en '").as_deref(), Some("\" en\""));
+        assert_eq!(canon("font-language-override", "\"1 %\"").as_deref(), Some("\"1 %\""));
+        assert_eq!(canon("font-language-override", "auto"), None);
+        assert_eq!(canon("font-language-override", "\"turkish\""), None);
+        assert_eq!(canon("font-language-override", "\"xøx\""), None);
+        assert_eq!(canon("font-language-override", "\"\""), None);
+        assert_eq!(canon("font-language-override", "\"ENG  \""), None);
+    }

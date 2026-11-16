@@ -8,6 +8,8 @@
 //! слова — в нижнем регистре. Вызывается из JS-шима (`_lumen_css_canonical_font`).
 
 use super::background_cssom::one_of;
+use super::length::split_top_level_ws;
+use crate::style::math_value::canonical_specified_numeric_math;
 
 /// `normal | light | dark | <dashed-ident>`; идентификатор сохраняется как записан (регистр
 /// значим), ключевые слова — в нижнем регистре.
@@ -89,8 +91,93 @@ pub fn canonical_specified_font(prop: &str, value: &str) -> Option<String> {
             one_of(v, &["auto", "none"])
         }
         "font-synthesis-style" => one_of(v, &["auto", "none", "oblique-only"]),
+        // CSS Fonts L5 §3: `none | [ <metric>? [ from-font | <number [0,∞]> ] ]`.
+        "font-size-adjust" => font_size_adjust(v),
+        // CSS Fonts L4 §7: `normal | <string>` (1-4 ASCII characters).
+        "font-language-override" => font_language_override(v),
         _ => None,
     }
+}
+
+/// Метрики `font-size-adjust`; `ex-height` — умолчание и в записи опускается.
+const SIZE_ADJUST_METRICS: &[&str] = &["ex-height", "cap-height", "ch-width", "ic-width", "ic-height"];
+
+/// Простая строка в кавычках: тот же символ на концах, внутри нет незакрытой кавычки.
+fn unquote(s: &str) -> Option<&str> {
+    let bytes = s.as_bytes();
+    let q = *bytes.first()?;
+    if !(q == b'"' || q == b'\'') || bytes.len() < 2 || bytes[bytes.len() - 1] != q {
+        return None;
+    }
+    let inner = &s[1..s.len() - 1];
+    let mut escaped = false;
+    for c in inner.bytes() {
+        if escaped {
+            escaped = false;
+        } else if c == b'\\' {
+            escaped = true;
+        } else if c == q {
+            return None;
+        }
+    }
+    (!escaped).then_some(inner)
+}
+
+fn font_size_adjust(v: &str) -> Option<String> {
+    let mut toks = split_top_level_ws(v);
+    if toks.is_empty() || toks.len() > 2 {
+        return None;
+    }
+    let metric = if toks.len() == 2 {
+        let m = toks[0].to_ascii_lowercase();
+        if !SIZE_ADJUST_METRICS.contains(&m.as_str()) {
+            return None;
+        }
+        toks.remove(0);
+        Some(m)
+    } else {
+        None
+    };
+    let value = toks[0];
+    let prefix = |metric: Option<&str>| match metric {
+        // `ex-height` — умолчание, опускается (CSSOM §serialize a CSS value).
+        Some(m) if m != "ex-height" => format!("{m} "),
+        _ => String::new(),
+    };
+    if value.eq_ignore_ascii_case("none") {
+        return (metric.is_none()).then(|| "none".to_string());
+    }
+    if value.eq_ignore_ascii_case("from-font") {
+        return Some(format!("{}from-font", prefix(metric.as_deref())));
+    }
+    let number = if value.contains('(') {
+        // Значение math-функции, свёрнутое до числа.
+        // shortcut: `"!"` (оценщик не берёт выражение — `sign()` с относительными единицами)
+        // тоже принимается как написано, так что `calc(1px)` проходит валидацию; отвергать
+        // его — вместе с настоящей проверкой размерности в `canonical_numeric_math`.
+        match canonical_specified_numeric_math("font-size-adjust", value).as_str() {
+            "" | "!" => value.to_string(),
+            canon => canon.to_string(),
+        }
+    } else {
+        let n = value.parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 0.0)?;
+        format!("{}", n + 0.0)
+    };
+    Some(format!("{}{number}", prefix(metric.as_deref())))
+}
+
+fn font_language_override(v: &str) -> Option<String> {
+    if v.eq_ignore_ascii_case("normal") {
+        return Some("normal".into());
+    }
+    let inner = unquote(v)?;
+    let valid = !inner.is_empty()
+        && inner.len() <= 4
+        && inner.bytes().all(|b| b.is_ascii() && (0x20..0x7f).contains(&b) && b != b'"' && b != b'\\');
+    if !valid {
+        return None;
+    }
+    Some(format!("\"{}\"", inner.trim_end_matches(' ')))
 }
 
 fn palette(s: &str) -> Option<String> {
