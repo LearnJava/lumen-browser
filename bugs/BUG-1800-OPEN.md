@@ -744,3 +744,55 @@ parent-widen — сначала атрибутировать источник в
 Unattributed на input'ах) — отдельная перепись; (c) fanout-sib суммы
 class-записей марки (срез 83) — сумма сопоставима с parent-widen. Все три —
 не точечные сужения root-set'а, а механизмы классов выше.
+
+## Срез 14 (P3, 2026-11-17) — атрибуция `input:Unattributed` (пункт (b) среза 13): это JS-записи `el.checked` (`_lumen_set_dirty_checked`), 4 записи/сессию в одном флаши, parent-корни малы — рычаг ниже порога, механизм не строился
+
+**Проба** (временная, `LUMEN_S14_PROBE=1`, снята до коммита, дерево бит-в-байт
+HEAD по коду): (1) реестр «какой натив сделал последний структурный тач узла» —
+`probe_note_structural` на всех пяти местах `record_dom_touch` в
+`install/dom_core.rs` (`set_attr_ns`, `set_dirty_value`, `clear_dirty_value`,
+`set_dirty_checked`, `clear_dirty_checked`; других вызывателей нет — grep);
+(2) «почему `changes_since` отчитала узел `Unattributed`» — arm structural
+(с источником из реестра) / `child_list_no_narrow` / `named_empty`. Печать — в
+существующей `changes=` строки `incr stages`:
+`input:Unattributed{structural:set_dirty_checked}`. Реестр глобальный, а не в
+`DomTouched`: drain page-пайплайна чистит его карты между тачем и чтением
+флаша. Смок на локальной странице (все три вида записей + чтение `offsetWidth`)
+— формат воспроизводится, «no basis» первого флаша — ожидаемо.
+
+**Числа** (живой github, homepage, compat, dev-release на ветке, репро
+карточки, `LUMEN_FRAME_LOG=1`; прогон начат 2026-11-16 23:55, ready 28,2 с,
+status OK, лог `.tmp/perf-audit/20261116-235548`, не коммитится): 15 флашей,
+`Unattributed`-записей за сессию всего 4 — все `input` с
+`structural:set_dirty_checked`, все в одном большом флаше (deep=59, тот же, что
+в переписи срезов 12–13, changes=102). Механизм: скрипт github пишет
+`el.checked` четырём инпутам → шим `HTMLInputElement.checked`
+(`web_api_shim_mid.js:10738`) → `_lumen_set_dirty_checked` → `record_dom_touch`
+(структурный «dirty value/checked»-тач, `dom_touched.rs`) → `Unattributed` в
+`changes_since` → parent-widen. Остальные источники — нули: `set_dirty_value`,
+`set_attr_ns`, `child_list_no_narrow`, `named_empty` не встретились ни разу.
+
+**Почему рычаг пуст.** Parent-widen четырёх инпутов — их родители-обёртки,
+среди 12 показанных deep-корней того же флаша форм-секции малы
+(`section.Primer_Brand__FormControl…(5)`); union большого флаша держат
+документные корни has-reach-кандидатов (`div.logged-out…(2411)`,
+`HomeView--palette…(1372)`) и fanout-sib суммы (срез 13). Потолок сужения — 4
+малых корня из 59 в одном флаши за сессию — проценты от шторма, ниже порога
+протокола 10–15 % (S32/S36; прецеденты: срезы 4, 10, CoW среза 9, 12, 13).
+
+**Будущая попытка (класс, не сайт):** писать dirty value/checked именованным
+изменением — `AttrFrom` с sentinel-именем, который `pseudo_class_read_attr_names`
+(срез 3) объявляет читаемым `:checked`/`:indeterminate`/
+`:placeholder-shown`/`:in-range` — тогда сработает существующее attr-narrowing
+(`attr_gen`, `attr_write_needs_fanout`). Брать только если найдётся
+форм-тяжёлый сайт, где этот класс штормит; на github — нет.
+
+**Гейт:** `clippy -p lumen-js --features v8-backend --all-targets -D warnings`
+чистый (код среза снят, дерево бит-в-байт HEAD); голый
+`clippy -p lumen-js --all-targets` на HEAD красный вне среза — два тест-модуля
+без `#[cfg(feature = "v8-backend")]`, заведено
+[BUG-1820](BUG-1820-OPEN.md). Коммит — только документация.
+
+**Осталось:** каноничный живой ebay-замер (когда сайт откроется); пункты (a)
+has-reach-диф и (c) fanout-sib суммы — механизмы классов выше (срез 13, (a) —
+только с перф-протоколом уровня BUG-341).
