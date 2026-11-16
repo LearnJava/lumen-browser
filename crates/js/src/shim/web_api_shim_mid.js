@@ -2798,6 +2798,8 @@ var _LUMEN_BACKGROUND_PROPERTIES = {
 var _LUMEN_MASK_PROPERTIES = {
     'mask-image': 1, 'mask-size': 1, 'mask-repeat': 1, 'mask-position': 1,
     'mask-origin': 1, 'mask-clip': 1, 'mask-composite': 1, 'mask-mode': 1,
+    // CSS Masking L1 §3/§4.5 + CSS 2.1 §11.1 basic shapes and `rect()` (BUG-1408 slice 6).
+    'clip-path': 1, 'clip': 1,
 };
 
 // CSS Fonts L4 keyword properties validated by the native `_lumen_css_canonical_font`

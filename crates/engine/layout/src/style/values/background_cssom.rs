@@ -203,7 +203,7 @@ impl Comp {
 }
 
 /// `<position>` целиком: 1–4 значения (CSS Values 4 §6.4.1) → `x y` в каноническом порядке.
-fn position(s: &str) -> Option<String> {
+pub(super) fn position(s: &str) -> Option<String> {
     let toks: Vec<String> = split_top_level_ws(s).iter().map(|t| t.to_ascii_lowercase()).collect();
     let is_kw = |t: &str| t == "center" || Side::parse(t).is_some();
     let (x, y) = match toks.len() {
