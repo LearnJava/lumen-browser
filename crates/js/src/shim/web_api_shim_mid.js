@@ -2796,6 +2796,8 @@ var _LUMEN_FONT_PROPERTIES = {
     // CSS Fonts L4/L5 value grammars (BUG-1408 slice 3); `font-family`/`font-size` live in
     // `_LUMEN_MISC_PROPERTIES` (BUG-1551).
     'font-size-adjust': 1, 'font-language-override': 1,
+    // CSS Fonts L3/L4 lists of OpenType tags and `font-variant-alternates` (BUG-1408 slice 4).
+    'font-feature-settings': 1, 'font-variation-settings': 1, 'font-variant-alternates': 1,
 };
 
 // CSS Text L3/L4 longhands with a length or multi-component grammar: the native
