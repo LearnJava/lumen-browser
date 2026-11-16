@@ -18,7 +18,7 @@
 
 use std::rc::Rc;
 
-use lumen_css_parser::{ComplexSelector, Declaration, Rule, Stylesheet};
+use lumen_css_parser::{ComplexSelector, Declaration, Rule, SimpleSelector, Stylesheet};
 use lumen_dom::{Document, NodeId};
 
 use crate::style::{matches_complex, ComputedStyle, CustomProps};
@@ -41,6 +41,15 @@ pub(crate) struct CustomDep<'s> {
     /// The selectors of every rule that reads or declares a changed name, directly or through a
     /// custom property whose value reads one.
     selectors: Vec<&'s ComplexSelector>,
+    /// One of those rules targets a pseudo-element (`::before`, `::marker`, `::cue`, …).
+    ///
+    /// Such a rule never matches an element node ([`crate::style::matches_complex`] rejects a
+    /// compound with a pseudo-element part), so [`Self::may_reach`] cannot name the elements whose
+    /// pseudo-element style reads the change. The cascade saving is still sound — pseudo-element
+    /// styles are computed by the box build, from the element's fresh style — but the *box* reuse
+    /// is not: a carried `::before` box would keep the previous value. See
+    /// [`CustomFlow::pseudo_dependent`].
+    pseudo: bool,
 }
 
 /// The change one element's style carries down to its children, with the sheet-side analysis.
@@ -63,6 +72,14 @@ fn all_rules(sheet: &Stylesheet) -> impl Iterator<Item = &Rule> {
         .chain(sheet.supports_rules.iter().flat_map(|s| s.rules.iter()))
         .chain(sheet.layers.iter().flat_map(|l| l.rules.iter()))
         .chain(sheet.scope_rules.iter().flat_map(|s| s.rules.iter()))
+}
+
+/// Whether any of `sel`'s compounds carries a pseudo-element — a rule such a selector comes from
+/// styles a box the cascade never visits (see [`CustomDep::pseudo`]).
+fn mentions_pseudo_element(sel: &ComplexSelector) -> bool {
+    std::iter::once(&sel.head)
+        .chain(sel.tail.iter().map(|(_, c)| c))
+        .any(|c| c.parts.iter().any(|p| matches!(p, SimpleSelector::PseudoElement(_))))
 }
 
 /// Whether `decl`'s value reads one of `names` (over-approximation: a `var(` and the name's text).
@@ -103,19 +120,21 @@ impl<'s> CustomDep<'s> {
             }
         }
         let mut selectors = Vec::new();
+        let mut pseudo = false;
         for rule in all_rules(sheet) {
             let dependent = rule
                 .declarations
                 .iter()
                 .any(|d| (d.property.starts_with("--") && names.contains(&d.property)) || reads_any(d, &names));
             if dependent {
+                pseudo |= rule.selectors.iter().any(mentions_pseudo_element);
                 selectors.extend(rule.selectors.iter());
                 if selectors.len() > MAX_SELECTORS {
                     return None;
                 }
             }
         }
-        Some(Self { names, selectors })
+        Some(Self { names, selectors, pseudo })
     }
 
     /// Whether `node`'s style could be affected by the change, by anything but inheritance.
@@ -232,5 +251,11 @@ impl<'s> CustomFlow<'s> {
             old: prev.custom_props.clone(),
             new: style.custom_props.clone(),
         }
+    }
+
+    /// Whether a rule that reads the change targets a pseudo-element (see [`CustomDep::pseudo`]),
+    /// i.e. whether carrying the boxes over would leave a pseudo-element style stale.
+    pub(crate) fn pseudo_dependent(&self) -> bool {
+        self.dep.pseudo
     }
 }

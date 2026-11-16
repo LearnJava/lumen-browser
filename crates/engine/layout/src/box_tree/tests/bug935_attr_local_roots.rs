@@ -74,6 +74,8 @@ struct Step {
     point: usize,
     /// Elements that took a parent's changed custom properties without a cascade (срез 98).
     inherited: u32,
+    /// Box subtrees the build carried over from the previous pass (срез 102).
+    reused: u32,
 }
 
 impl Step {
@@ -142,9 +144,11 @@ fn drive(html: &str, css: &str, steps: Vec<Mutation>) -> Vec<Step> {
         set_incremental_restyle(true);
         super::super::set_incremental_box_build(true);
         let _ = take_cascade_stats();
+        let _ = super::super::take_box_build_stats();
         let (incr, incr_counters) =
             super::super::layout_mutation_incremental_restyle(&doc, &sheet, vp, &m, &hp, false, prev, delta);
         let stats = take_cascade_stats();
+        let reused = super::super::take_box_build_stats().reused;
         super::super::set_incremental_box_build(false);
         set_incremental_restyle(false);
 
@@ -157,6 +161,18 @@ fn drive(html: &str, css: &str, steps: Vec<Mutation>) -> Vec<Step> {
         collect(&incr, &mut a);
         collect(&full, &mut b);
         assert_eq!(a, b, "step {step}: the narrowed incremental tree diverged from a full rebuild");
+        // BUG-935 срез 102: the carried boxes hold the previous pass's styles — the published
+        // custom properties must show this pass's values, exactly as a full rebuild's do.
+        assert_eq!(
+            crate::collect_custom_properties_for(&incr, Some(&incr_counters), vp),
+            crate::collect_custom_properties_for(&full, Some(&full_counters), vp),
+            "step {step}: the published custom properties diverged from a full rebuild"
+        );
+        assert_eq!(
+            crate::collect_pseudo_computed_styles(&incr),
+            crate::collect_pseudo_computed_styles(&full),
+            "step {step}: the published pseudo-element styles diverged from a full rebuild"
+        );
 
         out.push(Step {
             recomputed: stats.recomputed,
@@ -165,6 +181,7 @@ fn drive(html: &str, css: &str, steps: Vec<Mutation>) -> Vec<Step> {
             shallow,
             point,
             inherited: stats.inherited,
+            reused,
         });
         prev = incr;
         prev_counters = incr_counters;
@@ -728,6 +745,7 @@ fn an_unread_custom_property_cascades_nothing_below_the_element() {
     for (i, step) in r.iter().enumerate() {
         assert!(step.inherited >= 20, "step {i}: {} elements inherited", step.inherited);
         assert!(step.cascaded() <= 3, "step {i}: {} elements went through the cascade", step.cascaded());
+        assert!(step.reused >= 1, "step {i}: no box subtree was carried over the custom-property change");
     }
 }
 
@@ -739,6 +757,18 @@ fn a_descendant_that_redeclares_the_property_is_cascaded() {
         "<div id=\"w\" class=\"wrap\"><div id=\"a\"><p class=\"c\">a <b>x</b></p></div><div id=\"b\" class=\"own\"><p class=\"c\">b <b>y</b></p></div></div>",
         ".own { --sc: 5px } .c { padding-left: var(--sc, 0px) }",
         vec![toggle_style("--sc: 20px"), toggle_style("--sc: 30px")],
+    );
+}
+
+/// A pseudo-element rule that reads the change: the cascade may still spare the elements (the
+/// pseudo-element's own style is computed by the box build), but no box may be carried over —
+/// a carried `::before` would keep the previous value (срез 102).
+#[test]
+fn a_pseudo_element_rule_reading_the_change_keeps_the_boxes_rebuilding() {
+    let _ = drive(
+        &wrapped(20),
+        "p::before { content: var(--sc, 'x') } p { margin: 1px }",
+        vec![toggle_style("--sc: 'a'"), toggle_style("--sc: 'b'")],
     );
 }
 

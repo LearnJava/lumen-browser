@@ -457,10 +457,59 @@ pub(crate) fn build_box_or_reuse(
             // its own original. Only the root carries the flag: the move stops the
             // recursion, so nothing inside it can hold a claim of its own.
             subtree.dirty = crate::incremental::DirtyBits::REUSED_SUBTREE;
+            // BUG-935 срез 102: a subtree carried under the custom-property licence holds the
+            // previous pass's styles, whose only stale part is `custom_props`.
+            if !counters.custom_only_subtrees().is_empty() {
+                refresh_carried_custom_props(&mut subtree, None, counters);
+            }
             return subtree;
         }
     }
     build_box(doc, sheet, id, inherited, viewport, flat, counters, registry, dark_mode, prev_index)
+}
+
+/// BUG-935 срез 102 — bring the styles of a subtree carried over under
+/// [`CounterMap::custom_only_subtrees`] up to this pass's cascade.
+///
+/// The boxes came out of `prev`, so each still holds the style it was built from. For the nodes
+/// the session's custom-property flow changed, the only difference is `custom_props`; every other
+/// field of the cascade entry they were built from is by definition the same. Element boxes take
+/// the cascade entry itself (the allocation swap when the carried box still holds exactly the
+/// entry the previous pass handed it — `replaced_styles` — a `ComputedStyle` clone otherwise, for
+/// the rare box whose style the build rewrote in place, e.g. a blockified legend). Anonymous and
+/// pseudo boxes copy their parent's map when they are built (`anon_style`, `::before`/`::after`),
+/// so theirs follows the parent that owns them, `parent` being that box's old and new maps.
+fn refresh_carried_custom_props(
+    b: &mut LayoutBox,
+    parent: Option<(&crate::style::CustomProps, &crate::style::CustomProps)>,
+    counters: &CounterMap,
+) {
+    let old_props = b.style.custom_props.clone();
+    let target = if b.origin.role != BoxRole::Element {
+        parent
+            .filter(|(old_parent, _)| old_props.ptr_eq(old_parent))
+            .map(|(_, new_parent)| new_parent.clone())
+    } else if counters.custom_only_subtrees().contains(&b.node) {
+        counters.style_for(b.node).map(|s| s.custom_props.clone())
+    } else {
+        None
+    };
+    if let Some(target) = target
+        && !old_props.ptr_eq(&target)
+    {
+        match counters.replaced_styles().get(&b.node) {
+            Some(prev) if Arc::ptr_eq(prev, &b.style) => {
+                if let Some(fresh) = counters.style_arc(b.node) {
+                    b.style = fresh;
+                }
+            }
+            _ => Arc::make_mut(&mut b.style).custom_props = target,
+        }
+    }
+    let new_props = b.style.custom_props.clone();
+    for child in &mut b.children {
+        refresh_carried_custom_props(child, Some((&old_props, &new_props)), counters);
+    }
 }
 
 /// BUG-341 S4 — incremental box-build entry point.
@@ -522,7 +571,11 @@ pub(crate) fn incremental_build_box_unplaced(
         return (built, Vec::new());
     }
     let t = std::time::Instant::now();
-    let (prev_index, visited) = crate::incremental::extract_clean_subtrees(prev, counters.clean_subtrees());
+    let (prev_index, visited) = crate::incremental::extract_clean_subtrees(
+        prev,
+        counters.clean_subtrees(),
+        counters.custom_only_subtrees(),
+    );
     BOX_BUILD_STATS.with(|s| {
         let mut v = s.get();
         v.prev_index_visited += visited as u32;
