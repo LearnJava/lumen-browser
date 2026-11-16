@@ -211,3 +211,95 @@
         assert_eq!(canon(p, "styleset(thisone) styleset(something,else)"), None);
         assert_eq!(canon(p, "ornaments(one historical-forms"), None);
     }
+
+    use crate::style::{expand_font, font_shorthand_value};
+
+    fn pairs(v: &str) -> Option<Vec<(String, String)>> {
+        expand_font(v).map(|l| l.into_iter().map(|(n, v)| (n.to_string(), v)).collect())
+    }
+
+    fn longhand(v: &str, name: &str) -> Option<String> {
+        pairs(v)?.into_iter().find(|(n, _)| n == name).map(|(_, v)| v)
+    }
+
+    fn compose(v: &str) -> Option<String> {
+        let l = pairs(v)?;
+        font_shorthand_value(&|n| l.iter().find(|(k, _)| k == n).map(|(_, v)| v.clone()))
+    }
+
+    #[test]
+    fn font_shorthand_expands_leading_section_in_any_order() {
+        let v = "italic small-caps bold condensed 10px / 1.2 serif";
+        assert_eq!(longhand(v, "font-style").as_deref(), Some("italic"));
+        assert_eq!(longhand(v, "font-variant-caps").as_deref(), Some("small-caps"));
+        assert_eq!(longhand(v, "font-variant-ligatures").as_deref(), Some("normal"));
+        assert_eq!(longhand(v, "font-weight").as_deref(), Some("bold"));
+        assert_eq!(longhand(v, "font-stretch").as_deref(), Some("condensed"));
+        assert_eq!(longhand(v, "font-size").as_deref(), Some("10px"));
+        assert_eq!(longhand(v, "line-height").as_deref(), Some("1.2"));
+        assert_eq!(longhand(v, "font-family").as_deref(), Some("serif"));
+
+        // `normal` занимает любую свободную позицию, умолчания дописываются.
+        let v = "normal normal normal italic 10px/normal Menu";
+        assert_eq!(longhand(v, "font-style").as_deref(), Some("italic"));
+        assert_eq!(longhand(v, "font-weight").as_deref(), Some("normal"));
+        assert_eq!(longhand(v, "line-height").as_deref(), Some("normal"));
+        assert_eq!(longhand(v, "font-family").as_deref(), Some("Menu"));
+    }
+
+    #[test]
+    fn font_shorthand_rejects_off_grammar_values() {
+        for v in [
+            // Пять `normal` не помещаются в четыре позиции.
+            "normal normal normal normal normal 20%/1.2 \"FB Armada\"",
+            // Четыре позиции заняты, лишнему компоненту места нет.
+            "italic small-caps lighter condensed normal smaller monospace",
+            "normal 100 semi-condensed oblique small-caps 10px/normal Menu",
+            // Одна позиция дважды.
+            "italic oblique xx-small serif",
+            "small-caps small-caps medium/normal sans-serif",
+            "bold bolder xx-large/1.2 cursive",
+            "ultra-condensed extra-condensed larger/calc(120% + 1.2em) fantasy",
+            // Вне грамматики.
+            "menu icon",
+            "oldstyle-nums medium serif",
+            "normal full-width medium serif",
+            "italic titling-caps medium serif",
+            // Нет `<font-family>` / `<font-size>`.
+            "italic small-caps lighter condensed smaller",
+            "100% larger / 2 fantasy",
+            "",
+        ] {
+            assert_eq!(pairs(v), None, "font = {v:?} должен быть невалиден");
+        }
+    }
+
+    #[test]
+    fn font_shorthand_composes_back_from_longhands() {
+        assert_eq!(compose("medium serif").as_deref(), Some("medium serif"));
+        assert_eq!(
+            compose("normal normal normal italic 10px/normal Menu").as_deref(),
+            Some("italic 10px Menu")
+        );
+        assert_eq!(
+            compose("small-caps 20%/1.2 FB Armada").as_deref(),
+            Some("small-caps 20% / 1.2 FB Armada")
+        );
+        assert_eq!(
+            compose("bold calc(30% - 40px)/calc(120% + 1.2em) monospace").as_deref(),
+            Some("bold calc(30% - 40px) / calc(120% + 1.2em) monospace")
+        );
+        // `font` выражает только CSS2 `small-caps`; прочие оси `font-variant` не сериализуются.
+        assert_eq!(compose("titling-caps medium serif"), None);
+        assert_eq!(compose("normal full-width medium serif"), None);
+        // Общий CSS-wide keyword сериализуется сам.
+        let wide: Vec<(String, String)> = pairs("medium serif")
+            .unwrap()
+            .into_iter()
+            .map(|(n, _)| (n, "inherit".to_string()))
+            .collect();
+        assert_eq!(
+            font_shorthand_value(&|n| wide.iter().find(|(k, _)| k == n).map(|(_, v)| v.clone())).as_deref(),
+            Some("inherit")
+        );
+    }

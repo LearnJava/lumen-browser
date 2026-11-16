@@ -2097,6 +2097,8 @@ function _lumen_style_merge_decl(obj, decl, important, force) {
         // A raw `border-image` value and the `border-image-*` longhands exclude each other.
         if (k === 'border-image') _LUMEN_BORDER_IMAGE_KEYS.forEach(function(lh) { delete obj[lh]; });
         else if (_LUMEN_BORDER_IMAGE_INITIAL.hasOwnProperty(k)) delete obj['border-image'];
+        // A system-font `font: <keyword>` is stored as itself; any of its longhands replaces it.
+        else if (_LUMEN_FONT_SHORTHAND_LONGHANDS.indexOf(k) !== -1) delete obj['font'];
         // Parsing a block keeps the LAST of duplicate declarations, at its own position.
         if (!force) delete obj[k];
         obj[k] = decl[k];
@@ -2194,6 +2196,14 @@ function _lumen_parse_decl_into(obj, prop, val) {
             if (fvLonghands === false) return; // invalid declaration: dropped, not stored
             fvLonghands.forEach(function(kv) { obj[kv[0]] = kv[1]; });
             return;
+        }
+        if (prop === 'font') {
+            var fontLonghands = _lumen_expand_font(val);
+            if (fontLonghands === false) return; // invalid declaration: dropped, not stored
+            if (fontLonghands !== null) {
+                fontLonghands.forEach(function(kv) { obj[kv[0]] = kv[1]; });
+                return;
+            }
         }
         if (prop === 'mask') {
             var maskLonghands = _lumen_expand_mask(val);
@@ -2697,6 +2707,8 @@ function _lumen_serialize_style(obj) {
         shorthandOf[lh[0]] = sh;
         shorthandOf[lh[1]] = sh;
     });
+    // `font` covers `font-variant`'s six axes, so it is claimed before them (BUG-1408 slice 8).
+    claimShorthand('font', _LUMEN_FONT_SHORTHAND_LONGHANDS, _lumen_font_shorthand_value(obj));
     // `font-variant` collapses only when every one of its six longhands is declared.
     if (_LUMEN_FONT_VARIANT_LONGHANDS.every(function(lh) {
         return Object.prototype.hasOwnProperty.call(obj, lh) && !shorthandOf[lh];
@@ -2866,6 +2878,33 @@ function _lumen_font_variant_value(obj) {
     if (!parts.length) return 'normal';
     if (parts.length > 1 && parts.indexOf('none') !== -1) return '';
     return parts.join(' ');
+}
+
+// CSS Fonts L4 §6.10: `font` is a shorthand over seven longhand groups (the six axes of
+// `font-variant` included, so it claims them before `font-variant` does in `cssText`). System-font
+// and CSS-wide keywords are stored under `font` itself, like `font-synthesis` above.
+var _LUMEN_FONT_SHORTHAND_LONGHANDS = [
+    'font-style',
+    'font-variant-ligatures', 'font-variant-caps', 'font-variant-alternates',
+    'font-variant-numeric', 'font-variant-east-asian', 'font-variant-position',
+    'font-weight', 'font-stretch', 'font-size', 'line-height', 'font-family',
+];
+var _LUMEN_SYSTEM_FONT_KEYWORDS = {
+    'caption': 1, 'icon': 1, 'menu': 1, 'message-box': 1, 'small-caption': 1, 'status-bar': 1,
+};
+// Longhand/value pairs of `font: strVal`; `null` — the value is not this shorthand's (system-font
+// or CSS-wide keyword: stored as written), `false` — invalid (declaration dropped).
+function _lumen_expand_font(strVal) {
+    var lower = strVal.trim().toLowerCase();
+    if (_LUMEN_SYSTEM_FONT_KEYWORDS.hasOwnProperty(lower) ||
+        _LUMEN_CSS_WIDE_KEYWORDS.indexOf(lower) !== -1) return null;
+    var r = JSON.parse(_lumen_css_expand_font(strVal));
+    return r.k === 'ok' ? r.l : false;
+}
+// Shorthand serialization from the expanded longhands; `undefined` when it does not compose.
+function _lumen_font_shorthand_value(obj) {
+    var v = _lumen_css_font_shorthand(JSON.stringify(obj));
+    return v === null || v === undefined ? undefined : v;
 }
 
 // CSS Text L3/L4 longhands with a length or multi-component grammar: the native
@@ -4199,6 +4238,7 @@ function _lumen_shorthand_longhands_other(key) {
     if (_LUMEN_2V_SHORTHANDS.hasOwnProperty(key)) return _LUMEN_2V_SHORTHANDS[key];
     if (key === 'font-variant') return _LUMEN_FONT_VARIANT_LONGHANDS;
     if (key === 'mask') return _LUMEN_MASK_SHORTHAND_LONGHANDS;
+    if (key === 'font') return _LUMEN_FONT_SHORTHAND_LONGHANDS;
     return _lumen_border_longhands(key) || [];
 }
 CSSStyleDeclaration.prototype.getPropertyValue = function(prop) {
@@ -4232,6 +4272,10 @@ CSSStyleDeclaration.prototype.getPropertyValue = function(prop) {
     if (key === 'mask') {
         var maskSh = _lumen_css_mask_shorthand(JSON.stringify(obj));
         if (maskSh !== null && maskSh !== undefined) return maskSh;
+    }
+    if (key === 'font') {
+        var fontSh = _lumen_font_shorthand_value(obj);
+        if (fontSh !== undefined) return fontSh;
     }
     if (_lumen_gap_rule_key_re.test(key)) {
         var gapSh = _lumen_css_gap_rule_shorthand(key, JSON.stringify(obj));
@@ -4318,7 +4362,7 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val, priority) {
         }
         _lumen_shorthand_longhands_other(key).forEach(function(lh) { _lumen_style_drop(obj, lh); });
         _lumen_gap_rule_delete(obj, key);
-        _lumen_style_mark_important(obj, key, false);
+        _lumen_style_drop(obj, key);
         _lumen_style_set_parsed(nid, obj);
         return;
     }
@@ -4409,6 +4453,15 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val, priority) {
         _lumen_style_commit_decl(nid, realObj, obj, prio === 'important');
         return;
     }
+    if (key === 'font') {
+        var fontExpanded = _lumen_expand_font(strVal);
+        if (fontExpanded === false) return; // invalid shorthand value: whole declaration dropped
+        if (fontExpanded !== null) {
+            fontExpanded.forEach(function(kv) { obj[kv[0]] = kv[1]; });
+            _lumen_style_commit_decl(nid, realObj, obj, prio === 'important');
+            return;
+        }
+    }
     // Срез 10: color/length/line-width/sizing/keyword grammars all
     // go through the shared `_lumen_canonicalize_longhand` dispatch
     // (also used by `_lumen_parse_style` above) instead of one
@@ -4487,6 +4540,7 @@ CSSStyleDeclaration.prototype.getPropertyPriority = function getPropertyPriority
     else if (_LUMEN_2V_SHORTHANDS.hasOwnProperty(key)) longhands = _LUMEN_2V_SHORTHANDS[key];
     else if (_LUMEN_TEXT_SHORTHANDS.hasOwnProperty(key)) longhands = _LUMEN_TEXT_SHORTHANDS[key];
     else if (key === 'font-variant') longhands = _LUMEN_FONT_VARIANT_LONGHANDS;
+    else if (key === 'font') longhands = _LUMEN_FONT_SHORTHAND_LONGHANDS;
     else if (_lumen_gap_rule_key_re.test(key)) longhands = JSON.parse(_lumen_css_gap_rule_longhands(key));
     else longhands = _lumen_border_longhands(key);
     if (!longhands || !longhands.length) return '';

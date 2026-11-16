@@ -934,6 +934,28 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // CSS Fonts L4 §6.10 `font` shorthand in inline-`style`: expands to its seven longhand
+    // groups (BUG-1408 slice 8). JSON `{"k":"ok","l":[[longhand,value],...]}` or `{"k":"invalid"}`.
+    reg!(scope, ctx, store,
+        "_lumen_css_expand_font",
+        |value: String| -> String {
+            match lumen_layout::style::expand_font(&value) {
+                Some(l) => serde_json::json!({ "k": "ok", "l": l }).to_string(),
+                None => r#"{"k":"invalid"}"#.to_string(),
+            }
+        }
+    );
+
+    // `font` shorthand value from the stored longhands (`obj` is a JSON object of
+    // longhand → value); `None` when it cannot be composed.
+    reg!(scope, ctx, store,
+        "_lumen_css_font_shorthand",
+        |obj: String| -> Option<String> {
+            let map: std::collections::HashMap<String, String> = serde_json::from_str(&obj).ok()?;
+            lumen_layout::style::font_shorthand_value(&|n| map.get(n).cloned())
+        }
+    );
+
     // CSS Masking L1 §4.1 `mask` shorthand in inline-`style`: expands to its layer longhands
     // (plus the `mask-border-*` initial values it resets; BUG-1408 slice 7). JSON
     // `{"k":"ok","l":[[longhand,value],...]}` or `{"k":"invalid"}`.

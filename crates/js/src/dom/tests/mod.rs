@@ -380,6 +380,8 @@ mod v8_bug1408_mask_cssom;
 mod v8_bug1408_mask_shorthand;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1408_clip_cssom;
+#[cfg(feature = "v8-backend")]
+mod v8_bug1408_font_shorthand;
 mod v8_bug1408_font_cssom;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1551_misc_cssom;

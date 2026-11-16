@@ -234,3 +234,34 @@ keyword раздаётся каждой оси. JS-шим (`web_api_shim_mid.js`
 0 неожиданных результатов.
 
 **Остаток среза 7:** шорткод `font`; `*-computed.html` (BUG-1407/1278).
+
+## Срез 8 (2026-11-16, P3): шорткод `font`
+
+`crates/engine/layout/src/style/values/font_cssom.rs::expand_font`/`font_shorthand_value`
+(нативы `_lumen_css_expand_font`/`_lumen_css_font_shorthand`, список лонгхендов
+`_LUMEN_FONT_SHORTHAND_LONGHANDS` в шиме):
+
+- грамматика CSS Fonts L4 §6.10:
+  `[ [ <'font-style'> || <font-variant-css2> || <'font-weight'> || <'font-stretch'> ]?
+  <'font-size'> [ / <'line-height'> ]? <'font-family'> ]`; каждая позиция ведущей секции не
+  более одного раза, `normal` занимает любую свободную (пять `normal` подряд — невалидно),
+  `oblique <angle>` разбирается вместе с углом (`0deg` даёт `normal`), из `font-variant`
+  в шорткод входит только CSS2 `small-caps`;
+- раскладка на 12 лонгхендов: семь групп — `font-style`, шесть осей `font-variant`
+  (не заданная ось — `normal`), `font-weight`, `font-stretch`, `font-size`, `line-height`
+  (`normal`, если `/` нет), `font-family`;
+- сборка шорткода обратно в порядке грамматики: `normal`-компоненты опускаются,
+  `size / line-height` — с пробелами вокруг `/` (при `line-height: normal` слэша нет);
+  ось `font-variant`, не сводимая к `normal`/`small-caps`, делает шорткод
+  несериализуемым — `getPropertyValue('font')` и `cssText` его не показывают;
+- system-font keywords (`caption`, `icon`, `menu`, `message-box`, `small-caption`,
+  `status-bar`) и CSS-wide keywords не раскладываются — хранятся под `font` как записаны
+  (прецедент `font-synthesis`); любой лонгхенд из `_LUMEN_FONT_SHORTHAND_LONGHANDS`
+  вытесняет такой `font`, а `setProperty('font', '')` удаляет и его.
+
+Зелёные файлы (`css/css-fonts/parsing/`, ожидания `.ini` удалены): `font-valid` (315
+сабтестов), `font-invalid` (16), `font-shorthand-variant` (1), 0 неожиданных результатов.
+Заодно позеленел `css/cssom/font-shorthand-serialization` (1 сабтест, ожидание `.ini`
+удалено) — он ждал именно сериализации шорткода из лонгхендов.
+
+**Остаток среза 8:** `*-computed.html` (BUG-1407/1278).

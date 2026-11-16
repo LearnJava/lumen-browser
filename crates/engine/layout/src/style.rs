@@ -261,7 +261,7 @@ pub use values::misc_cssom::canonical_specified_misc;
 pub use values::text_cssom::{canonical_specified_text, transform_text_after_by_value, transform_text_by_value};
 pub use values::background_cssom::{canonical_specified_background, serialize_border_radius};
 pub use values::mask_cssom::{canonical_specified_mask, expand_mask, mask_shorthand_value};
-pub use values::font_cssom::{canonical_specified_font, expand_font_variant};
+pub use values::font_cssom::{canonical_specified_font, expand_font, expand_font_variant, font_shorthand_value};
 pub use values::rule_cssom::{GapDecl, expand_gap_rule_declaration, gap_rule_longhand_names, gap_rule_shorthand_value};
 pub use values::rule_interp::{canonical_gap_rule_value, interpolate_gap_rule_value, is_interpolable_gap_rule_property};
 pub use values::rule_anim::{
