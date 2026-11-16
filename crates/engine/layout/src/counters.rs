@@ -509,6 +509,16 @@ pub struct CounterMap {
     /// see that function's doc comment for why content dirtiness (not style
     /// equality alone) is the correctness precondition.
     clean_subtrees: IdSet<NodeId>,
+    /// BUG-935 срез 102 — `NodeId`s whose whole subtree differs from the previous pass in
+    /// `custom_props` alone ([`crate::custom_flow`]) and whose content is untouched. Such a
+    /// subtree moves no geometry — a custom property reaches layout only through the `var()` the
+    /// cascade already expanded — so the box build carries it over exactly like a
+    /// [`Self::clean_subtrees`] entry *and* the graft reuses its geometry. The one difference is
+    /// that the carried boxes still hold the previous styles' `custom_props`, so
+    /// `build_box_or_reuse` refreshes them from this pass's cascade. Kept out of
+    /// `clean_subtrees` because `ScopedCollection` reads that set as "the published maps are still
+    /// right", which is exactly what is *not* true for a custom-property change.
+    custom_only_subtrees: IdSet<NodeId>,
     /// BUG-935 срез 78 — the ids the incremental box build took out of the previous tree's dirty
     /// area ([`crate::incremental::ReleasedIds`]); `None` for a pass that did not record them.
     released: Option<crate::incremental::ReleasedIds>,
@@ -711,6 +721,13 @@ impl CounterMap {
     /// (`RestyleDelta::content_dirty`) that gates population.
     pub fn clean_subtrees(&self) -> &IdSet<NodeId> {
         &self.clean_subtrees
+    }
+
+    /// BUG-935 срез 102 — the subtrees that differ from the previous pass in `custom_props`
+    /// alone; the box build may carry them over but must refresh their styles — see the
+    /// `custom_only_subtrees` field doc.
+    pub fn custom_only_subtrees(&self) -> &IdSet<NodeId> {
+        &self.custom_only_subtrees
     }
 
     /// BUG-935 срез 78 — records the ids [`crate::incremental::ReleasedIds`] names for this pass.
@@ -1725,6 +1742,20 @@ fn probe_pseudo(
     ps.counter_reset
 }
 
+/// BUG-935 срез 102 — how far the cascade allows the box build to carry a subtree over from the
+/// previous pass. Ordered worst-to-best so combining siblings is [`Ord::min`].
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Reuse {
+    /// A style in it changed beyond `custom_props`, its content moved, or an ancestor's change
+    /// this pass is not one a carried box may stand in for.
+    Dirty,
+    /// Every style in it is the previous one with new `custom_props` — see
+    /// [`CounterMap::custom_only_subtrees`].
+    CustomOnly,
+    /// Byte-identical to the previous pass (BUG-341 S4).
+    Clean,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn walk(
     doc: &Document,
@@ -1758,11 +1789,12 @@ fn walk(
     unclean: bool,
     // BUG-935 срез 98: the parent's style changed in `custom_props` only — see [`CustomFlow`].
     flow: Option<&CustomFlow<'_>>,
-    // BUG-341 S4: returns `true` when this node's own style AND its entire
-    // descendant subtree are unchanged from `prev_styles` (vacuously `true`
-    // for non-element nodes, which carry no style of their own). Aggregated
-    // bottom-up into `map.clean_subtrees` — see that field's doc comment.
-) -> bool {
+    // BUG-341 S4: reports how far this node's subtree may be carried over from the previous
+    // pass — [`Reuse::Clean`] ("identical", aggregated into `map.clean_subtrees`),
+    // [`Reuse::CustomOnly`] (BUG-935 срез 102, aggregated into `map.custom_only_subtrees`) or
+    // [`Reuse::Dirty`]. Vacuously `Clean` for non-element nodes, which carry no style of their
+    // own.
+) -> Reuse {
     note_visit();
     match &doc.get(id).data {
         // Text / comment / doctype / fragment — no counter properties, no children.
@@ -1774,7 +1806,7 @@ fn walk(
         // (whose box embeds this text) drops out of `clean_subtrees`.
         NodeData::Text(_) | NodeData::Comment(_) | NodeData::ProcessingInstruction { .. } | NodeData::Doctype { .. }
         | NodeData::ShadowRoot { .. } | NodeData::DocumentFragment => {
-            return !incr.is_some_and(|d| d.content_dirty.contains(id));
+            return if incr.is_some_and(|d| d.content_dirty.contains(id)) { Reuse::Dirty } else { Reuse::Clean };
         }
 
         // Document node: has no style of its own; just recurse into children.
@@ -1784,14 +1816,14 @@ fn walk(
             // for that); it has no style of its own, so the force must be handed down
             // here — the element branch below never sees this node.
             let force = force || incr.is_some_and(|d| d.dirty_roots.contains(&id) || d.shallow_roots.contains(&id));
-            let mut all_clean = true;
+            let mut reuse = Reuse::Clean;
             for &child_id in flat.children_of(doc, id) {
                 if skip_clean_subtree(doc, flat, map, incr, ctx, id, child_id, force) {
                     continue;
                 }
-                all_clean &= walk(doc, sheet, child_id, inherited, viewport, flat, ctx, map, dark_mode, incr, force, id, false, false, None);
+                reuse = reuse.min(walk(doc, sheet, child_id, inherited, viewport, flat, ctx, map, dark_mode, incr, force, id, false, false, None));
             }
-            return all_clean;
+            return reuse;
         }
 
         NodeData::Element { .. } => {} // handled below
@@ -1846,6 +1878,9 @@ fn walk(
         _ => None,
     };
     let mut child_flow: Option<CustomFlow<'_>> = None;
+    // BUG-935 срез 102: this node's style came out of the flow instead of the cascade — its only
+    // difference from the previous pass is `custom_props`, which the box build can carry over.
+    let fast_used = fast.is_some();
     let style: Arc<ComputedStyle> = match (reused, fast) {
         (Some(style), _) => style,
         (None, Some((new, prev, f))) => {
@@ -1964,8 +1999,18 @@ fn walk(
     let changed_shallow = shallow && subtree_changed && !subtree_rematched && !level_descent_disabled();
     let child_force = force || (subtree_changed && !changed_shallow);
     let child_shallow = is_shallow_root || changed_shallow;
-    let child_unclean = unclean || changed_shallow;
-    let mut children_clean = true;
+    // BUG-935 срез 102: a change that is `custom_props` alone leaves every descendant's box
+    // usable — its style is the old one with a new map, and no box field derived from
+    // `custom_props` exists. Only a change beyond it inherits S92's "the child's box must be
+    // rebuilt" claim. A flow a pseudo-element rule reads the change through does not qualify:
+    // such a box is built from the element's style and would keep the previous value.
+    let custom_change = match (fast_used, child_flow.as_ref()) {
+        (true, _) => flow.is_some_and(|f| !f.pseudo_dependent()),
+        (false, Some(cf)) => !cf.pseudo_dependent(),
+        (false, None) => false,
+    };
+    let child_unclean = unclean || (changed_shallow && !custom_change);
+    let mut reuse = Reuse::Clean;
     // For slots with dir=auto and no assigned strong directionality, children should inherit
     // from the slot's parent (the shadow tree parent), not the slot itself.
     // This matches the reference rendering where assigned content renders in the shadow tree context.
@@ -1987,14 +2032,18 @@ fn walk(
     for &child_id in flat.children_of(doc, id) {
         // BUG-341 S27: nothing in the delta can reach this child's subtree, so
         // the walk's whole output for it is a restatement of its input.
-        if !child_unclean && skip_clean_subtree(doc, flat, map, incr, ctx, id, child_id, child_force) {
+        //
+        // BUG-935 срез 102: a running custom-property flow reaches this child's
+        // descendants through inheritance even when no root names them, so the
+        // licence does not hold below a node the flow passes through.
+        if child_flow.is_none() && !child_unclean && skip_clean_subtree(doc, flat, map, incr, ctx, id, child_id, child_force) {
             continue;
         }
-        let child_clean = walk(
+        let child_reuse = walk(
             doc, sheet, child_id, child_inherited, viewport, flat, ctx, map, dark_mode, incr, child_force, id, child_shallow,
             child_unclean, child_flow.as_ref(),
         );
-        children_clean &= child_clean;
+        reuse = reuse.min(child_reuse);
     }
 
     // ::after quotes come after all children in document order.
@@ -2013,13 +2062,36 @@ fn walk(
     // own content was not mutated, AND every descendant is itself clean. Only
     // recorded when the delta has a complete content record at all — see
     // `ContentDirty`.
+    //
+    // BUG-935 срез 102: a subtree whose styles all differ from the previous pass in `custom_props`
+    // alone is reusable too, but as its own kind — the box build carries it over and refreshes the
+    // carried styles, which `clean_subtrees`' consumer (`ScopedCollection`) must not hear about.
     let content_dirty = incr.is_some_and(|d| d.content_dirty.contains(id));
-    let subtree_clean = !must_recompute && !content_dirty && children_clean && !unclean;
-    if subtree_clean && incr.is_some_and(|d| d.content_dirty.tracked()) {
-        map.clean_subtrees.insert(id);
-        note_clean_insert();
+    let own = if unclean {
+        Reuse::Dirty
+    } else if fast_used {
+        if subtree_changed { Reuse::CustomOnly } else { Reuse::Clean }
+    } else if !must_recompute {
+        Reuse::Clean
+    } else if custom_change {
+        Reuse::CustomOnly
+    } else {
+        Reuse::Dirty
+    };
+    let subtree = if content_dirty { Reuse::Dirty } else { own.min(reuse) };
+    if incr.is_some_and(|d| d.content_dirty.tracked()) {
+        match subtree {
+            Reuse::Clean => {
+                map.clean_subtrees.insert(id);
+                note_clean_insert();
+            }
+            Reuse::CustomOnly => {
+                map.custom_only_subtrees.insert(id);
+            }
+            Reuse::Dirty => {}
+        }
     }
-    subtree_clean
+    subtree
 }
 
 // ─── Counter value formatting ────────────────────────────────────────────────

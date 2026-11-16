@@ -192,25 +192,49 @@ pub(crate) type ReuseIndex = std::collections::HashMap<NodeId, std::sync::Mutex<
 ///
 /// Every position it empties keeps a husk carrying [`DirtyBits::MOVED_OUT`] —
 /// see that flag for why the graft must be able to recognise one.
+///
+/// BUG-935 срез 102: `custom_only` joins the licence — subtrees whose whole style difference is
+/// `custom_props` ([`CounterMap::custom_only_subtrees`]). Their geometry is the previous pass's
+/// too, but their boxes still hold the previous styles, so `build_box_or_reuse` refreshes the
+/// carried styles from this pass's cascade.
 pub(crate) fn extract_clean_subtrees(
     prev: &mut LayoutBox,
     clean: &lumen_core::id_hash::IdSet<NodeId>,
+    custom_only: &lumen_core::id_hash::IdSet<NodeId>,
 ) -> (ReuseIndex, u64) {
     let mut out = ReuseIndex::default();
     let mut visited = 0u64;
-    if clean.contains(&prev.node) {
+    if reusable_as_root(prev, clean, custom_only) {
         let husk = moved_out_husk(prev);
         let taken = std::mem::replace(prev, husk);
         out.insert(taken.node, std::sync::Mutex::new(Some(taken)));
         return (out, 1);
     }
-    extract_clean_subtrees_inner(prev, clean, &mut out, &mut visited);
+    extract_clean_subtrees_inner(prev, clean, custom_only, &mut out, &mut visited);
     (out, visited)
+}
+
+/// Whether `b` may be taken as the whole unit for its node.
+///
+/// A `clean` member may be taken from whatever box first carries its id — its styles are the
+/// previous pass's and nothing reads them. A `custom_only` member may not: `anon_style` and the
+/// pseudo-element cascade derive an anonymous or pseudo box's style from the *parent's*, and the
+/// refresh that follows the move can only rebuild an element box's own cascade entry. So an outer
+/// anonymous wrapper is walked through instead, and the element box below it — which does have an
+/// entry — becomes the unit.
+fn reusable_as_root(
+    b: &LayoutBox,
+    clean: &lumen_core::id_hash::IdSet<NodeId>,
+    custom_only: &lumen_core::id_hash::IdSet<NodeId>,
+) -> bool {
+    clean.contains(&b.node)
+        || (custom_only.contains(&b.node) && b.origin.role == crate::box_tree::BoxRole::Element)
 }
 
 fn extract_clean_subtrees_inner(
     b: &mut LayoutBox,
     clean: &lumen_core::id_hash::IdSet<NodeId>,
+    custom_only: &lumen_core::id_hash::IdSet<NodeId>,
     out: &mut ReuseIndex,
     visited: &mut u64,
 ) {
@@ -222,12 +246,12 @@ fn extract_clean_subtrees_inner(
         // occurrence — the one this pre-order walk reaches first — is the one
         // that means "the whole subtree for this node". S4's `index_by_node`
         // had the same rule for the same reason.
-        if clean.contains(&child.node) && !out.contains_key(&child.node) {
+        if reusable_as_root(child, clean, custom_only) && !out.contains_key(&child.node) {
             let husk = moved_out_husk(child);
             let taken = std::mem::replace(child, husk);
             out.insert(taken.node, std::sync::Mutex::new(Some(taken)));
         } else {
-            extract_clean_subtrees_inner(child, clean, out, visited);
+            extract_clean_subtrees_inner(child, clean, custom_only, out, visited);
         }
     }
 }
@@ -3654,7 +3678,7 @@ mod tests {
             let (mut prev, _) =
                 layout_measured_hyp_with_counters(&doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false);
             let clean: IdSet<NodeId> = [id("c"), id("o")].into_iter().collect();
-            let (index, _) = extract_clean_subtrees(&mut prev, &clean);
+            let (index, _) = extract_clean_subtrees(&mut prev, &clean, &IdSet::default());
             let taken: Vec<LayoutBox> = index.into_values().filter_map(|slot| slot.into_inner().unwrap()).collect();
             (prev, taken)
         };
