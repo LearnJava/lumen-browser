@@ -775,6 +775,55 @@ var _sw_container = Object.assign({
     },
 }, _sw_container_et);
 
+// ── SW → page messages (SW §3.1.4 client message queue, SW-MSG-S4) ───────────
+// The Rust pump (`V8JsRuntime::pump_workers`) calls `_lumen_deliver_sw_messages`
+// with already-parsed envelopes `[{scope, json}]` — `json` is embedded as raw
+// JSON, so it must NOT be parsed again (the BUG-1814 convention). Each message
+// becomes a `MessageEvent` whose `source` is the scope's `ServiceWorker`
+// object, queued on the client message queue: events arriving before a handler
+// is attached are held back, and the queue opens on `onmessage` assignment or
+// an explicit `startMessages()` — `addEventListener('message')` alone does not
+// open it (the spec only enables the queue via `startMessages`).
+var _sw_msg_queue = [];
+var _sw_msg_queue_open = false;
+function _sw_drain_msg_queue() {
+    while (_sw_msg_queue_open && _sw_msg_queue.length) {
+        (function(queued) {
+            setTimeout(function() {
+                _sw_container_et.dispatchEvent.call(_sw_container, queued);
+            }, 0);
+        })(_sw_msg_queue.shift());
+    }
+}
+function _lumen_deliver_sw_messages(msgs) {
+    for (var i = 0; i < msgs.length; i++) {
+        var reg = _sw_registrations[msgs[i].scope];
+        var sw = reg && (reg.active || reg.waiting || reg.installing);
+        if (!sw) continue;
+        var ev = new MessageEvent(msgs[i].json, { bubbles: false, cancelable: false });
+        ev.origin = _sw_origin;
+        ev.source = sw;
+        ev.ports = [];
+        _sw_msg_queue.push(ev);
+    }
+    _sw_drain_msg_queue();
+}
+// The accessor (not the plain property Object.assign made) lets the setter
+// open the message queue, per `startMessages`' implicit call on assignment.
+Object.defineProperty(_sw_container, 'onmessage', {
+    get: function() { return this._sw_onmessage || null; },
+    set: function(fn) {
+        this._sw_onmessage = (typeof fn === 'function') ? fn : null;
+        if (this._sw_onmessage) this.startMessages();
+    },
+    enumerable: true, configurable: true,
+});
+_sw_container.startMessages = function() {
+    if (_sw_msg_queue_open) return;
+    _sw_msg_queue_open = true;
+    _sw_drain_msg_queue();
+};
+
 // HTML LS §8.9.1 `interface Navigator` (BUG-624). The members below — and the
 // ones the per-API modules hang on `navigator` later in `install_dom` — start
 // out as own properties of the singleton; `navigator_bindings.rs`'s

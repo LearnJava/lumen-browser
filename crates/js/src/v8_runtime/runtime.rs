@@ -708,6 +708,13 @@ impl V8JsRuntime {
             &self.worker_errors,
             &self.worker_port_messages,
         );
+        // SW-MSG-S4: deliver messages service workers posted to this page
+        // (`Client.postMessage` in the SW isolate), keyed by this page's
+        // client id.
+        crate::sw_clients::deliver(
+            self,
+            self.sw_client_id.load(std::sync::atomic::Ordering::Relaxed),
+        );
     }
 
     /// Deliver messages posted by `SharedWorker` threads to this page's

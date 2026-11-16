@@ -138,6 +138,8 @@ pub mod attribution_reporting;
 pub mod frame_bridge;
 pub mod pointer_capture;
 pub mod sw_worker;
+#[cfg(feature = "v8-backend")]
+pub(crate) mod sw_clients;
 
 /// V8 compat layer (slice S2): `IntoV8NativeFn`, `register_v8_native`, and
 /// helpers for registering typed Rust closures as V8 globals.

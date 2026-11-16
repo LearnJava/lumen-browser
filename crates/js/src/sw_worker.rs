@@ -18,6 +18,12 @@
 //! SW-MSG-S3: page → worker messages — `ServiceWorker.postMessage` on the
 //! page sends [`SwWorkerMessage::Message`], dispatched here as an
 //! `ExtendableMessageEvent` with a `WindowClient` `source`.
+//!
+//! SW-MSG-S4: the return channel — `Client.prototype.postMessage` in the
+//! isolate calls `_lumen_sw_post_to_client`, which queues into the
+//! process-global hub (`crate::sw_clients`); the destination page's
+//! `V8JsRuntime::pump_workers` delivers it as a `message` event on
+//! `navigator.serviceWorker`.
 
 use std::time::Duration;
 
@@ -432,17 +438,29 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
 
   // ── Client / WindowClient (SW §5.2/§5.3, SW-MSG-S3) ─────────────────────────
   // The `source` of an incoming `message` event, rebuilt from the JSON
-  // descriptor the page stamps onto the envelope. `focus()`/`navigate()` and
-  // `postMessage` (the return channel) arrive with later slices
-  // (SW-MSG-S4/S6).
+  // descriptor the page stamps onto the envelope. `postMessage` (the return
+  // channel) landed in SW-MSG-S4; `focus()`/`navigate()` still arrive with
+  // SW-MSG-S6.
   function Client(info) {{
     info = info || {{}};
     this.id = (info.id != null) ? String(info.id) : '';
+    // SW-MSG-S4: the numeric client id of the posting page — the key
+    // `_lumen_sw_post_to_client` routes the reply by.
+    this._cid = (typeof info.id === 'number') ? info.id : Number(info.id) || 0;
     this.url = String(info.url || '');
     this.type = String(info.type || 'window');
     this.frameType = String(info.frameType || 'top-level');
   }}
   globalThis.Client = Client;
+  // SW-MSG-S4: the return channel (SW §3.2.5) — posts into the process-global
+  // hub under this page's client id; the page's own pump delivers it. No
+  // `transfer` yet (ports ride in SW-MSG-S5). A dead client's id is simply
+  // never drained.
+  Client.prototype.postMessage = function(data /*, transfer */) {{
+    if (typeof _lumen_sw_post_to_client !== 'function') return;
+    var payload = JSON.stringify(structuredClone(data));
+    _lumen_sw_post_to_client(this._cid, payload);
+  }};
   function WindowClient(info) {{
     Client.call(this, info);
     info = info || {{}};
@@ -993,6 +1011,20 @@ fn install_sw_globals_v8(
         rt.register_native(
             "_lumen_sw_cache_names",
             crate::v8_compat::into_v8_fn0(move || -> Vec<String> { be.cache_names(&orig) }),
+        )?;
+    }
+
+    // SW-MSG-S4: the return channel — a SW's `Client.postMessage` lands here
+    // keyed by the page client id stamped into every incoming message's
+    // source descriptor; this worker's scope is captured (the page pump
+    // routes by client id alone).
+    {
+        let sw_scope = scope.to_string();
+        rt.register_native(
+            "_lumen_sw_post_to_client",
+            crate::v8_compat::into_v8_fn2(move |client_id: f64, data_json: String| {
+                crate::sw_clients::push_out(client_id as u64, sw_scope.clone(), data_json);
+            }),
         )?;
     }
 

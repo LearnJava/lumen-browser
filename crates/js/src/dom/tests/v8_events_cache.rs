@@ -1680,3 +1680,145 @@ fn v8_sw_page_post_message_without_worker_is_silent_noop() {
     .unwrap();
     assert_eq!(rt.eval("__threw").unwrap(), lumen_core::JsValue::Bool(false));
 }
+
+/// Drive the page rig the way the S3 test does, plus the worker-message pump
+/// that delivers SW→page traffic (`V8JsRuntime::pump_workers` — the shell
+/// calls it on every tick; the test calls it explicitly).
+fn sw_pump_round(rt: &V8JsRuntime) {
+    let _ = rt.eval("_lumen_fetch_pump(); _lumen_tick_timers();");
+    rt.pump_workers();
+}
+
+/// SW-MSG-S4: the return channel — the SW answers a page message via
+/// `e.source.postMessage`, the page gets a `message` event on
+/// `navigator.serviceWorker` with the payload, the SW `origin`, and
+/// `e.source === reg.active`.
+#[test]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+fn v8_sw_client_post_message_roundtrip() {
+    let be = Arc::new(MockCacheBackend::new());
+    let store: lumen_core::ext::SwWorkerStore = Arc::default();
+    let script = r#"
+self.addEventListener('message', function(e) {
+  if (e.source) e.source.postMessage('pong:' + e.data);
+});
+"#;
+    let rt = V8JsRuntime::new().unwrap();
+    let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(SwScriptFetch(script));
+    rt.install_dom(
+        make_doc(), "https://example.com/", Some(provider), None, None, None, None, None,
+        Some(be), None, Some(Arc::clone(&store)), false, None,
+    )
+    .unwrap();
+    rt.eval(
+        "window._got = null; window._reg = null;
+         navigator.serviceWorker.register('/sw.js', { scope: '/' })
+             .then(function(r) { window._reg = r; });
+         navigator.serviceWorker.onmessage = function(e) {
+           window._got = [e.data, e.origin,
+                          String(navigator.serviceWorker.controller === window._reg.active)]
+                          .join('|');
+         };",
+    )
+    .unwrap();
+    // The SW isolate spawns asynchronously after the lifecycle sets `active`
+    // (script fetch + thread handle insertion), so `postMessage` must wait
+    // for the store handle — earlier it is a quiet no-op (S3 semantics).
+    let key = ("https://example.com".to_string(), "/".to_string());
+    let mut activated = false;
+    for _ in 0..100 {
+        sw_pump_round(&rt);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        if store.lock().unwrap().contains_key(&key) {
+            activated = true;
+            break;
+        }
+    }
+    assert!(activated, "SW thread never activated");
+    rt.eval("window._reg.active.postMessage('ping');").unwrap();
+    let mut got = String::new();
+    for _ in 0..100 {
+        sw_pump_round(&rt);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        if let Ok(lumen_core::JsValue::String(s)) = rt.eval("String(window._got)")
+            && s != "null" {
+            got = s;
+            break;
+        }
+    }
+    assert_eq!(got, "pong:ping|https://example.com|true");
+}
+
+/// SW-MSG-S4: messages the SW sends before a handler is attached stay in the
+/// client message queue; `addEventListener('message')` alone does not open it
+/// (the spec enables the queue only via `startMessages` / `onmessage`).
+#[test]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+fn v8_sw_client_message_queue_waits_for_onmessage() {
+    let be = Arc::new(MockCacheBackend::new());
+    let store: lumen_core::ext::SwWorkerStore = Arc::default();
+    let script = r#"
+self.addEventListener('message', function(e) {
+  if (e.source) {
+    e.source.postMessage('m1');
+    e.source.postMessage('m2');
+  }
+});
+"#;
+    let rt = V8JsRuntime::new().unwrap();
+    let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(SwScriptFetch(script));
+    rt.install_dom(
+        make_doc(), "https://example.com/", Some(provider), None, None, None, None, None,
+        Some(be), None, Some(Arc::clone(&store)), false, None,
+    )
+    .unwrap();
+    rt.eval(
+        "window._arr = [];
+         navigator.serviceWorker.addEventListener('message', function(e) {
+           window._arr.push(e.data);
+         });
+         navigator.serviceWorker.register('/sw.js', { scope: '/' })
+             .then(function(r) { window._reg = r; });",
+    )
+    .unwrap();
+    // Wait for the isolate, then send 'go'; the SW answers with m1/m2. The
+    // listener was attached without `startMessages()`, so nothing may be
+    // delivered even after the replies have landed in the queue.
+    let key = ("https://example.com".to_string(), "/".to_string());
+    let mut activated = false;
+    for _ in 0..100 {
+        sw_pump_round(&rt);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        if store.lock().unwrap().contains_key(&key) {
+            activated = true;
+            break;
+        }
+    }
+    assert!(activated, "SW thread never activated");
+    rt.eval("window._reg.active.postMessage('go');").unwrap();
+    // Give the SW time to answer; the queue must still hold everything.
+    let mut held = false;
+    for _ in 0..50 {
+        sw_pump_round(&rt);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        if let Ok(lumen_core::JsValue::Number(n)) = rt.eval("window._arr.length")
+            && n == 0.0 {
+            held = true;
+            break;
+        }
+    }
+    assert!(held, "queue delivered without an attached handler");
+    // `addEventListener` did not open the queue — `startMessages()` does.
+    rt.eval("navigator.serviceWorker.startMessages();").unwrap();
+    let mut got = String::new();
+    for _ in 0..100 {
+        sw_pump_round(&rt);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        if let Ok(lumen_core::JsValue::String(s)) = rt.eval("window._arr.join(',')")
+            && s == "m1,m2" {
+            got = s;
+            break;
+        }
+    }
+    assert_eq!(got, "m1,m2");
+}
