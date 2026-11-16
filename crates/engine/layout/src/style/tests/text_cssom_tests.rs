@@ -25,7 +25,11 @@
         assert_eq!(canon("font-stretch", "Condensed").as_deref(), Some("condensed"));
         for bad in ["0.5", "-10%", "auto"] {
             assert!(canon("font-stretch", bad).is_none(), "font-stretch {bad:?}");
+            assert!(canon("font-width", bad).is_none(), "font-width {bad:?}");
         }
+        assert_eq!(canon("font-width", "Semi-Condensed").as_deref(), Some("semi-condensed"));
+        assert_eq!(canon("font-width", "234.5%").as_deref(), Some("234.5%"));
+        assert_eq!(canon("font-width", "calc(100% + 100%)").as_deref(), Some("calc(200%)"));
     }
 
     #[test]

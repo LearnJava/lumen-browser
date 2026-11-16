@@ -43,6 +43,30 @@
             canon("font-family", "Twisty Tie, '34J', \"serif\", Veronica, sans-serif").as_deref(),
             Some("Twisty Tie, \"34J\", \"serif\", Veronica, sans-serif")
         );
+        // Обобщённое семейство — в нижнем регистре, что бы ни было написано (BUG-1408).
+        assert_eq!(canon("font-family", "Serif").as_deref(), Some("serif"));
+        assert_eq!(canon("font-family", "System-UI").as_deref(), Some("system-ui"));
+        assert_eq!(
+            canon("font-family", "\"New Century Schoolbook\", serif").as_deref(),
+            Some("New Century Schoolbook, serif")
+        );
+        assert_eq!(canon("font-family", "'21st Century', fantasy").as_deref(), Some("\"21st Century\", fantasy"));
+        assert_eq!(canon("font-family", "\"inherit\", \"serif\"").as_deref(), Some("\"inherit\", \"serif\""));
+        // Невалидная грамматика: ключевое слово в многословном имени, не-идентификатор,
+        // строка с хвостом, пустой элемент списка.
+        for bad in [
+            "cursive serif",
+            "Red/Black, sans-serif",
+            "\"Lucida\" Grande, sans-serif",
+            "Ahem!, sans-serif",
+            "test@foo, sans-serif",
+            "#POUND, sans-serif",
+            "Hawaii 5-0, sans-serif",
+            "Helvetica,",
+            "inherit",
+        ] {
+            assert_eq!(canon("font-family", bad), None, "font-family {bad:?}");
+        }
     }
 
     #[test]

@@ -104,3 +104,34 @@ setter-страница из `getComputedStyle`/`style`); `style.objectPosition 
 `font-variant-alternates` (`styleset()`/`character-variant()`), `font-language-override`,
 шорткоды `font`/`font-variant`, `font-kerning-computed` и остальные `*-computed.html`
 (это `getComputedStyle`, BUG-1407/1278).
+
+**Остаток среза 2:** `font-family`, `font-size`, `font-width`, `font-size-adjust` (числа и
+`calc()`), `font-feature-settings`/`font-variation-settings` (теги с раскрытием escape-последовательностей),
+`font-variant-alternates` (`styleset()`/`character-variant()`), `font-language-override`,
+шорткоды `font`/`font-variant`, `font-kerning-computed` и остальные `*-computed.html`
+(это `getComputedStyle`, BUG-1407/1278).
+
+## Срез 3 (2026-11-16, P3): CSS Fonts, значения-грамматики
+
+- `font-family` (`crates/engine/layout/src/style/values/misc_cssom.rs`): грамматика
+  `[ <family-name> | <generic-family> ]#` — обобщённое семейство приводится к нижнему регистру
+  (`Serif` → `serif`), ключевое слово внутри многословного имени — невалидно (`cursive serif`),
+  не-идентификатор (`Ahem!`, `#POUND`, `Hawaii 5-0`), строка с хвостом (`"Lucida" Grande`) и
+  пустой элемент списка (`Helvetica,`) отбрасываются; имя в кавычках — без кавычек, если
+  читается как идентификаторы (`"New Century Schoolbook"` → `New Century Schoolbook`).
+- `font-width` — алиас `font-stretch` (`text_cssom.rs`), `calc()`-проценты сводятся
+  (`calc(100% + 100%)` → `calc(200%)`).
+- `font-size-adjust` (`font_cssom.rs`): `none | [ <metric>? [ from-font | <number [0,∞]> ] ]`;
+  `ex-height` в записи опускается (`ex-height 0.5` → `0.5`), `calc()` числа сворачиваются
+  (`cap-height calc(0.5 + 1)` → `cap-height calc(1.5)`).
+- `font-language-override`: `normal | <string>` с 1–4 ASCII-символами, хвостовые пробелы
+  снимаются (`"ENG "` → `"ENG"`), переполнение и не-ASCII отбрасываются.
+
+Зелёные файлы (`css/css-fonts/parsing/`, ожидания `.ini` удалены): `font-family-{valid,invalid}`,
+`font-width-invalid`, `font-size-adjust-invalid`, `font-language-override-{valid,invalid}` —
+6 файлов, 0 неожиданных результатов; `font-width-valid` 28/30 и `font-size-adjust-valid` 18/19
+(осталось — канонический порядок множителей в math-функции: `5 * sign(...)`).
+
+**Остаток среза 3:** шорткоды `font`, `font-variant`, `mask`, `clip`/`clip-path`;
+`font-feature-settings`/`font-variation-settings` (теги с escape-последовательностями),
+`font-variant-alternates`, `*-computed.html` (BUG-1407/1278).

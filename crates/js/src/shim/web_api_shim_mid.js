@@ -2793,6 +2793,9 @@ var _LUMEN_FONT_PROPERTIES = {
     'font-synthesis-position': 1,
     'font-variant-caps': 1, 'font-variant-ligatures': 1, 'font-variant-numeric': 1,
     'font-variant-east-asian': 1, 'font-variant-position': 1, 'font-variant-emoji': 1,
+    // CSS Fonts L4/L5 value grammars (BUG-1408 slice 3); `font-family`/`font-size` live in
+    // `_LUMEN_MISC_PROPERTIES` (BUG-1551).
+    'font-size-adjust': 1, 'font-language-override': 1,
 };
 
 // CSS Text L3/L4 longhands with a length or multi-component grammar: the native
@@ -2802,7 +2805,7 @@ var _LUMEN_TEXT_PROPERTIES = {
     'tab-size': 1, 'letter-spacing': 1, 'word-spacing': 1, 'text-indent': 1, 'text-transform': 1,
     // CSS Fonts L4 §2: `font-weight` `<number [1,1000]>`, `font-style` `oblique <angle>`,
     // `font-stretch` `<percentage>` (BUG-1410).
-    'font-weight': 1, 'font-style': 1, 'font-stretch': 1,
+    'font-weight': 1, 'font-style': 1, 'font-stretch': 1, 'font-width': 1,
     // CSS Inline L3 (BUG-1529): `line-height`, `baseline-shift`, the `vertical-align` grammar, `initial-letter`.
     'line-height': 1, 'baseline-shift': 1, 'vertical-align': 1, 'initial-letter': 1,
     // CSS Tables L2 (BUG-1535): `<length [0,∞]>{1,2}`.
