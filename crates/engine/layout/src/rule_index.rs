@@ -87,97 +87,6 @@ fn direct_subject_key(comp: &CompoundSelector) -> SubjectKey<'_> {
     SubjectKey::Universal
 }
 
-/// BUG-1794 срез 2 (временная перепись) — текстовый рендер subject-компаунда
-/// для печати universal-правил (у `ComplexSelector` нет `Display`).
-fn probe_render(comp: &CompoundSelector) -> String {
-    use lumen_css_parser::PseudoClass;
-    let mut s = String::new();
-    for p in &comp.parts {
-        match p {
-            SimpleSelector::Universal => s.push('*'),
-            SimpleSelector::Type(t) => s.push_str(t),
-            SimpleSelector::Class(c) => {
-                s.push('.');
-                s.push_str(c);
-            }
-            SimpleSelector::Id(i) => {
-                s.push('#');
-                s.push_str(i);
-            }
-            SimpleSelector::Attribute(a) => {
-                s.push('[');
-                s.push_str(&a.name);
-                s.push(']');
-            }
-            SimpleSelector::PseudoElement(_) => s.push_str("::pe"),
-            SimpleSelector::PseudoClass(pc) => {
-                s.push(':');
-                s.push_str(match pc {
-                    PseudoClass::Where(_) => "where",
-                    PseudoClass::Is(_) => "is",
-                    PseudoClass::Not(_) => "not",
-                    PseudoClass::Has(_) => "has",
-                    PseudoClass::Root => "root",
-                    PseudoClass::FirstChild => "first-child",
-                    PseudoClass::LastChild => "last-child",
-                    PseudoClass::OnlyChild => "only-child",
-                    PseudoClass::Empty => "empty",
-                    PseudoClass::FirstOfType => "first-of-type",
-                    PseudoClass::LastOfType => "last-of-type",
-                    PseudoClass::OnlyOfType => "only-of-type",
-                    PseudoClass::NthChild(..) => "nth-child",
-                    PseudoClass::NthLastChild(..) => "nth-last-child",
-                    PseudoClass::NthOfType(..) => "nth-of-type",
-                    PseudoClass::NthLastOfType(..) => "nth-last-of-type",
-                    _ => "other",
-                });
-            }
-        }
-    }
-    s
-}
-
-/// BUG-1794 срез 2 (временная перепись) — печать universal-subject'ов с частотой.
-fn probe_universal_shape(comp: &CompoundSelector) {
-    use lumen_css_parser::PseudoClass;
-    let mut kind = 0usize;
-    let mut has_pe = false;
-    for p in &comp.parts {
-        match p {
-            SimpleSelector::Universal => {}
-            SimpleSelector::PseudoElement(_) => has_pe = true,
-            SimpleSelector::PseudoClass(pc) => match pc {
-                PseudoClass::Where(_) => kind = kind.max(2),
-                PseudoClass::Is(_) => kind = kind.max(3),
-                PseudoClass::Not(_) => kind = kind.max(4),
-                PseudoClass::Has(_) => kind = kind.max(5),
-                _ => kind = kind.max(1),
-            },
-            _ => kind = 7,
-        }
-    }
-    if has_pe {
-        kind = 6;
-    }
-    crate::counters::note_universal_shape(kind);
-    if std::env::var_os("LUMEN_PROBE_CANDS").is_some() {
-        let text = probe_render(comp);
-        PROBE_UNIVERSAL_MORE.with(|m| {
-            let mut m = m.borrow_mut();
-            let e = m.entry(text).or_insert(0);
-            *e += 1;
-            if *e == 1 && m.len() <= 120 {
-                eprintln!("[probe1794-universal] new#{:3} {}", m.len(), m.keys().last().map_or("", |s| s.as_str()));
-            }
-        });
-    }
-}
-
-thread_local! {
-    static PROBE_UNIVERSAL_MORE: std::cell::RefCell<std::collections::HashMap<String, u32>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
-}
-
 enum SubjectKey<'a> {
     Id(&'a str),
     Class(&'a str),
@@ -286,7 +195,6 @@ impl RuleIndex {
                             idx.by_attr.entry((*name).to_owned()).or_default().push(rule_idx);
                         }
                         SubjectKey::Universal => {
-                            probe_universal_shape(subject(sel));
                             idx.universal.push(rule_idx);
                         }
                     }

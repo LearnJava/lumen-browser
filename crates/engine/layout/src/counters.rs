@@ -892,18 +892,6 @@ pub fn precompute_counters(
     let t = std::time::Instant::now();
     walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, None, false, doc.root(), false, false, None);
     note_walk_ns(t.elapsed().as_nanos() as u64);
-    if std::env::var_os("LUMEN_PROBE_CANDS").is_some() {
-        let st = take_cascade_stats();
-        eprintln!(
-            "[probe1794] cands={} universal={} type={} id={} class={} attr={} matches={} nested={} first_fail={} prefix_fail={}",
-            st.candidates, st.cand_universal, st.cand_type, st.cand_id, st.cand_class,
-            st.cand_attr, st.match_calls, st.match_nested, st.match_first_fail, st.match_prefix_fail,
-        );
-        eprintln!("[probe1794] universal shapes *={} pseudo={} where={} is={} not={} has={} pe={} other={}",
-            st.universal_shapes[0], st.universal_shapes[1], st.universal_shapes[2],
-            st.universal_shapes[3], st.universal_shapes[4], st.universal_shapes[5],
-            st.universal_shapes[6], st.universal_shapes[7]);
-    }
     map.record_generated_content(doc, flat);
     map
 }
@@ -1474,22 +1462,20 @@ pub struct CascadeStats {
     /// матчить компаунд-префикс. С ростом числа при неизменных результатах —
     /// экономия пройденных предков.
     pub prefix_refuted: u32,
-    /// BUG-1794 срез 2 (временная перепись) — вклад корзин [`crate::rule_index`]
-    /// в [`Self::candidates`]: сколько кандидатов пришло из `universal`,
-    /// type/id/class/attr-бакетов. Решает, лечится ли 170 кандидатов на узел
-    /// сужением `universal`, или это неизбежная ширина class-бакетов.
+    /// BUG-1794 срез 8 — вклад корзин [`crate::rule_index`] в
+    /// [`Self::candidates`] (до dedup): сколько кандидатов пришло из
+    /// `universal`, type/id/class/attr-бакетов. Ответ переписи 2026-11-16:
+    /// на github 83 % объёма — universal (`*` и голые псевдоклассы, ключей
+    /// нет), class-бакеты — 1.3 %; печатается в строке `[engine] incr cascade`.
     pub cand_universal: u32,
     pub cand_type: u32,
     pub cand_id: u32,
     pub cand_class: u32,
     pub cand_attr: u32,
-    /// BUG-1794 срез 2 (временная перепись) — вызовы `matches_chain` не из
-    /// `matches_complex`, т.е. рекурсия внутрь `:is`/`:where`/`:not`/`:has`.
+    /// BUG-1794 срез 8 — вызовы `matches_chain` не из `matches_complex`, т.е.
+    /// рекурсия внутрь `:is`/`:where`/`:not`/`:has` (на github вдвое больше
+    /// входных вызовов).
     pub match_nested: u32,
-    /// BUG-1794 срез 2 (временная перепись) — форма subject-компаунда правил,
-    /// попавших в `universal`: 0 `*`, 1 нефункциональные псевдоклассы,
-    /// 2 `:where`, 3 `:is`, 4 `:not`, 5 `:has`, 6 псевдоэлемент, 7 прочее.
-    pub universal_shapes: [u32; 8],
 }
 
 thread_local! {
@@ -1523,7 +1509,6 @@ thread_local! {
             cand_class: 0,
             cand_attr: 0,
             match_nested: 0,
-            universal_shapes: [0; 8],
         })
     };
 }
@@ -1587,8 +1572,8 @@ pub(crate) fn note_prefix_refuted() {
     });
 }
 
-/// BUG-1794 срез 2 (временная перепись) — вклад одной корзины [`crate::rule_index`]
-/// в выдачу `candidates`.
+/// BUG-1794 срез 8 — вклад одной корзины [`crate::rule_index`]
+/// в выдачу `candidates` (до dedup).
 pub(crate) fn note_candidate_bucket(kind: u8, n: usize) {
     CASCADE_STATS.with(|s| {
         let mut v = s.get();
@@ -1603,16 +1588,7 @@ pub(crate) fn note_candidate_bucket(kind: u8, n: usize) {
     });
 }
 
-/// BUG-1794 срез 2 (временная перепись) — форма universal-subject'а.
-pub(crate) fn note_universal_shape(kind: usize) {
-    CASCADE_STATS.with(|s| {
-        let mut v = s.get();
-        v.universal_shapes[kind.min(7)] += 1;
-        s.set(v);
-    });
-}
-
-/// BUG-1794 срез 2 (временная перепись) — вызов `matches_chain` из рекурсии
+/// BUG-1794 срез 8 — вызов `matches_chain` из рекурсии
 /// `:is`/`:where`/`:not`/`:has`.
 pub(crate) fn note_match_nested() {
     CASCADE_STATS.with(|s| {
