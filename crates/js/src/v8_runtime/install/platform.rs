@@ -922,6 +922,18 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // CSS Fonts L4 §9 `font-variant` shorthand in inline-`style`: expands to its six longhands
+    // (BUG-1408 slice 5). JSON `{"k":"ok","l":[[longhand,value],...]}` or `{"k":"invalid"}`.
+    reg!(scope, ctx, store,
+        "_lumen_css_expand_font_variant",
+        |value: String| -> String {
+            match lumen_layout::style::expand_font_variant(&value) {
+                Some(l) => serde_json::json!({ "k": "ok", "l": l }).to_string(),
+                None => r#"{"k":"invalid"}"#.to_string(),
+            }
+        }
+    );
+
     // `text-transform` over a text string with the layout's own casing rules, so that
     // `innerText` matches what is painted (BUG-1329). `value` is the computed
     // `text-transform`, `lang` the element's `lang`/`xml:lang` ("" when unset).

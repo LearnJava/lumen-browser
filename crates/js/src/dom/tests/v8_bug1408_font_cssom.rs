@@ -69,6 +69,47 @@ fn valid_font_values_are_canonical() {
 }
 
 #[test]
+fn font_variant_shorthand_round_trips_through_longhands() {
+    let rt = rt();
+    for (val, want) in [
+        ("normal", "normal"),
+        ("none", "none"),
+        ("All-Small-Caps", "all-small-caps"),
+        (
+            "super proportional-width jis83 stacked-fractions tabular-nums historical-forms \
+             all-small-caps no-contextual",
+            "no-contextual all-small-caps historical-forms tabular-nums stacked-fractions \
+             jis83 proportional-width super",
+        ),
+        (
+            "annotation(flowing) ornaments(flowing) swash(flowing) character-variant(flowing) \
+             styleset(flowing) historical-forms stylistic(flowing)",
+            "stylistic(flowing) historical-forms styleset(flowing) character-variant(flowing) \
+             swash(flowing) ornaments(flowing) annotation(flowing)",
+        ),
+        ("small-caps tabular-nums", "small-caps tabular-nums"),
+    ] {
+        assert_eq!(assign(&rt, "fontVariant", val), want, "font-variant = {val:?}");
+    }
+    // Лонгхенды читаются после присваивания шорткода, шорткод собирается из них же.
+    assert_eq!(
+        eval_str(&rt, "var d = document.createElement('div'); d.style.fontVariant = 'small-caps'; d.style.fontVariantCaps"),
+        "small-caps"
+    );
+    assert_eq!(
+        eval_str(&rt, "var d = document.createElement('div'); d.style.fontVariantNumeric = 'tabular-nums'; d.style.fontVariant"),
+        "tabular-nums"
+    );
+    assert_eq!(
+        eval_str(&rt, "var d = document.createElement('div'); d.style.fontVariant = 'small-caps'; d.style.cssText"),
+        "font-variant: small-caps;"
+    );
+    for val in ["normal none", "small-caps normal", "sub super", "bogus"] {
+        assert_eq!(assign(&rt, "fontVariant", val), "", "font-variant = {val:?} должен отклониться");
+    }
+}
+
+#[test]
 fn font_tag_lists_and_alternates_in_inline_style() {
     let rt = rt();
     for (prop, val, want) in [

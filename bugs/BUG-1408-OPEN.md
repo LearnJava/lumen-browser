@@ -163,5 +163,19 @@ setter-страница из `getComputedStyle`/`style`); `style.objectPosition 
 (из `.ini` убрана строка), specified-половина читает `div.style` правила таблицы стилей и
 остаётся за CSSOM-10.
 
-**Остаток:** шорткоды `font`, `font-variant`, `mask`, `clip`/`clip-path`;
-`*-computed.html` (BUG-1407/1278).
+## Срез 5 (2026-11-16, P3): шорткод `font-variant`
+
+`crates/engine/layout/src/style/values/font_cssom.rs::expand_font_variant` — разбор
+`normal | none | [ <common-lig-values> || … || [ sub | super ] ]` и раскладка по шести
+лонгхендам (`font-variant-{ligatures,caps,alternates,numeric,east-asian,position}`);
+отсутствующая ось получает `normal`, `none` — это `font-variant-ligatures: none`, CSS-wide
+keyword раздаётся каждой оси. JS-шим (`web_api_shim_mid.js`, `_lumen_expand_font_variant`)
+хранит лонгхенды в inline-`style`, поэтому `style.fontVariantCaps` читается после
+`style.fontVariant = 'small-caps'`, а `getPropertyValue('font-variant')` и `cssText`
+собирают шорткод обратно из лонгхендов (`_lumen_font_variant_value`).
+
+Зелёные файлы (`css/css-fonts/parsing/`, ожидания `.ini` удалены):
+`font-variant-valid` (23 сабтеста), `font-variant-invalid` (21), `font-variant-serialization` —
+0 неожиданных результатов; `font-valid`/`font-invalid`/`font-shorthand-variant` не изменились.
+
+**Остаток:** шорткоды `mask`, `clip`/`clip-path`, `font`; `*-computed.html` (BUG-1407/1278).

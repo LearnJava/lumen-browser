@@ -108,6 +108,130 @@ pub fn canonical_specified_font(prop: &str, value: &str) -> Option<String> {
     }
 }
 
+/// CSS Fonts L4 §9: `font-variant` — шорткод шести лонгхендов. Возвращает пары
+/// `(лонгхенд, каноническое значение)` в порядке спецификации; отсутствующая ось получает
+/// умолчание (`normal`). `None` — значение не по грамматике (объявление отбрасывается).
+///
+/// Лонгхенды, а не строка: `style.fontVariantCaps` после `style.fontVariant = 'small-caps'`
+/// обязан читаться, а CSSOM при чтении шорткода собирает его обратно из лонгхендов.
+pub fn expand_font_variant(value: &str) -> Option<Vec<(&'static str, String)>> {
+    const NAMES: [&str; 6] = [
+        "font-variant-ligatures",
+        "font-variant-caps",
+        "font-variant-alternates",
+        "font-variant-numeric",
+        "font-variant-east-asian",
+        "font-variant-position",
+    ];
+    let v = value.trim();
+    if v.is_empty() {
+        return None;
+    }
+    let lower = v.to_ascii_lowercase();
+    let all = |lig: &str| -> Vec<(&'static str, String)> {
+        NAMES
+            .iter()
+            .map(|n| (*n, if *n == NAMES[0] { lig.to_string() } else { "normal".to_string() }))
+            .collect()
+    };
+    // CSS Cascade L4 §7.1: CSS-wide keyword раздаётся каждому лонгхенду как есть.
+    if matches!(
+        lower.as_str(),
+        "inherit" | "initial" | "unset" | "revert" | "revert-layer"
+    ) {
+        return Some(NAMES.iter().map(|n| (*n, lower.clone())).collect());
+    }
+    if lower == "normal" {
+        return Some(all("normal"));
+    }
+    if lower == "none" {
+        return Some(all("none"));
+    }
+    let mut lig: [Option<String>; 4] = Default::default();
+    let mut caps: Option<String> = None;
+    let mut alternates: Vec<String> = Vec::new();
+    let mut num: [Option<String>; 5] = Default::default();
+    let mut ea: [Option<String>; 5] = Default::default();
+    let mut pos: Option<String> = None;
+    let pick = |slot: &mut Option<String>, tok: &str| -> Option<()> {
+        slot.replace(tok.to_string()).is_none().then_some(())
+    };
+    for tok in split_top_level_ws(v) {
+        let lower = tok.to_ascii_lowercase();
+        if tok.contains('(') || lower == "historical-forms" {
+            alternates.push(tok.to_string());
+        } else if VARIANT_CAPS.contains(&lower.as_str()) {
+            pick(&mut caps, &lower)?;
+        } else if ["sub", "super"].contains(&lower.as_str()) {
+            pick(&mut pos, &lower)?;
+        } else if let Some(i) = num_group(&lower, VARIANT_NUMERIC_GROUPS) {
+            pick(&mut num[i], &lower)?;
+        } else if let Some(i) = num_group(&lower, VARIANT_EAST_ASIAN_GROUPS) {
+            pick(&mut ea[i], &lower)?;
+        } else {
+            let i = num_group(&lower, VARIANT_LIGATURE_GROUPS)?;
+            pick(&mut lig[i], &lower)?;
+        }
+    }
+    let join = |o: &[Option<String>]| {
+        let parts: Vec<&str> = o.iter().flatten().map(String::as_str).collect();
+        if parts.is_empty() {
+            "normal".to_string()
+        } else {
+            parts.join(" ")
+        }
+    };
+    let alternates = if alternates.is_empty() {
+        "normal".to_string()
+    } else {
+        font_variant_alternates(&alternates.join(" "))?
+    };
+    Some(vec![
+        (NAMES[0], join(&lig)),
+        (NAMES[1], caps.unwrap_or_else(|| "normal".into())),
+        (NAMES[2], alternates),
+        (NAMES[3], join(&num)),
+        (NAMES[4], join(&ea)),
+        (NAMES[5], pos.unwrap_or_else(|| "normal".into())),
+    ])
+}
+
+const VARIANT_LIGATURE_GROUPS: &[&[&str]] = &[
+    &["common-ligatures", "no-common-ligatures"],
+    &["discretionary-ligatures", "no-discretionary-ligatures"],
+    &["historical-ligatures", "no-historical-ligatures"],
+    &["contextual", "no-contextual"],
+];
+
+const VARIANT_CAPS: &[&str] = &[
+    "small-caps",
+    "all-small-caps",
+    "petite-caps",
+    "all-petite-caps",
+    "unicase",
+    "titling-caps",
+];
+
+const VARIANT_NUMERIC_GROUPS: &[&[&str]] = &[
+    &["lining-nums", "oldstyle-nums"],
+    &["proportional-nums", "tabular-nums"],
+    &["diagonal-fractions", "stacked-fractions"],
+    &["ordinal"],
+    &["slashed-zero"],
+];
+
+const VARIANT_EAST_ASIAN_GROUPS: &[&[&str]] = &[
+    &["jis78", "jis83", "jis90", "jis04"],
+    &["simplified", "traditional"],
+    &["full-width"],
+    &["proportional-width"],
+    &["ruby"],
+];
+
+fn num_group(tok: &str, groups: &[&[&str]]) -> Option<usize> {
+    groups.iter().position(|g| g.contains(&tok))
+}
+
 /// Метрики `font-size-adjust`; `ex-height` — умолчание и в записи опускается.
 const SIZE_ADJUST_METRICS: &[&str] = &["ex-height", "cap-height", "ch-width", "ic-width", "ic-height"];
 
@@ -460,4 +584,53 @@ fn grouped(v: &str, standalone: &[&str], groups: &[&[&str]]) -> Option<String> {
     }
     let out: Vec<&str> = picked.iter().flatten().map(String::as_str).collect();
     (!out.is_empty()).then(|| out.join(" "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::expand_font_variant;
+
+    fn value(v: &str, longhand: &str) -> String {
+        expand_font_variant(v)
+            .unwrap_or_else(|| panic!("{v} is invalid"))
+            .into_iter()
+            .find(|(n, _)| *n == longhand)
+            .unwrap()
+            .1
+    }
+
+    #[test]
+    fn font_variant_shorthand_expands_in_spec_order() {
+        assert_eq!(value("small-caps", "font-variant-caps"), "small-caps");
+        assert_eq!(value("none", "font-variant-ligatures"), "none");
+        let v = "super proportional-width jis83 stacked-fractions tabular-nums \
+                 historical-forms all-small-caps no-contextual";
+        assert_eq!(value(v, "font-variant-ligatures"), "no-contextual");
+        assert_eq!(value(v, "font-variant-caps"), "all-small-caps");
+        assert_eq!(value(v, "font-variant-alternates"), "historical-forms");
+        assert_eq!(
+            value(v, "font-variant-numeric"),
+            "tabular-nums stacked-fractions"
+        );
+        assert_eq!(
+            value(v, "font-variant-east-asian"),
+            "jis83 proportional-width"
+        );
+        assert_eq!(value(v, "font-variant-position"), "super");
+    }
+
+    #[test]
+    fn font_variant_shorthand_rejects_bad_values() {
+        for v in [
+            "normal none",
+            "small-caps normal",
+            "common-ligatures no-common-ligatures",
+            "lining-nums oldstyle-nums",
+            "stylistic(flowing) stylistic(flowing)",
+            "sub super",
+            "bogus",
+        ] {
+            assert!(expand_font_variant(v).is_none(), "{v}");
+        }
+    }
 }
