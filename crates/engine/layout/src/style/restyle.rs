@@ -847,7 +847,7 @@ fn compound_could_match_after_attr_change(
 /// here; `:state()`'s attribute is a runtime `data-lumen-state-<name>`
 /// prefix no fixed list expresses, which [`AncestorDeps`] treats as
 /// unmodelled.
-fn pseudo_class_read_attr_names(pc: &PseudoClass) -> &'static [&'static str] {
+pub(crate) fn pseudo_class_read_attr_names(pc: &PseudoClass) -> &'static [&'static str] {
     match pc {
         PseudoClass::PlaceholderShown => &["placeholder", "value"],
         PseudoClass::Required | PseudoClass::Optional => &["required", "type"],
@@ -1312,6 +1312,9 @@ pub struct NodeRestyleIndex<'a> {
     /// [`Self::set_attr_narrowing`]: the A/B switch of a live measurement and the baseline
     /// of the differential tests.
     attr_narrowing: bool,
+    /// PERF-INVALIDATION-S1 — the sheet's change-key → rules map, built on the first flush
+    /// that asks for it (same sheet lifetime as this index).
+    invalidation: std::cell::OnceCell<super::invalidation::InvalidationIndex>,
 }
 
 /// BUG-1211 — [`add_readers`] for the `name` attribute selectors that a write of `old` -> `new` can flip.
@@ -1824,6 +1827,36 @@ impl<'a> NodeRestyleIndex<'a> {
         self.sibling_sources.iter().any(|c| compound_flip_possible_on_attr_change(c, doc, node, attr))
             && !has_no_following_element_sibling(doc, node)
     }
+
+    /// PERF-INVALIDATION-S1 — the rules this flush's `changes` can flip, or `None` when the
+    /// restricted cascade path is not licensed for this document/sheet pair.
+    ///
+    /// Indexes are built from the sheet this index was created for and are therefore only
+    /// valid for the same stylesheet revision: a caller that accepted a changed sheet
+    /// ([`crate::style::restyle_roots_for_rule_changes`]) must take the wide road. Shadow-tree
+    /// sheets are not scanned, so a document with an author shadow root stays wide, exactly
+    /// like [`Self::is_conservative`].
+    pub fn invalidated_rules(
+        &self,
+        doc: &Document,
+        changes: &[(NodeId, NodeChange<'_>)],
+        hover: bool,
+        focus: bool,
+    ) -> Option<super::invalidation::InvalidatedRules> {
+        if self.has_in_shadow_doc {
+            return None;
+        }
+        let (index, sheet) = match &self.sheet {
+            SheetRef::Borrowed(sheet) => {
+                (self.invalidation.get_or_init(|| super::invalidation::InvalidationIndex::build(sheet)), &**sheet)
+            }
+            SheetRef::Shared(sheet) => (
+                self.invalidation.get_or_init(|| super::invalidation::InvalidationIndex::build(sheet.as_ref())),
+                sheet.as_ref(),
+            ),
+        };
+        index.invalidated(doc, sheet, changes, hover, focus)
+    }
 }
 
 /// BUG-935 срез 83 — the element siblings after `node`: what a sibling combinator (`+`, `~`)
@@ -2000,5 +2033,6 @@ fn build_node_index<'a, 's>(
         ancestor_deps,
         sibling_deps,
         attr_narrowing: true,
+        invalidation: std::cell::OnceCell::new(),
     }
 }

@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use lumen_core::geom::Size;
 use lumen_css_parser::{
-    parse_inline_style, Declaration, FunctionRule, MixinRule, PropertyRule, Specificity, Stylesheet,
+    parse_inline_style, Declaration, FunctionRule, MixinRule, PropertyRule, Rule, Specificity, Stylesheet,
     MIXIN_APPLY_MARKER,
 };
 use lumen_dom::{Document, DocumentMode, NodeData, NodeId};
@@ -50,6 +50,7 @@ use crate::style::{
     FieldSizing, FontPalette, FontSizeBasis, FontWeight, Length, Overflow,
     FilterFn, SHADOW_HOST_SCOPE, SHADOW_SHEETS,
 };
+use crate::style::invalidation::{MatchRestriction, MatchedRule, RuleBlock};
 
 /// BUG-341 S18 — process-wide tally of full [`compute_style`] runs.
 ///
@@ -163,6 +164,123 @@ fn overflow_goes_to_viewport(doc: &Document, node: NodeId, parent: &ComputedStyl
 /// Computes the `ComputedStyle` for `node` by running the CSS cascade.
 ///
 /// `dark_mode` is forwarded to `@media (prefers-color-scheme: dark)` matching.
+/// CSS Cascade L5 §6.4.5 `@layer` ordering: normal declarations rank by the layer's
+/// source position (unlayered = `layer_n`), `!important` inverts it.
+fn layer_priority(important: bool, layer_idx: i32) -> i32 {
+    if important { -layer_idx } else { layer_idx }
+}
+
+/// The cascade's second sort field: encapsulation context, then the `style`-attribute bit.
+/// Normal declarations: the outer context wins (smaller `depth` ranks higher); `!important`
+/// inverts that.
+fn context_rank(important: bool, depth: u32, inline: bool) -> u32 {
+    let rank = if important { depth.min(CTX_MAX) } else { CTX_MAX - depth.min(CTX_MAX) };
+    rank * 2 + u32::from(inline)
+}
+
+/// One matched declaration with its cascade sort key — see `compute_style_shareable`.
+pub(crate) type MatchedDecl<'a> =
+    (bool, u32, i32, Specificity, usize, usize, &'a Declaration, Option<&'a Stylesheet>);
+
+/// The specificity of the first selector of `rule` that matches `node`, together with that
+/// selector's index — the previous pass's record of *why* the rule matched, re-applied by a
+/// restricted pass without re-testing the selector ([`crate::style::invalidation::MatchedRule`]).
+fn best_match(rule: &Rule, doc: &Document, node: NodeId) -> Option<(Specificity, u16)> {
+    let mut best: Option<(Specificity, u16)> = None;
+    for (i, complex) in rule.selectors.iter().enumerate() {
+        if matches_complex(complex, doc, node) {
+            let spec = complex.specificity();
+            match best {
+                Some((prev, _)) if prev >= spec => {}
+                _ => best = Some((spec, i as u16)),
+            }
+        }
+    }
+    best
+}
+
+/// Appends `rule`'s declarations under the cascade key the block gives them. Shared by the
+/// normal candidate path and the restricted one, so the two cannot drift.
+#[allow(clippy::too_many_arguments)]
+fn push_declarations<'a>(
+    rule: &'a Rule,
+    spec: Specificity,
+    rule_key: usize,
+    layer_idx: i32,
+    depth: u32,
+    origin: Option<&'a Stylesheet>,
+    matched: &mut Vec<MatchedDecl<'a>>,
+) {
+    for (decl_idx, decl) in rule.declarations.iter().enumerate() {
+        matched.push((
+            decl.important,
+            context_rank(decl.important, depth, false),
+            layer_priority(decl.important, layer_idx),
+            spec,
+            rule_key,
+            decl_idx,
+            decl,
+            origin,
+        ));
+    }
+}
+
+/// PERF-INVALIDATION-S1 — one `@media`/`@supports` block in a restricted pass: the previous
+/// matched rules of that block plus the invalidated ones, nothing else.
+#[allow(clippy::too_many_arguments)]
+fn restricted_block<'a>(
+    restriction: &MatchRestriction<'_>,
+    block: RuleBlock,
+    base: usize,
+    rules: &'a [Rule],
+    doc: &Document,
+    node: NodeId,
+    layer_n: i32,
+    matched: &mut Vec<MatchedDecl<'a>>,
+    matched_rules: &mut Vec<MatchedRule>,
+) {
+    let invalidated = restriction.invalidated.rules_in(block);
+    for m in restriction.prev.iter().filter(|m| m.block == block) {
+        let Some(rule) = rules.get(m.rule as usize) else { continue };
+        let spec_sel = if invalidated.binary_search(&m.rule).is_ok() {
+            best_match(rule, doc, node)
+        } else {
+            rule.selectors.get(m.selector as usize).map(|s| (s.specificity(), m.selector))
+        };
+        if let Some((spec, selector)) = spec_sel {
+            push_declarations(rule, spec, base + m.rule as usize, layer_n, 0, None, matched);
+            matched_rules.push(MatchedRule { block, rule: m.rule, selector });
+        }
+    }
+    for &rule_idx in invalidated {
+        if restriction.was_matched(block, rule_idx) {
+            continue;
+        }
+        let Some(rule) = rules.get(rule_idx as usize) else { continue };
+        if let Some((spec, selector)) = best_match(rule, doc, node) {
+            push_declarations(rule, spec, base + rule_idx as usize, layer_n, 0, None, matched);
+            matched_rules.push(MatchedRule { block, rule: rule_idx, selector });
+        }
+    }
+}
+
+/// PERF-INVALIDATION-S1 — one node's cascade from the previous pass's matched rule set plus
+/// the flush's invalidated rules, returning the rule set this pass applied.
+pub(crate) fn compute_style_restricted(
+    doc: &Document,
+    node: NodeId,
+    sheet: &Stylesheet,
+    inherited: &ComputedStyle,
+    viewport: Size,
+    dark_mode: bool,
+    restriction: &MatchRestriction<'_>,
+) -> (ComputedStyle, Arc<[MatchedRule]>) {
+    let mut matched_rules = Vec::new();
+    let (style, _) =
+        compute_style_shareable(doc, node, sheet, inherited, viewport, dark_mode, Some(restriction), &mut matched_rules);
+    (style, Arc::from(matched_rules))
+}
+
 pub fn compute_style(
     doc: &Document,
     node: NodeId,
@@ -171,7 +289,8 @@ pub fn compute_style(
     viewport: Size,
     dark_mode: bool,
 ) -> ComputedStyle {
-    compute_style_shareable(doc, node, sheet, inherited, viewport, dark_mode).0
+    let mut matched_rules = Vec::new();
+    compute_style_shareable(doc, node, sheet, inherited, viewport, dark_mode, None, &mut matched_rules).0
 }
 
 /// THREAD-4 срез 2 — [`compute_style`] plus whether the result is safe to
@@ -201,6 +320,7 @@ pub fn compute_style(
 /// THREAD-4): the measured cost is exactly repeated SVG icon markup
 /// (GitHub Octicons), so this scope covers the case that motivated the slice
 /// without auditing the rest of the cascade's ancestor-dependence.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compute_style_shareable(
     doc: &Document,
     node: NodeId,
@@ -208,6 +328,8 @@ pub(crate) fn compute_style_shareable(
     inherited: &ComputedStyle,
     viewport: Size,
     dark_mode: bool,
+    restriction: Option<&MatchRestriction<'_>>,
+    matched_rules: &mut Vec<MatchedRule>,
 ) -> (ComputedStyle, bool) {
     // BUG-341 S10: permanent per-phase instrumentation. Same-named sibling
     // scopes are merged by `lumen_core::profile`, so a `LUMEN_PROFILE_TREE=1`
@@ -215,6 +337,7 @@ pub(crate) fn compute_style_shareable(
     // of one line per node. Costs a cached bool check per phase when disabled.
     let _prof = lumen_core::profile::scope_detail("compute_style");
     note_compute_style();
+    matched_rules.clear();
     // CSS Color L5 §5.3 — `color(--name …)` is parsed deep inside
     // `apply_declaration`, which never sees the sheet: bind its
     // `@color-profile` rules to this thread first.
@@ -505,21 +628,11 @@ pub(crate) fn compute_style_shareable(
     //   Ascending sort, last applied wins → correct per spec.
     // `specificity`, `rule_idx`, `decl_idx` — обычный каскад внутри одного layer.
     let layer_n = sheet.layer_order.len() as i32;
-    // Compute layer priority sign correctly for normal vs !important declarations.
-    // For normal (imp=false): higher = wins → unlayered = N > layer[N-1] > ... > layer[0]
-    // For !important (imp=true): lower layer_idx wins → layer[0] = 0 > layer[1] = -1 > ... > unlayered = -N
-    let layer_pri = |imp: bool, layer_idx: i32| -> i32 {
-        if imp { -layer_idx } else { layer_idx }
-    };
     // Second sort field: encapsulation context, then the `style` attribute bit
     // (CSS Cascade L5 §6.1: context precedes element-attached styles). `depth` is the
     // shadow-tree depth of the sheet the declaration came from (document 0, a shadow
     // tree 1 + depth of its host's tree). Normal declarations: the OUTER context wins
     // (higher rank for smaller depth); `!important`: the INNER one wins.
-    let cx = |imp: bool, depth: u32, inline: bool| -> u32 {
-        let rank = if imp { depth.min(CTX_MAX) } else { CTX_MAX - depth.min(CTX_MAX) };
-        rank * 2 + u32::from(inline)
-    };
     // (important, is_inline, layer_priority, specificity, rule_idx, decl_idx,
     // declaration, shadow origin). The last field tracks which shadow-tree
     // stylesheet (if any) a matched declaration physically came from — `None`
@@ -550,31 +663,54 @@ pub(crate) fn compute_style_shareable(
     // BUG-1492: `key` is the rule's place in the source-order numbering shared with the
     // `@media`/`@supports` blocks (`RuleOrder`); `rule_idx` indexes `sheet.rules`.
     // BUG-1800 срез 9: classes go to `candidates` as an iterator — no `Vec<&str>` header.
-    let cands = with_front_cascade_index(|idx| {
-        idx.rules
-            .candidates(node_tag, node_id, class_attr.split_whitespace(), node_attrs)
-            .into_iter()
-            .map(|i| (i, idx.order.style(i)))
-            .collect::<Vec<_>>()
-    });
-
-    for &(rule_idx, rule_key) in &cands {
-        let rule = &sheet.rules[rule_idx];
-        shareable &= rule.selectors.iter().all(selector_is_share_safe);
-        let mut best: Option<Specificity> = None;
-        for complex in &rule.selectors {
-            if matches_complex(complex, doc, node) {
-                let spec = complex.specificity();
-                best = Some(match best {
-                    Some(prev) if prev >= spec => prev,
-                    _ => spec,
-                });
+    if let Some(restriction) = restriction {
+        // PERF-INVALIDATION-S1: the previous pass's matched set plus this flush's
+        // invalidated rules is a superset of the new one — see `style::invalidation`.
+        for m in restriction.prev.iter().filter(|m| m.block == RuleBlock::Top) {
+            let rule = &sheet.rules[m.rule as usize];
+            let spec_sel = if restriction.invalidated.contains(RuleBlock::Top, m.rule) {
+                best_match(rule, doc, node)
+            } else {
+                rule.selectors.get(m.selector as usize).map(|s| (s.specificity(), m.selector))
+            };
+            if let Some((spec, selector)) = spec_sel {
+                let key = with_front_cascade_index(|idx| idx.order.style(m.rule as usize));
+                push_declarations(rule, spec, key, layer_n, 0, None, &mut matched);
+                matched_rules.push(MatchedRule { block: RuleBlock::Top, rule: m.rule, selector });
             }
         }
-        if let Some(spec) = best {
-            for (decl_idx, decl) in rule.declarations.iter().enumerate() {
-                let lp = layer_pri(decl.important, layer_n);
-                matched.push((decl.important, cx(decl.important, 0, false), lp, spec, rule_key, decl_idx, decl, None));
+        for rule_idx in restriction.invalidated.candidates_in(
+            RuleBlock::Top,
+            node_tag,
+            node_id,
+            class_attr.split_whitespace(),
+            node_attrs,
+        ) {
+            if restriction.was_matched(RuleBlock::Top, rule_idx) {
+                continue;
+            }
+            let rule = &sheet.rules[rule_idx as usize];
+            if let Some((spec, selector)) = best_match(rule, doc, node) {
+                let key = with_front_cascade_index(|idx| idx.order.style(rule_idx as usize));
+                push_declarations(rule, spec, key, layer_n, 0, None, &mut matched);
+                matched_rules.push(MatchedRule { block: RuleBlock::Top, rule: rule_idx, selector });
+            }
+        }
+    } else {
+        let cands = with_front_cascade_index(|idx| {
+            idx.rules
+                .candidates(node_tag, node_id, class_attr.split_whitespace(), node_attrs)
+                .into_iter()
+                .map(|i| (i, idx.order.style(i)))
+                .collect::<Vec<_>>()
+        });
+
+        for &(rule_idx, rule_key) in &cands {
+            let rule = &sheet.rules[rule_idx];
+            shareable &= rule.selectors.iter().all(selector_is_share_safe);
+            if let Some((spec, selector)) = best_match(rule, doc, node) {
+                push_declarations(rule, spec, rule_key, layer_n, 0, None, &mut matched);
+                matched_rules.push(MatchedRule { block: RuleBlock::Top, rule: rule_idx as u32, selector });
             }
         }
     }
@@ -585,42 +721,84 @@ pub(crate) fn compute_style_shareable(
     // declared → overridden by later), и больший для !important (CSS Cascade
     // L5 §6.4.5 inversion: earlier layer !important wins).
     let layer_rule_base = with_front_cascade_index(|idx| idx.order.end);
-    // THREAD-4 срез 7: one candidate query over all `@layer` blocks (see
-    // `CascadeIndex::layers`); `flat` is the rule's running offset across
-    // blocks, i.e. exactly the old `layer_rule_offset + rule_idx`.
-    let layer_cands = with_front_cascade_index(|idx| {
-        idx.layers
-            .candidates(node_tag, node_id, class_attr.split_whitespace(), node_attrs)
-            .into_iter()
-            .filter_map(|flat| {
-                let (block, rule_idx) = *idx.layer_rules.get(flat)?;
-                if !*idx.layer_active.get(block)? {
-                    return None;
-                }
-                Some((flat, block, rule_idx, *idx.layer_order_pos.get(block)?))
-            })
-            .collect::<Vec<_>>()
-    });
-    for (flat, block, rule_idx, layer_idx) in layer_cands {
-        let Some(rule) = sheet.layers.get(block).and_then(|l| l.rules.get(rule_idx)) else {
-            continue;
-        };
-        shareable &= rule.selectors.iter().all(selector_is_share_safe);
-        let mut best: Option<Specificity> = None;
-        for complex in &rule.selectors {
-            if matches_complex(complex, doc, node) {
-                let spec = complex.specificity();
-                best = Some(match best {
-                    Some(prev) if prev >= spec => prev,
-                    _ => spec,
-                });
+    if let Some(restriction) = restriction {
+        // PERF-INVALIDATION-S1 — the same superset argument, over the flat `@layer`
+        // namespace the block's index uses.
+        type LayerCandidate = (u32, usize, usize, i32, Option<(Specificity, u16)>);
+        let mut req: Vec<LayerCandidate> = Vec::new();
+        for m in restriction.prev.iter().filter(|m| m.block == RuleBlock::Layer) {
+            let info = with_front_cascade_index(|idx| {
+                let (block, rule_idx) = *idx.layer_rules.get(m.rule as usize)?;
+                Some((block, rule_idx, *idx.layer_active.get(block)?, *idx.layer_order_pos.get(block)?))
+            });
+            let Some((block, rule_idx, active, layer_idx)) = info else { continue };
+            if !active {
+                continue;
+            }
+            let invalidated = restriction.invalidated.contains(RuleBlock::Layer, m.rule);
+            let cached = (!invalidated)
+                .then(|| {
+                    sheet.layers[block].rules[rule_idx]
+                        .selectors
+                        .get(m.selector as usize)
+                        .map(|s| (s.specificity(), m.selector))
+                })
+                .flatten();
+            req.push((m.rule, block, rule_idx, layer_idx, cached));
+        }
+        for flat in restriction.invalidated.candidates_in(
+            RuleBlock::Layer,
+            node_tag,
+            node_id,
+            class_attr.split_whitespace(),
+            node_attrs,
+        ) {
+            if restriction.was_matched(RuleBlock::Layer, flat) {
+                continue;
+            }
+            let info = with_front_cascade_index(|idx| {
+                let (block, rule_idx) = *idx.layer_rules.get(flat as usize)?;
+                Some((block, rule_idx, *idx.layer_active.get(block)?, *idx.layer_order_pos.get(block)?))
+            });
+            if let Some((block, rule_idx, active, layer_idx)) = info
+                && active
+            {
+                req.push((flat, block, rule_idx, layer_idx, None));
             }
         }
-        if let Some(spec) = best {
-            let global_rule_idx = layer_rule_base + flat;
-            for (decl_idx, decl) in rule.declarations.iter().enumerate() {
-                let lp = layer_pri(decl.important, layer_idx);
-                matched.push((decl.important, cx(decl.important, 0, false), lp, spec, global_rule_idx, decl_idx, decl, None));
+        for (flat, block, rule_idx, layer_idx, cached) in req {
+            let rule = &sheet.layers[block].rules[rule_idx];
+            let spec_sel = cached.or_else(|| best_match(rule, doc, node));
+            if let Some((spec, selector)) = spec_sel {
+                push_declarations(rule, spec, layer_rule_base + flat as usize, layer_idx, 0, None, &mut matched);
+                matched_rules.push(MatchedRule { block: RuleBlock::Layer, rule: flat, selector });
+            }
+        }
+    } else {
+        // THREAD-4 срез 7: one candidate query over all `@layer` blocks (see
+        // `CascadeIndex::layers`); `flat` is the rule's running offset across
+        // blocks, i.e. exactly the old `layer_rule_offset + rule_idx`.
+        let layer_cands = with_front_cascade_index(|idx| {
+            idx.layers
+                .candidates(node_tag, node_id, class_attr.split_whitespace(), node_attrs)
+                .into_iter()
+                .filter_map(|flat| {
+                    let (block, rule_idx) = *idx.layer_rules.get(flat)?;
+                    if !*idx.layer_active.get(block)? {
+                        return None;
+                    }
+                    Some((flat, block, rule_idx, *idx.layer_order_pos.get(block)?))
+                })
+                .collect::<Vec<_>>()
+        });
+        for (flat, block, rule_idx, layer_idx) in layer_cands {
+            let Some(rule) = sheet.layers.get(block).and_then(|l| l.rules.get(rule_idx)) else {
+                continue;
+            };
+            shareable &= rule.selectors.iter().all(selector_is_share_safe);
+            if let Some((spec, selector)) = best_match(rule, doc, node) {
+                push_declarations(rule, spec, layer_rule_base + flat, layer_idx, 0, None, &mut matched);
+                matched_rules.push(MatchedRule { block: RuleBlock::Layer, rule: flat as u32, selector });
             }
         }
     }
@@ -643,6 +821,20 @@ pub(crate) fn compute_style_shareable(
             continue;
         }
         let media_base = with_front_cascade_index(|idx| idx.order.media_base[media_i]);
+        if let Some(restriction) = restriction {
+            restricted_block(
+                restriction,
+                RuleBlock::Media(media_i as u32),
+                media_base,
+                &media.rules,
+                doc,
+                node,
+                layer_n,
+                &mut matched,
+                matched_rules,
+            );
+            continue;
+        }
         // BUG-284: candidate pre-filter (see @layer above) — real-world
         // stylesheets often put the bulk of their rules inside @media blocks.
         let media_cands = with_front_cascade_index(|idx| {
@@ -651,22 +843,9 @@ pub(crate) fn compute_style_shareable(
         for rule_idx in media_cands {
             let rule = &media.rules[rule_idx];
             shareable &= rule.selectors.iter().all(selector_is_share_safe);
-            let mut best: Option<Specificity> = None;
-            for complex in &rule.selectors {
-                if matches_complex(complex, doc, node) {
-                    let spec = complex.specificity();
-                    best = Some(match best {
-                        Some(prev) if prev >= spec => prev,
-                        _ => spec,
-                    });
-                }
-            }
-            if let Some(spec) = best {
-                let global_rule_idx = media_base + rule_idx;
-                for (decl_idx, decl) in rule.declarations.iter().enumerate() {
-                    let lp = layer_pri(decl.important, layer_n);
-                    matched.push((decl.important, cx(decl.important, 0, false), lp, spec, global_rule_idx, decl_idx, decl, None));
-                }
+            if let Some((spec, selector)) = best_match(rule, doc, node) {
+                push_declarations(rule, spec, media_base + rule_idx, layer_n, 0, None, &mut matched);
+                matched_rules.push(MatchedRule { block: RuleBlock::Media(media_i as u32), rule: rule_idx as u32, selector });
             }
         }
     }
@@ -682,28 +861,30 @@ pub(crate) fn compute_style_shareable(
             continue;
         }
         let supports_base = with_front_cascade_index(|idx| idx.order.supports_base[supports_i]);
+        if let Some(restriction) = restriction {
+            restricted_block(
+                restriction,
+                RuleBlock::Supports(supports_i as u32),
+                supports_base,
+                &supports.rules,
+                doc,
+                node,
+                layer_n,
+                &mut matched,
+                matched_rules,
+            );
+            continue;
+        }
         let supports_cands = with_front_cascade_index(|idx| {
             idx.supports[supports_i].candidates(node_tag, node_id, class_attr.split_whitespace(), node_attrs)
         });
         for rule_idx in supports_cands {
             let rule = &supports.rules[rule_idx];
             shareable &= rule.selectors.iter().all(selector_is_share_safe);
-            let mut best: Option<Specificity> = None;
-            for complex in &rule.selectors {
-                if matches_complex(complex, doc, node) {
-                    let spec = complex.specificity();
-                    best = Some(match best {
-                        Some(prev) if prev >= spec => prev,
-                        _ => spec,
-                    });
-                }
-            }
-            if let Some(spec) = best {
-                let global_rule_idx = supports_base + rule_idx;
-                for (decl_idx, decl) in rule.declarations.iter().enumerate() {
-                    let lp = layer_pri(decl.important, layer_n);
-                    matched.push((decl.important, cx(decl.important, 0, false), lp, spec, global_rule_idx, decl_idx, decl, None));
-                }
+            if let Some((spec, selector)) = best_match(rule, doc, node) {
+                push_declarations(rule, spec, supports_base + rule_idx, layer_n, 0, None, &mut matched);
+                matched_rules
+                    .push(MatchedRule { block: RuleBlock::Supports(supports_i as u32), rule: rule_idx as u32, selector });
             }
         }
     }
@@ -734,8 +915,8 @@ pub(crate) fn compute_style_shareable(
             }
             if let Some(spec) = best {
                 for (decl_idx, decl) in rule.declarations.iter().enumerate() {
-                    let lp = layer_pri(decl.important, layer_n);
-                    matched.push((decl.important, cx(decl.important, 0, false), lp, spec, next_rule_idx, decl_idx, decl, None));
+                    let lp = layer_priority(decl.important, layer_n);
+                    matched.push((decl.important, context_rank(decl.important, 0, false), lp, spec, next_rule_idx, decl_idx, decl, None));
                 }
             }
             next_rule_idx += 1;
@@ -795,8 +976,8 @@ pub(crate) fn compute_style_shareable(
             if let Some(spec) = best {
                 let gidx = next_rule_idx + i;
                 for (decl_idx, decl) in rule.declarations.iter().enumerate() {
-                    let lp = layer_pri(decl.important, layer_n);
-                    matched.push((decl.important, cx(decl.important, node_depth + 1, false), lp, spec, gidx, decl_idx, decl, Some(shadow)));
+                    let lp = layer_priority(decl.important, layer_n);
+                    matched.push((decl.important, context_rank(decl.important, node_depth + 1, false), lp, spec, gidx, decl_idx, decl, Some(shadow)));
                 }
             }
         }
@@ -818,8 +999,8 @@ pub(crate) fn compute_style_shareable(
             if let Some(spec) = best {
                 let gidx = base + i;
                 for (decl_idx, decl) in rule.declarations.iter().enumerate() {
-                    let lp = layer_pri(decl.important, layer_n);
-                    matched.push((decl.important, cx(decl.important, node_depth + 1, false), lp, spec, gidx, decl_idx, decl, Some(shadow)));
+                    let lp = layer_priority(decl.important, layer_n);
+                    matched.push((decl.important, context_rank(decl.important, node_depth + 1, false), lp, spec, gidx, decl_idx, decl, Some(shadow)));
                 }
             }
         }
@@ -871,8 +1052,8 @@ pub(crate) fn compute_style_shareable(
             if let Some(spec) = best {
                 let gidx = base + i;
                 for (decl_idx, decl) in rule.declarations.iter().enumerate() {
-                    let lp = layer_pri(decl.important, layer_n);
-                    matched.push((decl.important, cx(decl.important, node_depth, false), lp, spec, gidx, decl_idx, decl, Some(shadow)));
+                    let lp = layer_priority(decl.important, layer_n);
+                    matched.push((decl.important, context_rank(decl.important, node_depth, false), lp, spec, gidx, decl_idx, decl, Some(shadow)));
                 }
             }
         }
@@ -906,10 +1087,10 @@ pub(crate) fn compute_style_shareable(
             }
             if let Some(spec) = best {
                 for (decl_idx, decl) in rule.declarations.iter().enumerate() {
-                    let lp = layer_pri(decl.important, layer_n);
+                    let lp = layer_priority(decl.important, layer_n);
                     matched.push((
                         decl.important,
-                        cx(decl.important, scope.depth, false),
+                        context_rank(decl.important, scope.depth, false),
                         lp,
                         spec,
                         key_base + i,
@@ -931,8 +1112,8 @@ pub(crate) fn compute_style_shareable(
     for (decl_idx, decl) in inline_decls.iter().enumerate() {
         matched.push((
             decl.important,
-            cx(decl.important, node_depth, true),
-            layer_pri(decl.important, layer_n),
+            context_rank(decl.important, node_depth, true),
+            layer_priority(decl.important, layer_n),
             Specificity::default(),
             next_rule_idx,
             decl_idx,
@@ -1741,6 +1922,13 @@ pub(crate) fn compute_style_shareable(
         style.letter_spacing += style.letter_spacing_pct * style.font_size;
     }
 
+    // A restricted pass saw only the rules that can flip plus the previous matched set — the
+    // `shareable` verdict is built from "every candidate rule was safe", which this pass cannot
+    // re-establish over the candidates it skipped. Never memoise its result (the share cache is
+    // bypassed for restricted nodes anyway; this keeps the flag honest for any other caller).
+    if restriction.is_some() {
+        shareable = false;
+    }
     (style, shareable)
 }
 

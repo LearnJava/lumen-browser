@@ -72,6 +72,7 @@ use lumen_css_parser::Stylesheet;
 use lumen_dom::{Document, NodeData, NodeId};
 
 use super::cascade::compute_style_shareable;
+use super::invalidation::MatchedRule;
 use super::share_safety::{compound_is_bare_universal, dynamic_fingerprint, sheet_has_fingerprintable_selector};
 use super::ComputedStyle;
 
@@ -253,7 +254,7 @@ fn build_key(
 /// Per-pass structural memo — see module doc.
 #[derive(Default)]
 pub(crate) struct ShareCache {
-    entries: HashMap<ShareKey, Arc<ComputedStyle>>,
+    entries: HashMap<ShareKey, (Arc<ComputedStyle>, Arc<[MatchedRule]>)>,
     /// BUG-1112 срез 2 — measurement-only pass counters, see [`Self::stats_enabled`].
     hits: usize,
     inserts: usize,
@@ -302,7 +303,7 @@ impl ShareCache {
         inherited: &ComputedStyle,
         viewport: Size,
         dark_mode: bool,
-    ) -> Arc<ComputedStyle> {
+    ) -> (Arc<ComputedStyle>, Arc<[MatchedRule]>) {
         let track_position =
             *self.track_position.get_or_insert_with(|| sheet_has_position_dependent_subject(sheet));
         let track_fingerprint = *self
@@ -313,13 +314,16 @@ impl ShareCache {
             if Self::stats_enabled() {
                 self.hits += 1;
             }
-            return Arc::clone(hit);
+            return (Arc::clone(&hit.0), Arc::clone(&hit.1));
         }
         let key_was_some = key.is_some();
-        let (style, shareable) = compute_style_shareable(doc, node, sheet, inherited, viewport, dark_mode);
+        let mut matched_rules = Vec::new();
+        let (style, shareable) =
+            compute_style_shareable(doc, node, sheet, inherited, viewport, dark_mode, None, &mut matched_rules);
         let style = Arc::new(style);
+        let matched_rules: Arc<[MatchedRule]> = Arc::from(matched_rules);
         if shareable && let Some(k) = key {
-            self.entries.insert(k, Arc::clone(&style));
+            self.entries.insert(k, (Arc::clone(&style), Arc::clone(&matched_rules)));
             if Self::stats_enabled() {
                 self.inserts += 1;
             }
@@ -331,7 +335,7 @@ impl ShareCache {
                 self.key_none += 1;
             }
         }
-        style
+        (style, matched_rules)
     }
 }
 
