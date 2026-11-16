@@ -1,5 +1,5 @@
-//! Каноническая запись значений `content`, `font-family`, `font-size`, `list-style-image` для
-//! inline-`style` CSSOM (BUG-1551).
+//! Каноническая запись значений `content`, `font-family`, `font-size`, `list-style-image`,
+//! `object-fit`/`object-position` для inline-`style` CSSOM (BUG-1551, BUG-1408).
 //!
 //! `element.style.<p> = v` хранит значение в виде CSSOM §serialize a CSS value: строки — в двойных
 //! кавычках, `url(a)` → `url("a")`, `counter(n, decimal)` → `counter(n)`, `.5%` → `0.5%`,
@@ -23,8 +23,33 @@ pub fn canonical_specified_misc(prop: &str, value: &str) -> Option<String> {
         "font-size" => font_size(v),
         "font-family" => font_family(v),
         "content" => Some(content(v)),
+        // CSS Images L4 §5.5/§5.6 (BUG-1408, дополнение среза 19).
+        "object-fit" => object_fit(v),
+        "object-position" => object_position(v),
         _ => None,
     }
+}
+
+/// `fill | none | [ contain | cover ] || scale-down`; `contain scale-down` — синоним
+/// `scale-down`, поэтому и сериализуется так (`object-fit-valid`).
+fn object_fit(v: &str) -> Option<String> {
+    let toks: Vec<String> = split_outside(v, None).iter().map(|t| t.to_ascii_lowercase()).collect();
+    match toks.as_slice() {
+        [t] if ["fill", "none", "contain", "cover", "scale-down"].contains(&t.as_str()) => Some(t.clone()),
+        [a, b] | [b, a] if b == "scale-down" && (a == "contain" || a == "cover") => {
+            Some(if a == "contain" { "scale-down".into() } else { format!("{a} scale-down") })
+        }
+        _ => None,
+    }
+}
+
+/// `<position>` без трёхзначной записи — как у `mask-position`: `object-position-invalid`
+/// отвергает `right top 5px`, `center left 1px`, `bottom right 8%` и т.п.
+fn object_position(v: &str) -> Option<String> {
+    if split_outside(v, None).len() == 3 {
+        return None;
+    }
+    super::background_cssom::position(v)
 }
 
 /// `url("…")` вместо `url(…)`/`url('…')`; запись с модификаторами запроса сохраняет их порядок.

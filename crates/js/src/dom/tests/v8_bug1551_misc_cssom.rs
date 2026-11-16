@@ -59,3 +59,18 @@ fn assignment_goes_through_the_same_canon() {
     assert_eq!(assign(&rt, "fontSize", "-1px"), "");
     assert_eq!(assign(&rt, "backgroundImage", "url(a.png)"), "url(\"a.png\")");
 }
+
+#[test]
+fn object_fit_and_position_follow_their_grammar() {
+    let rt = rt();
+    assert_eq!(assign(&rt, "objectFit", "contain scale-down"), "scale-down");
+    assert_eq!(assign(&rt, "objectFit", "scale-down cover"), "cover scale-down");
+    assert_eq!(assign(&rt, "objectFit", "bogus"), "");
+    assert_eq!(assign(&rt, "objectFit", "contain cover"), "");
+    assert_eq!(assign(&rt, "objectPosition", "10%"), "10% center");
+    assert_eq!(assign(&rt, "objectPosition", "bottom right"), "right bottom");
+    assert_eq!(assign(&rt, "objectPosition", "right top 5px"), "");
+    assert_eq!(attr(&rt, "object-position: bottom 10% right 20%", "objectPosition"), "right 20% bottom 10%");
+    assert_eq!(assign(&rt, "imageRendering", "Pixelated"), "pixelated");
+    assert_eq!(assign(&rt, "imageRendering", "high-quality crisp-edges"), "");
+}
