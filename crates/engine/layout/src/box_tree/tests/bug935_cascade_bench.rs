@@ -113,6 +113,89 @@ fn pseudo_probe_walk_cost() {
     );
 }
 
+/// PERF-INVALIDATION-S1 — та же BEM-страница, но меряется не полный каскад, а флаш:
+/// одна запись класса на блоке `.b0` (`class="b0"` ↔ `class="b0 is-open"`, правило
+/// `.b0.is-open .b0__cell` стилизует 18 внуков), 40 флашей подряд, каждый — от каскада
+/// предыдущего. Печатает `candidates`, `match_calls`, `recomputed` и `walk_ns` на флаш —
+/// ворота среза S1 («кандидатов в 3 раза меньше», «проход ≤ 50 % от HEAD»).
+#[test]
+#[ignore = "стенд: печатает время, ничего не проверяет"]
+fn flush_walk_cost() {
+    use crate::counters::{
+        incremental_precompute_counters, precompute_counters, set_incremental_restyle, take_cascade_stats,
+        ContentDirty, RestyleDelta,
+    };
+    use crate::style::{restyle_node_index, restyle_roots_for_node_changes, NodeChange};
+    let (html, css) = page();
+    let mut doc = lumen_html_parser::parse(&html);
+    let sheet = lumen_css_parser::parse(&css);
+    let vp = Size::new(1280.0, 800.0);
+    let flat = lumen_dom::build_flat_tree(&doc);
+    // `.b0` — первый блок страницы; id у него нет, ищем по классу.
+    let block = (0..doc.node_count() as u32)
+        .map(lumen_dom::NodeId::from_raw)
+        .find(|&n| doc.get(n).get_attr("class") == Some("b0"))
+        .expect("block .b0");
+    set_incremental_restyle(true);
+    let mut map = precompute_counters(&doc, &sheet, vp, &flat, false);
+    let (mut best, mut sum) = (u64::MAX, 0u64);
+    let (mut cands, mut matches, mut recomputed) = (0u32, 0u32, 0u32);
+    let (mut visited, mut skipped, mut confirmed) = (0u32, 0u32, 0u32);
+    for round in 0..40 {
+        let old = doc.get(block).get_attr("class").unwrap_or("").to_string();
+        let new = if old.contains("is-open") { "b0".to_string() } else { "b0 is-open".to_string() };
+        if let lumen_dom::NodeData::Element { attrs, .. } = &mut doc.get_mut(block).data {
+            for attr in attrs.iter_mut() {
+                if attr.name.local == "class" {
+                    attr.value = new.clone();
+                }
+            }
+        }
+        let index = restyle_node_index(&doc, &sheet);
+        let roots = restyle_roots_for_node_changes(
+            &doc,
+            [(block, NodeChange::AttrFrom { name: "class", old: &old })],
+            &index,
+        );
+        // Живой флаш пишет в content-запись узел, на котором была запись атрибута.
+        let content: std::collections::HashSet<lumen_dom::NodeId> = [block].into_iter().collect();
+        let delta = RestyleDelta {
+            prev_styles: map.styles().clone(),
+            dirty_roots: roots.deep,
+            shallow_roots: roots.shallow,
+            point_roots: roots.point,
+            content_dirty: ContentDirty::Nodes(&content),
+        };
+        let _ = take_cascade_stats();
+        let next = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
+        let s = take_cascade_stats();
+        if round > 0 {
+            best = best.min(s.walk_ns);
+            sum += s.walk_ns;
+            cands += s.candidates;
+            matches += s.match_calls;
+            recomputed += s.recomputed;
+            visited += s.visited;
+            skipped += s.skipped_subtrees;
+            confirmed += s.confirmed;
+        }
+        map = next;
+    }
+    set_incremental_restyle(false);
+    let n = 39.0;
+    println!(
+        "flush_walk_cost: лучший флаш {:.2} мс, средний {:.2} мс; кандидатов {:.0}/флаш, matches {:.0}/флаш, recomputed {:.1}/флаш, visited {:.0}, skipped {:.0}, confirmed {:.0}",
+        best as f64 / 1e6,
+        sum as f64 / 1e6 / n,
+        cands as f64 / n,
+        matches as f64 / n,
+        recomputed as f64 / n,
+        visited as f64 / n,
+        skipped as f64 / n,
+        confirmed as f64 / n,
+    );
+}
+
 #[test]
 #[ignore = "стенд: печатает время, ничего не проверяет"]
 fn cascade_matching_cost() {
