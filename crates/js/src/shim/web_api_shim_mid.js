@@ -2195,6 +2195,12 @@ function _lumen_parse_decl_into(obj, prop, val) {
             fvLonghands.forEach(function(kv) { obj[kv[0]] = kv[1]; });
             return;
         }
+        if (prop === 'mask') {
+            var maskLonghands = _lumen_expand_mask(val);
+            if (maskLonghands === false) return; // invalid declaration: dropped, not stored
+            maskLonghands.forEach(function(kv) { obj[kv[0]] = kv[1]; });
+            return;
+        }
         var canon = _lumen_canonicalize_longhand(prop, val);
         if (canon === null || canon === undefined) return; // invalid declaration: dropped, not stored
         obj[prop] = canon;
@@ -2801,6 +2807,21 @@ var _LUMEN_MASK_PROPERTIES = {
     // CSS Masking L1 §3/§4.5 + CSS 2.1 §11.1 basic shapes and `rect()` (BUG-1408 slice 6).
     'clip-path': 1, 'clip': 1,
 };
+
+// CSS Masking L1 §4.1: `mask` is a shorthand over the layer longhands plus the `mask-border-*`
+// ones (reset to their initial values). Inline-`style` keeps them expanded and composes the
+// shorthand back on read (BUG-1408 slice 7).
+var _LUMEN_MASK_SHORTHAND_LONGHANDS = [
+    'mask-image', 'mask-position', 'mask-size', 'mask-repeat',
+    'mask-origin', 'mask-clip', 'mask-composite', 'mask-mode',
+    'mask-border-source', 'mask-border-outset', 'mask-border-repeat', 'mask-border-slice',
+    'mask-border-width',
+];
+// Longhand/value pairs of `mask: strVal`, or `false` when the value is invalid.
+function _lumen_expand_mask(strVal) {
+    var r = JSON.parse(_lumen_css_expand_mask(strVal));
+    return r.k === 'ok' ? r.l : false;
+}
 
 // CSS Fonts L4 keyword properties validated by the native `_lumen_css_canonical_font`
 // (engine `style::values::font_cssom`): single keywords and per-axis keyword lists whose
@@ -4177,6 +4198,7 @@ function _lumen_shorthand_longhands_other(key) {
     if (key === 'block-step') return ['block-step-size', 'block-step-insert', 'block-step-align', 'block-step-round'];
     if (_LUMEN_2V_SHORTHANDS.hasOwnProperty(key)) return _LUMEN_2V_SHORTHANDS[key];
     if (key === 'font-variant') return _LUMEN_FONT_VARIANT_LONGHANDS;
+    if (key === 'mask') return _LUMEN_MASK_SHORTHAND_LONGHANDS;
     return _lumen_border_longhands(key) || [];
 }
 CSSStyleDeclaration.prototype.getPropertyValue = function(prop) {
@@ -4206,6 +4228,10 @@ CSSStyleDeclaration.prototype.getPropertyValue = function(prop) {
     if (key === 'font-variant') {
         var fvSh = _lumen_font_variant_value(obj);
         if (fvSh !== undefined) return fvSh;
+    }
+    if (key === 'mask') {
+        var maskSh = _lumen_css_mask_shorthand(JSON.stringify(obj));
+        if (maskSh !== null && maskSh !== undefined) return maskSh;
     }
     if (_lumen_gap_rule_key_re.test(key)) {
         var gapSh = _lumen_css_gap_rule_shorthand(key, JSON.stringify(obj));
@@ -4373,6 +4399,13 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val, priority) {
         var fvExpanded = _lumen_expand_font_variant(strVal);
         if (fvExpanded === false) return; // invalid shorthand value: whole declaration dropped
         fvExpanded.forEach(function(kv) { obj[kv[0]] = kv[1]; });
+        _lumen_style_commit_decl(nid, realObj, obj, prio === 'important');
+        return;
+    }
+    if (key === 'mask') {
+        var maskExpanded = _lumen_expand_mask(strVal);
+        if (maskExpanded === false) return; // invalid shorthand value: whole declaration dropped
+        maskExpanded.forEach(function(kv) { obj[kv[0]] = kv[1]; });
         _lumen_style_commit_decl(nid, realObj, obj, prio === 'important');
         return;
     }
