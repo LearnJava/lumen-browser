@@ -1,7 +1,7 @@
 # BUG-1819 — `object-fit` не хранит `[ contain | cover ] || scale-down` (CSS Images L4): computed-style теряет значение
 
 **Статус:** OPEN
-**Заведён:** 2026-11-16 (P3, срез 9 [BUG-1408](BUG-1408-OPEN.md))
+**Заведён:** 2026-11-16 (P3, срез 9 [BUG-1408](BUG-1408-FIXED.md))
 **Область:** layout (`crates/engine/layout/src/style/values/flexgrid.rs::ObjectFit`, `style/apply/layout.rs:138`,
 `selector_query.rs::computed_style_to_map`)
 

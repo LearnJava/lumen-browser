@@ -94,10 +94,12 @@ pub fn canonical_specified_font(prop: &str, value: &str) -> Option<String> {
             v,
             &["normal"],
             &[
+                // WPT/css-fonts (поведение браузеров): full-width/half-width/
+                // proportional-width — одна группа, jis*/simplified/traditional
+                // и `ruby` — отдельные (`jis78 proportional-width` валидно).
                 &["jis78", "jis83", "jis90", "jis04"],
                 &["simplified", "traditional"],
-                &["full-width"],
-                &["proportional-width"],
+                &["full-width", "half-width", "proportional-width"],
                 &["ruby"],
             ],
         ),
@@ -381,11 +383,14 @@ const VARIANT_NUMERIC_GROUPS: &[&[&str]] = &[
     &["slashed-zero"],
 ];
 
+/// WPT/css-fonts (поведение браузеров): trio `full-width`/`half-width`/
+/// `proportional-width` — одна группа; jis*, simplified/traditional и `ruby` —
+/// отдельные (`jis78 proportional-width` валидно, `full-width
+/// proportional-width` — нет).
 const VARIANT_EAST_ASIAN_GROUPS: &[&[&str]] = &[
     &["jis78", "jis83", "jis90", "jis04"],
     &["simplified", "traditional"],
-    &["full-width"],
-    &["proportional-width"],
+    &["full-width", "half-width", "proportional-width"],
     &["ruby"],
 ];
 
@@ -775,6 +780,7 @@ mod tests {
             value(v, "font-variant-numeric"),
             "tabular-nums stacked-fractions"
         );
+        // jis-семейство и trio ширины — разные группы, запись по группам
         assert_eq!(
             value(v, "font-variant-east-asian"),
             "jis83 proportional-width"
@@ -791,6 +797,8 @@ mod tests {
             "lining-nums oldstyle-nums",
             "stylistic(flowing) stylistic(flowing)",
             "sub super",
+            // trio ширины — одна группа, два значения ширины невалидны (WPT)
+            "full-width proportional-width",
             "bogus",
         ] {
             assert!(expand_font_variant(v).is_none(), "{v}");

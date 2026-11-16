@@ -1,6 +1,6 @@
 # BUG-1408 — CSSOM `element.style`: шрифтовые и масочные свойства принимают невалидное и не канонизируют валидное
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-11-16
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 18, `css/css-fonts` + `css/css-masking` + `css/WOFF2`)
 **Область:** js/layout (`crates/js/src/shim/web_api_shim_mid.js::_lumen_canonicalize_longhand` — нет грамматики для `font-*`, `mask-*`, `clip-*`)
 
@@ -290,3 +290,34 @@ keyword раздаётся каждой оси. JS-шим (`web_api_shim_mid.js`
 enum, заведён [BUG-1819](BUG-1819-OPEN.md); round-trip `calc(100% - 20px) calc(100% - 10px)`
 в `object-position` — `parse_position_component` не разбирает `calc()`, остаток
 [BUG-495](BUG-495-OPEN.md). Плюс `*-computed.html` шрифтовых/масочных свойств (BUG-1407/1278).
+
+## Срез 10 (2026-11-16, P3): порядок множителей произведения в math-функции, trio east-asian
+
+`crates/engine/layout/src/style/math_value.rs::canonical_math_order` (сериализатор
+`calc.rs::math_tree_canonical`) — структурная запись дерева для значений, которые оценщик
+не сворачивает (`sign()` с относительными единицами), CSS Values L4 §10.13: множители
+произведения переставляются («sort a calculation's children»: число, процент, размерности
+по алфавиту единиц, остальное — в исходном порядке; делители не сортируются и идут
+в хвосте), Sum/Product пишутся в скобках всегда, корневые снимаются; суммы не
+сортируются (остаток BUG-1430), унарный минус парсера (`0 - x`) пишется как `-x`.
+Выражения с угловыми единицами остаются как написаны — AST хранит углы числом-радианами
+без единицы. Врезка: `font-size-adjust` (`font_cssom.rs`, после `!`-ветки
+`canonical_specified_numeric_math`) и `font-width`/`font-stretch` (`text_cssom.rs`,
+поверх `canonical_length_sorted`).
+
+Попутно — остаток среза 5, `font-variant`: trio `full-width`/`half-width`/
+`proportional-width` — одна группа east-asian в обеих таблицах (`font_cssom.rs`,
+`grouped` + `VARIANT_EAST_ASIAN_GROUPS`; поведение браузеров/WPT: `jis78
+proportional-width` валидно, `full-width proportional-width` — нет).
+
+Зелёные файлы (ожидания `.ini` удалены): `font-size-adjust-valid` (46/46, было 45/46),
+`font-width-valid` (30/30, было 28/30), `font-variant-invalid` (21/21, было 20/21 —
+`full-width proportional-width` теперь отвергается), `font-variant-east-asian-{valid,
+invalid}` перепроверены (57/57, 19/19). Зелёный набор `css-fonts`/`css-masking`/
+`css-images` `parsing` без регрессий (0 unexpected, 20 файлов за прогон); юнит-тесты
+`math_order_*`, `variant_lists_use_spec_order`, `font_variant_shorthand_*` обновлены.
+
+**Остаток карточки (вне скоупа CSSOM):** `*-computed.html` — BUG-1407/1278;
+`shape()`/`path()` не раскладываются (раскладка, не CSSOM); `object-fit: cover
+scale-down` — [BUG-1819](BUG-1819-OPEN.md); round-trip `calc()` в
+`object-position` — [BUG-495](BUG-495-OPEN.md).
