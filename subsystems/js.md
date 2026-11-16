@@ -2114,8 +2114,12 @@ the time — read dates.
 - **`CSS.highlights.highlightsFromPoint()` (CSS Custom Highlight API §5, GAP-HLHITTEST, [P1]
   2026-09-26).** `_lumen_text_at_point(x, y)` (`install/platform.rs`) answers `[nid, utf16Offset, …]`
   from `FlushHandles::text_frag_rects` — `lumen_layout::collect_text_frag_rects` over the flush tree,
-  collected only once the page has called the API (`text_frags_needed`), re-collected after every
-  embedder push (`update_client_rects` clears `text_frags_collected`). The shim
+  collected on every real flush once the page has called the API (`text_frags_needed`;
+  `update_client_rects` clears `text_frags_collected` only to force that first collect). Since BUG-935
+  срез 100 an incremental flush collects it over the planned boxes (`ScopedCollection::collect_text_frag_rects`),
+  not the whole document: entries are keyed by text node, so one is dropped only when the plan rebuilt its
+  run and no run renders that text, and a text node under a subtree the plan left alone keeps its entry.
+  The shim
   (`highlight_api.rs`) keeps a range whose boundary points (DOM §5.2, walked over arena ids)
   enclose that character, skipping collapsed ranges and invalid `StaticRange`s, and sorts by
   `priority`, then last-registered-first. Not modelled: occlusion, the `shadowRoots` filter.

@@ -94,39 +94,52 @@ pub fn collect_text_frag_rects(
     let mut out: HashMap<u32, Vec<TextFragRect>> = HashMap::new();
     let mut stack: Vec<&LayoutBox> = vec![root];
     while let Some(b) = stack.pop() {
-        if let BoxKind::InlineRun { lines, .. } = &b.kind {
-            let line_h = b.used_line_height;
-            for (line_idx, line) in lines.iter().enumerate() {
-                let line_y = b.rect.y + line_idx as f32 * line_h;
-                for frag in line {
-                    if frag.text.is_empty() || frag.img_src.is_some() {
-                        continue;
-                    }
-                    for span in frag_source_spans(frag) {
-                        let lumen_dom::NodeData::Text(source) = &doc.get(span.source_node).data else {
-                            continue;
-                        };
-                        let byte_start = span.source_char_offset as usize;
-                        let byte_end = source_end_byte(source, byte_start, span.text);
-                        let start = utf16_offset_of_byte(source, byte_start);
-                        let end = utf16_offset_of_byte(source, byte_end);
-                        if end <= start {
-                            continue;
-                        }
-                        out.entry(span.source_node.index() as u32).or_default().push(TextFragRect {
-                            rect: [b.rect.x + frag.x + span.x, line_y, span.width, line_h],
-                            start,
-                            end,
-                        });
-                    }
-                }
-            }
-        }
+        collect_text_frag_rects_box(b, doc, &mut out);
         // `content-visibility: hidden` (BUG-1400): the skipped subtree, laid out as a probe.
         stack.extend(b.cv_hidden.iter().rev());
         stack.extend(b.children.iter().rev());
     }
     out
+}
+
+/// One box's contribution to [`collect_text_frag_rects`]: another run of the
+/// same text node (a run split across boxes) appends to its list, so the
+/// caller keeps tree order. Shared by the whole-tree walk and the planned
+/// boxes of [`crate::ScopedCollection`].
+pub fn collect_text_frag_rects_box(
+    b: &LayoutBox,
+    doc: &lumen_dom::Document,
+    out: &mut HashMap<u32, Vec<TextFragRect>>,
+) {
+    let BoxKind::InlineRun { lines, .. } = &b.kind else {
+        return;
+    };
+    let line_h = b.used_line_height;
+    for (line_idx, line) in lines.iter().enumerate() {
+        let line_y = b.rect.y + line_idx as f32 * line_h;
+        for frag in line {
+            if frag.text.is_empty() || frag.img_src.is_some() {
+                continue;
+            }
+            for span in frag_source_spans(frag) {
+                let lumen_dom::NodeData::Text(source) = &doc.get(span.source_node).data else {
+                    continue;
+                };
+                let byte_start = span.source_char_offset as usize;
+                let byte_end = source_end_byte(source, byte_start, span.text);
+                let start = utf16_offset_of_byte(source, byte_start);
+                let end = utf16_offset_of_byte(source, byte_end);
+                if end <= start {
+                    continue;
+                }
+                out.entry(span.source_node.index() as u32).or_default().push(TextFragRect {
+                    rect: [b.rect.x + frag.x + span.x, line_y, span.width, line_h],
+                    start,
+                    end,
+                });
+            }
+        }
+    }
 }
 
 /// Byte offset in `source` where the text of a fragment ends, given that it starts at `start`.

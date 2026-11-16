@@ -620,6 +620,36 @@ impl<'a> ScopedCollection<'a> {
         out.extend(fresh);
     }
 
+    /// BUG-935 срез 100: [`crate::collect_text_frag_rects`] over the planned boxes — the
+    /// `InlineRun`s of the subtrees a dirty root rebuilt and of clean subtrees that moved, not
+    /// the whole document. Entries are keyed by text node, which owns no box, so a published
+    /// one is only dropped when the plan rebuilt the box it came from and no run renders that
+    /// text any more: a text node whose DOM chain reaches a subtree the plan left alone was
+    /// carried over unchanged with its entry.
+    pub fn collect_text_frag_rects(
+        &self,
+        doc: &lumen_dom::Document,
+        out: &mut HashMap<u32, Vec<crate::TextFragRect>>,
+    ) {
+        let mut fresh: HashMap<u32, Vec<crate::TextFragRect>> = HashMap::new();
+        for it in &self.items {
+            if it.whole {
+                let mut stack = vec![it.b];
+                while let Some(b) = stack.pop() {
+                    crate::collect_text_frag_rects_box(b, doc, &mut fresh);
+                    // `content-visibility: hidden` (BUG-1400): the skipped subtree, laid out as a probe.
+                    stack.extend(b.cv_hidden.iter().rev());
+                    stack.extend(b.children.iter().rev());
+                }
+            } else if matches!(it.b.kind, BoxKind::InlineRun { .. }) {
+                crate::collect_text_frag_rects_box(it.b, doc, &mut fresh);
+            }
+        }
+        let kept: IdSet<u32> = self.skipped.iter().map(|b| b.node.index() as u32).collect();
+        out.retain(|nid, _| fresh.contains_key(nid) || sits_in_a_kept_subtree(doc, *nid, &kept));
+        out.extend(fresh);
+    }
+
     /// [`Self::collect_layout_rects`] for `getComputedStyle`'s used geometry.
     ///
     /// The `Display::Contents` backfill [`crate::collect_computed_styles`] runs
@@ -928,6 +958,25 @@ fn has_positioned_box(root: &LayoutBox) -> bool {
             return true;
         }
         stack.extend(b.children.iter());
+    }
+    false
+}
+
+/// Whether the text node behind arena index `nid` sits in a subtree the plan left alone
+/// ([`ScopedCollection::collect_text_frag_rects`]): the box tree carried such a subtree over from
+/// the previous flush unchanged, so the entry published for its text nodes is still the one a
+/// whole-document collect would produce. The top boxes of those subtrees are the only ones the
+/// walk stopped at, and every text node inside one reaches it through its DOM ancestors.
+fn sits_in_a_kept_subtree(doc: &lumen_dom::Document, nid: u32, kept: &IdSet<u32>) -> bool {
+    if kept.is_empty() {
+        return false;
+    }
+    let mut cur = doc.get(NodeId::from_index(nid as usize)).parent;
+    while let Some(p) = cur {
+        if kept.contains(&(p.index() as u32)) {
+            return true;
+        }
+        cur = doc.get(p).parent;
     }
     false
 }
