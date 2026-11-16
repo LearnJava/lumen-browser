@@ -18,7 +18,8 @@
 use lumen_core::geom::Size;
 
 use crate::style::calc::{
-    calc_num_to_node, parse_math_function_value, tokenize_calc, CalcToken,
+    calc_num_to_node, math_tree_canonical, parse_calc_expr, parse_math_function_value,
+    strip_outer_parens, tokenize_calc, CalcToken,
 };
 use crate::style::calc::CalcNode;
 
@@ -698,6 +699,42 @@ pub fn canonical_specified_numeric_math(prop: &str, value: &str) -> String {
     canonical_numeric_math(prop, value).unwrap_or_default()
 }
 
+/// CSS Values L4 §10.13: структурная канонизация одиночного math-вызова без
+/// свёртки — множители произведения переставляются в канонический порядок
+/// (`calc(100% + (sign(20cqw - 10px) * 5%))` →
+/// `calc(100% + (5% * sign(20cqw - 10px)))`). Для значений, которые вычислитель
+/// берёт (число/угол/время), свёртка точнее — вызывать её первой.
+/// `None` — вызов с угловыми единицами (AST хранит углы числом-радианами без
+/// единицы, запись их потеряла бы) или не разобранный: остаётся как написано.
+pub(in crate::style) fn canonical_math_order(s: &str) -> Option<String> {
+    let open = s.find('(')?;
+    let name = s[..open].to_ascii_lowercase();
+    if !MATH_FNS.contains(&name.as_str()) || matching_paren(s.as_bytes(), open) != Some(s.len() - 1)
+    {
+        return None;
+    }
+    let toks = tokenize_calc(s)?;
+    if toks.iter().any(|t| {
+        matches!(
+            t,
+            CalcToken::Num(_, unit)
+                if matches!(unit.as_str(), "deg" | "grad" | "rad" | "turn")
+        )
+    }) {
+        return None;
+    }
+    let mut pos = 0;
+    let node = parse_calc_expr(&toks, &mut pos)?;
+    if pos != toks.len() {
+        return None;
+    }
+    let tree = math_tree_canonical(&node);
+    let body = strip_outer_parens(&tree);
+    // Корень — одиночный вызов: тело `calc()` — голое выражение, у прочих
+    // имя с аргументами уже напечатаны сериализатором.
+    Some(if name == "calc" { format!("calc({body})") } else { body.to_string() })
+}
+
 /// Литерал специфицированного значения: `NaN` и бесконечность остаются ключевыми словами.
 fn specified_literal(v: f64, unit: &str) -> String {
     let (mag, suffix) = if v.is_nan() {
@@ -860,5 +897,50 @@ mod tests {
         assert_eq!(sub("z-index", "abs()"), "abs()");
         assert_eq!(sub("color", "rgb(1 2 3)"), "rgb(1 2 3)");
         assert_eq!(sub("transition-delay", "calc(1s + 1s), 2s"), "2s, 2s");
+    }
+
+    fn order(s: &str) -> String {
+        canonical_math_order(s).unwrap()
+    }
+
+    #[test]
+    fn math_order_sorts_product_factors() {
+        // WPT css-fonts/parsing: font-width-valid, font-size-adjust-valid (BUG-1408).
+        assert_eq!(
+            order("calc(100% + (sign(20cqw - 10px) * 5%))"),
+            "calc(100% + (5% * sign(20cqw - 10px)))"
+        );
+        assert_eq!(
+            order("calc(10 + (sign(20cqw - 10px) * 5))"),
+            "calc(10 + (5 * sign(20cqw - 10px)))"
+        );
+        // число раньше функции, процент раньше размерности
+        assert_eq!(order("calc(sign(1em) * 3)"), "calc(3 * sign(1em))");
+        assert_eq!(order("calc(2px * 5%)"), "calc(5% * 2px)");
+        // размерности — по алфавиту единиц
+        assert_eq!(order("calc(1px * 1em)"), "calc(1em * 1px)");
+        // делители не сортируются и остаются в хвосте
+        assert_eq!(
+            order("calc(sign(1em) * 5% / 2)"),
+            "calc(5% * sign(1em) / 2)"
+        );
+        // суммы не сортируются
+        assert_eq!(order("calc(1px + 1em)"), "calc(1px + 1em)");
+        // произведение целиком — в скобках, корневые сняты
+        assert_eq!(order("calc(3 + 2 * 1px)"), "calc(3 + (2 * 1px))");
+    }
+
+    #[test]
+    fn math_order_roundtrips_and_bails_out() {
+        assert_eq!(order("calc(200%)"), "calc(200%)");
+        assert_eq!(order("calc(min(1px, 2px))"), "calc(min(1px, 2px))");
+        // унарный минус парсера (0 - x) пишется как -x
+        assert_eq!(order("calc(-5 + 5cqw)"), "calc(-5 + 5cqw)");
+        // угловые единицы AST хранит числом-радианами — не канонизируются
+        assert_eq!(canonical_math_order("calc(45deg * 2)"), None);
+        // не math-вызов / незакрытая скобка
+        assert_eq!(canonical_math_order("5%"), None);
+        assert_eq!(canonical_math_order("rgb(1, 2, 3)"), None);
+        assert_eq!(canonical_math_order("calc(1px"), None);
     }
 }

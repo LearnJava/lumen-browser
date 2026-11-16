@@ -469,6 +469,13 @@ fn ser_args(args: &[CalcNode]) -> String {
 /// is the canonical form, same as CSS Easing's alias folding for
 /// `step-start`/`steps(N, end)` elsewhere in the CSSOM-2 series.
 fn ser_func(func: MathFn, args: &[CalcNode]) -> String {
+    let (name, prefix) = math_fn_name(func);
+    format!("{name}({prefix}{})", ser_args(args))
+}
+
+/// Каноническое имя math-функции и префикс стратегии `round()` — общий для
+/// tier-сериализатора [`ser`] и структурного [`math_tree_canonical`].
+fn math_fn_name(func: MathFn) -> (&'static str, &'static str) {
     let name = match func {
         MathFn::Sin => "sin",
         MathFn::Cos => "cos",
@@ -494,7 +501,7 @@ fn ser_func(func: MathFn, args: &[CalcNode]) -> String {
         MathFn::Round(RoundStrategy::ToZero) => "to-zero, ",
         _ => "",
     };
-    format!("{name}({prefix}{})", ser_args(args))
+    (name, prefix)
 }
 
 /// Formats a unitless calc-tree number. Mirrors how `length_to_css` formats
@@ -503,6 +510,179 @@ fn ser_func(func: MathFn, args: &[CalcNode]) -> String {
 /// for `f32` already omits a trailing `.0` on whole numbers.
 fn format_calc_number(n: f32) -> String {
     format!("{n}")
+}
+
+// ──────────────── CSS Values L4 §10.13: структурная каноническая запись ────────────────
+
+/// «Serialize a calculation tree» без свёртки: Sum/Product пишутся в скобках
+/// всегда (корневые снимает [`super::math_value::canonical_math_order`]),
+/// множители произведения переставлены в канонический порядок («sort a
+/// calculation's children»: число, процент, размерности по алфавиту единиц,
+/// остальное — в исходном порядке; делители в хвосте). Сумма пишется как
+/// разобрана — сортировка слагаемых не нужна ни одному тесту и остаётся
+/// за BUG-1430. Отличие от tier-сериализатора [`calc_node_to_css`]: тот
+/// экономит скобки по старшинству операций, спецификация требует скобки
+/// у каждого Sum/Product (`calc(10 + (5 * sign(...)))`, не `calc(10 + 5 * ...)`).
+pub(in crate::style) fn math_tree_canonical(node: &CalcNode) -> String {
+    match node {
+        CalcNode::Length(_) | CalcNode::Number(_) => ser(node, 0),
+        CalcNode::Add(..) | CalcNode::Sub(..) => ser_sum(node),
+        CalcNode::Mul(..) | CalcNode::Div(..) => ser_product(node),
+        CalcNode::Min(args) => format!("min({})", ser_args_canonical(args)),
+        CalcNode::Max(args) => format!("max({})", ser_args_canonical(args)),
+        CalcNode::Clamp(mn, val, mx) => format!(
+            "clamp({}, {}, {})",
+            ser_arg_canonical(mn),
+            ser_arg_canonical(val),
+            ser_arg_canonical(mx)
+        ),
+        CalcNode::Func(func, args) => {
+            let (name, prefix) = math_fn_name(*func);
+            format!("{name}({prefix}{})", ser_args_canonical(args))
+        }
+    }
+}
+
+/// Сумма: слагаемые в порядке разбора; `Sub(0, x)` от унарного минуса
+/// парсера пишется как `-x`.
+fn ser_sum(root: &CalcNode) -> String {
+    let mut s = String::new();
+    let mut first = true;
+    for (neg, term) in sum_terms(root) {
+        if first {
+            if neg {
+                s.push('-');
+            }
+            first = false;
+        } else {
+            s.push_str(if neg { " - " } else { " + " });
+        }
+        s.push_str(&math_tree_canonical(term));
+    }
+    format!("({s})")
+}
+
+/// Слагаемые левой цепочки Add/Sub со знаками; правый Add/Sub — группа из
+/// исходных скобок, идёт одним слагаемым.
+fn sum_terms(node: &CalcNode) -> Vec<(bool, &CalcNode)> {
+    match node {
+        CalcNode::Add(a, b) => {
+            let mut t = sum_terms(a);
+            t.push((false, b));
+            t
+        }
+        CalcNode::Sub(a, b) => {
+            if let CalcNode::Number(0.0) = **a {
+                return vec![(true, b)];
+            }
+            let mut t = sum_terms(a);
+            t.push((true, b));
+            t
+        }
+        _ => vec![(false, node)],
+    }
+}
+
+/// Произведение: множители сортируются, делители не участвуют в сортировке
+/// и идут в хвосте (§10.13: Invert-узел не число/процент/размерность).
+fn ser_product(root: &CalcNode) -> String {
+    let mut factors = Vec::new();
+    product_factors(root, &mut factors);
+    let mut normals: Vec<&CalcNode> =
+        factors.iter().filter(|(inv, _)| !*inv).map(|(_, n)| *n).collect();
+    // стабильная сортировка: равные ключи сохраняют порядок разбора
+    normals.sort_by_key(|n| factor_key(n));
+    let mut s = String::new();
+    for (i, n) in normals.iter().enumerate() {
+        if i > 0 {
+            s.push_str(" * ");
+        }
+        s.push_str(&math_tree_canonical(n));
+    }
+    for (inv, n) in &factors {
+        if *inv {
+            s.push_str(" / ");
+            s.push_str(&math_tree_canonical(n));
+        }
+    }
+    format!("({s})")
+}
+
+/// Множители левой цепочки Mul/Div; правый операнд Div — делитель (`true`),
+/// он не перетасовывается и остаётся делением.
+fn product_factors<'a>(node: &'a CalcNode, out: &mut Vec<(bool, &'a CalcNode)>) {
+    match node {
+        CalcNode::Mul(a, b) => {
+            product_factors(a, out);
+            product_factors(b, out);
+        }
+        CalcNode::Div(a, b) => {
+            product_factors(a, out);
+            out.push((true, b));
+        }
+        _ => out.push((false, node)),
+    }
+}
+
+/// Ключ сортировки §10.13: число, процент, размерность (по единице), прочее.
+fn factor_key(node: &CalcNode) -> (u8, &'static str) {
+    match node {
+        CalcNode::Number(_) => (0, ""),
+        CalcNode::Length(l) => match l {
+            Length::Percent(_) => (1, ""),
+            other => match dimension_unit(other) {
+                Some(u) => (2, u),
+                None => (3, ""),
+            },
+        },
+        _ => (3, ""),
+    }
+}
+
+/// Имя единицы длины для сортировки; не-размерности (`Length::Calc`,
+/// ключевые слова) единицы не имеют.
+fn dimension_unit(l: &Length) -> Option<&'static str> {
+    Some(match l {
+        Length::Px(_) => "px",
+        Length::Em(_) => "em",
+        Length::Rem(_) => "rem",
+        Length::Ch(_) => "ch",
+        Length::Ex(_) => "ex",
+        Length::Cap(_) => "cap",
+        Length::Lh(_) => "lh",
+        Length::Rlh(_) => "rlh",
+        Length::Rex(_) => "rex",
+        Length::Rch(_) => "rch",
+        Length::Vh(_) => "vh",
+        Length::Vw(_) => "vw",
+        Length::Vmin(_) => "vmin",
+        Length::Vmax(_) => "vmax",
+        Length::Cqw(_) => "cqw",
+        Length::Cqh(_) => "cqh",
+        Length::Cqi(_) => "cqi",
+        Length::Cqb(_) => "cqb",
+        Length::Cqmin(_) => "cqmin",
+        Length::Cqmax(_) => "cqmax",
+        _ => return None,
+    })
+}
+
+/// Аргумент функции: корневые скобки Sum/Product снимаются («serialize a
+/// math function»); структурные узлы оборачивают выражение целиком, так что
+/// снимается ровно одна пара.
+fn ser_arg_canonical(node: &CalcNode) -> String {
+    strip_outer_parens(&math_tree_canonical(node)).into()
+}
+
+fn ser_args_canonical(args: &[CalcNode]) -> String {
+    args.iter().map(ser_arg_canonical).collect::<Vec<_>>().join(", ")
+}
+
+pub(in crate::style) fn strip_outer_parens(s: &str) -> &str {
+    match s.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
+        Some(inner) => inner,
+        None => s,
+    }
 }
 
 /// Резолвит научную math-функцию. Валидация арности уже сделана парсером —
@@ -834,7 +1014,7 @@ fn lex_number(bytes: &[u8], start: usize) -> Option<(f32, String, usize)> {
 }
 
 /// `expr := term (('+' | '-') term)*`
-fn parse_calc_expr(tokens: &[CalcToken], pos: &mut usize) -> Option<CalcNode> {
+pub(in crate::style) fn parse_calc_expr(tokens: &[CalcToken], pos: &mut usize) -> Option<CalcNode> {
     let mut left = parse_calc_term(tokens, pos)?;
     loop {
         match tokens.get(*pos) {
