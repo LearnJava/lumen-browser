@@ -220,18 +220,12 @@ impl Lumen {
         };
 
         // Re-run layout+paint with the current viewport (including zoom).
-        let phys = self.renderer.as_ref().map_or_else(
-            || (1024.0_f32, 720.0_f32),
-            |r| {
-                let s = r.viewport_size();
-                (s.width, s.height)
-            },
-        );
-        // GAP-VVPORT срез 3: `<meta viewport initial-scale>` no longer feeds the
-        // real box-layout viewport — only user zoom does (see
-        // `Lumen::relayout_viewport`'s doc comment for the split rationale).
-        let (css_w, css_h) = zoom::effective_viewport(phys.0, phys.1, self.zoom_factor);
-        let viewport = lumen_core::geom::Size::new(css_w, css_h);
+        // BUG-935 срез 99: content-viewport, как у relayout — без вычета хрома
+        // восстановленное дерево строилось на 72 px выше видимой области, и
+        // первый relayout-флаш пере́лаживал его целиком.
+        let viewport = self
+            .relayout_viewport()
+            .unwrap_or_else(|| lumen_core::geom::Size::new(1024.0, 720.0));
         // content-visibility: auto (BB-4): relevance против восстановленного
         // scroll-положения; ratchet новой страницы стартует с нуля.
         lumen_layout::set_cv_scroll(data.scroll_x, data.scroll_y);

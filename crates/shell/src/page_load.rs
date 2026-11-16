@@ -982,13 +982,12 @@ impl Lumen {
         // `<link rel=stylesheet media=...>`, чтобы print-only лист не грел
         // кэш и не слал CssLoaded (progressive-кадры не красятся print-стилями).
         let media_ctx = {
-            let viewport = self.renderer.as_ref().map_or_else(
-                || Size::new(1024.0, 720.0),
-                |r| {
-                    let s = r.viewport_size();
-                    Size::new(s.width, s.height)
-                },
-            );
+            // BUG-935 срез 99: media-контекст стриминга — против content-viewport,
+            // как у финального pipeline и relayout, иначе `@media (height)`
+            // стриминга решается по другой высоте, чем каскад после загрузки.
+            let viewport = self
+                .relayout_viewport()
+                .unwrap_or_else(|| Size::new(1024.0, 720.0));
             screen_media_context(viewport, self.dark_mode)
         };
 
@@ -1163,9 +1162,10 @@ impl Lumen {
     /// Обновить display list на основе снапшота частичного DOM.
     /// Применяет `stream_sheet` — CSS, загруженный параллельными потоками (PH1-2).
     pub(crate) fn paint_partial_dom(&mut self, doc: &lumen_dom::Document) {
-        let Some(renderer) = self.renderer.as_ref() else { return };
-        let vp_size = renderer.viewport_size();
-        let viewport = Size::new(vp_size.width, vp_size.height);
+        // BUG-935 срез 99: тот же content-viewport, что и у relayout —
+        // стриминговые черновики на сырой высоте окна пере́лаживались целиком
+        // первым же relayout-флашем после загрузки.
+        let Some(viewport) = self.relayout_viewport() else { return };
 
         let font = match lumen_font::Font::parse(INTER_FONT) {
             Ok(f) => f,
@@ -1936,13 +1936,12 @@ impl Lumen {
             && let Some(src) = self.layout_source.as_ref()
             && let Ok(doc_guard) = src.document.lock()
         {
-            let viewport = self.renderer.as_ref().map_or_else(
-                || Size::new(1024.0, 720.0),
-                |r| {
-                    let s = r.viewport_size();
-                    Size::new(s.width, s.height)
-                },
-            );
+            // BUG-935 срез 99: content-viewport, как у relayout — сырая высота
+            // окна уходила в зеркало вьюпорта движка (`update_viewport_size`)
+            // и в сбор геометрии, пока первый relayout не исправлял её.
+            let viewport = self
+                .relayout_viewport()
+                .unwrap_or_else(|| Size::new(1024.0, 720.0));
             let rects = collect_layout_rects(lb_ref, &doc_guard);
             // GAP-LAYOUTSHIFT срез 5: scored off `collect_layout_shift_rects`,
             // not the gBCR `rects` above (see that function's doc-comment) —
@@ -2268,13 +2267,12 @@ impl Lumen {
                         .as_ref()
                         .and_then(|ls| ls.document.lock().ok())
                         .map(|doc_guard| {
-                            let viewport = self.renderer.as_ref().map_or_else(
-                                || Size::new(1024.0, 720.0),
-                                |r| {
-                                    let s = r.viewport_size();
-                                    Size::new(s.width, s.height)
-                                },
-                            );
+                            // BUG-935 срез 99: content-viewport, как у relayout
+                            // (сырая высота окна лезла в геометрию lazy-картинок
+                            // и в зеркало вьюпорта движка).
+                            let viewport = self
+                                .relayout_viewport()
+                                .unwrap_or_else(|| Size::new(1024.0, 720.0));
                             (
                                 collect_layout_rects(lb_ref, &doc_guard),
                                 collect_client_rects(lb_ref, &doc_guard),

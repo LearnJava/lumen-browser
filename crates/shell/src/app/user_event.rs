@@ -254,13 +254,14 @@ impl Lumen {
                 // LOAD-2: builder и stream_sheet живут до RenderDone — пока финальный
                 // pipeline ждёт медленный CSS, по дедлайну (или по приходу CSS)
                 // из них ещё рисуется черновик (`paint_stream_draft`).
-                let viewport = self.renderer.as_ref().map_or_else(
-                    || Size::new(1024.0, 720.0),
-                    |r| {
-                        let s = r.viewport_size();
-                        Size::new(s.width, s.height)
-                    },
-                );
+                // BUG-935 срез 99: тот же content-viewport, что и у relayout
+                // (`relayout_viewport`), — сырая высота окна без вычета хрома
+                // строила первое дерево на 72 px выше видимой области, и первый
+                // relayout-флаш пере́лаживал его целиком (разовые 370–580 мс на
+                // rbc.ru, S97/S98 (б)).
+                let viewport = self
+                    .relayout_viewport()
+                    .unwrap_or_else(|| Size::new(1024.0, 720.0));
                 // Storage-хэндлы требуют `&mut self` (ls_storage) — берём их на
                 // UI-потоке, дальше это `Arc`-и (Send), уезжающие в рендер-поток.
                 let ls_store = ls_store_for_base(&raw.base, &mut self.ls_storage);
