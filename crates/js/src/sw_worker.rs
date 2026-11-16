@@ -453,12 +453,21 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
   }}
   globalThis.Client = Client;
   // SW-MSG-S4: the return channel (SW §3.2.5) — posts into the process-global
-  // hub under this page's client id; the page's own pump delivers it. No
-  // `transfer` yet (ports ride in SW-MSG-S5). A dead client's id is simply
-  // never drained.
-  Client.prototype.postMessage = function(data /*, transfer */) {{
+  // hub under this page's client id; the page's own pump delivers it.
+  // SW-MSG-S5: transferred `MessagePort`s ride as ids in a `__lumen_msg__`
+  // envelope — the same wire shape the page's `ServiceWorker.postMessage`
+  // builds — and the local partners bind through the hub's port outbox.
+  // A dead client's id is simply never drained.
+  Client.prototype.postMessage = function(data, transfer) {{
     if (typeof _lumen_sw_post_to_client !== 'function') return;
-    var payload = JSON.stringify(structuredClone(data));
+    var portIds = (typeof _lumen_port_prepare_transfer === 'function')
+      ? _lumen_port_prepare_transfer(transfer, null) : [];
+    var toSend = (portIds.length && typeof _lumen_port_walk_serialize === 'function')
+      ? _lumen_port_walk_serialize(data) : data;
+    var payload = JSON.stringify(structuredClone(toSend));
+    if (portIds.length) {{
+      payload = JSON.stringify({{ __lumen_msg__: true, data: JSON.parse(payload), ports: portIds }});
+    }}
     _lumen_sw_post_to_client(this._cid, payload);
   }};
   function WindowClient(info) {{
@@ -478,18 +487,42 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
   // §4.7). Data and the client descriptor arrive JSON-encoded (the same wire
   // shape the page side built); `origin` is this SW's own origin — only
   // same-origin pages can post, so the page's origin equals it.
+  // SW-MSG-S5: a `__lumen_msg__` envelope carries transferred ports — reify
+  // them (page-side `_lumenPortRegistry` ids) into `e.ports` and resolve port
+  // sentinels embedded in `data`, exactly like the dedicated worker's
+  // `_lumen_worker_dispatch_message`.
   globalThis._sw_fire_message = function(dataJson, sourceJson) {{
     var data = null;
     try {{ data = JSON.parse(dataJson); }} catch (e) {{ }}
+    var ports = [];
+    if (data && typeof data === 'object' && data.__lumen_msg__ === true) {{
+      if (typeof _lumen_port_reify_list === 'function') ports = _lumen_port_reify_list(data.ports, null);
+      if (typeof _lumen_port_walk_deserialize === 'function') data = _lumen_port_walk_deserialize(data.data, null);
+    }}
     var info = {{}};
     try {{ info = JSON.parse(sourceJson) || {{}}; }} catch (e) {{ }}
     var evt = new ExtendableMessageEvent('message', {{
       data: data,
       origin: origin,
       source: new WindowClient(info),
-      ports: [],
+      ports: ports,
     }});
     globalThis._sw_dispatch_extendable(evt);
+  }};
+
+  // SW-MSG-S5: the SW twin of the dedicated worker's
+  // `_lumen_worker_deliver_port_message` — a message posted by the page
+  // endpoint of a bridge whose other end is a `MessagePort` inside this
+  // isolate. `json` is the raw JSON text of the cloned payload.
+  globalThis._sw_deliver_port_message = function(portId, json) {{
+    if (typeof _lumenPortRegistry === 'undefined') return;
+    var p = _lumenPortRegistry[portId];
+    if (!p) return;
+    var data;
+    try {{ data = JSON.parse(json); }} catch(e) {{ data = null; }}
+    if (typeof _lumen_port_walk_deserialize === 'function') data = _lumen_port_walk_deserialize(data, null);
+    p._deliverOrQueue({{ type: 'message', data: data, target: p,
+                        currentTarget: p, bubbles: false, cancelable: false }});
   }};
 
   // _sw_fire_fetch: dispatch FetchEvent, collect respondWith body.
@@ -781,6 +814,17 @@ fn run_sw_thread_v8(
                 // same way install/activate do (SW-MSG-S2's collector).
                 drain_extend_v8(&rt, false);
             }
+            SwWorkerMessage::PortPost(port_id, json) => {
+                // SW-MSG-S5: message for a `MessagePort` reconstructed inside
+                // this isolate from a page-side transfer — the SW twin of the
+                // dedicated worker's `_lumen_worker_deliver_port_message`.
+                let _ = rt.set_global("_sw_port_id__", lumen_core::JsValue::Number(port_id as f64));
+                let _ = rt.set_global("_sw_port_json__", lumen_core::JsValue::String(json));
+                let _ = rt.eval(
+                    "if(typeof _sw_deliver_port_message==='function'){\
+                         _sw_deliver_port_message(_sw_port_id__,_sw_port_json__);}",
+                );
+            }
             SwWorkerMessage::Push(push) => dispatch_push_v8(&rt, &push.payload),
             SwWorkerMessage::PushSubscriptionChange(change) => {
                 dispatch_push_subscription_change_v8(&rt, &change)
@@ -1024,6 +1068,35 @@ fn install_sw_globals_v8(
             "_lumen_sw_post_to_client",
             crate::v8_compat::into_v8_fn2(move |client_id: f64, data_json: String| {
                 crate::sw_clients::push_out(client_id as u64, sw_scope.clone(), data_json);
+            }),
+        )?;
+    }
+
+    // SW-MSG-S5: page → port delivery inside this isolate (the SW twin of the
+    // dedicated worker's `_lumen_port_post_reply`) — posts into the hub's
+    // port-addressed outbox; the page's pump routes by port id alone.
+    {
+        rt.register_native(
+            "_lumen_port_post_reply",
+            crate::v8_compat::into_v8_fn2(move |port_id: u32, json: String| {
+                crate::sw_clients::push_out_port(port_id, json);
+            }),
+        )?;
+    }
+    // SW-MSG-S5: port transfer ids. The page and its dedicated workers share
+    // one per-runtime counter; the SW thread is spawned outside it, so it
+    // allocates from a process-global one instead.
+    //
+    // shortcut: base offset 1<<30 instead of sharing each page's exact
+    // counter (that would mean plumbing an Arc through ext.rs's
+    // SwWorkerStore) — page windows are 1M wide, so this stays collision-free
+    // for the first ~4096 pages per session; revisit if that bites.
+    {
+        static SW_PORT_NEXT_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1 << 30);
+        rt.register_native(
+            "_lumen_next_port_id",
+            crate::v8_compat::into_v8_fn0(move || -> u32 {
+                SW_PORT_NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             }),
         )?;
     }

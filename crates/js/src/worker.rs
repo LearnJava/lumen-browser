@@ -595,7 +595,17 @@ pub(crate) fn install_worker_bindings_v8(
     // into `spawn_worker_v8` below) — a port id only needs to be unique
     // within one page's own worker set, since each side's `_lumenPortRegistry`
     // is a separate `globalThis` map with no cross-page namespace to collide in.
-    let port_next_id: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
+    //
+    // SW-MSG-S5: with one exception — the SW→page port hub (`sw_clients`,
+    // process-global) routes by bare port id, so two pages must not allocate
+    // the same id. Each runtime's counter therefore starts in its own 1M-wide
+    // window of one process-global sequence; the SW side starts above all of
+    // them (see sw_worker.rs).
+    let port_next_id: Arc<Mutex<u32>> = {
+        static PORT_PAGE_SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let base = PORT_PAGE_SEQ.fetch_add(1 << 20, std::sync::atomic::Ordering::Relaxed);
+        Arc::new(Mutex::new(base))
+    };
     install_worker_constructor_v8(
         rt, registry, queue, errors, next_id, blob_store, fetch_provider, port_queue,
         ws_provider, determinism, port_next_id,

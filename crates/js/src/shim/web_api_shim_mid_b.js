@@ -490,12 +490,22 @@ function _sw_make_worker(scriptUrl, initState, scope) {
 
         // SW §3.2.5 `ServiceWorker.postMessage` (SW-MSG-S3): data crosses as
         // JSON (the same compromise as `Worker.prototype.postMessage`), the
-        // client descriptor is stamped here. Ports ride along in SW-MSG-S5,
-        // so `transfer` is ignored for now. A scope with no live worker is a
-        // quiet no-op — the native drops the message.
-        postMessage: function(data /*, transfer */) {
+        // client descriptor is stamped here. SW-MSG-S5: transferred
+        // `MessagePort`s ride as ids in a `__lumen_msg__` envelope — the same
+        // wire shape `Worker.prototype.postMessage` uses — and the local
+        // partners are bound to this scope so their posts route through
+        // `_lumen_sw_port_post`. A scope with no live worker is a quiet
+        // no-op — the native drops the message.
+        postMessage: function(data, transfer) {
             if (typeof _lumen_sw_post_message !== 'function') return;
-            var payload = JSON.stringify(structuredClone(data));
+            var portIds = (typeof _lumen_port_prepare_transfer === 'function')
+                ? _lumen_port_prepare_transfer(transfer, this._scope) : [];
+            var toSend = (portIds.length && typeof _lumen_port_walk_serialize === 'function')
+                ? _lumen_port_walk_serialize(data) : data;
+            var payload = JSON.stringify(structuredClone(toSend));
+            if (portIds.length) {
+                payload = JSON.stringify({ __lumen_msg__: true, data: JSON.parse(payload), ports: portIds });
+            }
             var source = JSON.stringify({
                 id: _lumen_sw_client_id(),
                 url: (typeof location !== 'undefined') ? location.href : '',
@@ -800,10 +810,24 @@ function _lumen_deliver_sw_messages(msgs) {
         var reg = _sw_registrations[msgs[i].scope];
         var sw = reg && (reg.active || reg.waiting || reg.installing);
         if (!sw) continue;
-        var ev = new MessageEvent(msgs[i].json, { bubbles: false, cancelable: false });
+        var data = msgs[i].json;
+        var ports = [];
+        // SW-MSG-S5: a `__lumen_msg__` envelope carries ports transferred out
+        // of the SW (`Client.postMessage(data, [port])`) — reify the page
+        // endpoints (SW counter ids) and resolve sentinels in `data`; each
+        // endpoint posts back through `_lumen_sw_port_post` by this scope.
+        if (data && typeof data === 'object' && data.__lumen_msg__ === true) {
+            if (typeof _lumen_port_reify_list === 'function') ports = _lumen_port_reify_list(data.ports, null);
+            if (typeof _lumen_port_walk_deserialize === 'function') data = _lumen_port_walk_deserialize(data.data, null);
+            for (var j = 0; j < ports.length; j++) {
+                ports[j]._remoteSwScope = msgs[i].scope;
+                if (typeof _lumen_sw_port_bind === 'function') _lumen_sw_port_bind(ports[j]._lumenPortId);
+            }
+        }
+        var ev = new MessageEvent(data, { bubbles: false, cancelable: false });
         ev.origin = _sw_origin;
         ev.source = sw;
-        ev.ports = [];
+        ev.ports = ports;
         _sw_msg_queue.push(ev);
     }
     _sw_drain_msg_queue();

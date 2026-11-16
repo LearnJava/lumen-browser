@@ -1822,3 +1822,141 @@ self.addEventListener('message', function(e) {
     }
     assert_eq!(got, "m1,m2");
 }
+
+/// SW-MSG-S5: a `MessageChannel` port transferred into the SW through
+/// `ServiceWorker.postMessage(data, [port])` carries the conversation — the
+/// WPT `resources/postmessage-worker.js` script verbatim: `{port}` sets it,
+/// `{value}`/`done` messages come back acked on `port1`.
+#[test]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+fn v8_sw_message_port_ping_pong() {
+    // https://github.com/web-platform-tests/wpt/blob/master/service-workers/
+    // service-worker/resources/postmessage-worker.js — unchanged.
+    let script = r"
+var port;
+
+// Exercise the 'onmessage' handler:
+self.onmessage = function(e) {
+  var message = e.data;
+  if ('port' in message) {
+    port = message.port;
+  }
+};
+
+// And an event listener:
+self.addEventListener('message', function(e) {
+    var message = e.data;
+    if ('value' in message) {
+      port.postMessage('Acking value: ' + message.value);
+    } else if ('done' in message) {
+      port.postMessage('quit');
+    }
+  });
+";
+    let be = Arc::new(MockCacheBackend::new());
+    let store: lumen_core::ext::SwWorkerStore = Arc::default();
+    let rt = V8JsRuntime::new().unwrap();
+    let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(SwScriptFetch(script));
+    rt.install_dom(
+        make_doc(), "https://example.com/", Some(provider), None, None, None, None, None,
+        Some(be), None, Some(Arc::clone(&store)), false, None,
+    )
+    .unwrap();
+    rt.eval(
+        "window._got = [];
+         navigator.serviceWorker.register('/sw.js', { scope: '/' })
+             .then(function(r) { window._reg = r; });",
+    )
+    .unwrap();
+    let key = ("https://example.com".to_string(), "/".to_string());
+    let mut activated = false;
+    for _ in 0..100 {
+        sw_pump_round(&rt);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        if store.lock().unwrap().contains_key(&key) {
+            activated = true;
+            break;
+        }
+    }
+    assert!(activated, "SW thread never activated");
+    rt.eval(
+        "var mc = new MessageChannel();
+         mc.port1.onmessage = function(e) { window._got.push(e.data); };
+         window._reg.active.postMessage({port: mc.port2}, [mc.port2]);
+         window._reg.active.postMessage({value: 1});
+         window._reg.active.postMessage({value: 2});
+         window._reg.active.postMessage({done: true});",
+    )
+    .unwrap();
+    let mut got = String::new();
+    for _ in 0..100 {
+        sw_pump_round(&rt);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        if let Ok(lumen_core::JsValue::String(s)) = rt.eval("window._got.join('|')")
+            && s == "Acking value: 1|Acking value: 2|quit" {
+            got = s;
+            break;
+        }
+    }
+    assert_eq!(got, "Acking value: 1|Acking value: 2|quit");
+}
+
+
+/// SW-MSG-S5: the transferred port arrives on the event as a working
+/// `MessagePort` — `e.ports` reified in transfer order, the object a
+/// `MessagePort` instance, and a reply through it reaches the page endpoint.
+#[test]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+fn v8_sw_extendable_message_event_has_ports() {
+    let script = r#"
+self.addEventListener('message', function(e) {
+  if (e.ports && e.ports.length) {
+    e.ports[0].postMessage([e.ports.length,
+                            e.ports[0] instanceof MessagePort].join('|'));
+  }
+});
+"#;
+    let be = Arc::new(MockCacheBackend::new());
+    let store: lumen_core::ext::SwWorkerStore = Arc::default();
+    let rt = V8JsRuntime::new().unwrap();
+    let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(SwScriptFetch(script));
+    rt.install_dom(
+        make_doc(), "https://example.com/", Some(provider), None, None, None, None, None,
+        Some(be), None, Some(Arc::clone(&store)), false, None,
+    )
+    .unwrap();
+    rt.eval(
+        "window._got = null;
+         navigator.serviceWorker.register('/sw.js', { scope: '/' })
+             .then(function(r) { window._reg = r; });",
+    )
+    .unwrap();
+    let key = ("https://example.com".to_string(), "/".to_string());
+    let mut activated = false;
+    for _ in 0..100 {
+        sw_pump_round(&rt);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        if store.lock().unwrap().contains_key(&key) {
+            activated = true;
+            break;
+        }
+    }
+    assert!(activated, "SW thread never activated");
+    rt.eval(
+        "var mc = new MessageChannel();
+         mc.port1.onmessage = function(e) { window._got = e.data; };
+         window._reg.active.postMessage({hello: 1}, [mc.port2]);",
+    )
+    .unwrap();
+    let mut got = String::new();
+    for _ in 0..100 {
+        sw_pump_round(&rt);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        if let Ok(lumen_core::JsValue::String(s)) = rt.eval("String(window._got)")
+            && s == "1|true" {
+            got = s;
+            break;
+        }
+    }
+    assert_eq!(got, "1|true");
+}

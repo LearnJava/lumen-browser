@@ -4834,6 +4834,11 @@ pub enum SwWorkerMessage {
     Fetch(SwFetchRequest),
     /// Dispatch a `message` event (page → SW, SW-MSG-S3).
     Message(SwClientMessage),
+    /// Deliver to a `MessagePort` living inside the SW isolate (SW-MSG-S5):
+    /// `(port_id, json)` — the port-addressed sibling of `Message`, routed by
+    /// the transfer id from `_lumen_port_prepare_transfer` instead of by the
+    /// event channel.
+    PortPost(u32, String),
     /// Dispatch a `push` event.
     Push(SwPushMessage),
     /// Dispatch a `pushsubscriptionchange` event.

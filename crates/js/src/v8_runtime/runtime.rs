@@ -715,6 +715,12 @@ impl V8JsRuntime {
             self,
             self.sw_client_id.load(std::sync::atomic::Ordering::Relaxed),
         );
+        // SW-MSG-S5: port-addressed traffic from `MessagePort`s living inside
+        // SW isolates, routed by port id like the dedicated-worker queue above.
+        crate::sw_clients::deliver_ports(
+            self,
+            self.sw_client_id.load(std::sync::atomic::Ordering::Relaxed),
+        );
     }
 
     /// Deliver messages posted by `SharedWorker` threads to this page's
