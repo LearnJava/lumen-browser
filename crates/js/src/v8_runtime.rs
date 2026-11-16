@@ -293,6 +293,10 @@ impl V8JsRuntime {
             }
         });
         let worker_determinism_inner = worker_determinism.clone();
+        // SW-MSG-S3: this page's `Client.id`, stamped into every outgoing
+        // `ServiceWorker.postMessage` envelope — cloned like the locals above,
+        // before the `move` closure.
+        let sw_client_id_inner = self.sw_client_id.clone();
         // BUG-674: the Service Worker registry and Cache Storage key on this,
         // not on an origin string passed in from JS — the same binding the
         // file-API grants get (BUG-371). Cloned before `page_origin` is needed
@@ -527,6 +531,7 @@ impl V8JsRuntime {
                 idb_sw.clone(),
                 worker_determinism_inner.clone(),
                 sw_origin.clone(),
+                sw_client_id_inner.clone(),
             )?;
 
             install::install_history(
