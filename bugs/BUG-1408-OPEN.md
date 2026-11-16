@@ -206,5 +206,31 @@ keyword раздаётся каждой оси. JS-шим (`web_api_shim_mid.js`
 
 **Остаток среза 6:** `shape()`/`path()` не раскладываются — `style::parse::shape`
 знает только `inset`/`circle`/`ellipse`/`polygon`/`rect`/`xywh`, такой `clip-path`
-ничего не клипует (это раскладка, не CSSOM); шорткоды `mask`, `font`;
-`*-computed.html` (BUG-1407/1278).
+ничего не клипует (это раскладка, не CSSOM); шорткод `font`; `*-computed.html`
+(BUG-1407/1278).
+
+## Срез 7 (2026-11-16, P3): шорткод `mask`
+
+`crates/engine/layout/src/style/values/mask_cssom.rs::expand_mask`/`mask_shorthand_value`
+(нативы `_lumen_css_expand_mask`/`_lumen_css_mask_shorthand`, список лонгхендов
+`_LUMEN_MASK_SHORTHAND_LONGHANDS` в шиме):
+
+- разбор `<mask-layer>#` (CSS Masking L1 §4.1): компоненты в любом порядке (`||`), каждая
+  группа не более одного раза — `<mask-reference>` (`none`/`<image>`), `<position>`
+  (с `/ <bg-size>` после неё), `<repeat-style>` (1–2 ключевых слова), `<geometry-box>{0,2}`
+  (первый — `mask-origin`, второй — `mask-clip`; один бокс задаёт оба, `no-clip` — только
+  `mask-clip`), `<compositing-operator>`, `<masking-mode>`; голое слово вне этих групп —
+  невалидно (`margin-box`);
+- раскладка по восьми лонгхендам слоёв с умолчаниями (`mask-position: 0% 0%`,
+  `mask-size: auto`, `mask-repeat: repeat`, `mask-origin`/`mask-clip: border-box`,
+  `mask-composite: add`, `mask-mode: match-source`) и сброс `mask-border-*`
+  (`source none`, `outset 0`, `repeat stretch`, `slice 0`, `width auto`) — один раз, не
+  по слоям; CSS-wide keyword раздаётся всем тринадцати лонгхендам;
+- сборка шорткода обратно из лонгхендов: порядок грамматики, умолчания опускаются,
+  `no-clip` печатается без origin (когда origin — `border-box`), слой без компонентов — `none`.
+
+Зелёные файлы (`css/css-masking/parsing/`, ожидания `.ini` удалены): `mask-valid.sub`
+(`test_valid_value` 30 сабтестов + `test_shorthand_value` 2), `mask-invalid` (12),
+0 неожиданных результатов.
+
+**Остаток среза 7:** шорткод `font`; `*-computed.html` (BUG-1407/1278).
