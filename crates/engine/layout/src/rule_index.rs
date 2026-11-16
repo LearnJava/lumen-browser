@@ -219,6 +219,7 @@ impl RuleIndex {
             v.sort_unstable();
             v.dedup();
         }
+        // universal: сортировка по rule_idx и dedup — как остальные корзины.
         idx.universal.sort_unstable();
         idx.universal.dedup();
         idx
@@ -271,25 +272,30 @@ impl RuleIndex {
     ) -> &'r [RuleIdx] {
         out.clear();
         if let Some(v) = self.by_type.get(tag) {
+            crate::counters::note_candidate_bucket(1, v.len());
             out.extend_from_slice(v);
         }
         if let Some(id_str) = id
             && let Some(v) = self.by_id.get(id_str)
         {
+            crate::counters::note_candidate_bucket(2, v.len());
             out.extend_from_slice(v);
         }
         for cls in classes {
             if let Some(v) = self.by_class.get(cls) {
+                crate::counters::note_candidate_bucket(3, v.len());
                 out.extend_from_slice(v);
             }
         }
         if !self.by_attr.is_empty() {
             for a in attrs {
                 if let Some(v) = self.by_attr.get(a.name.local.as_str()) {
+                    crate::counters::note_candidate_bucket(4, v.len());
                     out.extend_from_slice(v);
                 }
             }
         }
+        crate::counters::note_candidate_bucket(0, self.universal.len());
         out.extend_from_slice(&self.universal);
         // A duplicate is only possible when more than one bucket contributed
         // (each bucket is already deduped internally by `build_from_rules`) —

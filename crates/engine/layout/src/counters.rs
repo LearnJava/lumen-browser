@@ -1462,6 +1462,20 @@ pub struct CascadeStats {
     /// матчить компаунд-префикс. С ростом числа при неизменных результатах —
     /// экономия пройденных предков.
     pub prefix_refuted: u32,
+    /// BUG-1794 срез 8 — вклад корзин [`crate::rule_index`] в
+    /// [`Self::candidates`] (до dedup): сколько кандидатов пришло из
+    /// `universal`, type/id/class/attr-бакетов. Ответ переписи 2026-11-16:
+    /// на github 83 % объёма — universal (`*` и голые псевдоклассы, ключей
+    /// нет), class-бакеты — 1.3 %; печатается в строке `[engine] incr cascade`.
+    pub cand_universal: u32,
+    pub cand_type: u32,
+    pub cand_id: u32,
+    pub cand_class: u32,
+    pub cand_attr: u32,
+    /// BUG-1794 срез 8 — вызовы `matches_chain` не из `matches_complex`, т.е.
+    /// рекурсия внутрь `:is`/`:where`/`:not`/`:has` (на github вдвое больше
+    /// входных вызовов).
+    pub match_nested: u32,
 }
 
 thread_local! {
@@ -1489,6 +1503,12 @@ thread_local! {
             match_first_fail: 0,
             match_prefix_fail: 0,
             prefix_refuted: 0,
+            cand_universal: 0,
+            cand_type: 0,
+            cand_id: 0,
+            cand_class: 0,
+            cand_attr: 0,
+            match_nested: 0,
         })
     };
 }
@@ -1548,6 +1568,32 @@ pub(crate) fn note_prefix_refuted() {
     CASCADE_STATS.with(|s| {
         let mut v = s.get();
         v.prefix_refuted += 1;
+        s.set(v);
+    });
+}
+
+/// BUG-1794 срез 8 — вклад одной корзины [`crate::rule_index`]
+/// в выдачу `candidates` (до dedup).
+pub(crate) fn note_candidate_bucket(kind: u8, n: usize) {
+    CASCADE_STATS.with(|s| {
+        let mut v = s.get();
+        match kind {
+            0 => v.cand_universal += n as u32,
+            1 => v.cand_type += n as u32,
+            2 => v.cand_id += n as u32,
+            3 => v.cand_class += n as u32,
+            _ => v.cand_attr += n as u32,
+        }
+        s.set(v);
+    });
+}
+
+/// BUG-1794 срез 8 — вызов `matches_chain` из рекурсии
+/// `:is`/`:where`/`:not`/`:has`.
+pub(crate) fn note_match_nested() {
+    CASCADE_STATS.with(|s| {
+        let mut v = s.get();
+        v.match_nested += 1;
         s.set(v);
     });
 }
