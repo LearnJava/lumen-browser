@@ -882,8 +882,10 @@ impl FlushHandles {
         // flushes). Both entries are functions of a box's style alone, so what the plan collects
         // (everything a dirty root rebuilt) is all there is to refresh; the ids the flush evicts
         // for the geometry caches are the ones evicted here.
+        // BUG-935 срез 100: the text-fragment table follows the same plan (keyed by text node,
+        // which owns no box — see `ScopedCollection::collect_text_frag_rects`).
         // `LUMEN_NO_SCOPE_PRUNE=1` (the way back for the scoped collectors) brings the whole-document
-        // walk of both back as well.
+        // walk of all three back as well.
         let scoped_ids = incr_scope
             .as_ref()
             .filter(|_| !scope_prune_disabled() && !self.scope_prune_off.load(Ordering::Relaxed))
@@ -948,11 +950,32 @@ impl FlushHandles {
             self.custom_props_collected.store(true, Ordering::Relaxed);
         }
         if self.text_frags_needed.load(Ordering::Relaxed) {
-            *self
-                .text_frag_rects
-                .lock()
-                .unwrap_or_else(|e| e.into_inner()) =
-                lumen_layout::collect_text_frag_rects(&layout_root, &doc_guard);
+            let _text_frags_scope = lumen_core::profile::scope("flush.text_frags");
+            let mut frags = self.text_frag_rects.lock().unwrap_or_else(|e| e.into_inner());
+            // BUG-935 срез 100: the same scoping as the pseudo/custom maps — the runs a dirty root
+            // rebuilt are the only ones whose fragments can differ, and a first-ever collect
+            // (nothing published yet) stays whole-document.
+            match (&scoped_plan, scoped_ids) {
+                (Some(plan), Some(_))
+                    if self.text_frags_collected.load(Ordering::Relaxed)
+                        && counters.cq_boxless().is_empty() =>
+                {
+                    plan.collect_text_frag_rects(&doc_guard, &mut frags);
+                    if verify_scope_prune() {
+                        let full = lumen_layout::collect_text_frag_rects(&layout_root, &doc_guard);
+                        let stale = full.iter().filter(|(k, v)| frags.get(*k) != Some(*v)).count()
+                            + frags.keys().filter(|k| !full.contains_key(*k)).count();
+                        if stale > 0 {
+                            eprintln!(
+                                "[verify] scope-prune STALE text frags: held {} full {} stale {stale}",
+                                frags.len(),
+                                full.len()
+                            );
+                        }
+                    }
+                }
+                _ => *frags = lumen_layout::collect_text_frag_rects(&layout_root, &doc_guard),
+            }
             self.text_frags_collected.store(true, Ordering::Relaxed);
         }
         if self.pseudo_rects_needed.load(Ordering::Relaxed) {

@@ -331,6 +331,8 @@ mod v8_bug935_s70_scope_prune;
 #[cfg(feature = "v8-backend")]
 mod v8_bug935_s95_pseudo_custom_scope;
 #[cfg(feature = "v8-backend")]
+mod v8_bug935_s100_text_frags_scope;
+#[cfg(feature = "v8-backend")]
 mod v8_bug935_s74_node_index_cache;
 #[cfg(feature = "v8-backend")]
 mod v8_bug935_s77_scroll_rollup_cache;
