@@ -112,3 +112,102 @@
         assert_eq!(canon("font-language-override", "\"\""), None);
         assert_eq!(canon("font-language-override", "\"ENG  \""), None);
     }
+
+    #[test]
+    fn feature_settings_tags_and_flags() {
+        let p = "font-feature-settings";
+        assert_eq!(canon(p, "normal").as_deref(), Some("normal"));
+        assert_eq!(canon(p, "\"dlig\" 1").as_deref(), Some("\"dlig\""));
+        assert_eq!(canon(p, "\"smcp\" on").as_deref(), Some("\"smcp\""));
+        assert_eq!(canon(p, "'c2sc'").as_deref(), Some("\"c2sc\""));
+        assert_eq!(canon(p, "\"liga\" off").as_deref(), Some("\"liga\" 0"));
+        assert_eq!(canon(p, "\"tnum\", 'hist'").as_deref(), Some("\"tnum\", \"hist\""));
+        assert_eq!(canon(p, "\"PKRN\"").as_deref(), Some("\"PKRN\""));
+        assert_eq!(
+            canon(p, "\"\\22\\7d\\2f\\2a\"").as_deref(),
+            Some("\"\\\"}/*\"")
+        );
+        assert_eq!(
+            canon(p, "\"\\22\\22\\22\\22\"").as_deref(),
+            Some("\"\\\"\\\"\\\"\\\"\"")
+        );
+        // Сериализованная запись обязана разбираться обратно (round-trip).
+        assert_eq!(canon(p, "\"\\\"}/*\"").as_deref(), Some("\"\\\"}/*\""));
+        assert_eq!(
+            canon(p, "\"dlig\" 1, \"smcp\" on, \"dlig\" 0").as_deref(),
+            Some("\"dlig\", \"smcp\", \"dlig\" 0")
+        );
+        assert_eq!(canon(p, "normal \"dlig\""), None);
+        assert_eq!(canon(p, "\"c2sc\", normal"), None);
+        assert_eq!(canon(p, "\"tnum\" \"hist\""), None);
+        assert_eq!(canon(p, "\"silly\" off"), None);
+        assert_eq!(canon(p, "dlig"), None);
+    }
+
+    #[test]
+    fn variation_settings_tags_and_numbers() {
+        let p = "font-variation-settings";
+        assert_eq!(canon(p, "normal").as_deref(), Some("normal"));
+        assert_eq!(canon(p, "\"wght\" 700").as_deref(), Some("\"wght\" 700"));
+        assert_eq!(canon(p, "'wght' 700").as_deref(), Some("\"wght\" 700"));
+        assert_eq!(
+            canon(p, "\"wght\" 700, \"XHGT\" 0.7").as_deref(),
+            Some("\"wght\" 700, \"XHGT\" 0.7")
+        );
+        assert_eq!(canon(p, "\"a cd\" 0.5").as_deref(), Some("\"a cd\" 0.5"));
+        assert_eq!(canon(p, "\"ab@d\" 0.5").as_deref(), Some("\"ab@d\" 0.5"));
+        assert_eq!(
+            canon(p, "'wght' 1e3, 'slnt' -450.0e-1").as_deref(),
+            Some("\"wght\" 1000, \"slnt\" -45")
+        );
+        assert_eq!(canon(p, "700"), None);
+        assert_eq!(canon(p, "\"XHGT\""), None);
+        assert_eq!(canon(p, "wght 700"), None);
+        assert_eq!(canon(p, "normal, \"wght\" 700"), None);
+        assert_eq!(canon(p, "\"wgt\" 700"), None);
+        assert_eq!(canon(p, "\"XHGTX\" 0.7"), None);
+        assert_eq!(canon(p, "\"abc\\1F\" 0.5"), None);
+        assert_eq!(canon(p, "\"abc\\7F\" 0.5"), None);
+        assert_eq!(canon(p, "\"abc\\A9\" 0.5"), None);
+        assert_eq!(canon(p, "'wght' 200 'abcd' 400"), None);
+        assert_eq!(canon(p, "'a' 1234"), None);
+        assert_eq!(canon(p, "'abcde' 1234"), None);
+        assert_eq!(canon(p, "'wght' 200, "), None);
+        assert_eq!(canon(p, "'abcd\" 123"), None);
+        assert_eq!(canon(p, "'wght' 100px"), None);
+        assert_eq!(canon(p, "'wght' calc(100px + 200px)"), None);
+        assert_eq!(canon(p, "'wght' 42%"), None);
+        assert_eq!(canon(p, "'wght' calc(100%)"), None);
+    }
+
+    #[test]
+    fn variant_alternates_functions() {
+        let p = "font-variant-alternates";
+        assert_eq!(canon(p, "normal").as_deref(), Some("normal"));
+        assert_eq!(
+            canon(p, "styleset(more, than, one)").as_deref(),
+            Some("styleset(more, than, one)")
+        );
+        assert_eq!(
+            canon(p, "character-variant(more, than, one)").as_deref(),
+            Some("character-variant(more, than, one)")
+        );
+        assert_eq!(
+            canon(p, "character-variant(more,than,one) styleset(x)").as_deref(),
+            Some("styleset(x) character-variant(more, than, one)")
+        );
+        assert_eq!(
+            canon(p, "swash(Swash) Historical-Forms").as_deref(),
+            Some("historical-forms swash(Swash)")
+        );
+        assert_eq!(canon(p, "swash(several,different,aliases)"), None);
+        assert_eq!(canon(p, "stylistic(more,than,one)"), None);
+        assert_eq!(canon(p, "annotation()"), None);
+        assert_eq!(canon(p, "historical-forms(argument)"), None);
+        assert_eq!(canon(p, "annotation"), None);
+        assert_eq!(canon(p, "ornaments stylistic"), None);
+        assert_eq!(canon(p, "swash(one) swash(two)"), None);
+        assert_eq!(canon(p, "unkown(one) myfunction(two)"), None);
+        assert_eq!(canon(p, "styleset(thisone) styleset(something,else)"), None);
+        assert_eq!(canon(p, "ornaments(one historical-forms"), None);
+    }

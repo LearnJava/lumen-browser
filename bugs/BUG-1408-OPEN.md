@@ -135,3 +135,33 @@ setter-страница из `getComputedStyle`/`style`); `style.objectPosition 
 **Остаток среза 3:** шорткоды `font`, `font-variant`, `mask`, `clip`/`clip-path`;
 `font-feature-settings`/`font-variation-settings` (теги с escape-последовательностями),
 `font-variant-alternates`, `*-computed.html` (BUG-1407/1278).
+
+## Срез 4 (2026-11-16, P3): теги OpenType и `font-variant-alternates`
+
+`font_cssom.rs`:
+
+- `font-feature-settings` — `normal | <feature-tag-value>#`: тег `<string>` (4 ASCII-символа
+  0x20–0x7E) с развёрнутыми CSS-escape (`"\22\7d\2f\2a"` → `"}/*"`), сериализация в двойных
+  кавычках с экранированием `"`/`\`; `on` и `1` опускаются, `off` → `0`, порядок слоёв
+  сохраняется (дубликаты — нет: это специфицированное значение), пустой элемент списка
+  (`"tnum", normal`, `"a",`, `"a" "b"`) невалиден.
+- `font-variation-settings` — `normal | [ <string> <number> ]#`: тег с теми же правилами,
+  `<number>` — литерал (`1e3` → `1000`, `-450.0e-1` → `-45`) или math-функция
+  (`canonical_specified_numeric_math`), единицы/проценты (`100px`, `42%`, `calc(100%)`)
+  отвергаются.
+- `font-variant-alternates` — `normal | [ stylistic() || historical-forms || styleset() ||
+  character-variant() || swash() || ornaments() || annotation() ]`: каждая группа один раз,
+  запись в порядке спецификации, `styleset`/`character-variant` — список `<custom-ident>`
+  через `, `, остальные функции — ровно один аргумент.
+
+Зелёные файлы (`css/css-fonts/parsing/`, ожидания `.ini` удалены):
+`font-feature-settings-{valid,invalid}`, `font-variation-settings-{valid,invalid}`,
+`font-variant-alternates-invalid`, `font-variation-settings-computed` —
+6 файлов, 0 неожиданных результатов. `font-variant-alternates-valid` уже был зелёным
+(passthrough совпадал с ожиданием). Вне `parsing/`: `variations/font-variation-settings-inherit`
+(3 сабтеста, `.ini` удалён), `calc-in-font-variation-settings` — теперь проходит computed-половина
+(из `.ini` убрана строка), specified-половина читает `div.style` правила таблицы стилей и
+остаётся за CSSOM-10.
+
+**Остаток:** шорткоды `font`, `font-variant`, `mask`, `clip`/`clip-path`;
+`*-computed.html` (BUG-1407/1278).

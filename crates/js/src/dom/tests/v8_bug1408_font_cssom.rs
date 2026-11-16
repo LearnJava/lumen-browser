@@ -67,3 +67,28 @@ fn valid_font_values_are_canonical() {
         assert_eq!(assign(&rt, prop, val), want, "{prop} = {val:?}");
     }
 }
+
+#[test]
+fn font_tag_lists_and_alternates_in_inline_style() {
+    let rt = rt();
+    for (prop, val, want) in [
+        ("fontFeatureSettings", "\"dlig\" 1, \"smcp\" on", "\"dlig\", \"smcp\""),
+        ("fontFeatureSettings", "\"liga\" off", "\"liga\" 0"),
+        ("fontFeatureSettings", "\"\\22\\7d\\2f\\2a\"", "\"\\\"}/*\""),
+        ("fontVariationSettings", "'wght' 1e3, 'slnt' -450.0e-1", "\"wght\" 1000, \"slnt\" -45"),
+        ("fontVariantAlternates", "character-variant(more,than,one) styleset(x)",
+            "styleset(x) character-variant(more, than, one)"),
+        ("fontVariantAlternates", "historical-forms", "historical-forms"),
+    ] {
+        assert_eq!(assign(&rt, prop, val), want, "{prop} = {val:?}");
+    }
+    for (prop, val) in [
+        ("fontFeatureSettings", "\"silly\" off"),
+        ("fontVariationSettings", "'wght' 100px"),
+        ("fontVariantAlternates", "swash(one) swash(two)"),
+        ("fontVariantAlternates", "annotation()"),
+        ("fontVariantAlternates", "historical-forms(argument)"),
+    ] {
+        assert_eq!(assign(&rt, prop, val), "", "{prop} = {val:?} должно отклоняться");
+    }
+}
