@@ -80,6 +80,9 @@ fn matches_chain(
     leftmost_ok: &impl Fn(NodeId) -> bool,
 ) -> bool {
     let is_entry = n == 1 + complex.tail.len();
+    if !is_entry {
+        crate::counters::note_match_nested();
+    }
     if !matches_compound(compound_at(complex, n - 1), doc, node) {
         if is_entry {
             crate::counters::note_match_outcome(true, false);
