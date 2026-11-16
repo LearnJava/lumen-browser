@@ -618,3 +618,55 @@ BUG-1802 (sbar-кадры) — отдельно. Для будущей попы�
 пусты, текст снят. Прогон: `LUMEN_NO_ADBLOCK=1 python scripts/compat_crawl.py
 --only github`. Прежние откаты (всё, что не переоткрывать) перечислены в
 §«Поглощение» карточки BUG-1794.
+
+## Срез 12 (P3, 2026-11-16) — перепись шторма github; lift blanket-консерватизма shadow-документа: звук, 11/11 verify, живого выигрыша нет — откачен
+
+**Перепись** (временная проба `LUMEN_S12_PROBE=1`, снята до коммита; живой
+github, homepage, compat, dev-release `d71873319`, ready 27,2 с; лог
+`.tmp/perf-audit/20261116-205614`): 16 флашей, 12 пересчитывают весь документ —
+recomputed 2086–2279 при forced_same ≈ 99 %, walk 2,5–7,8 с каждый, сумма walk
+51,7 с за сессию. Состав изменений шторма (из `changes=` «incr stages»):
+`span:ChildList` + `span:Attr("aria-hidden")` + `span:AttrFrom{class, old:""}` —
+анимация заголовка/DataMarquee; `relative-time`/`fullstory-capture`/
+`ghcc-consent`/`cookie-consent-link:Attr(…)` — Catalyst-элементы (т. е. узлы у
+границ shadow-деревьев); `link:Attr(href/rel/crossorigin/data-rspack*)` +
+`head:ChildListEnds` — чейндж rspack-загрузчика; `img:Attr(width/height/style/src)`.
+Причины глубоких корней: blanket-widen на родителях (`adjacent=60` из
+`changes=102` в большом флаше; корни `head:151`, `div.logged-out:1929` — почти
+весь документ), guard `#node` (adjacent-батчи, 2 из 16 флашей).
+
+**Механизм** (построен и откачен): split `NodeRestyleIndex::conservative` —
+shadow-часть консерватизма стала пер-изменением (`narrows_for_change`:
+shadow-листы видят только своё дерево, хост и slotted-детей — лемма BUG-1794
+с4, `change_can_reach_shadow_sheets`), nth-of-часть осталась листовой; рычаг
+`LUMEN_NO_SHADOW_NARROW=1`. Новые диф-тесты shadow-сценариев (световые записи
+сужаются, adjacent остаются широкими, incr==full на каждом шаге) и обновлённые
+контрактные тесты рут-сета — зелёные; lib 6056, clippy `-p lumen-layout`
+чистый.
+
+**Живой A/B** (github homepage, 4 прогона с ротацией плеч, один бинарь; OFF =
+`LUMEN_NO_SHADOW_NARROW=1`; логи `.tmp/perf-audit/20261116-214{1,4,5,8}*`):
+walk_sum OFF 53,2/42,5 с против ON 8,6/80,0 с, узких флашей OFF 6/4 против ON
+3/5 (форма сессии гуляет: 4–15 флашей между прогонами — homepage отдаёт разный
+состав), recomputed OFF 20,0k/17,8k против ON 2,1k/22,2k — группы
+пересекаются, выигрыша нет. Самопроверка звукости в том же прогоне
+(`LUMEN_VERIFY_INCR_CASCADE=1`, механизм активен): 11/11 флашей «equal to a
+full cascade».
+
+**Почему не сдвинул:** шторм держат не световые записи, а (1) adjacent-батчи
+Catalyst-элементов с shadow-корнями (`data-catalyst`, `relative-time`-черед) —
+под пер-изменённым консерватизмом они остаются широкими по построению (их
+shadow-листы не сканируются — лемма с4), (2) guard `#node`, (3) fanout-sib
+корни от class-записей марки (срез 83: корень n + каждый следующий sibling —
+сумма сопоставима с parent-widen), (4) has-cap. Сужаемая срезом доля шторма —
+меньшинство изменений, эффект ниже разрешения протокола.
+
+**Вердикт:** lift blanket-консерватизма звуковой и дёшев, но без wall-clock
+выигрыша на цели не живёт (S32/S36; прецедент срез 4) — код удалён полностью,
+рабочее дерево бит-в-байт HEAD по коду, в карточке остаётся перепись.
+
+**Следующий рычаг** (по переписи): сужение ADJACENT-записей до области —
+shadow-дерево + хост + slotted-дети вместо doc-wide корня (световую сторону той
+же записи сужает сканируемый анализ, страж при этом сохраняется для
+unscanned-части); после него — цена `span:ChildList`-марки (семья BUG-935) и
+fanout-sib от class-записей.
