@@ -265,3 +265,28 @@ keyword раздаётся каждой оси. JS-шим (`web_api_shim_mid.js`
 удалено) — он ждал именно сериализации шорткода из лонгхендов.
 
 **Остаток среза 8:** `*-computed.html` (BUG-1407/1278).
+
+## Срез 9 (2026-11-16, P3): `css-images` — `object-fit`, `object-position`, `image-rendering`
+
+Дополнение WPT-RUN-14 срез 19 (2026-10-08) про `css-images`:
+
+- `object-fit` (`misc_cssom.rs`): `fill | none | [ contain | cover ] || scale-down`;
+  `contain scale-down` — синоним `scale-down`, поэтому им и сериализуется
+  (`object-fit-valid`);
+- `object-position`: `<position>` без трёхзначной записи (как у `mask-position`) —
+  делегирование `background_cssom::position`, поэтому `10%` → `10% center`,
+  `bottom right` → `right bottom`, а `right top 5px`/`center left 1px`/`bottom right 8%`
+  отвергаются (`object-position-{valid,invalid}`);
+- `image-rendering` — плоский список ключевых слов `_LUMEN_KEYWORD_PROPERTIES`
+  (`auto | smooth | high-quality | crisp-edges | pixelated`).
+
+Зелёные файлы (`css/css-images/parsing/`, ожидания `.ini` удалены):
+`object-fit-{valid,invalid}`, `object-position-{valid,invalid}`, `image-rendering-{invalid,computed}`
+— 6 файлов, 0 неожиданных результатов; плюс 5 из 6 сабтестов `object-fit-computed` и
+15 из 16 `object-position-computed` (эти два `.ini` сужены, а не удалены).
+
+**Остаток среза 9** (не CSSOM, точечно здесь не чинится):
+`object-fit: cover scale-down` в computed style — `ComputedStyle.object_fit` одиночный
+enum, заведён [BUG-1819](BUG-1819-OPEN.md); round-trip `calc(100% - 20px) calc(100% - 10px)`
+в `object-position` — `parse_position_component` не разбирает `calc()`, остаток
+[BUG-495](BUG-495-OPEN.md). Плюс `*-computed.html` шрифтовых/масочных свойств (BUG-1407/1278).

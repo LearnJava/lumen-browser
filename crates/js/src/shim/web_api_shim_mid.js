@@ -3153,6 +3153,8 @@ var _LUMEN_LINE_WIDTH_PROPERTIES = {
 // `url()`, `counter()`, font family names and `<length-percentage>` sizes (BUG-1551).
 var _LUMEN_MISC_PROPERTIES = {
     'content': 1, 'font-family': 1, 'font-size': 1, 'list-style-image': 1,
+    // CSS Images L4 §5.5/§5.6 (BUG-1408): `<position>` reuses the `background-position` canon.
+    'object-fit': 1, 'object-position': 1,
 };
 
 // CSS Sizing L3 §4 (CSSOM-2/BUG-484, third slice): `width`/`height` accept
@@ -3244,6 +3246,8 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     'empty-cells': ['show', 'hide'],
     'table-layout': ['auto', 'fixed'],
     'color-interpolation': ['auto', 'srgb', 'linearrgb'],
+    // CSS Images L3 §5.3 (BUG-1408): plain keyword longhand.
+    'image-rendering': ['auto', 'smooth', 'high-quality', 'crisp-edges', 'pixelated'],
     // CSS UI L4 §6.2 — `caret-shape` / `caret-animation` (inherited keyword longhands).
     'caret-shape': ['auto', 'bar', 'block', 'underscore'],
     'caret-animation': ['auto', 'manual'],
