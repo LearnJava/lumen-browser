@@ -1402,7 +1402,7 @@ impl FlushHandles {
         // parent's child-list change reaches it — its own writes widen nothing.
         let roots = lumen_layout::style::restyle_roots_for_node_changes_with_basis(
             doc,
-            changes,
+            changes.iter().copied(),
             &*node_index,
             &|n| !fresh_node_roots_enabled() || basis.cascade.contains_key(&n),
         );
@@ -1414,6 +1414,13 @@ impl FlushHandles {
         let shallow_roots = roots.shallow;
         self.shallow_roots_used.fetch_add(shallow_roots.len() as u64, Ordering::Relaxed);
         let focus_changed = basis.focus != current_focus;
+        let hover_changed = basis.hover != current_hover;
+        // PERF-INVALIDATION-S1 — the rules these changes can flip, for the cascade's
+        // restricted path. A changed sheet makes the previous pass's rule refs unusable, and
+        // the index itself refuses documents/sheets it cannot model (shadow roots, `@scope`).
+        let invalidation = (basis.sheet_revision == sheet.revision())
+            .then(|| node_index.invalidated_rules(doc, &changes, hover_changed, focus_changed))
+            .flatten();
         if focus_changed {
             let state_index = lumen_layout::style::restyle_state_index(doc, sheet);
             dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
@@ -1510,7 +1517,7 @@ impl FlushHandles {
         };
         let content_tracked = matches!(content_dirty, lumen_layout::counters::ContentDirty::Nodes(_));
         let journal_len = content_journal.map(|j| j.len());
-        let delta = lumen_layout::counters::RestyleDelta {
+        let delta = lumen_layout::counters::RestyleDelta { invalidation,
             prev_styles: basis.cascade,
             dirty_roots,
             shallow_roots,

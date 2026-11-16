@@ -49,6 +49,7 @@ mod computed;
 mod container;
 mod container_scroll;
 mod env;
+pub(crate) mod invalidation;
 mod logical;
 mod math_value;
 mod matching;
@@ -85,6 +86,7 @@ use apply::apply_declaration;
 // только `style::tests::cascade` через цепочку `use super::*` — отсюда
 // `#[cfg(test)]` на её реэкспорте (прецедент SH-3a/SPLIT-ST11).
 pub use cascade::{compute_style, take_compute_style_calls};
+pub(crate) use cascade::compute_style_restricted;
 #[cfg(test)]
 pub(in crate::style) use cascade::parse_zoom;
 pub(crate) use zoom::{scale_inherited_lengths, scale_visual_lengths, ZoomDeclared};
@@ -358,6 +360,9 @@ pub use restyle_cache::RestyleIndexCache;
 pub use restyle::{
     restyle_node_index, restyle_node_index_shared, restyle_state_index_owned, restyle_root_set_for_node_change, restyle_root_set_for_state_change,
     restyle_roots_for_node_changes, restyle_roots_for_node_changes_with_basis, restyle_state_index, NodeChange, NodeRestyleIndex, OwnedNodeChange, RestyleRoots, StateRestyleIndex,
+};
+pub use invalidation::{
+    InvalidatedRules, InvalidationIndex, MatchRestriction, MatchedRule, RuleBlock, RuleRef,
 };
 // `CONTAINER_CQ`/`FONT_CH_EX` читает `style::values::length` по старому пути
 // `crate::style::…` (SPLIT-ST9): это реэкспорт, а не импорт, — своих вызывателей

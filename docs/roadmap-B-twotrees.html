@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-11-16",
+ "generated": "2026-11-17",
  "counts": {
-  "open": 312,
+  "open": 313,
   "fixed": 1438,
   "inprogress": 0,
   "wontfix": 4
  },
- "total_bugs": 1754,
+ "total_bugs": 1755,
  "phases": [
   {
    "id": "P0",
@@ -3305,7 +3305,7 @@
       {
        "id": "PERF-INVALIDATION",
        "title": "PERF-INVALIDATION: инвалидационные наборы правил и перенос грязных поддеревьев",
-       "status": "ready",
+       "status": "active",
        "size": "L",
        "note": "Архитектурная задача вместо микро-срезов BUG-935 (101 срез): инвалидационные наборы правил (флаш ebay — 610 тыс. кандидатов и 1,34 млн match-вызовов, проход github — 3,77 млн) плюс перенос грязных поддеревьев через REUSED_SUBTREE (хвост среза 101). Ворота — локальные стенды bug935_cascade_bench и v8_bug935_s101_stand; живой github.com — подтверждение, ebay 403 с 2026-11-12. Лимит 3 среза, дальше ADR. Бриф — [docs/tasks/PERF-INVALIDATION.md](docs/tasks/PERF-INVALIDATION.md). **Готово, когда:** стенды ≤50 % и ≤70 % от HEAD, под LUMEN_VERIFY_INCR_CASCADE=1 полный и инкрементальный каскад равны, ADR записан."
       }
@@ -11958,6 +11958,13 @@
    "status": "open",
    "title": "SITES-TRIAGE-3: нет `navigator.serviceWorker.startMessages()` (нестандартный Chrome-API контейнера) → `TypeError` убивает инициализацию rutube-ru, TIMEOUT 2/2 п…",
    "component": "js (`web_api_shim_mid_b.js` — `_sw_container`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1820": {
+   "status": "open",
+   "title": "`clippy -p lumen-js --all-targets` красный на чистом main `14a917d79`: `mod v8_bug935_s101_stand` (cd454631c, BUG-935 с101) и `mod v8_bug1408_font_cssom` (da0f0…",
+   "component": "js (`crates/js/src/dom/tests/mod.rs:335,388`)",
    "date": null,
    "debtor": false
   },
@@ -22733,6 +22740,9 @@
   ],
   "js (`crates/js/src/dom.rs`, `crates/js/src/v8_runtime.rs`, `crates/engine/dom/src/lib.rs`)": [
    "BUG-328"
+  ],
+  "js (`crates/js/src/dom/tests/mod.rs:335,388`)": [
+   "BUG-1820"
   ],
   "js (`crates/js/src/dom/tests/v8_bug1148_srcset_img_load.rs`, `v8_bug1158_raw_text_inner_html.rs`, `v8_bug1167_ce_wrapper_gc.rs`)": [
    "BUG-1241"

@@ -1095,7 +1095,7 @@ fn bug341_s14_hover_flip_no_rule_can_react_to_recascades_nothing() {
     // And the incremental cascade run under that empty root-set still
     // reproduces the full post-transition cascade bit-for-bit.
     lumen_layout::set_interactive_state(Some(sidebar), None, None);
-    let delta = RestyleDelta {
+    let delta = RestyleDelta { invalidation: None,
         prev_styles: none_map.styles().clone(),
         dirty_roots,
         content_dirty: lumen_layout::counters::ContentDirty::Nothing,
@@ -1197,7 +1197,7 @@ fn bug341_s17_keystroke_recascades_the_input_not_the_omnibox() {
     );
 
     let _ = take_cascade_stats();
-    let delta = RestyleDelta {
+    let delta = RestyleDelta { invalidation: None,
         prev_styles: before.styles().clone(),
         dirty_roots,
         content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),

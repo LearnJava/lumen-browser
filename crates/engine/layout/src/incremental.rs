@@ -1878,7 +1878,7 @@ mod tests {
             !dirty_roots.is_empty(),
             "the `.card`/`.item` ancestors carry hover rules — narrowing them away would be wrong",
         );
-        let delta = RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing, shallow_roots: Default::default(), point_roots: Default::default() };
+        let delta = RestyleDelta { invalidation: None, prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing, shallow_roots: Default::default(), point_roots: Default::default() };
         set_incremental_restyle(true);
         let (incr, incr_counters) = layout_mutation_incremental_restyle(
             &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta,
@@ -1947,7 +1947,7 @@ mod tests {
         set_interactive_state(Some(card), None, None);
         let state_index = crate::style::restyle_state_index(&doc, &sheet);
         let dirty_roots = restyle_root_set_for_state_change(&doc, None, Some(card), &state_index);
-        let delta = RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing, shallow_roots: Default::default(), point_roots: Default::default() };
+        let delta = RestyleDelta { invalidation: None, prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing, shallow_roots: Default::default(), point_roots: Default::default() };
         set_incremental_restyle(true);
         let (incr, _incr_counters) = layout_mutation_incremental_restyle(
             &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta,
@@ -2025,7 +2025,7 @@ mod tests {
         set_interactive_state(Some(a), None, None);
         let state_index = crate::style::restyle_state_index(&doc, &sheet);
         let dirty_roots = restyle_root_set_for_state_change(&doc, None, Some(a), &state_index);
-        let delta = RestyleDelta {
+        let delta = RestyleDelta { invalidation: None,
             prev_styles: prev_counters.into_styles(),
             dirty_roots,
             content_dirty: crate::counters::ContentDirty::Nothing,
@@ -2166,7 +2166,7 @@ mod tests {
         let state_index = restyle_state_index(&doc, &sheet);
         let dirty_roots = restyle_root_set_for_state_change(&doc, None, Some(icon), &state_index);
         let delta =
-            RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing, shallow_roots: Default::default(), point_roots: Default::default() };
+            RestyleDelta { invalidation: None, prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing, shallow_roots: Default::default(), point_roots: Default::default() };
         set_incremental_restyle(true);
         set_incremental_box_build(true);
         let _ = take_box_build_stats();
@@ -2232,7 +2232,7 @@ mod tests {
 
         let (prev, prev_counters) =
             layout_measured_hyp_with_counters(&doc, &old, vp, &FixedMeasurer, &NullHyphenationProvider, false);
-        let delta = RestyleDelta {
+        let delta = RestyleDelta { invalidation: None,
             prev_styles: prev_counters.styles().clone(),
             dirty_roots: std::iter::once(u).collect(),
             content_dirty: crate::counters::ContentDirty::Nothing,
@@ -2292,7 +2292,7 @@ mod tests {
 
         let (prev, prev_counters) =
             layout_measured_hyp_with_counters(&doc, &old, vp, &FixedMeasurer, &NullHyphenationProvider, false);
-        let delta = RestyleDelta {
+        let delta = RestyleDelta { invalidation: None,
             prev_styles: prev_counters.styles().clone(),
             dirty_roots: std::iter::once(span).collect(),
             content_dirty: ContentDirty::Nothing,
@@ -2363,7 +2363,7 @@ mod tests {
         set_interactive_state(Some(icon), None, None);
         let state_index = restyle_state_index(&doc, &sheet);
         let dirty_roots = restyle_root_set_for_state_change(&doc, None, Some(icon), &state_index);
-        let delta = RestyleDelta {
+        let delta = RestyleDelta { invalidation: None,
             prev_styles: prev_counters.styles().clone(),
             dirty_roots,
             content_dirty: crate::counters::ContentDirty::Nothing,
@@ -2499,7 +2499,7 @@ mod tests {
         let state_index = restyle_state_index(&doc, &sheet);
         let dirty_roots = restyle_root_set_for_state_change(&doc, None, Some(icon), &state_index);
         let delta =
-            RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing, shallow_roots: Default::default(), point_roots: Default::default() };
+            RestyleDelta { invalidation: None, prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing, shallow_roots: Default::default(), point_roots: Default::default() };
         set_incremental_restyle(true);
         set_incremental_box_build(true);
         let (incr, incr_counters) = layout_mutation_incremental_restyle(
@@ -2551,7 +2551,7 @@ mod tests {
         let vp = Size::new(800.0, 600.0);
         clear_interactive_state();
 
-        let delta = RestyleDelta {
+        let delta = RestyleDelta { invalidation: None,
             prev_styles: prev_counters.styles().clone(),
             dirty_roots: std::collections::HashSet::new(),
             content_dirty: crate::counters::ContentDirty::Untracked,
@@ -2619,7 +2619,7 @@ mod tests {
         set_interactive_state(Some(b), None, None);
         let state_index = crate::style::restyle_state_index(&doc, &sheet);
         let dirty_roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b), &state_index);
-        let delta = RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing, shallow_roots: Default::default(), point_roots: Default::default() };
+        let delta = RestyleDelta { invalidation: None, prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing, shallow_roots: Default::default(), point_roots: Default::default() };
         set_incremental_restyle(true);
         let (incr, _incr_counters) = layout_mutation_incremental_restyle(
             &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta,
@@ -2670,7 +2670,7 @@ mod tests {
         let state_index = crate::style::restyle_state_index(&doc, &sheet);
         let dirty_roots = restyle_root_set_for_state_change(&doc, None, None, &state_index);
         assert!(dirty_roots.is_empty(), "no-op transition must yield an empty root-set");
-        let delta = RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing, shallow_roots: Default::default(), point_roots: Default::default() };
+        let delta = RestyleDelta { invalidation: None, prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing, shallow_roots: Default::default(), point_roots: Default::default() };
         set_incremental_restyle(true);
         let _ = crate::counters::take_cascade_stats();
         let (incr, _incr_counters) = layout_mutation_incremental_restyle(
@@ -2761,7 +2761,7 @@ mod tests {
         let node_index = restyle_node_index(&doc, &sheet);
         let dirty_roots =
             restyle_root_set_for_node_change(&doc, [(a, NodeChange::Attr("class"))], &node_index);
-        let delta = RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Untracked, shallow_roots: Default::default(), point_roots: Default::default() };
+        let delta = RestyleDelta { invalidation: None, prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Untracked, shallow_roots: Default::default(), point_roots: Default::default() };
         set_incremental_restyle(true);
         let (incr, _incr_counters) = layout_mutation_incremental_restyle(
             &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta,
@@ -2848,7 +2848,7 @@ mod tests {
              S17 must narrow the root-set to #a instead of widening to #menu",
         );
 
-        let delta = RestyleDelta {
+        let delta = RestyleDelta { invalidation: None,
             prev_styles: prev_counters.styles().clone(),
             dirty_roots,
             content_dirty: crate::counters::ContentDirty::Untracked,
@@ -2948,7 +2948,7 @@ mod tests {
         // The complete content record a tracked mutation source hands over: the
         // attribute write touched #a's content and nothing else.
         let content: std::collections::HashSet<lumen_dom::NodeId> = [a].into_iter().collect();
-        let delta = RestyleDelta {
+        let delta = RestyleDelta { invalidation: None,
             prev_styles: prev_counters.styles().clone(),
             dirty_roots,
             content_dirty: ContentDirty::Nodes(&content),
@@ -3042,7 +3042,7 @@ mod tests {
         let node_index = restyle_node_index(&doc, &sheet);
         let dirty_roots =
             restyle_root_set_for_node_change(&doc, [(menu, NodeChange::Unattributed)], &node_index);
-        let delta = RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Untracked, shallow_roots: Default::default(), point_roots: Default::default() };
+        let delta = RestyleDelta { invalidation: None, prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Untracked, shallow_roots: Default::default(), point_roots: Default::default() };
         set_incremental_restyle(true);
         let (incr, _incr_counters) = layout_mutation_incremental_restyle(
             &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta,
@@ -3218,7 +3218,7 @@ mod tests {
         let prev = precompute_counters(&doc, &sheet, vp, &flat, false);
 
         set_incremental_restyle(true);
-        let delta = RestyleDelta {
+        let delta = RestyleDelta { invalidation: None,
             prev_styles: prev.styles().clone(),
             dirty_roots: Default::default(),
             content_dirty: crate::counters::ContentDirty::Nothing,
@@ -3280,7 +3280,7 @@ mod tests {
         dirty_roots.insert(dirty_root);
 
         set_incremental_restyle(true);
-        let delta = RestyleDelta {
+        let delta = RestyleDelta { invalidation: None,
             prev_styles: prev.styles().clone(),
             dirty_roots,
             content_dirty: crate::counters::ContentDirty::Nothing,
@@ -3569,7 +3569,7 @@ mod tests {
         // Incremental: same transition, conservative root-set derived from it.
         let state_index = crate::style::restyle_state_index(&doc, &sheet);
         let dirty_roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b), &state_index);
-        let delta = RestyleDelta { prev_styles: baseline.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing, shallow_roots: Default::default(), point_roots: Default::default() };
+        let delta = RestyleDelta { invalidation: None, prev_styles: baseline.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing, shallow_roots: Default::default(), point_roots: Default::default() };
         set_incremental_restyle(true);
         take_cascade_stats();
         let incr_after = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
@@ -3639,7 +3639,7 @@ mod tests {
             restyle_root_set_for_node_change(&doc, [(a, NodeChange::Attr("class"))], &node_index);
         // BUG-341 S4: a DOM class mutation is NOT `dom_content_stable` — box-build
         // reuse must not trust style-equality alone here (see `RestyleDelta` doc).
-        let delta = RestyleDelta { prev_styles: baseline.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Untracked, shallow_roots: Default::default(), point_roots: Default::default() };
+        let delta = RestyleDelta { invalidation: None, prev_styles: baseline.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Untracked, shallow_roots: Default::default(), point_roots: Default::default() };
         set_incremental_restyle(true);
         take_cascade_stats();
         let incr_after = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);

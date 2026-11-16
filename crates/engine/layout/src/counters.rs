@@ -42,6 +42,7 @@ use crate::style::{
     compute_pseudo_element_style, Content, ComputedStyle, ContentItem, ListStyleType, ShareCache,
     slot_assigned_directionality,
 };
+use crate::style::invalidation::{InvalidatedRules, MatchRestriction, MatchedRule};
 use crate::custom_flow::CustomFlow;
 use lumen_css_parser::Stylesheet;
 use lumen_core::id_hash::{IdMap, IdSet};
@@ -96,6 +97,11 @@ const NO_PARENT: u32 = u32::MAX;
 /// the steady state. The invariant it maintains is the one above, stated
 /// exactly: after a pass, `entries` holds precisely the elements that pass
 /// walked, all stamped with its ordinal.
+/// One node's carried cascade entry: its style, the pass ordinal that last wrote or
+/// confirmed it, the composed-tree parent it was cascaded under, and — PERF-INVALIDATION-S1 —
+/// the rules the cascade applied for it.
+type StyleEntry = (Arc<ComputedStyle>, u32, u32, Option<Arc<[MatchedRule]>>);
+
 #[derive(Debug, Default, Clone)]
 pub struct CascadeStyles {
     /// `NodeId` → (style, ordinal of the pass that last wrote or confirmed it, raw id
@@ -110,7 +116,7 @@ pub struct CascadeStyles {
     /// BUG-935 срез 60: the parent is what tells a shallow restyle that a child was
     /// *moved* — a moved node keeps its entry (every pass visits it) but its
     /// descendants were matched against a different ancestor chain.
-    entries: IdMap<NodeId, (Arc<ComputedStyle>, u32, u32)>,
+    entries: IdMap<NodeId, StyleEntry>,
     /// Ordinal of the pass currently writing into this map, or of the last one
     /// to have finished. Wraps; see [`Self::reuse`] for why that is harmless.
     pass: u32,
@@ -157,6 +163,10 @@ pub struct CascadeStyles {
     /// (ria.ru: one `notifications` scope) used to switch the skip off for the
     /// whole document — every forced flush walked all 6000 nodes to re-cascade
     /// four.
+    /// PERF-INVALIDATION-S1 — the stylesheet revision the cached matched-rule sets were
+    /// recorded against. Rule refs index into the sheet's block lists, so a changed sheet
+    /// makes them meaningless: a pass with a different revision must not restrict.
+    sheet_revision: Option<lumen_css_parser::StylesheetRevision>,
     counter_scopes: IdSet<NodeId>,
 }
 
@@ -170,6 +180,7 @@ impl CascadeStyles {
             swept: false,
             generated_content: false,
             quotes_recorded: false,
+            sheet_revision: None,
             counter_scopes: IdSet::default(),
         }
     }
@@ -218,8 +229,20 @@ impl CascadeStyles {
     /// BUG-935 срез 98 — the style the immediately preceding pass cascaded for `id` under
     /// `parent`, without restamping it. `None` when there is none or the node moved since.
     fn peek_prev(&self, id: NodeId, parent: NodeId) -> Option<&Arc<ComputedStyle>> {
-        let (style, stamp, prev_parent) = self.entries.get(&id)?;
+        let (style, stamp, prev_parent, _) = self.entries.get(&id)?;
         (stamp.wrapping_add(1) == self.pass && *prev_parent == parent.raw()).then_some(style)
+    }
+
+    /// PERF-INVALIDATION-S1 — the rules that matched `id` in the immediately preceding pass
+    /// under `parent`; `None` when there is no entry, the node moved, or the pass did not
+    /// record them (an entry from before the mechanism existed, or a hand-assembled map).
+    fn prev_matched(&self, id: NodeId, parent: NodeId) -> Option<&Arc<[MatchedRule]>> {
+        let (_, stamp, prev_parent, matched) = self.entries.get(&id)?;
+        if stamp.wrapping_add(1) == self.pass && *prev_parent == parent.raw() {
+            matched.as_ref()
+        } else {
+            None
+        }
     }
 
     /// One hash lookup, where the pre-S24 shape needed three (`contains_key`
@@ -243,11 +266,19 @@ impl CascadeStyles {
     ///
     /// Alongside the style, the raw id of the parent it was cascaded under
     /// ([`NO_PARENT`] when there was none).
-    fn write(&mut self, id: NodeId, style: Arc<ComputedStyle>, parent: NodeId) -> Option<(Arc<ComputedStyle>, u32)> {
+    /// PERF-INVALIDATION-S1 — `matched` is the rule set the cascade actually applied for this
+    /// node (the next restricted pass's licence to skip re-matching the rest).
+    fn write(
+        &mut self,
+        id: NodeId,
+        style: Arc<ComputedStyle>,
+        parent: NodeId,
+        matched: Option<Arc<[MatchedRule]>>,
+    ) -> Option<(Arc<ComputedStyle>, u32)> {
         self.visited += 1;
         self.entries
-            .insert(id, (style, self.pass, parent.raw()))
-            .map(|(prev, _, prev_parent)| (prev, prev_parent))
+            .insert(id, (style, self.pass, parent.raw(), matched))
+            .map(|(prev, _, prev_parent, _)| (prev, prev_parent))
     }
 
     /// Close the pass: drop every entry it did not visit.
@@ -262,7 +293,7 @@ impl CascadeStyles {
             return;
         }
         let pass = self.pass;
-        self.entries.retain(|_, (_, stamp, _)| *stamp == pass);
+        self.entries.retain(|_, (_, stamp, _, _)| *stamp == pass);
     }
 
     /// How many passes have written into this cache — 0 for one that has only
@@ -301,9 +332,18 @@ impl CascadeStyles {
         self.quotes_recorded
     }
 
+    /// PERF-INVALIDATION-S1 — the stylesheet revision the matched-rule sets belong to.
+    pub fn sheet_revision(&self) -> Option<lumen_css_parser::StylesheetRevision> {
+        self.sheet_revision
+    }
+
+    fn note_sheet_revision(&mut self, revision: lumen_css_parser::StylesheetRevision) {
+        self.sheet_revision = Some(revision);
+    }
+
     /// The style this cache holds for `id`, if any.
     pub fn get(&self, id: &NodeId) -> Option<&Arc<ComputedStyle>> {
-        self.entries.get(id).map(|(style, _, _)| style)
+        self.entries.get(id).map(|(style, ..)| style)
     }
 
     /// Whether this cache holds an entry for `id`.
@@ -328,7 +368,7 @@ impl CascadeStyles {
 
     /// Iterate `(node, style)` pairs in arbitrary order.
     pub fn iter(&self) -> impl Iterator<Item = (&NodeId, &Arc<ComputedStyle>)> {
-        self.entries.iter().map(|(id, (style, _, _))| (id, style))
+        self.entries.iter().map(|(id, (style, ..))| (id, style))
     }
 
     /// This cache's contents as a plain map, dropping the pass stamps.
@@ -337,7 +377,7 @@ impl CascadeStyles {
     /// flag-off fallback in [`incremental_precompute_counters`]. Carrying the
     /// map is the whole point everywhere else.
     fn into_plain(self) -> HashMap<NodeId, Arc<ComputedStyle>> {
-        self.entries.into_iter().map(|(id, (style, _, _))| (id, style)).collect()
+        self.entries.into_iter().map(|(id, (style, ..))| (id, style)).collect()
     }
 
     /// A cache holding exactly `styles`, as though one pass had just written it.
@@ -346,7 +386,7 @@ impl CascadeStyles {
     /// document — the graft's unit gates, which care about one or two nodes.
     pub fn from_plain(styles: HashMap<NodeId, Arc<ComputedStyle>>) -> Self {
         Self {
-            entries: styles.into_iter().map(|(id, style)| (id, (style, 0, NO_PARENT))).collect(),
+            entries: styles.into_iter().map(|(id, style)| (id, (style, 0, NO_PARENT, None))).collect(),
             pass: 0,
             visited: 0,
             swept: false,
@@ -355,6 +395,7 @@ impl CascadeStyles {
             // no-op path.
             generated_content: true,
             quotes_recorded: true,
+            sheet_revision: None,
             counter_scopes: IdSet::default(),
         }
     }
@@ -388,7 +429,7 @@ impl PartialEq for CascadeStyles {
             && self
                 .entries
                 .iter()
-                .all(|(id, (style, _, _))| other.get(id).is_some_and(|o| style == o))
+                .all(|(id, (style, ..))| other.get(id).is_some_and(|o| style == o))
     }
 }
 
@@ -909,6 +950,7 @@ pub fn precompute_counters(
     let t = std::time::Instant::now();
     walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, None, false, doc.root(), false, false, None);
     note_walk_ns(t.elapsed().as_nanos() as u64);
+    map.styles.note_sheet_revision(sheet.revision());
     map.record_generated_content(doc, flat);
     map
 }
@@ -977,6 +1019,13 @@ pub struct RestyleDelta<'a> {
     /// edge case for v1 (see BUG-341 "S4" notes) rather than blocking the
     /// common case on a full counter-snapshot equality check.
     pub content_dirty: ContentDirty<'a>,
+    /// PERF-INVALIDATION-S1 — the rules this flush's changes can flip, from
+    /// [`crate::style::InvalidationIndex`]. `None` keeps the full candidate list for every
+    /// recompute (the wide road): a structural/unattributed change, a `class`/`id` write
+    /// with no recorded old value, a changed stylesheet, a document with author shadow
+    /// roots. `Some` lets a node recompute from its previous pass's matched set plus these
+    /// rules — the same style, without re-matching the rest of the candidate list.
+    pub invalidation: Option<InvalidatedRules>,
 }
 
 impl RestyleDelta<'_> {
@@ -1122,7 +1171,9 @@ pub fn incremental_precompute_counters(
     // next pass to walk therefore still sees its entries as one pass old.
     if delta.is_noop() {
         let _prof = lumen_core::profile::scope("cascade_noop");
-        return CounterMap::carried_unchanged(doc, flat, delta.prev_styles);
+        let mut map = CounterMap::carried_unchanged(doc, flat, delta.prev_styles);
+        map.styles.note_sheet_revision(sheet.revision());
+        return map;
     }
     let root_style = ComputedStyle::root();
     // BUG-341 S26: the stage's three parts are scoped separately because only
@@ -1140,11 +1191,12 @@ pub fn incremental_precompute_counters(
         // how many entries this one will hold — closer than `node_count`, which
         // counts text and comment nodes too. S24: and it *is* this pass's cache.
         let elements = delta.prev_styles.len();
-        let RestyleDelta { mut prev_styles, dirty_roots, shallow_roots, point_roots, content_dirty } = delta;
+        let RestyleDelta { mut prev_styles, dirty_roots, shallow_roots, point_roots, content_dirty, invalidation } = delta;
         // BUG-341 S27: read off the carried cache before it is moved into the
         // map — it is the previous walking pass's report, and the licence to
         // skip depends on it.
         let prev_quotes = prev_styles.quotes_recorded();
+        let prev_sheet = prev_styles.sheet_revision();
         let prev_counter_scopes = std::mem::take(&mut prev_styles.counter_scopes);
         let spine = restyle_spine(
             doc,
@@ -1155,7 +1207,7 @@ pub fn incremental_precompute_counters(
             prev_quotes,
         );
         let map = CounterMap::continuing(prev_styles, elements);
-        (ctx, map, IncrRestyle { dirty_roots, shallow_roots, point_roots, content_dirty, spine, prev_counter_scopes })
+        (ctx, map, IncrRestyle { dirty_roots, shallow_roots, point_roots, content_dirty, spine, prev_counter_scopes, invalidation, prev_sheet })
     };
     {
         let _prof = lumen_core::profile::scope("cascade_walk");
@@ -1167,6 +1219,7 @@ pub fn incremental_precompute_counters(
         let _prof = lumen_core::profile::scope("cascade_finish_pass");
         map.styles.finish_pass();
     }
+    map.styles.note_sheet_revision(sheet.revision());
     map.record_generated_content(doc, flat);
     map
 }
@@ -1198,6 +1251,10 @@ struct IncrRestyle<'a> {
     /// moved out of the carried cache: the subtrees the spine may not skip
     /// because they held counters (or sat inside a counter scope).
     prev_counter_scopes: IdSet<NodeId>,
+    /// PERF-INVALIDATION-S1 — see [`RestyleDelta::invalidation`].
+    invalidation: Option<InvalidatedRules>,
+    /// The stylesheet revision the carried matched-rule sets belong to.
+    prev_sheet: Option<lumen_css_parser::StylesheetRevision>,
 }
 
 /// BUG-341 S27 — the part of the document a pass with this delta can possibly
@@ -1890,13 +1947,40 @@ fn walk(
             if subtree_changed {
                 child_flow = Some(f.below(&prev, &style));
             }
-            map.styles.write(id, Arc::clone(&style), parent);
+            // A flow-written style differs only in `custom_props`, so the rule set the
+            // previous pass matched is still exactly the set this one would match.
+            let carried = map.styles.prev_matched(id, parent).map(Arc::clone);
+            map.styles.write(id, Arc::clone(&style), parent, carried);
             map.replaced_styles.insert(id, prev);
             style
         }
         (None, None) => {
+            // PERF-INVALIDATION-S1: a shallow recompute (the node's own keys or an ancestor's
+            // style may have moved) may start from the previous pass's matched rule set plus
+            // the flush's invalidated rules instead of the whole subject-candidate list. A
+            // deep/forced node has no such licence: its match can change for reasons the
+            // delta did not name rule-by-rule.
+            let restriction = incr
+                .and_then(|d| {
+                    (d.prev_sheet == Some(sheet.revision()))
+                        .then_some(d.invalidation.as_ref())
+                        .flatten()
+                })
+                .filter(|_| shallow && !deep && !force)
+                .and_then(|invalidated| {
+                    map.styles
+                        .prev_matched(id, parent)
+                        .map(|prev| MatchRestriction { prev: prev.as_ref(), invalidated })
+                });
             // BUG-284/THREAD-4 срез 2 (`style::share_cache`); result also feeds `build_box`.
-            let mut style = map.share_cache.compute(doc, id, sheet, inherited, viewport, dark_mode);
+            let (mut style, matched_rules) = match restriction {
+                Some(restriction) => {
+                    let (style, rules) =
+                        crate::style::compute_style_restricted(doc, id, sheet, inherited, viewport, dark_mode, &restriction);
+                    (Arc::new(style), rules)
+                }
+                None => map.share_cache.compute(doc, id, sheet, inherited, viewport, dark_mode),
+            };
             // BUG-1651: a recompute that lands on the same custom properties still builds them
             // as a fresh `Arc` (a node declaring one `--x` copies the whole inherited map; a
             // child of such a node inherits that copy), so every comparison against the
@@ -1911,7 +1995,7 @@ fn walk(
             }
             // BUG-341 S24: keep whatever this displaced — the graft still needs
             // to see the style `prev`'s box was built from (`replaced_styles`).
-            let displaced = map.styles.write(id, Arc::clone(&style), parent);
+            let displaced = map.styles.write(id, Arc::clone(&style), parent, Some(matched_rules));
             if shallow {
                 // Unchanged style under the same parent: the descendants' inherited
                 // chain and ancestor matching are what they were. A new node, a moved
@@ -3109,7 +3193,7 @@ mod tests {
             let sheet = lumen_css_parser::parse(css);
             let flat = lumen_dom::build_flat_tree(&doc);
             let full = precompute_counters(&doc, &sheet, vp, &flat, false);
-            let delta = RestyleDelta {
+            let delta = RestyleDelta { invalidation: None,
                 prev_styles: full.into_styles(),
                 dirty_roots: HashSet::new(),
                 content_dirty: ContentDirty::Nothing,
@@ -3195,7 +3279,7 @@ mod tests {
 
         let mut dirty_roots = HashSet::new();
         dirty_roots.insert(target);
-        let delta = RestyleDelta {
+        let delta = RestyleDelta { invalidation: None,
             prev_styles: full.into_styles(),
             dirty_roots,
             content_dirty: ContentDirty::Nothing,
@@ -3230,7 +3314,7 @@ mod tests {
     ) -> (CascadeStats, CounterMap) {
         let vp = Size::new(800.0, 600.0);
         let flat = lumen_dom::build_flat_tree(doc);
-        let delta = RestyleDelta {
+        let delta = RestyleDelta { invalidation: None,
             prev_styles: prev,
             dirty_roots,
             content_dirty: ContentDirty::Nodes(content),

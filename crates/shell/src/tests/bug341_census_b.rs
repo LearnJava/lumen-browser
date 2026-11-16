@@ -128,7 +128,7 @@ fn bug341_s27_walk_census() {
                         dirty_roots.len(),
                         touched.content.len(),
                     );
-                    let delta = lumen_layout::counters::RestyleDelta {
+                    let delta = lumen_layout::counters::RestyleDelta { invalidation: None,
                         prev_styles: std::mem::take(&mut state.prev_cascade_styles),
                         dirty_roots,
                         content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
@@ -732,7 +732,7 @@ fn bug341_s3_incremental_cascade_precompute_share() {
         // BUG-341 S24: the cache is consumed by the pass, so each sample
         // gets its own copy of the same baseline — built outside the timed
         // region, exactly like the `prev` tree copy the S4 bench below makes.
-        let delta = RestyleDelta {
+        let delta = RestyleDelta { invalidation: None,
             prev_styles: baseline.styles().clone(),
             dirty_roots: dirty_roots.clone(),
             content_dirty: lumen_layout::counters::ContentDirty::Nothing,
@@ -874,7 +874,7 @@ fn bug341_s4_incremental_box_build_share() {
     for i in 0..WARMUP + SAMPLES {
         lumen_layout::set_interactive_state(Some(tab_b), None, None);
         // BUG-341 S24: one fresh cache per sample, like the `prev` copy below.
-        let delta = RestyleDelta {
+        let delta = RestyleDelta { invalidation: None,
             prev_styles: baseline.styles().clone(),
             dirty_roots: dirty_roots.clone(),
             content_dirty: lumen_layout::counters::ContentDirty::Nothing,

@@ -709,6 +709,21 @@ impl Lumen {
                 );
             }
             dirty_roots.extend(roots.deep);
+            // PERF-INVALIDATION-S1 — the rules these changes can flip (the engine-thread
+            // flush's twin). Rule refs are only meaningful for the sheet the carried cascade
+            // was recorded against.
+            let invalidation = (prev_styles.sheet_revision() == Some(src.stylesheet.revision()))
+                .then(|| {
+                    let changes: Vec<_> =
+                        touched.changes.iter().map(|(n, c)| (*n, c.as_node_change())).collect();
+                    node_index.invalidated_rules(
+                        &doc,
+                        &changes,
+                        prev_hover != new_interactive.0 || prev_active != new_interactive.2,
+                        prev_focus != new_interactive.1,
+                    )
+                })
+                .flatten();
             let (shallow_roots, point_roots) = (roots.shallow, roots.point);
             drop(doc);
             dirty_roots_ms = dirty_roots_t0.map(|t| t.elapsed().as_secs_f32() * 1000.0);
@@ -725,7 +740,7 @@ impl Lumen {
             } else {
                 lumen_layout::counters::ContentDirty::Untracked
             };
-            let delta = lumen_layout::counters::RestyleDelta { prev_styles, dirty_roots, content_dirty, shallow_roots, point_roots };
+            let delta = lumen_layout::counters::RestyleDelta { invalidation, prev_styles, dirty_roots, content_dirty, shallow_roots, point_roots };
             lumen_layout::counters::set_incremental_restyle(true);
             // BUG-341 S15 — see the twin call in `relayout_chrome_host`: the
             // box-build reuse rides on the same content precondition computed
