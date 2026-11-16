@@ -178,4 +178,33 @@ keyword раздаётся каждой оси. JS-шим (`web_api_shim_mid.js`
 `font-variant-valid` (23 сабтеста), `font-variant-invalid` (21), `font-variant-serialization` —
 0 неожиданных результатов; `font-valid`/`font-invalid`/`font-shorthand-variant` не изменились.
 
-**Остаток:** шорткоды `mask`, `clip`/`clip-path`, `font`; `*-computed.html` (BUG-1407/1278).
+**Остаток (до среза 6):** шорткоды `mask`, `clip`/`clip-path`, `font`; `*-computed.html` (BUG-1407/1278).
+
+## Срез 6 (2026-11-16, P3): `clip-path` и `clip`
+
+`crates/engine/layout/src/style/values/clip_cssom.rs` (делегирование из
+`canonical_specified_mask` по свойствам `clip-path`/`clip`, ключи в `_LUMEN_MASK_PROPERTIES`):
+
+- `clip-path: none | url(…) | [ <basic-shape> || <geometry-box> ]`;
+  `<geometry-box>` без формы, `border-box` рядом с формой опускается;
+- basic-shapes: `inset()` (стороны + `round <radii>{1,4} [/ …]`), `circle()`
+  (`closest-side` опускается, `<position>` — канонический `x y`), `ellipse()`
+  (два `closest-side` опускаются), `polygon()` (`nonzero` и нулевой `round`
+  опускаются, вершины `x y` через `, `), `path()` (`nonzero` опускается, данные пути
+  нормализуются в `Cmd x y …`, `z` → `Z`), `rect()`/`xywh()` (четыре аргумента +
+  `round`), `shape()` (CSS Shapes 2: `from`, `move`/`line`/`hline`/`vline`/`curve`/
+  `smooth`/`arc`/`close`, флаги дуги в каноническом порядке, `small` и
+  `rotate 0deg` опускаются);
+- `clip: auto | rect(<top>, <right>, <bottom>, <left>)` (CSS 2.1 §11.1) — четыре
+  аргумента через `, `, `auto` или `<length>` без процентов;
+- единицы внутри форм пишутся как заданы (движок сводит абсолютные к px:
+  `polygon(… 5pt 6%)` остаётся `5pt`), регистр единиц нормализуется (`0Px` → `0px`).
+
+Зелёные файлы (`css/css-masking/parsing/`, ожидания `.ini` удалены):
+`clip-{valid,invalid}` (3 и 4 сабтеста), `clip-path-{valid,invalid}` (54 и 48),
+`clip-path-shape-parsing` (44), 0 неожиданных результатов.
+
+**Остаток среза 6:** `shape()`/`path()` не раскладываются — `style::parse::shape`
+знает только `inset`/`circle`/`ellipse`/`polygon`/`rect`/`xywh`, такой `clip-path`
+ничего не клипует (это раскладка, не CSSOM); шорткоды `mask`, `font`;
+`*-computed.html` (BUG-1407/1278).

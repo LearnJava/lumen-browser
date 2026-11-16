@@ -5,6 +5,7 @@ pub mod background;
 pub mod background_cssom;
 pub mod border_image;
 pub mod caret;
+pub mod clip_cssom;
 pub mod box_model;
 pub mod color;
 pub mod dynamic_range_limit;

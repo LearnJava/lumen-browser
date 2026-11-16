@@ -2,7 +2,8 @@
 //!
 //! `element.style.<p> = v` проверяет значение по грамматике свойства и хранит каноническую
 //! запись (CSSOM §serialize a CSS value); недопустимое значение отбрасывается. Покрыто:
-//! `mask-{image,size,repeat,position,origin,clip,composite,mode}`.
+//! `mask-{image,size,repeat,position,origin,clip,composite,mode}`, `clip-path`/`clip`
+//! (`clip_cssom`).
 //! Слои `mask-{image,size,repeat,position*}` — та же грамматика, что у `background-*`
 //! (`background_cssom`), поэтому проверка делегируется ей; `mask-composite`/`mask-mode`/
 //! `mask-{origin,clip}` — свои списки ключевых слов. Вызывается из JS-шима
@@ -40,6 +41,8 @@ pub fn canonical_specified_mask(prop: &str, value: &str) -> Option<String> {
         "mask-composite" => list(v, |s| one_of(s, &["add", "subtract", "intersect", "exclude"])),
         // CSS Masking L1 §4.3: `alpha | luminance | match-source`.
         "mask-mode" => list(v, |s| one_of(s, &["alpha", "luminance", "match-source"])),
+        // CSS Masking L1 §3/§4.5 и CSS 2.1 §11.1 — своя грамматика (`clip_cssom`).
+        "clip-path" | "clip" => super::clip_cssom::canonical_specified_clip(prop, v),
         _ => None,
     }
 }
