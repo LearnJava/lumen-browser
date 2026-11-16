@@ -10,6 +10,10 @@
 //!
 //! SW-MSG-S1: timer-task loop with `run_worker_tasks` + `recv_timeout` (modeled
 //! on `worker.rs`), async `setTimeout`/`setInterval`, and fetch timeout.
+//!
+//! SW-MSG-S2: `ExtendableEvent`/`ExtendableMessageEvent` classes,
+//! `waitUntil` collecting lifetime promises, and `install`/`activate` waiting
+//! for them via `_sw_extend_pending()` (capped by [`EXTEND_TIMEOUT`]).
 
 use std::time::Duration;
 
@@ -35,6 +39,10 @@ use crate::worker::run_worker_tasks;
 
 /// Timeout for a SW to call `event.respondWith()`.
 const FETCH_TIMEOUT: Duration = Duration::from_millis(5_000);
+
+/// SW-MSG-S2: cap on how long `install`/`activate` may be extended by
+/// `waitUntil` promises before the thread gives up waiting.
+const EXTEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Build the `ServiceWorkerGlobalScope` shim source for a given (already
 /// JS-string-literal-quoted) `scope_str`.
@@ -315,13 +323,101 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     }}));
   }};
 
-  // _sw_fire_event: fire install/activate handlers.
-  globalThis._sw_fire_event = function(type) {{
-    var fns = _handlers[type] || [];
-    var evt = {{ type: type, waitUntil: function(p) {{}} }};
-    for (var i = 0; i < fns.length; i++) {{
-      try {{ fns[i](evt); }} catch(e) {{ }}
+  // ── ExtendableEvent (SW §4.5) / ExtendableMessageEvent (SW §4.7) ────────────
+  // SW-MSG-S2: `waitUntil` collects the lifetime promises of the dispatch in
+  // flight; the Rust thread polls `_sw_extend_pending()` and keeps running
+  // timers until it drops to zero or EXTEND_TIMEOUT. `waitUntil` outside a
+  // dispatch with nothing still pending throws the spec InvalidStateError.
+  var _extend_promises = [];
+  var _extend_active = false;
+  function _sw_ext_track(p) {{
+    var pr = (p && typeof p.then === 'function') ? p : Promise.resolve(p);
+    pr.then(function() {{ pr._sw_settled = true; }},
+            function(reason) {{
+              pr._sw_settled = true;
+              // Read (and logged) by the Rust thread after `install` only —
+              // full failed-install behaviour is BUG-1742, not here.
+              globalThis._sw_extend_error__ = String((reason && reason.message) || reason);
+            }});
+    _extend_promises.push(pr);
+  }}
+  function ExtendableEvent(type, init) {{
+    Event.call(this, type, init);
+  }}
+  ExtendableEvent.prototype = Object.create(Event.prototype);
+  ExtendableEvent.prototype.constructor = ExtendableEvent;
+  Object.defineProperty(ExtendableEvent.prototype, Symbol.toStringTag, {{
+    value: 'ExtendableEvent', configurable: true,
+  }});
+  ExtendableEvent.prototype.waitUntil = function(promise) {{
+    if (!_extend_active && globalThis._sw_extend_pending() === 0) {{
+      throw new DOMException(
+        "Failed to execute 'waitUntil' on 'ExtendableEvent': The event has "
+        + "already been dispatched or its lifetime has ended.",
+        'InvalidStateError');
     }}
+    _sw_ext_track(promise);
+  }};
+  globalThis.ExtendableEvent = ExtendableEvent;
+
+  function ExtendableMessageEvent(type, init) {{
+    ExtendableEvent.call(this, type, init);
+    init = init || {{}};
+    this.data = (init.data !== undefined) ? init.data : null;
+    this.origin = (init.origin != null) ? String(init.origin) : '';
+    this.lastEventId = (init.lastEventId != null) ? String(init.lastEventId) : '';
+    var s = init.source;
+    // SW §4.7: `source` is `Client`/`ServiceWorker`/`MessagePort` or null —
+    // anything else is a TypeError. `Client`/`ServiceWorker` classes may not
+    // exist in this isolate yet (SW-MSG-S3/S5), so match by constructor name.
+    var ok = (s == null)
+      || (typeof MessagePort === 'function' && s instanceof MessagePort)
+      || (s && typeof s === 'object'
+          && /^(?:Window)?Client$|^ServiceWorker$/.test(
+               String(s.constructor && s.constructor.name)));
+    if (!ok) {{
+      throw new TypeError(
+        "Failed to construct 'ExtendableMessageEvent': member 'source' is "
+        + "not of type Client, ServiceWorker or MessagePort.");
+    }}
+    this.source = (s === undefined) ? null : s;
+    this.ports = Object.freeze(Array.isArray(init.ports) ? init.ports.slice() : []);
+  }}
+  ExtendableMessageEvent.prototype = Object.create(ExtendableEvent.prototype);
+  ExtendableMessageEvent.prototype.constructor = ExtendableMessageEvent;
+  Object.defineProperty(ExtendableMessageEvent.prototype, Symbol.toStringTag, {{
+    value: 'ExtendableMessageEvent', configurable: true,
+  }});
+  globalThis.ExtendableMessageEvent = ExtendableMessageEvent;
+
+  // How many `waitUntil` promises of the last dispatch are still unsettled.
+  // Read by the Rust thread.
+  globalThis._sw_extend_pending = function() {{
+    var n = 0;
+    for (var i = 0; i < _extend_promises.length; i++) {{
+      if (!_extend_promises[i]._sw_settled) n++;
+    }}
+    return n;
+  }};
+
+  // SW-MSG-S2: dispatch an extendable event — reset the collector, run the
+  // listeners inside the dispatch window, close the window.
+  globalThis._sw_dispatch_extendable = function(evt) {{
+    _extend_promises = [];
+    _extend_active = true;
+    try {{
+      var fns = (_handlers[evt.type] || []).slice();
+      for (var i = 0; i < fns.length; i++) {{
+        try {{ fns[i].call(self, evt); }} catch(e) {{ }}
+      }}
+    }} finally {{
+      _extend_active = false;
+    }}
+  }};
+
+  // _sw_fire_event: fire install/activate as ExtendableEvents.
+  globalThis._sw_fire_event = function(type) {{
+    globalThis._sw_dispatch_extendable(new ExtendableEvent(type));
   }};
 
   // _sw_fire_fetch: dispatch FetchEvent, collect respondWith body.
@@ -349,7 +445,7 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
           }});
         }});
       }},
-      waitUntil: function(p) {{}},
+      waitUntil: function(p) {{ _sw_ext_track(p); }},
       preventDefault: function() {{}},
     }};
     for (var i = 0; i < fns.length; i++) {{
@@ -395,19 +491,14 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     }};
   }}
 
-  // _sw_fire_push: dispatch PushEvent (Push API L1 §5). No respondWith-style
-  // return value — the SW's job is `waitUntil(showNotification(...))`
-  // side effects, nothing the Rust side reads back.
+  // _sw_fire_push: dispatch PushEvent (Push API L1 §5) as an ExtendableEvent
+  // (SW-MSG-S2). No respondWith-style return value — the SW's job is
+  // `waitUntil(showNotification(...))` side effects, nothing the Rust side
+  // reads back.
   globalThis._sw_fire_push = function(payloadB64) {{
-    var fns = _handlers['push'] || [];
-    var evt = {{
-      type: 'push',
-      data: new PushMessageData(payloadB64),
-      waitUntil: function(p) {{}},
-    }};
-    for (var i = 0; i < fns.length; i++) {{
-      try {{ fns[i](evt); }} catch(e) {{ }}
-    }}
+    var evt = new ExtendableEvent('push');
+    evt.data = new PushMessageData(payloadB64);
+    globalThis._sw_dispatch_extendable(evt);
   }};
 
   // _sw_fire_push_subscription_change: dispatch PushSubscriptionChangeEvent
@@ -415,16 +506,10 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
   // subscription for this scope (see `crate::push_api`'s `subscribe` native).
   globalThis._sw_fire_push_subscription_change = function(
       oldEndpoint, oldP256dhB64, oldAuthB64, newEndpoint, newP256dhB64, newAuthB64) {{
-    var fns = _handlers['pushsubscriptionchange'] || [];
-    var evt = {{
-      type: 'pushsubscriptionchange',
-      oldSubscription: _sw_make_subscription(oldEndpoint, oldP256dhB64, oldAuthB64),
-      newSubscription: _sw_make_subscription(newEndpoint, newP256dhB64, newAuthB64),
-      waitUntil: function(p) {{}},
-    }};
-    for (var i = 0; i < fns.length; i++) {{
-      try {{ fns[i](evt); }} catch(e) {{ }}
-    }}
+    var evt = new ExtendableEvent('pushsubscriptionchange');
+    evt.oldSubscription = _sw_make_subscription(oldEndpoint, oldP256dhB64, oldAuthB64);
+    evt.newSubscription = _sw_make_subscription(newEndpoint, newP256dhB64, newAuthB64);
+    globalThis._sw_dispatch_extendable(evt);
   }};
 
   // Console (BUG-1782): the full standard surface from `CONSOLE_SHIM`'s
@@ -584,8 +669,12 @@ fn run_sw_thread_v8(
 
     // Fire install then activate. No manual microtask pump needed (V8 runs
     // its own queue to completion inside `eval`) — see module doc comment.
+    // SW-MSG-S2: each phase waits for its `waitUntil` promises (timers keep
+    // running) before the next one starts.
     let _ = rt.eval("if(typeof _sw_fire_event==='function'){_sw_fire_event('install');}");
+    drain_extend_v8(&rt, true);
     let _ = rt.eval("if(typeof _sw_fire_event==='function'){_sw_fire_event('activate');}");
+    drain_extend_v8(&rt, false);
 
     // SW-MSG-S1: timer‑task loop modelled on the dedicated worker's (BUG‑815).
     loop {
@@ -615,6 +704,37 @@ fn run_sw_thread_v8(
         }
         // SW-MSG-S1: flush any timers that the dispatched message may have armed.
         let _ = rt.eval("if(typeof _lumen_flush_timers==='function')_lumen_flush_timers();");
+    }
+}
+
+/// SW-MSG-S2: run the isolate's task loop until the last extendable dispatch
+/// has no unsettled `waitUntil` promises left, capped at [`EXTEND_TIMEOUT`].
+/// `log_rejected` is `install` only: a rejected promise there means a failed
+/// install (full failed-install behaviour is BUG-1742), so it is logged.
+#[cfg(feature = "v8-backend")]
+fn drain_extend_v8(rt: &V8JsRuntime, log_rejected: bool) {
+    let start = std::time::Instant::now();
+    while matches!(
+        rt.eval("typeof _sw_extend_pending==='function'?_sw_extend_pending():0"),
+        Ok(lumen_core::JsValue::Number(n)) if n > 0.0
+    ) {
+        if start.elapsed() >= EXTEND_TIMEOUT {
+            break;
+        }
+        // `None` — no timer left that could settle anything (microtasks drain
+        // inside each `eval`), so the promises can only be stuck.
+        let Some(wait) = run_worker_tasks(rt) else {
+            break;
+        };
+        std::thread::sleep(wait.min(Duration::from_millis(20)));
+    }
+    if log_rejected {
+        if let Ok(lumen_core::JsValue::String(e)) =
+            rt.eval("globalThis._sw_extend_error__ === undefined ? null : _sw_extend_error__")
+        {
+            eprintln!("[sw] waitUntil rejected during install: {e}");
+        }
+        let _ = rt.eval("globalThis._sw_extend_error__ = undefined;");
     }
 }
 
@@ -1381,6 +1501,117 @@ self.addEventListener('fetch', function(event) {
 
         let result = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
         assert_eq!(result, Some("привет с сервера".as_bytes().to_vec()));
+    }
+
+    /// SW-MSG-S2: `waitUntil` в обработчике `install` продлевает его жизнь —
+    /// `activate` стартует не раньше, чем разрешится промис. Порядок виден в
+    /// массиве, который читается через fetch-ответ: таймер 5 мс внутри окна
+    /// продления выставляет `__wait_done`, и если `activate` успел раньше
+    /// конца 40-мс промиса, там остался бы `undefined`.
+    #[test]
+    fn sw_extendable_event_wait_until_extends_install() {
+        let cache = MockCache::new();
+        let handle = spawn_sw_worker_v8(
+            "https://example.com".to_string(),
+            "/".to_string(),
+            r#"
+var __order = [];
+self.addEventListener('install', function(e) {
+    __order.push('install');
+    e.waitUntil(new Promise(function(r) { setTimeout(r, 40); }));
+});
+self.addEventListener('activate', function() {
+    __order.push('activate:' + globalThis.__wait_done);
+});
+setTimeout(function() { globalThis.__wait_done = true; }, 5);
+self.addEventListener('fetch', function(e) {
+    e.respondWith(Promise.resolve(new Response(JSON.stringify(__order))));
+});
+"#
+            .to_string(),
+            Arc::clone(&cache) as Arc<dyn CacheBackend>,
+            None,
+            None,
+            None,
+        );
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        handle
+            .tx
+            .send(lumen_core::ext::SwWorkerMessage::Fetch(lumen_core::ext::SwFetchRequest {
+                url: "https://example.com/order".to_string(),
+                method: "GET".to_string(),
+                response_tx: tx,
+            }))
+            .unwrap();
+        let result = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap()
+            .expect("SW должен ответить на fetch");
+        let order = String::from_utf8(result).unwrap();
+        assert!(order.contains("install"), "{order}");
+        assert!(
+            order.contains("activate:true"),
+            "activate должен прийти после конца waitUntil-промиса (40 мс), а не сразу: {order}"
+        );
+    }
+
+    /// SW-MSG-S2: `waitUntil` вне окна диспатча, когда ожидающих промисов
+    /// больше нет — спецификационный `InvalidStateError` (SW §4.5).
+    #[test]
+    fn sw_extendable_event_wait_until_after_dispatch_throws_invalid_state() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None, None)
+            .unwrap();
+        rt.eval(
+            "globalThis.__thrown = null;
+             _sw_fire_event('install');
+             try {
+               (new ExtendableEvent('x')).waitUntil(Promise.resolve());
+             } catch (err) { globalThis.__thrown = err.name; }",
+        )
+        .unwrap();
+        assert_eq!(
+            rt.eval("globalThis.__thrown").unwrap(),
+            lumen_core::JsValue::String("InvalidStateError".into())
+        );
+    }
+
+    /// SW-MSG-S2: конструктор `ExtendableMessageEvent` (SW §4.7) — значения
+    /// по умолчанию, наследование от `ExtendableEvent`, замороженный `ports`
+    /// и `TypeError` на постороннем `source`.
+    #[test]
+    fn sw_extendable_message_event_constructor() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None, None)
+            .unwrap();
+        rt.eval(
+            "var e = new ExtendableMessageEvent('message');
+             globalThis.__r = [
+               e instanceof ExtendableEvent,
+               e.data === null, e.origin === '', e.lastEventId === '',
+               e.source === null, e.ports.length === 0,
+               Object.isFrozen(e.ports),
+               e.type === 'message',
+             ];
+             var p = new MessagePort();
+             var e2 = new ExtendableMessageEvent('message',
+                 { data: 5, origin: 'https://x.test', source: p, ports: [p] });
+             globalThis.__r.push(e2.data === 5, e2.origin === 'https://x.test',
+                 e2.source === p, e2.ports[0] instanceof MessagePort);
+             globalThis.__bad = 'no-throw';
+             try { new ExtendableMessageEvent('m', { source: {} }); }
+             catch (err) { globalThis.__bad = err instanceof TypeError; }",
+        )
+        .unwrap();
+        match rt.eval("globalThis.__r.every(function(v) { return v === true; })") {
+            Ok(lumen_core::JsValue::Bool(true)) => {}
+            other => panic!("поля ExtendableMessageEvent: {other:?}"),
+        }
+        assert_eq!(
+            rt.eval("globalThis.__bad").unwrap(),
+            lumen_core::JsValue::Bool(true),
+            "посторонний source обязан дать TypeError"
+        );
     }
 
     /// `indexedDB` в области воркера. `sw.js` t-банка обращается к ней на
