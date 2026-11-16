@@ -377,6 +377,12 @@ pub struct V8JsRuntime {
     pub(super) activation_consumed: Arc<AtomicBool>,
     /// Live SW execution threads keyed by `(origin, scope)`.
     pub(super) sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
+    /// SW-MSG-S3: this page's client id (SW §5.2 `Client.id`), handed out from
+    /// a process-global counter at construction. The page shim reads it via
+    /// `_lumen_sw_client_id` to stamp outgoing `ServiceWorker.postMessage`
+    /// envelopes; SW-MSG-S4's return channel keys the client message queue on
+    /// the same number.
+    pub(super) sw_client_id: Arc<AtomicU64>,
     /// BUG-1118: shell-provided hook that starts an `<img src=…>` fetch the
     /// instant script sets the attribute, instead of waiting for the next
     /// relayout — see [`lumen_core::ext::ImageLoadHook`]'s doc comment for
@@ -593,6 +599,10 @@ impl V8JsRuntime {
             activation_ever: Arc::new(AtomicBool::new(false)),
             activation_consumed: Arc::new(AtomicBool::new(false)),
             sw_worker_store: None,
+            sw_client_id: {
+                static SW_CLIENT_SEQ: AtomicU64 = AtomicU64::new(1);
+                Arc::new(AtomicU64::new(SW_CLIENT_SEQ.fetch_add(1, Ordering::Relaxed)))
+            },
             image_load_hook: None,
             ss_store: None,
             cookie_jar: None,

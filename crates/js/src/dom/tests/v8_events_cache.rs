@@ -1551,3 +1551,132 @@ fn sw_worker_store_is_keyed_by_document_origin_not_js_string() {
     let r = rt.eval("_lumen_sw_has_registration()").unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
+
+// ── SW-MSG-S3: страница → воркер ──────────────────────────────────────────────
+
+/// Fetch provider serving the registration script to the page's `register()`
+/// lifecycle fetch — the only network call this rig makes.
+struct SwScriptFetch(&'static str);
+impl lumen_core::ext::JsFetchProvider for SwScriptFetch {
+    fn fetch_sync(
+        &self,
+        url: &str,
+        _method: &str,
+    ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        Ok(lumen_core::ext::JsFetchResult {
+            status: 200,
+            status_text: "OK".into(),
+            headers: vec![],
+            body: self.0.as_bytes().to_vec(),
+            url: url.to_string(),
+        })
+    }
+}
+
+/// SW-MSG-S3: `ServiceWorker.postMessage` crosses threads and lands in the SW
+/// isolate as an `ExtendableMessageEvent` carrying `data`, the SW `origin`,
+/// and a `WindowClient` `source` — read back through a SW `fetch` response,
+/// the channel the fetch-interception plumbing already provides.
+#[test]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+fn v8_sw_page_post_message_reaches_message_event() {
+    let be = Arc::new(MockCacheBackend::new());
+    let store: lumen_core::ext::SwWorkerStore = Arc::default();
+    let script = r#"
+var _log = [];
+self.addEventListener('message', function(e) {
+  _log.push([e.data.n, e.origin, e.source.url, e.source.frameType,
+             e instanceof ExtendableMessageEvent].join('|'));
+});
+self.addEventListener('fetch', function(e) {
+  e.respondWith(new Response(_log.join(';')));
+});
+"#;
+    let rt = V8JsRuntime::new().unwrap();
+    let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(SwScriptFetch(script));
+    rt.install_dom(
+        make_doc(), "https://example.com/", Some(provider), None, None, None, None, None,
+        Some(be), None, Some(Arc::clone(&store)), false, None,
+    )
+    .unwrap();
+    rt.eval(
+        "var reg = null;
+         navigator.serviceWorker.register('/sw.js', { scope: '/' })
+             .then(function(r) { reg = r; });",
+    )
+    .unwrap();
+    // Drive the register lifecycle: two `setTimeout(0)` hops plus the script
+    // fetch, whose promise settles only from the fetch pump.
+    for _ in 0..10 {
+        let _ = rt.eval("_lumen_fetch_pump(); _lumen_tick_timers();");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(
+        matches!(
+            rt.eval("reg !== null && reg.active !== null && reg.active._scope === '/'").unwrap(),
+            lumen_core::JsValue::Bool(true)
+        ),
+        "registration never reached active"
+    );
+    // The SW execution thread spawns from a settled fetch callback — wait for
+    // its handle to appear in the store.
+    let key = ("https://example.com".to_string(), "/".to_string());
+    let mut tx = None;
+    for _ in 0..100 {
+        if let Some(h) = store.lock().unwrap().get(&key) {
+            tx = Some(h.tx.clone());
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let tx = tx.expect("SW thread never activated");
+    rt.eval(
+        "reg.active.postMessage({n:1});
+         reg.active.postMessage({n:2});
+         reg.active.postMessage({n:3});",
+    )
+    .unwrap();
+    // Messages cross threads — read the accumulated log back through a SW
+    // fetch response, retrying until all three arrived.
+    let line = "https://example.com|https://example.com/|top-level|true";
+    let expected = format!("1|{line};2|{line};3|{line}");
+    let mut body = String::new();
+    for _ in 0..100 {
+        let (rtx, rrx) = std::sync::mpsc::sync_channel(1);
+        tx.send(lumen_core::ext::SwWorkerMessage::Fetch(lumen_core::ext::SwFetchRequest {
+            url: "https://example.com/log".into(),
+            method: "GET".into(),
+            response_tx: rtx,
+        }))
+        .unwrap();
+        if let Ok(Some(b)) = rrx.recv_timeout(std::time::Duration::from_secs(2)) {
+            body = String::from_utf8(b).unwrap();
+            if body == expected {
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(body, expected);
+}
+
+/// A `postMessage` with no live worker behind the scope is a quiet no-op —
+/// the page-side envelope is built, the native drops it, nothing throws.
+#[test]
+fn v8_sw_page_post_message_without_worker_is_silent_noop() {
+    let be = Arc::new(MockCacheBackend::new());
+    let rt = runtime_on_shared_cache("https://example.com/", &be, Some(Arc::default()));
+    rt.eval(
+        "var reg = null;
+         navigator.serviceWorker.register('/sw.js', { scope: '/' })
+             .then(function(r) { reg = r; });",
+    )
+    .unwrap();
+    rt.eval(
+        "globalThis.__threw = false;
+         try { reg.installing.postMessage({hello: 'world'}); }
+         catch (e) { globalThis.__threw = true; }",
+    )
+    .unwrap();
+    assert_eq!(rt.eval("__threw").unwrap(), lumen_core::JsValue::Bool(false));
+}

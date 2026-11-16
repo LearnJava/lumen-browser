@@ -14,6 +14,10 @@
 //! SW-MSG-S2: `ExtendableEvent`/`ExtendableMessageEvent` classes,
 //! `waitUntil` collecting lifetime promises, and `install`/`activate` waiting
 //! for them via `_sw_extend_pending()` (capped by [`EXTEND_TIMEOUT`]).
+//!
+//! SW-MSG-S3: page → worker messages — `ServiceWorker.postMessage` on the
+//! page sends [`SwWorkerMessage::Message`], dispatched here as an
+//! `ExtendableMessageEvent` with a `WindowClient` `source`.
 
 use std::time::Duration;
 
@@ -401,7 +405,9 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
   }};
 
   // SW-MSG-S2: dispatch an extendable event — reset the collector, run the
-  // listeners inside the dispatch window, close the window.
+  // listeners inside the dispatch window, close the window. The matching
+  // `self.on<type>` handler runs inside the same window, so its `waitUntil`
+  // calls are collected too.
   globalThis._sw_dispatch_extendable = function(evt) {{
     _extend_promises = [];
     _extend_active = true;
@@ -409,6 +415,10 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
       var fns = (_handlers[evt.type] || []).slice();
       for (var i = 0; i < fns.length; i++) {{
         try {{ fns[i].call(self, evt); }} catch(e) {{ }}
+      }}
+      var on = self['on' + evt.type];
+      if (typeof on === 'function') {{
+        try {{ on.call(self, evt); }} catch(e) {{ }}
       }}
     }} finally {{
       _extend_active = false;
@@ -418,6 +428,50 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
   // _sw_fire_event: fire install/activate as ExtendableEvents.
   globalThis._sw_fire_event = function(type) {{
     globalThis._sw_dispatch_extendable(new ExtendableEvent(type));
+  }};
+
+  // ── Client / WindowClient (SW §5.2/§5.3, SW-MSG-S3) ─────────────────────────
+  // The `source` of an incoming `message` event, rebuilt from the JSON
+  // descriptor the page stamps onto the envelope. `focus()`/`navigate()` and
+  // `postMessage` (the return channel) arrive with later slices
+  // (SW-MSG-S4/S6).
+  function Client(info) {{
+    info = info || {{}};
+    this.id = (info.id != null) ? String(info.id) : '';
+    this.url = String(info.url || '');
+    this.type = String(info.type || 'window');
+    this.frameType = String(info.frameType || 'top-level');
+  }}
+  globalThis.Client = Client;
+  function WindowClient(info) {{
+    Client.call(this, info);
+    info = info || {{}};
+    this.visibilityState = String(info.visibilityState || 'visible');
+    this.focused = !!info.focused;
+  }}
+  WindowClient.prototype = Object.create(Client.prototype);
+  WindowClient.prototype.constructor = WindowClient;
+  Object.defineProperty(WindowClient.prototype, Symbol.toStringTag, {{
+    value: 'WindowClient', configurable: true,
+  }});
+  globalThis.WindowClient = WindowClient;
+
+  // SW-MSG-S3: dispatch a page→SW message as an ExtendableMessageEvent (SW
+  // §4.7). Data and the client descriptor arrive JSON-encoded (the same wire
+  // shape the page side built); `origin` is this SW's own origin — only
+  // same-origin pages can post, so the page's origin equals it.
+  globalThis._sw_fire_message = function(dataJson, sourceJson) {{
+    var data = null;
+    try {{ data = JSON.parse(dataJson); }} catch (e) {{ }}
+    var info = {{}};
+    try {{ info = JSON.parse(sourceJson) || {{}}; }} catch (e) {{ }}
+    var evt = new ExtendableMessageEvent('message', {{
+      data: data,
+      origin: origin,
+      source: new WindowClient(info),
+      ports: [],
+    }});
+    globalThis._sw_dispatch_extendable(evt);
   }};
 
   // _sw_fire_fetch: dispatch FetchEvent, collect respondWith body.
@@ -696,6 +750,18 @@ fn run_sw_thread_v8(
             SwWorkerMessage::Fetch(req) => {
                 let body = dispatch_fetch_v8(&rt, &req.url, &req.method);
                 let _ = req.response_tx.send(body);
+            }
+            SwWorkerMessage::Message(m) => {
+                let _ = rt.set_global("_sw_msg_data__", lumen_core::JsValue::String(m.data_json));
+                let _ =
+                    rt.set_global("_sw_msg_source__", lumen_core::JsValue::String(m.source_json));
+                let _ = rt.eval(
+                    "if(typeof _sw_fire_message==='function'){\
+                         _sw_fire_message(_sw_msg_data__,_sw_msg_source__);}",
+                );
+                // An ExtendableMessageEvent extends the worker's lifetime the
+                // same way install/activate do (SW-MSG-S2's collector).
+                drain_extend_v8(&rt, false);
             }
             SwWorkerMessage::Push(push) => dispatch_push_v8(&rt, &push.payload),
             SwWorkerMessage::PushSubscriptionChange(change) => {

@@ -4810,6 +4810,18 @@ pub struct SwPushSubscriptionChangeMessage {
     pub new: (String, String, String),
 }
 
+/// A `message` posted by the page through `ServiceWorker.postMessage`
+/// (SW §3.2.5, SW-MSG-S3). Both payloads cross as JSON strings — the same
+/// JSON compromise `Worker.prototype.postMessage` already makes; ports ride
+/// along later (SW-MSG-S5).
+pub struct SwClientMessage {
+    /// The structured-clone-able message data, JSON-encoded on the page.
+    pub data_json: String,
+    /// Descriptor of the posting client (`{id, url, type, frameType,
+    /// visibilityState, focused}`), JSON-encoded on the page.
+    pub source_json: String,
+}
+
 /// Message sent from the main thread to a Service Worker execution thread.
 ///
 /// One `mpsc` channel per SW carries every event flavour the Rust side can
@@ -4820,6 +4832,8 @@ pub struct SwPushSubscriptionChangeMessage {
 pub enum SwWorkerMessage {
     /// Dispatch a `fetch` event.
     Fetch(SwFetchRequest),
+    /// Dispatch a `message` event (page → SW, SW-MSG-S3).
+    Message(SwClientMessage),
     /// Dispatch a `push` event.
     Push(SwPushMessage),
     /// Dispatch a `pushsubscriptionchange` event.

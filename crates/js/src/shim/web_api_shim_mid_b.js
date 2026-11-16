@@ -477,14 +477,35 @@ function _sw_make_event_target() {
     };
 }
 
-function _sw_make_worker(scriptUrl, initState) {
+function _sw_make_worker(scriptUrl, initState, scope) {
     var et = _sw_make_event_target();
     var w = Object.assign({
         scriptURL: String(scriptUrl),
         state: initState || 'installing',
         onstatechange: null,
         onerror: null,
-        postMessage: function() {},
+        // SW-MSG-S3: the registration scope this object belongs to — the key
+        // `_lumen_sw_post_message` routes by.
+        _scope: String(scope || '/'),
+
+        // SW §3.2.5 `ServiceWorker.postMessage` (SW-MSG-S3): data crosses as
+        // JSON (the same compromise as `Worker.prototype.postMessage`), the
+        // client descriptor is stamped here. Ports ride along in SW-MSG-S5,
+        // so `transfer` is ignored for now. A scope with no live worker is a
+        // quiet no-op — the native drops the message.
+        postMessage: function(data /*, transfer */) {
+            if (typeof _lumen_sw_post_message !== 'function') return;
+            var payload = JSON.stringify(structuredClone(data));
+            var source = JSON.stringify({
+                id: _lumen_sw_client_id(),
+                url: (typeof location !== 'undefined') ? location.href : '',
+                type: 'window',
+                frameType: 'top-level',
+                visibilityState: (typeof document !== 'undefined' && document.visibilityState) || 'visible',
+                focused: (typeof document !== 'undefined' && document.hasFocus && document.hasFocus()) || false,
+            });
+            _lumen_sw_post_message(this._scope, payload, source);
+        },
     }, et);
     w._setState = function(s) {
         w.state = s;
@@ -615,7 +636,7 @@ function _sw_run_lifecycle(reg) {
                 var item = arr[i];
                 var reg = _sw_make_registration(item.scope, item.scriptURL);
                 if (item.state === 'activated' || item.state === 'installed') {
-                    var sw = _sw_make_worker(item.scriptURL, item.state);
+                    var sw = _sw_make_worker(item.scriptURL, item.state, item.scope);
                     reg.active = sw;
                     _sw_registrations[item.scope] = reg;
                     _lumen_sw_register(item.scope, item.scriptURL);
@@ -734,7 +755,7 @@ var _sw_container = Object.assign({
             }
         }
         var reg = _sw_make_registration(scope, scriptUrl);
-        var sw = _sw_make_worker(scriptUrl, 'installing');
+        var sw = _sw_make_worker(scriptUrl, 'installing', scope);
         reg.installing = sw;
         _sw_registrations[scope] = reg;
         // Register immediately in Rust-side map (for _lumen_sw_has_registration sync checks).

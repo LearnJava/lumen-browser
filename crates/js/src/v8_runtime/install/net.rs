@@ -23,6 +23,7 @@ pub(crate) fn install_service_worker(
     idb_sw: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
     determinism: Option<crate::worker::WorkerDeterminism>,
     page_origin: String,
+    sw_client_id: Arc<std::sync::atomic::AtomicU64>,
 ) -> JsResult<()> {
     // ── Service Worker / Cache Storage ───────────────────────────────────────
     //
@@ -126,6 +127,41 @@ pub(crate) fn install_service_worker(
                 sw_be2.as_ref().and_then(|be| be.load())
             }
         );
+
+        // SW-MSG-S3: page → SW messaging. `_lumen_sw_post_message` routes by
+        // the registry key `(page_origin, scope)` — the same key
+        // `_lumen_sw_activate_script` wrote — and a missing key (no live
+        // worker yet) is a quiet no-op, matching the pre-S3 behaviour.
+        {
+            let sws = sw_worker_store.clone();
+            let o = page_origin.clone();
+            reg!(scope, ctx, store,
+                "_lumen_sw_post_message",
+                move |scope: String, data_json: String, source_json: String| {
+                    let origin = o.clone();
+                    let Some(store) = sws.as_ref() else { return };
+                    if let Some(handle) = store.lock().unwrap().get(&(origin, scope)) {
+                        // `send` never blocks on an unbounded channel — safe
+                        // to do under the store lock.
+                        let _ = handle.tx.send(lumen_core::ext::SwWorkerMessage::Message(
+                            lumen_core::ext::SwClientMessage { data_json, source_json },
+                        ));
+                    }
+                }
+            );
+        }
+        // SW-MSG-S3: this page's `Client.id` (SW §5.2) — read by the shim when
+        // it stamps the `source` descriptor of an outgoing message.
+        {
+            let cid = sw_client_id;
+            reg!(scope, ctx, store,
+                "_lumen_sw_client_id",
+                move || -> i32 {
+                    std::sync::atomic::AtomicU64::load(&cid, std::sync::atomic::Ordering::Relaxed)
+                        as i32
+                }
+            );
+        }
 
         // _lumen_sw_activate_script(scope, script_text) — PH3-20: SW fetch interception.
         // Called from the _sw_run_lifecycle JS shim when a SW finishes the activate phase.
