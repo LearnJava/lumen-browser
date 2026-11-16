@@ -670,3 +670,200 @@ shadow-дерево + хост + slotted-дети вместо doc-wide корн
 же записи сужает сканируемый анализ, страж при этом сохраняется для
 unscanned-части); после него — цена `span:ChildList`-марки (семья BUG-935) и
 fanout-sib от class-записей.
+
+## Срез 13 (P3, 2026-11-16) — сужение до области хоста + пер-изменённый консерватизм: звук, диф-тесты зелёные, живого выигрыша нет — откачен
+
+**Механизм** (построен и откачен): split blanket-консерватизма
+`NodeRestyleIndex` (поле `conservative` осталось только sheet-уровню —
+`:nth-child(… of S)` с несобранными источниками):
+
+- `narrows_for_change(doc, node)` — сужение разрешено изменению, которое ни
+  один shadow-лист наблюдать не может (`!change_can_reach_shadow_sheets`):
+  световая запись вне границ теней идёт сканируемым анализом (s68/s73/s82/s83)
+  как на странице без теней; `shallow_ok` стал пер-изменением;
+- страж BUG-1794 с4 вместо `roots.deep.insert(doc.root())` ставит корень
+  области `shadow_scope_root` — enclosing host / сам хост / `shadow_host_of` /
+  parent-хост; поддерево хоста в composed-дереве — ровно «shadow-дерево +
+  хост + slotted-дети» (walk спускается из хоста в composed-детей с force).
+  Изменение внутри дерева и на ShadowRoot — `continue` (light-стороны нет),
+  хост и slotted-ребёнок продолжаются обычными ветками;
+- `LUMEN_NO_SHADOW_NARROW=1` — A/B-выключатель, возвращает поведение до среза
+  бит-в-байт (включая doc-root стража и бланкетный консерватизм).
+
+Тесты: shadow-харнес `bug935_shadow_narrow` (incr==full на каждом шаге, стили
+и боксы, лист дерева из `<style>` в корне; light-запись сужается, запись в
+дереве — корень хоста) и root-set тесты `node_fanout` (хост-область вместо
+документа, внутри-деревная Attr/ChildList → `{host}`, slotted-ребёнок →
+`{host}`, light-запись сужается). lib 6054 зелёных + известная флака
+deep_chain (соло зелёный); clippy `-p lumen-layout --all-targets -D warnings`
+чистый.
+
+**Живой A/B** (github homepage, compat, один бинарь, 2×2; OFF =
+`LUMEN_NO_SHADOW_NARROW=1`; репро карточки; логи
+`.tmp/perf-audit/20261116-{230853,231139,231305,232612}`, не коммитятся):
+
+| плечо | флеши | walk_sum | recomputed | wide(>1000) | ready_s |
+|---|---|---|---|---|---|
+| ON | 14 | 26,6 с | 13 301 | 6 | 53,95 |
+| ON | 13 | 126,2 с | 13 299 | 6 | 91,59 |
+| OFF | 12 | 18,4 с | 10 855 | 5 | 22,99 |
+| OFF | 9 | 12,2 с | 6 408 | 3 | 40,71 |
+
+Группы не пересекаются — ON хуже по каждой метрике в обоих сопоставлениях.
+
+**Почему не сдвинул:** широкие флеши не ушли — recomputed 2086–2279 (весь
+документ) во всех ON-прогонах. Union корней batch'а держат документные корни
+других источников: has-reach кандидаты высоко в дереве (`html.(2692)`,
+`react-app.(1384)`, `div.logged-out(2411)`) и cap среза 6, Unattributed
+parent-widen (`input:Unattributed` ×4 в changes=102), fanout-sib суммы
+(срез 83). Суженные host-корни стража в логе видны (`relative-time.(2)` ×12 —
+страж сработал как задуман), но в union поглощаются большим корнем; сужение
+light-записей ничего не меняет, пока в batch'е есть хоть один документный
+корень. Плюс детерминированная надбавка: сужение впервые включает subtree-сканы
+(`affected_descendants`, перечисление `SubjectIndex` в `has_reach_roots`) на
+большом листе github — `incr.root_set` ON1 347,6 мс/сессия против OFF1
+45,9 мс; большой флаш ON2 — 4045,9 мс против 4,61 мс на тот же shape у OFF1.
+(ON2-выброс — два флаша 46/37 с при байт-в-байт тех же счётчиках матча, что у
+OFF-флаша 2,52 с, и 4 JS-ошибки `n.setAttribute is not a function` — форма
+сессии/конкуренция, не работа механизма: ON1 те же флеши 2,7–5,4 с.)
+
+**Вердикт:** пер-изменённое сужение корней звукно и дёшево в тестах, но не
+меняет ни один широкий флаш на github и добавляет детерминированную надбавку
+сканов — откат по S32/S36 (прецеденты: срез 4, CoW среза 9, срез 12). Код
+удалён полностью, рабочее дерево бит-в-байт HEAD по коду, в карточке остаётся
+перепись. Прецедент того же класса — срез 5 [BUG-1794](BUG-1794-DUPLICATE.md)
+(«снятие `conservative` + сужение deep-корня до границы кадра,
+`shadow_sheet_root`»): verify 15/15 equal, `ready_s` не лучше — тоже откачен;
+теперь на этот механизм дважды есть независимые отрицательные замера.
+
+**Следующий рычаг** (по переписи этого среза): шторм держат не страж и не
+световые записи, а (a) has-reach кандидаты уровня html/react-app/logged-out с
+cap — «перевернулся ли матч аргумента» — диф-механизм другого класса, не
+предпринимать без перф-протокола уровня BUG-341; (b) `input:Unattributed`
+parent-widen — сначала атрибутировать источник в журнале (кто сообщает
+Unattributed на input'ах) — отдельная перепись; (c) fanout-sib суммы
+class-записей марки (срез 83) — сумма сопоставима с parent-widen. Все три —
+не точечные сужения root-set'а, а механизмы классов выше.
+
+## Срез 14 (P3, 2026-11-17) — атрибуция `input:Unattributed` (пункт (b) среза 13): это JS-записи `el.checked` (`_lumen_set_dirty_checked`), 4 записи/сессию в одном флаши, parent-корни малы — рычаг ниже порога, механизм не строился
+
+**Проба** (временная, `LUMEN_S14_PROBE=1`, снята до коммита, дерево бит-в-байт
+HEAD по коду): (1) реестр «какой натив сделал последний структурный тач узла» —
+`probe_note_structural` на всех пяти местах `record_dom_touch` в
+`install/dom_core.rs` (`set_attr_ns`, `set_dirty_value`, `clear_dirty_value`,
+`set_dirty_checked`, `clear_dirty_checked`; других вызывателей нет — grep);
+(2) «почему `changes_since` отчитала узел `Unattributed`» — arm structural
+(с источником из реестра) / `child_list_no_narrow` / `named_empty`. Печать — в
+существующей `changes=` строки `incr stages`:
+`input:Unattributed{structural:set_dirty_checked}`. Реестр глобальный, а не в
+`DomTouched`: drain page-пайплайна чистит его карты между тачем и чтением
+флаша. Смок на локальной странице (все три вида записей + чтение `offsetWidth`)
+— формат воспроизводится, «no basis» первого флаша — ожидаемо.
+
+**Числа** (живой github, homepage, compat, dev-release на ветке, репро
+карточки, `LUMEN_FRAME_LOG=1`; прогон начат 2026-11-16 23:55, ready 28,2 с,
+status OK, лог `.tmp/perf-audit/20261116-235548`, не коммитится): 15 флашей,
+`Unattributed`-записей за сессию всего 4 — все `input` с
+`structural:set_dirty_checked`, все в одном большом флаше (deep=59, тот же, что
+в переписи срезов 12–13, changes=102). Механизм: скрипт github пишет
+`el.checked` четырём инпутам → шим `HTMLInputElement.checked`
+(`web_api_shim_mid.js:10738`) → `_lumen_set_dirty_checked` → `record_dom_touch`
+(структурный «dirty value/checked»-тач, `dom_touched.rs`) → `Unattributed` в
+`changes_since` → parent-widen. Остальные источники — нули: `set_dirty_value`,
+`set_attr_ns`, `child_list_no_narrow`, `named_empty` не встретились ни разу.
+
+**Почему рычаг пуст.** Parent-widen четырёх инпутов — их родители-обёртки,
+среди 12 показанных deep-корней того же флаша форм-секции малы
+(`section.Primer_Brand__FormControl…(5)`); union большого флаша держат
+документные корни has-reach-кандидатов (`div.logged-out…(2411)`,
+`HomeView--palette…(1372)`) и fanout-sib суммы (срез 13). Потолок сужения — 4
+малых корня из 59 в одном флаши за сессию — проценты от шторма, ниже порога
+протокола 10–15 % (S32/S36; прецеденты: срезы 4, 10, CoW среза 9, 12, 13).
+
+**Будущая попытка (класс, не сайт):** писать dirty value/checked именованным
+изменением — `AttrFrom` с sentinel-именем, который `pseudo_class_read_attr_names`
+(срез 3) объявляет читаемым `:checked`/`:indeterminate`/
+`:placeholder-shown`/`:in-range` — тогда сработает существующее attr-narrowing
+(`attr_gen`, `attr_write_needs_fanout`). Брать только если найдётся
+форм-тяжёлый сайт, где этот класс штормит; на github — нет.
+
+**Гейт:** `clippy -p lumen-js --features v8-backend --all-targets -D warnings`
+чистый (код среза снят, дерево бит-в-байт HEAD); голый
+`clippy -p lumen-js --all-targets` на HEAD красный вне среза — два тест-модуля
+без `#[cfg(feature = "v8-backend")]`, заведено
+[BUG-1820](BUG-1820-OPEN.md). Коммит — только документация.
+
+**Осталось:** каноничный живой ebay-замер (когда сайт откроется); пункты (a)
+has-reach-диф и (c) fanout-sib суммы — механизмы классов выше (срез 13, (a) —
+только с перф-протоколом уровня BUG-341).
+
+## Срез 15 (P3, 2026-11-17) — перепись (c): fanout-sib на github не срабатывает ни разу — при `conservative` (любой author shadow root) весь narrowing-слой выключен; гипотеза «fanout-sib суммы» была артефактом чтения `widest=` — рычаг пуст, механизм не строился
+
+**Проба** (временная, `LUMEN_S15_PROBE=1`, снята до коммита, дерево бит-в-байт
+HEAD): реестр «первый источник каждого deep-корня `root_set_impl`» —
+`probe_note` на всех семи местах вставки deep-корней (`node_change.rs`:
+shadow-guard, childlist-orphan, nth-of-parent, fanout-sib, parent-widen,
+deep-self; `restyle.rs`: has-reach, has-reach-cap, struct-reach), drain во
+flush (`style_flush.rs`) и в relayout (UI-поток). Печать раз в флаш —
+`[engine] s15 roots: deep=N changes=M union=U тег=корней/сумма-размеров/макс`
+по 11 корзинам; union — честная площадь union корней, суммы считают
+пересекающиеся поддеревья с повтором. Смок на локальной странице (10 записей
+`a`→`z` при селекторе `.a ~ .b`, узел + следующие соседи) — формат
+воспроизводится, `fanout-sib=10/10/1`. Попутная ловушка смока: запись
+`a`→`a is-open` корня fanout не даёт — `class_write_hits` честно признаёт
+запись «немой» (токен `a` сохранён), корень остаётся shallow.
+
+**Числа** (живой github, homepage, compat-crawl, dev-release ветки `5c748cf72`,
+репро карточки, `LUMEN_FRAME_LOG=1`; лог `.tmp/perf-audit/20261117-s15-probe`,
+не коммитится; в логе две сессии — перезапуск после DIFF[a11y], состав
+идентичен; 32 incr-флаша, 27 с deep-корнями, union_sum 51 381 за обе):
+**fanout-sib = 0 корней за сессию**. Остальные корзины:
+
+| источник | корней | size_sum | доля от union_sum |
+|---|---|---|---|
+| has-reach (прямой deep, без перечисления) | 359 | 251 954 | 490 % (пересечения) |
+| parent-widen | 145 | 11 645 | 22,7 % |
+| shadow-guard (doc-root) | 8 | 21 966 | 42,8 % |
+| has-reach-cap / struct-reach / deep-self / nth-of / childlist-orphan / sheet / state | 0 | 0 | — |
+
+Большой флаш (deep=59, changes=97, union=2961 — тот же, что в переписи
+срезов 12–13): has-reach 53 корня (size_sum 25 435, макс 2960 — корни размера
+документа: `html.(2692)`, `react-app`, `div.logged-out` переписи срез 13),
+parent-widen 6 корней (16), union = весь документ. parent-widen-хвост —
+`relative-time:Attr(format/tense/precision/format-style/datetime)` (родители —
+форм-секции ~277), `img:Attr(style)`, SVG-геометрия (`width`/`height`/
+`viewBox`/`d`), 4 `input:Unattributed` (те же `el.checked` среза 14); суммы
+331–406 на флаш против union 2700 — шум.
+
+**Почему рычаг пуст.** `build_node_index` ставит
+`conservative = has_in_shadow_doc` — на github есть author shadow root, поэтому
+**во всех 32 флашах** (`shallow=0`, `has_dependency=true` в каждом)
+`shallow_ok=false` и `needs_fanout` принудительно true: ветка fanout-sib
+(`needs_fanout && written.is_some() && shallow_ok && attr_narrowing &&
+parent.is_some()`) не срабатывает ни разу, именованные записи идут в
+parent-widen, has-reach кандидаты вставляются глубокими корнями напрямую
+(`narrow=false` — без SubjectIndex-перечисления и cap-проверки срез 6).
+Гипотеза (c) среза 13 («fanout-sib суммы class-записей») была артефактом
+чтения `widest=`-печатей без источников: корни среднего размера — это
+conservative parent-widen, не fanout-sib. Перепись подтверждается данными
+срезов 12–13 (те же doc-размерные has-reach корни, тот же флаш 59/102).
+
+**Вердикт:** (c) закрыт — рычаг пуст по построению: срез 83 работает только
+поверх narrowing-слоя, который на github выключен консервативным режимом, а
+сам консерватизм уже дважды пытались снять (срез 12, срез 13 — оба отката по
+S32/S36). Держатель union на github — has-reach прямые глубокие корни +
+shadow-guard, то есть пункт (a), который остаётся под перф-протоколом уровня
+BUG-341 (срез 13). Незакрытых негейтованных рычагов у бага не осталось:
+(b) — срез 14, (c) — этот срез; каноничный ebay-замер заблокирован 403.
+Цель на github остаётся целью [PERF-INVALIDATION](../docs/tasks/PERF-INVALIDATION.md)
+(S1-инвалидационные наборы — архитектурный класс того же механизма).
+
+**Гейт:** `clippy -p lumen-layout -p lumen-js --features v8-backend -p
+lumen-shell --all-targets -D warnings` чистый (код пробы снят, дерево
+бит-в-байт HEAD); `scripts/scoped-test.sh` + `dump_golden.py` — без расхождений
+с базой. Коммит — только документация.
+
+**Осталось:** каноничный живой ebay-замер (когда сайт откроется); пункт (a)
+has-reach-диф — только с перф-протоколом уровня BUG-341 (срез 13); lift
+консервативизма — третьей попытки без новых фактов не предпринимать (срезы
+12/13, прецедент срез 5 BUG-1794).
