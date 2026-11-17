@@ -55,9 +55,10 @@ WPT-SW-SCOUT, кластер C (`docs/wpt-vendor-notes/service-workers.md`): 33 
 
 Результат на кластере C (53 файла): **15.65% → 42.88%** (8/51 → 22/51 id), TIMEOUT 23 → 9.
 
+**Срез 2026-11-18 (P3, job queue на scope):** конкурентные `register()` на одном scope больше не перезаписывают `installing` — в `web_api_shim_mid_b.js` добавлена per-scope FIFO-очередь `_sw_enqueue_scope`. Первый job на scope выполняется инлайн (одиночный `register()` по-прежнему заполняет `_sw_registrations` синхронно, как и раньше — тесты/WPT-харнесс читают его сразу), а второй и последующие конкурентные `register()` ждут, пока promise предыдущего не осядет, и только затем ставят своего worker в `installing`. Регресс-тест `sw_register_concurrent_same_scope_serializes` (в `v8_events_cache.rs`) гонит два `register()` на одном scope и проверяет, что первый резолвится с `installing.scriptURL === script1`, а второй — с `script2`. Полный `sw_`-набор — 85/85.
+
 Осталось (глубже, отдельные срезы):
 
-- **Job queue на scope** — конкурентные `register()` на одном scope перезаписывают `installing` (`register-same-scope-different-script-url` «concurrently»), нужен FIFO по scope.
 - **Провал install → `redundant`** — провал `waitUntil`/parse в изоляте не возвращает worker в `redundant` и не снимает `installing` (тест «does not install» висит на `wait_for_state(redundant)`).
 - **Script resource map** — byte-check страницы (`_sw_script_bytes`) и `importScripts` изолята дважды ходят в сеть за импортами; stash-гварды ломаются (`update-missing-import-scripts` «Initialize global state»). Нужно передавать уже скачанные импорты в изолят.
 - **`Service-Worker: script` хедер** — не шлётся (`service-worker-header` 1/1 → 0/1, честный FAIL вместо ложного PASS).

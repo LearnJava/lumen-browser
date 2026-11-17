@@ -561,6 +561,50 @@ fn sw_register_calls_lumen_primitive() {
     );
 }
 
+/// BUG-1742: concurrent `register()` on one scope is a per-scope FIFO — the
+/// second script's worker must not overwrite `installing` before the first
+/// register() promise settles (WPT
+/// `register-same-scope-different-script-url` «concurrently»).
+#[test]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+fn sw_register_concurrent_same_scope_serializes() {
+    let (rt, _store) = v8_sw_runtime_at(
+        "https://concurrent.test/app/",
+        "self.onmessage = function() {};",
+    );
+    rt.eval(
+        "var r1_script = null, r2_script = null;
+         var p1 = navigator.serviceWorker.register('/sw.js?1', { scope: '/app/' });
+         var p2 = navigator.serviceWorker.register('/sw.js?2', { scope: '/app/' });
+         p1.then(function(r) { r1_script = r.installing ? r.installing.scriptURL : 'none'; });
+         p2.then(function(r) { r2_script = r.installing ? r.installing.scriptURL : 'none'; });",
+    )
+    .unwrap();
+    let settled = (|| {
+        for _ in 0..400 {
+            let _ = rt.eval("_lumen_fetch_pump(); _lumen_tick_timers();");
+            rt.pump_workers();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            if matches!(
+                rt.eval("r1_script !== null && r2_script !== null").unwrap(),
+                lumen_core::JsValue::Bool(true)
+            ) {
+                return true;
+            }
+        }
+        false
+    })();
+    assert!(settled, "concurrent register() promises never settled");
+    assert_eq!(
+        rt.eval("r1_script").unwrap(),
+        lumen_core::JsValue::String("https://concurrent.test/sw.js?1".into())
+    );
+    assert_eq!(
+        rt.eval("r2_script").unwrap(),
+        lumen_core::JsValue::String("https://concurrent.test/sw.js?2".into())
+    );
+}
+
 /// BUG-675: evaluates `register(args)` and returns the rejection's `name`,
 /// or `"resolved:<scriptURL>"`, plus whether a registration was recorded.
 fn sw_register_outcome(page: &str, args: &str) -> (String, bool) {
