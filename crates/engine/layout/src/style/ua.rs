@@ -13,8 +13,8 @@ use lumen_dom::{Document, NodeData, NodeId};
 use crate::box_tree::canvas_has_layout_subtree;
 use crate::style::{
     BorderStyle, BoxSizing, Color, ComputedStyle, ContentVisibility, CssColor, Cursor, Display,
-    FontStyle, FontWeight, Length, LengthOrAuto, ListStyleType, TextAlign, VerticalAlign,
-    WhiteSpace, WritingMode,
+    FontStyle, FontWeight, Length, LengthOrAuto, ListStyleType, OutlineColor, OutlineStyle,
+    TextAlign, VerticalAlign, WhiteSpace, WritingMode,
 };
 use crate::style::AlignValue;
 use crate::style::Interactivity;
@@ -239,6 +239,25 @@ pub(in crate::style) fn ua_link_color(doc: &Document, node: NodeId) -> Option<Co
 /// именно UA-таблица. Авторский `cursor` перекрывает хинт, как и остальные.
 pub(in crate::style) fn ua_cursor(doc: &Document, node: NodeId) -> Option<Cursor> {
     crate::style::matching::forms::matches_any_link(doc, node).then_some(Cursor::Pointer)
+}
+/// UA stylesheet: `:focus-visible { outline: 2px auto }` (CSS UI L4 §3.3, §5.3).
+///
+/// Без этого правила клавиатурная навигация по странице невидима. Chrome рисует
+/// кольцо 2px цветом `-webkit-focus-ring-color`; `outline-color: auto` в Lumen
+/// резолвится в `currentColor` текста, поэтому цвет задаётся явно — тот же
+/// синий Chrome. UA-фаза идёт до каскада, так что авторский `outline`
+/// перекрывает кольцо целиком.
+pub(in crate::style) fn apply_ua_focus_ring(
+    doc: &Document,
+    node: NodeId,
+    style: &mut ComputedStyle,
+) {
+    if !crate::style::matching::forms::matches_focus_visible(doc, node) {
+        return;
+    }
+    style.outline_style = OutlineStyle::Auto;
+    style.outline_width = 2.0;
+    style.outline_color = OutlineColor::Color(Color { r: 0, g: 95, b: 204, a: 255 });
 }
 /// UA stylesheet: масштаб font-size для `<small>`, `<sub>`, `<sup>`.
 /// HTML5 §15.3.3: font-size: smaller (≈ 0.83× родительского).

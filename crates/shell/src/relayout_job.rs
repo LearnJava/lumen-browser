@@ -569,6 +569,9 @@ impl Lumen {
         let hovered = self.hovered_nid;
         let focused = self.focused_node;
         let active = self.active_nid;
+        // UX-FOCUS-RING: `:focus-visible` needs to know whether this focus came
+        // from the keyboard — thread-local, so the job carries it across threads.
+        let keyboard_focus = self.focus_from_keyboard;
         let forced_colors = self.a11y_store.forced_colors();
         let device_pixel_ratio = self.zoom_factor;
         let (cv_x, cv_y) = (self.scroll_x, self.scroll_y);
@@ -618,6 +621,7 @@ impl Lumen {
             let t0 = std::time::Instant::now();
             // Interactive state is thread-local — set it on THIS (engine) thread.
             lumen_layout::set_interactive_state(hovered, focused, active);
+            lumen_layout::set_keyboard_focus(keyboard_focus);
             lumen_layout::set_forced_colors(forced_colors);
             lumen_layout::set_device_pixel_ratio(device_pixel_ratio);
             lumen_layout::set_cv_scroll(cv_x, cv_y);

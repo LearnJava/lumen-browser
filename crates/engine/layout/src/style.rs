@@ -352,6 +352,7 @@ pub use env::{
     forced_colors_active, pop_ch_ex_context, pop_lh_context, pop_root_font_metrics, push_root_font_metrics, root_font_metrics, print_media_active, push_ch_ex_context, push_lh_context,
     restore_cq_axes,
     set_animated_heights, set_cq_axes, set_cq_context, set_forced_colors, set_interactive_state,
+    set_keyboard_focus,
     set_print_media, StyleEnvSnapshot, set_device_pixel_ratio, device_pixel_ratio,
 };
 pub(crate) use env::{animated_height_for, animated_heights_active, note_cq_unit};
@@ -430,6 +431,7 @@ use ua::{
     strip_ua_appearance_box_styling, ua_font_family, ua_font_size_factor,
     ua_font_style, ua_font_weight, ua_link_color, ua_text_align, ua_vertical_align, ua_white_space,
     ua_cursor,
+    apply_ua_focus_ring,
 };
 pub use ua::ua_form_element_colors;
 // Восемь `pub` item-ов — публичная поверхность крейта (`pub mod style` в
