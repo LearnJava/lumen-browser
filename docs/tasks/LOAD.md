@@ -197,3 +197,134 @@ RenderDone.
 
 **Done when:** тест: UTF-8 страница разбирается один раз (счётчик/спан `parse-html`), cp1251 —
 откат и прежний DOM; `html_parse_ms` в perf_metrics на 850-КБ документе (BUG-1694) падает.
+
+## LOAD-5 — картинки качаются со стримингового сканера, пул ≤ 8 (P6, M)
+
+**Depends on:** — (LOAD-1, LOAD-3C в `main`). **Files:** `crates/shell/src/page_pipeline.rs`
+(`warm_preload_cache` :273 и его комментарий :251-260), `crates/shell/src/page_load.rs`
+(`spawn_image_requests` :1625, `std::thread::spawn` :1695), `crates/shell/src/prefetch.rs`.
+
+1. Сканер уже эмитит `<img src/srcset>`-хинты (`dispatch_preload_hints`,
+   `PreloadHint::Image`), но байты не греет — комментарий «`<img>` сканера и preconnect
+   в байтовом кэше не нужны» устарел: после LOAD-1 не-lazy картинки в живом режиме
+   стартуют только из `apply_loaded_page` (`spawn_dynamic_image_loads`), пока идут
+   HTML+CSS+скрипты, сеть простаивает. Греять не-lazy `<img>` через `PREFETCH_CACHE`
+   из пула ≤ 8 (образец — пул LOAD-3C) общим клиентом с политикой документа, чтобы
+   `IMAGE_CACHE.get_or_decode` взял те же байты без второго запроса.
+2. `spawn_image_requests` делает `std::thread::spawn` на каждую картинку без предела —
+   перевести на тот же пул; видимые в вьюпорте впереди остальных
+   (`collect_image_requests` уже принимает viewport).
+3. Откат `LUMEN_NO_IMG_POOL=1`; headless-путь (`fetch_and_decode_images`) не трогать —
+   он читает только готовое из `IMAGE_CACHE::peek_current`.
+
+**Done when:** тест — 30 внешних картинок создают ≤ 8 потоков, каждая скачана один раз
+(счётчик запросов стенда); на стенде `load_lab.py` (картинки +3 с) GET картинок уходят
+до RenderDone (журнал сервера); первый кадр и `load` не хуже значений §LOAD-1/1B;
+`ready_s` на корпусе `docs/perf/corpus-user-ru.txt` не хуже.
+
+## LOAD-4 — финальный проход не ждёт последний CSS (P6, M)
+
+**Depends on:** — (LOAD-2 и PERF-INVALIDATION S1/S2 в `main`). **Files:**
+`crates/shell/src/page_pipeline.rs` (`build_page_cascade` :725, фазы `parse_and_layout`),
+`crates/shell/src/stylesheets.rs` (`load_linked_stylesheets` :101).
+
+1. Фетч `<link rel=stylesheet>` уже параллелен (`parallel_map`, `stylesheets.rs:131`,
+   конкатенация в порядке документа), но финальный проход ждёт все листы до экранного
+   layout. Остаток записан в §LOAD-2: `final_applied_ms` 8,6 с при CSS +5 с («не
+   менялся»); дедлайн 2 с спасает только черновик, финал ждёт до `FETCH_READ_TIMEOUT`
+   60 с (`network/src/lib.rs:1242`).
+2. В живом режиме строить каскад из пришедших к моменту финала листов (порядок
+   документа сохраняется — опоздавший лист встанет на своё место); опоздавший лист по
+   приходу запускать инкрементальный рестайл (механизм PERF-INVALIDATION), не полную
+   пересборку; `load`/`error` у `<link>` — по факту прихода, как сейчас.
+3. Headless (`--screenshot`, `graphic_tests`, `--dump-*`, `--trace-nav`) — прежний
+   путь, попиксельно без изменений.
+
+**Done when:** на стенде `load_lab.py --css-ms 5000` (dev-release) финальный кадр
+≤ прихода CSS + 1 с, поздний лист применяется инкрементально (спан каскада короче
+полного); unit-тест порядка; graphic_tests и `dump_golden.py` без изменений;
+`final_applied_s` на корпусе пользователя не хуже базы LOAD-0.
+
+## LOAD-7 — мёртвый подресурс не держит `load` окна (P6, M)
+
+**Depends on:** —. **Files:** `crates/shell/src/page_load.rs` (`pending_window_load`,
+`maybe_fire_window_load`, `unsettled_images` — LOAD-1), `dynamic_image_hook.rs`,
+`crates/network/src/lib.rs` (таймауты).
+
+1. Проба: на 5 сайтах корпуса с `ready_s` ≫ `final_applied_s` (ok-ru 45,2/6,4;
+   sports-ru 36/17,3; pikabu 21,2/7,0) атрибутировать держателей `ready_s −
+   final_applied_s` сетевым журналом и health-log `load_timing`: сетевые держатели
+   (запрос без ответа) против JS-шторма флашей — последний это BUG-1800 (P3), его не
+   трогать, только записать в отчёт задачи.
+2. Сетевые держатели: запрос картинки (и фрейма), не давший ответа к дедлайну
+   (порядка 10 с, по образцу `STREAM_CSS_DEADLINE` из LOAD-2), завершается ошибкой:
+   `<img>` получает `error`, `ImageRequestLedger`/`pending_window_load`
+   освобождаются — окно не ждёт до `FETCH_READ_TIMEOUT` 60 с. Кратные 10 с `ready_s`
+   из базы LOAD-0 (auto-ru 10,27; drom 10,2; cian 10,12; rambler 10,23; mos-ru 20,15;
+   market-yandex 30,38) — первые кандидаты на проверку.
+3. Повторный замер этих сайтов (`perf_audit --mode stability`), запись в
+   `docs/perf/journal.md`.
+
+**Done when:** unit-тест — картинка, висящая дольше дедлайна, не задерживает `load`
+окна, у `<img>` приходит `error`; на корпусе нет `ready_s` кратных 10 с сверх
+`final_applied_s` + дедлайн; статусы сайтов не ухудшаются.
+
+## LOAD-9 — одна экранная раскладка на загрузку (P6, M)
+
+**Depends on:** —. **Files:** `crates/shell/src/page_pipeline.rs` (`parse_and_layout`:
+layout для скриптов и экранный layout — карта фаз в шапке этого файла),
+`crates/shell/src/page_load.rs` (`LoadMarks`, LOAD-0).
+
+1. Финальный проход делает полный layout минимум дважды: для скриптов (геометрия до
+   исполнения) и экранный после DOMContentLoaded; на github полных layout-проходов
+   три (THREAD-3/4), layout+paint — 70 % времени загрузки (64,3 из 90,8 с headless).
+2. Если после script-layout ни DOM, ни набор листов, ни inline-стили не менялись
+   (скрипты не мутировали, новых подресурсов, меняющих геометрию, нет) — экранная
+   фаза переиспользует дерево прохода, второй полный layout не строится. Изменились —
+   как сейчас.
+3. Инструменталь: счётчик полных layout-проходов на загрузку рядом с `LoadMarks`
+   (LOAD-0), виден в health-log.
+
+**Done when:** unit-тест — одинаковый DOM даёт один layout; на github (dev-release,
+`--trace-nav`) спанов `layout` на загрузку меньше на один; graphic_tests без изменений.
+
+## LOAD-6 — параллельный матчинг селекторов начального каскада (P6, L)
+
+**Depends on:** —. **Files:** `crates/engine/layout/src/style/` (`cascade.rs`,
+`matching.rs`), вызов каскада в `crates/shell/src/page_pipeline.rs`.
+
+1. THREAD-4 (перепись на github): layout-проход 6,5–8,0 с, из них
+   `precompute_counters` 83–89 % — почти целиком `compute_style`, внутри `cs_match`
+   (матчинг селекторов) 82–92 %; сама геометрия `lay_out` — 68–87 мс (~1 %). Матчинг
+   каждого узла независим: кандидатов даёт `RuleIndex` (только чтение), результат
+   per-node, порядок каскада в матче не участвует.
+2. Срез 1: параллельный матчинг всех узлов на ограниченном пуле (чанки/уровни дерева —
+   детерминизм сохраняется); `compute_style` остаётся последовательным. Срез 2 — по
+   переписи после среза 1, если `compute_style`/`build_box` стали доминировать:
+   распараллелить и их по уровням дерева.
+3. Дифференциальный гейт: параллельный каскад байт-в-байт равен последовательному
+   (семья `LUMEN_VERIFY_INCR_CASCADE`, стенд `bug935_cascade_bench`).
+
+**Done when:** полный каскад на живом github ≤ 50 % wall time против HEAD на 8
+потоках; дифференциал равен; graphic_tests и `dump_golden.py` без изменений; запись
+до/после в `docs/perf/journal.md`.
+
+## LOAD-8 — preconnect/dns-prefetch исполняется (P6, S)
+
+**Depends on:** —. **Files:** `crates/shell/src/page_pipeline.rs`
+(`dispatch_preload_hints` :183, `PreloadHint::Preconnect` :227),
+`crates/shell/src/event_sink.rs` :33, `crates/network/src/pool.rs` / `h2/pool.rs`.
+
+1. Сейчас хинт `preconnect`/`dns-prefetch` только попадает в сетевой журнал:
+   `Event::SubresourceHintFound` — «not a fetch trigger» (`page_source.rs:617`),
+   обработчика нет. Первый подресурс с нового origin платит DNS+TCP+TLS целиком — на
+   CDN-тяжёлых порталах (auto-ru, pikabu) это стартовая задержка каждого нового хоста.
+2. По хинту греть соединение в процессный пул PERF-13 (`pool::shared_pools`):
+   `preconnect` — DNS+TCP+TLS без запроса, `dns-prefetch` — только резолв; соединение
+   переиспользуется первым настоящим запросом к origin по обычному ключу пула. ≤ 4
+   origin одновременно, чтобы хинты не открывали десятки сокетов.
+3. Фолбэк: нет свободного слота/ошибка — тихо пропустить, хинт advisory.
+
+**Done when:** стенд (локальный сервер, `<link rel=preconnect>` + скрипт с того же
+origin через 1 с): handshake один (счётчик TCP у сервера), без хинта — два; unit-тест
+ключа пула; graphic_tests не затронуты.
