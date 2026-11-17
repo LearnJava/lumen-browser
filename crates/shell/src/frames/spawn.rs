@@ -438,6 +438,7 @@ pub(crate) fn spawn_frame(
                 dedup: Arc::default(),
                 proxy: proxy.clone(),
                 stream_builder: None,
+                late_css: None,
             },
         )
     });

@@ -95,6 +95,22 @@ impl Lumen {
                 // 16-мс троттлинга: следующего куска может не быть.
                 self.paint_stream_draft(generation);
             }
+            // LOAD-4: `<link>`-лист пришёл после финального каскада — применяем
+            // его в порядке документа (см. `Lumen::apply_late_stylesheet`);
+            // до `RenderDone` своей навигации событие ждёт в очереди.
+            LoadEvent::LateStylesheet(boxed, tab_id, generation) => {
+                if !self.is_active_tab(tab_id) {
+                    self.mark_bg_tab_needs_reload(tab_id);
+                    return;
+                }
+                if generation != self.load_generation { return; }
+                // LOAD-4: лист применён (или провалился) — `load` окна больше
+                // не ждёт его; счётчик навигации, `+1` дала подписка.
+                if let Some(outstanding) = self.pending_late_css.as_ref() {
+                    outstanding.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                self.apply_late_stylesheet(generation, *boxed);
+            }
             LoadEvent::ImageDecoded { src, image, animated } => {
                 // PH1-2c: картинка декодирована параллельным потоком во время
                 // streaming. Регистрируем в renderer-е по ключу `src` (тот же,
@@ -298,6 +314,11 @@ impl Lumen {
                 let target = self.target_color_space();
                 // BUG-1118: see `DynamicImageHookCtx`'s doc comment — this is
                 // the one call site with a live `Lumen` to build it from.
+                // LOAD-4: счётчик листов «в пути» — свой у навигации; `load` окна
+                // ждёт его (`Lumen::maybe_fire_window_load`), поэтому он уезжает
+                // и в фид, и в `Lumen`.
+                let pending_late_css = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                self.pending_late_css = Some(Arc::clone(&pending_late_css));
                 let dynamic_image_hook_ctx = Some(crate::dynamic_image_hook::DynamicImageHookCtx {
                     generation,
                     dedup: Arc::clone(&self.stream_images_requested),
@@ -309,6 +330,13 @@ impl Lumen {
                     } else {
                         self.stream_builder.take()
                     },
+                    // LOAD-4: медленный `<link>` не держит финальный проход.
+                    late_css: Some(crate::stylesheets::LateCssFeed {
+                        proxy: proxy.clone(),
+                        tab_id,
+                        generation,
+                        outstanding: pending_late_css,
+                    }),
                 });
                 // BUG-1027: поток гоняет весь финальный pipeline, включая
                 // сборку дерева боксов — рекурсию по глубине DOM ценой ~10.4 КБ
@@ -412,6 +440,11 @@ impl Lumen {
                         let nav_meta = page.nav;
                         self.apply_loaded_page(page, Some(new_layout_source), new_js_ctx);
                         self.load_marks.mark_final_applied(std::time::Instant::now());
+                        // LOAD-4: страница этой навигации теперь в `layout_source` —
+                        // поздние `<link>`-листы применяем к ней, а те, что пришли
+                        // пока шёл pipeline, разбираем здесь.
+                        self.applied_page_generation = Some(generation);
+                        self.drain_pending_late_stylesheets(generation);
                         // Deliver W3C Navigation Timing L2 entry after streaming load completes.
                         // ADR-016 M2.2c-2d (20): same conversion as the reload path above —
                         // `self.js_present` gate + `route_task_js`, `nav_start` still taken

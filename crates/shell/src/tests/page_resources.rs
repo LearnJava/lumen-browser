@@ -282,7 +282,7 @@ fn load_linked_stylesheets_reports_one_outcome_per_element() {
     let base = ResourceBase::file_base(PathBuf::from("samples/page.html"));
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
-    let (css, outcomes, _blocked) = load_linked_stylesheets(&doc, &base, &sink, None, &ctx);
+    let (css, outcomes, _blocked) = load_linked_stylesheets(&doc, &base, &sink, None, &ctx, None);
     let css = crate::doc_extract::concat_chunks(&css);
     assert!(css.is_empty(), "neither sheet exists on disk");
     assert_eq!(outcomes.len(), 2, "rel=alternate is not a cascade sheet");
@@ -898,6 +898,38 @@ fn inline_style_fingerprint_handles_document_without_styles() {
 
 // ──────────────── BUG-1413: порядок листов — порядок документа ──────────────
 
+/// LOAD-4: лист `<link>`, доехавший после первой сборки каскада, дописывается
+/// в конец `DynamicCssBase::linked` — и `merge_sheet_chunks` возвращает его на
+/// место в порядке документа (CSS Cascade L4 §6.4.3): после `<style>` до него
+/// и перед `<style>` после. Той же позицией пользуется запись CSSOM-реестра.
+#[test]
+fn late_linked_sheet_takes_its_document_position() {
+    let doc = lumen_html_parser::parse(
+        r#"<html><head><link rel="stylesheet" href="first.css"><style>.mid{}</style><link rel="stylesheet" href="late.css"><style>.after{}</style></head></html>"#,
+    );
+    let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
+    let (inline, _) = extract_style_chunks(&doc, None);
+    let mut hrefs = Vec::new();
+    collect_link_hrefs(&doc, doc.root(), &mut hrefs, &ctx);
+    let (first_node, late_node) = (hrefs[0].0, hrefs[1].0);
+    // Первая сборка: пришёл только первый лист.
+    let mut linked = vec![(first_node, ".first{background-color:red}\n".to_owned())];
+    let before = merge_sheet_chunks(&doc, &inline, &linked);
+    assert!(before.contains(".first") && !before.contains(".late"), "{before:?}");
+    // Поздний лист дописан в конец вектора — позицию даёт склейка по дереву.
+    linked.push((late_node, ".late{background-color:green}\n".to_owned()));
+    let after = merge_sheet_chunks(&doc, &inline, &linked);
+    let (first, mid, late, aft) = (
+        after.find(".first").expect(".first"),
+        after.find(".mid").expect(".mid"),
+        after.find(".late").expect(".late"),
+        after.find(".after").expect(".after"),
+    );
+    assert!(first < mid && mid < late && late < aft, "поздний лист не на своём месте: {after:?}");
+    // CSSOM: среди владельцев листов до позднего стоят `<link>` и `<style>` — 2.
+    assert_eq!(crate::stylesheets::stylesheet_owner_index(&doc, late_node), 2);
+}
+
 /// `<style>` ПОСЛЕ `<link>` обязан идти в каскаде после листа из `<link>`, а
 /// `<style>` ДО `<link>` — перед ним (CSS Cascade L4 §6.4.3).
 #[test]
@@ -910,7 +942,7 @@ fn page_sheets_follow_document_order() {
     let base = ResourceBase::file_base(dir.join("page.html"));
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
     let (inline, _) = extract_style_chunks(&doc, None);
-    let (linked, _, _) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
+    let (linked, _, _) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx, None);
     let css = merge_sheet_chunks(&doc, &inline, &linked);
     let first = css.find(".first").unwrap();
     let link = css.find("background-color:red").unwrap();
@@ -929,7 +961,7 @@ fn style_after_link_wins_at_equal_specificity() {
     let base = ResourceBase::file_base(dir.join("page.html"));
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
     let (inline, _) = extract_style_chunks(&doc, None);
-    let (linked, _, _) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
+    let (linked, _, _) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx, None);
     let sheet = lumen_css_parser::parse(&merge_sheet_chunks(&doc, &inline, &linked));
     let last_bg = sheet
         .rules
@@ -960,7 +992,7 @@ fn inline_style_imports_stay_with_their_own_style() {
         lumen_network::ReferrerPolicy::default_policy(),
     );
     assert_eq!(prefixes.len(), 1);
-    let (linked, _, _) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
+    let (linked, _, _) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx, None);
     let css = merge_sheet_chunks(&doc, &resolved, &linked);
     let o = css.find(".o{}").unwrap();
     let imp = css.find(".imp{}").unwrap();
@@ -1343,7 +1375,7 @@ fn stylesheet_node_registry_preserves_document_order_across_tags() {
     let base = ResourceBase::file_base(dir.join("page.html"));
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
 
-    let entries = build_stylesheet_node_registry(&doc, &base, &sink, None);
+    let entries = build_stylesheet_node_registry(&doc, &base, &sink, None, false);
 
     assert_eq!(entries.len(), 3, "one entry per <style>/<link>, in document order");
     assert_eq!(entries[0].sheet.rules.len(), 1);
@@ -1373,7 +1405,7 @@ fn stylesheet_node_registry_drops_unfetchable_link() {
     let base = ResourceBase::file_base(PathBuf::from("samples/page.html"));
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
 
-    let entries = build_stylesheet_node_registry(&doc, &base, &sink, None);
+    let entries = build_stylesheet_node_registry(&doc, &base, &sink, None, false);
 
     assert_eq!(entries.len(), 1, "the missing link contributes no entry");
     assert_eq!(entries[0].sheet.rules[0].selector_text(), "a");
@@ -1395,7 +1427,7 @@ fn stylesheet_node_registry_skips_style_src_blocked_link() {
     );
     let base = ResourceBase::file_base(dir.join("page.html"));
 
-    let entries = build_stylesheet_node_registry(&doc, &base, &null_sink(), None);
+    let entries = build_stylesheet_node_registry(&doc, &base, &null_sink(), None, false);
 
     assert!(entries.is_empty(), "style-src 'none' must keep the link out of the registry");
 }
@@ -1417,7 +1449,7 @@ fn nonced_link_stylesheet_passes_style_src_nonce_policy() {
     let base = ResourceBase::url_base("http://127.0.0.1:9/page.html".to_owned());
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
 
-    let (_css, _outcomes, blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
+    let (_css, _outcomes, blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx, None);
 
     assert_eq!(
         blocked,
@@ -1451,7 +1483,7 @@ fn load_linked_stylesheets_falls_back_to_document_encoding() {
     let base = ResourceBase::file_base(dir.join("page.html"));
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
 
-    let (css, outcomes, _blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
+    let (css, outcomes, _blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx, None);
     let css = crate::doc_extract::concat_chunks(&css);
 
     assert!(outcomes[0].1, "a.css must be fetched");
@@ -1480,7 +1512,7 @@ fn load_linked_stylesheets_uses_link_charset_attribute() {
     let base = ResourceBase::file_base(dir.join("page.html"));
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
 
-    let (css, _, _blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
+    let (css, _, _blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx, None);
     let css = crate::doc_extract::concat_chunks(&css);
 
     assert!(
@@ -1510,7 +1542,7 @@ fn load_linked_stylesheets_bom_wins_over_document_encoding() {
     let base = ResourceBase::file_base(dir.join("page.html"));
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
 
-    let (css, _, _blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
+    let (css, _, _blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx, None);
     let css = crate::doc_extract::concat_chunks(&css);
 
     assert!(

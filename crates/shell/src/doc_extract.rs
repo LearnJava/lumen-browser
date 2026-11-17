@@ -236,6 +236,10 @@ pub(crate) struct DynamicCssBase {
     pub(crate) import_prefixes: std::collections::HashMap<NodeId, String>,
     /// Тела внешних `<link rel=stylesheet>` по узлам, в порядке документа.
     pub(crate) linked: Vec<(NodeId, String)>,
+    /// LOAD-4: в `linked` доехал лист `<link>`, пришедший после первой сборки
+    /// каскада, — следующая сверка (`Lumen::refresh_dynamic_css`) обязана
+    /// пересобрать лист из этих частей, хотя инлайновый `<style>` не менялся.
+    pub(crate) linked_dirty: bool,
     /// Хэш инлайновых `<style>`, из которых собран текущий лист.
     pub(crate) inline_fp: u64,
     /// CSSOM-5 срез 2 (BUG-897): последний увиденный

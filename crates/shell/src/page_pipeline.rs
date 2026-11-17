@@ -534,10 +534,9 @@ pub(crate) struct LayoutSource {
     /// cloning the whole `Stylesheet` on every submit. Replaced wholesale on
     /// reload/thaw, never mutated in place.
     pub(crate) stylesheet: Arc<lumen_css_parser::Stylesheet>,
-    /// CSSOM-1 срез 2: см. [`PageCascade::stylesheet_nodes`]. Ещё не читается
-    /// нигде — срез 3 подключит JS-байндинги `document.styleSheets` поверх
-    /// него.
-    #[allow(dead_code)]
+    /// CSSOM-1 срез 2: см. [`PageCascade::stylesheet_nodes`]. LOAD-4: поздний
+    /// `<link>`-лист дописывается сюда на своё место в порядке дерева вместе с
+    /// `document.styleSheets` (`Lumen::apply_late_stylesheet`).
     pub(crate) stylesheet_nodes: Arc<Vec<StylesheetNodeEntry>>,
     /// Decoded HTML source captured after encoding detection. Used by bfcache
     /// to restore the page without a network round-trip.
@@ -724,6 +723,10 @@ fn base_uri_href_blocked(doc: &Document, base: &ResourceBase, href: &str) -> Opt
 /// Verbatim the code `parse_and_layout` used to run inline; the only change is
 /// that it can now run twice for one load (once before the scripts, once after
 /// them if they changed the stylesheet set).
+///
+/// `late_css` — LOAD-4: живое окно (`None` — headless, `--deterministic`,
+/// dump-режимы) строит каскад из пришедших листов и подписывается на
+/// остальные вместо ожидания (см. `stylesheets::load_linked_stylesheets`).
 #[allow(clippy::too_many_arguments)]
 fn build_page_cascade(
     doc: &Document,
@@ -735,6 +738,7 @@ fn build_page_cascade(
     media_print: bool,
     // COMPAT-PACK-CSS: текст изолированной таблицы пакета (пусто — записи нет).
     compat_css: &str,
+    late_css: Option<&LateCssFeed>,
 ) -> Result<PageCascade, Box<dyn Error>> {
     let (css, dynamic_css, link_outcomes, blocked_by_style_src, blocked_inline_style_policies, blocked_style_attr_nodes, blocked_style_attr_policies) = {
         let _s = lumen_core::trace::span("fetch-css", "net");
@@ -785,6 +789,7 @@ fn build_page_cascade(
             sink,
             cookie_jar.clone(),
             &link_media_ctx,
+            late_css,
         );
         blocked_by_style_src.extend(blocked_by_style_src_imports);
         // BUG-1413: порядок листов — порядок элементов в документе.
@@ -792,6 +797,7 @@ fn build_page_cascade(
         let dyn_css = DynamicCssBase {
             import_prefixes,
             linked,
+            linked_dirty: false,
             inline_fp: inline_style_fingerprint(doc),
             // CSSOM-5 срез 2: placeholder — see the field's doc comment.
             adopted_fp: 0,
@@ -835,7 +841,7 @@ fn build_page_cascade(
     // PREFETCH_CACHE (см. doc-комментарий build_stylesheet_node_registry).
     let stylesheet_nodes = {
         let _s = lumen_core::trace::span("cssom-node-sheets", "parse");
-        build_stylesheet_node_registry(doc, base, sink, cookie_jar.clone())
+        build_stylesheet_node_registry(doc, base, sink, cookie_jar.clone(), late_css.is_some())
     };
 
     // PH3-19: @font-face загрузка разделена на два прохода.
@@ -1087,6 +1093,12 @@ pub(crate) fn parse_and_layout(
     // страницу, не дожидаясь картинок; `--deterministic` (graphic_tests, gdigrab-снимки)
     // и все headless-вызовы получают полностью загруженную страницу, как раньше.
     let defer_images = dynamic_image_hook_ctx.is_some() && !deterministic.enabled;
+    // LOAD-4: тот же живой режим — финальный каскад не ждёт медленный `<link>`.
+    let late_css = if defer_images {
+        dynamic_image_hook_ctx.as_mut().and_then(|c| c.late_css.take())
+    } else {
+        None
+    };
     // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
     // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы.
     let encoding = lumen_encoding::detect(bytes, content_type);
@@ -1297,6 +1309,7 @@ pub(crate) fn parse_and_layout(
     let mut cascade = build_page_cascade(
         &doc, &effective_base(&doc, base), sink, cookie_jar.clone(), viewport, dark_mode, media_print,
         &compat_inject.css,
+        late_css.as_ref(),
     )?;
     // GAP-CSPENF срез 23: hand the decision down to `Document` before the
     // first layout below reads any `style=""` attribute — see
@@ -1476,6 +1489,7 @@ pub(crate) fn parse_and_layout(
         cascade = build_page_cascade(
             &d, &effective_base(&d, base), sink, cookie_jar.clone(), viewport, dark_mode, media_print,
             &compat_inject.css,
+            late_css.as_ref(),
         )?;
         // GAP-CSPENF срез 23: re-derived alongside the rest of `cascade` —
         // scripts may have inserted new elements with a `style=""` attribute

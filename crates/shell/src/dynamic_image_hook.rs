@@ -65,6 +65,11 @@ pub(crate) struct DynamicImageHookCtx {
     /// frames, hibernation and headless callers); `parse_and_layout` takes
     /// it out before the bundle travels on to the script runtime.
     pub(crate) stream_builder: Option<lumen_html_parser::IncrementalTreeBuilder>,
+    /// LOAD-4: `<link>`-листы, не пришедшие к финальному каскаду, применяются
+    /// через `LoadEvent::LateStylesheet` — фид уносит `parse_and_layout` тем же
+    /// путём. `None` у фреймов/разморозки: их под-документы идут прежним
+    /// (блокирующим) путём.
+    pub(crate) late_css: Option<crate::stylesheets::LateCssFeed>,
 }
 
 /// See the module doc comment.

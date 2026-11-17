@@ -2,7 +2,8 @@
 
 HTML отдаётся сразу, CSS — через CSS_MS, картинки и iframe — через IMG_MS (по умолчанию
 700 мс / 3000 мс). Страница сама шлёт метки (`/mark?<имя>`): `dcl`, `raf` (первый кадр
-после разбора), `load`; сервер пишет момент каждого запроса относительно запроса HTML.
+после разбора), `load`, `css-applied` (применение листа — `load` у `<link>`, LOAD-4);
+сервер пишет момент каждого запроса относительно запроса HTML.
 
     python scripts/load_lab.py --port 8765           # слушать, печатать журнал по Ctrl+C
     python scripts/load_lab.py --port 8765 --exit-on load --timeout 40 --json out.json
@@ -50,7 +51,7 @@ def page(img_ms: int, async_ms: int = -1) -> str:
     async_tag = '<script async src="/async.js"></script>' if async_ms >= 0 else ""
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>load-lab</title>
-<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/style.css" onload="mark('css-applied')" onerror="mark('css-error')">
 <script>
 function mark(n) {{ try {{ new Image().src = '/mark?' + n + '&t=' + Math.random(); }} catch (e) {{}} }}
 document.addEventListener('DOMContentLoaded', function () {{ mark('dcl'); requestAnimationFrame(function () {{ mark('raf'); }}); }});

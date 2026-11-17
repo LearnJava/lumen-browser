@@ -1536,12 +1536,19 @@ impl Lumen {
             .as_ref()
             .and_then(|p| p.async_scripts.as_ref())
             .is_some_and(|feed| feed.pending() > 0);
+        // LOAD-4: медленный `<link>`-лист держит `load` (HTML LS §4.6.7) — кадр
+        // его уже не ждёт, а событие `load` окна обязано дождаться.
+        let css_busy = self
+            .pending_late_css
+            .as_ref()
+            .is_some_and(|n| n.load(std::sync::atomic::Ordering::Relaxed) > 0);
         if !window_load_due(
             true,
             self.stream_image_sizes_dirty,
             unsettled,
             self.deferred_frames_busy(),
             async_busy,
+            css_busy,
         ) {
             return;
         }
@@ -2488,6 +2495,15 @@ fn feed_preload_and_emit(
             _ => continue,
         };
         let resolved_str = base.resolve_str(raw_url);
+        // GAP-CSPENF срез 47 / LOAD-4: `upgrade-insecure-requests` переписывает
+        // адрес ДО гейта и запроса — тем же порядком, что у финального прохода
+        // (`stylesheets::stylesheet_gate_url`). Без этого слот прогрева заводился
+        // на `http://`, финальный каскад искал `https://` и качал лист вторым
+        // запросом, а LOAD-4 считал уже пришедший лист непришедшим.
+        let resolved_str = [header_csp, &meta_csp[..]]
+            .into_iter()
+            .find_map(|policies| crate::csp_enforce::upgrade_insecure_url(policies, &resolved_str))
+            .unwrap_or(resolved_str);
         if [header_csp, &meta_csp[..]].into_iter().any(|policies| {
             crate::csp_enforce::speculative_fetch_blocked(policies, hint, &resolved_str, self_origin.as_ref())
         }) {
@@ -2509,7 +2525,7 @@ fn feed_preload_and_emit(
                     let _ = proxy.send_event(LoadEvent::CssLoaded(Box::new(sheet), tab_id, generation));
                 }
             }
-            ResolvedResource::Url(resolved) => {
+            ResolvedResource::Url(_) => {
                 // LOAD-3C: загрузка идёт на ограниченном пуле (`WARM_POOL`, ≤ 8
                 // потоков), а не на потоке под каждую подсказку, и тем же клиентом
                 // с той же referrer-политикой, что финальный проход
@@ -2517,7 +2533,7 @@ fn feed_preload_and_emit(
                 // один и тот же `Referer`.
                 let client = warm_client.client(base, referrer_policy);
                 let proxy2 = proxy.clone();
-                let Ok(parsed) = lumen_core::url::Url::parse(&resolved) else {
+                let Ok(parsed) = lumen_core::url::Url::parse(&resolved_str) else {
                     if is_css {
                         let _ = proxy2.send_event(LoadEvent::CssLoaded(Box::default(), tab_id, generation));
                     }
@@ -2530,7 +2546,7 @@ fn feed_preload_and_emit(
                     .map(|j| DocCookieJar::for_base(j, base));
                 crate::prefetch::PREFETCH_CACHE.warm_with(
                     generation,
-                    &resolved,
+                    &resolved_str,
                     move || {
                         client
                             .fetch_subresource_with_links(&parsed, dest)
@@ -2659,6 +2675,26 @@ impl WarmClient {
     }
 }
 
+/// LOAD-4: `<link rel=stylesheet>`, чьи байты пришли после того, как финальный
+/// проход живого окна собрал каскад (см.
+/// `stylesheets::subscribe_late_stylesheet`). Строится на потоке пула прогрева —
+/// там уже выполнен весь разбор (кодировка BUG-509, `url()`-ребейз BUG-1127,
+/// `@import`), — и применяется на UI-потоке
+/// [`crate::Lumen::apply_late_stylesheet`]: текст встаёт в
+/// `DynamicCssBase::linked` на своё место в порядке документа, лист
+/// пересобирается, restyle идёт обычным relayout-путём.
+pub(crate) struct LateStylesheet {
+    /// Узел `<link>` — по нему же уходит `load`/`error` (BUG-804).
+    pub(crate) node: u32,
+    /// `false` — фетч не удался: элемент получает `error`, каскад не меняется.
+    pub(crate) ok: bool,
+    /// Текст листа с разрешёнными `@import` (пусто при `ok == false`).
+    pub(crate) text: String,
+    /// `@import`-цели, запрещённые `style-src`: `(URL, тексты политик)` для
+    /// `securitypolicyviolation`, как `blocked_by_style_src` синхронного пути.
+    pub(crate) blocked_imports: Vec<(String, Vec<String>)>,
+}
+
 /// Событие от background-потока загрузки страницы в event loop.
 ///
 /// Загрузка разбита на четыре фазы: (0) `EarlyPreloadHints` — хинты из первых
@@ -2739,6 +2775,10 @@ pub(crate) enum LoadEvent {
     /// LOAD-3A: фоновая загрузка `async`-скрипта страницы закончилась — будит цикл, чтобы
     /// `about_to_wait` ([`Lumen::drive_async_scripts`]) исполнил его, не дожидаясь иного события.
     AsyncScriptReady,
+    /// LOAD-4: `<link>`-лист пришёл после финального каскада живого окна —
+    /// применяется сюда же (опоздавший лист, `stylesheets::LateCssFeed`).
+    /// Предпоследнее поле — id вкладки, последнее — generation навигации.
+    LateStylesheet(Box<LateStylesheet>, usize, u64),
     /// PH3-19: web-шрифт из @font-face url() декодирован в фоновом потоке.
     /// Регистрируется в FontRegistry + MultiFontMeasurer и вызывает relayout —
     /// текст появляется в fallback-шрифте сразу, подменяется по приходу (FOUT).
@@ -2887,12 +2927,15 @@ pub(crate) fn unsettled_images(
 /// `load`/`error` (`dirty`), и последнюю незавершённую картинку. LOAD-1B: и последний
 /// `<iframe>` (`frames_busy`) — HTML LS §8.2.3 держит `load` до `load` вложенных документов.
 /// LOAD-3A: и последний `async`-скрипт (`async_busy`) — он задерживает `load`, но не `DOMContentLoaded`.
+/// LOAD-4: и `<link>`-лист, пришедший после каскада (`css_busy`) — HTML LS §4.6.7 держит
+/// `load` до готовности таблицы стилей; кадр её не ждёт (LOAD-4), а `load` — ждёт.
 pub(crate) fn window_load_due(
     pending: bool,
     dirty: bool,
     unsettled: usize,
     frames_busy: bool,
     async_busy: bool,
+    css_busy: bool,
 ) -> bool {
-    pending && !dirty && unsettled == 0 && !frames_busy && !async_busy
+    pending && !dirty && unsettled == 0 && !frames_busy && !async_busy && !css_busy
 }

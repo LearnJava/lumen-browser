@@ -74,10 +74,17 @@ pub(crate) fn document_encoding(doc: &Document) -> lumen_encoding::Encoding {
 
 /// Загрузить все `<link rel=stylesheet>` документа и склеить их текст.
 ///
+/// `late` — LOAD-4: живое окно не ждёт медленный лист в финальном каскаде.
+/// `Some` строит каскад только из пришедших листов, а на остальные
+/// подписывается ([`subscribe_late_stylesheet`]); `None` — прежний
+/// блокирующий путь (headless, `--deterministic`, dump-режимы).
+///
 /// Второй элемент результата — исход по каждому элементу (`узел`, `получен
 /// ли лист`) в порядке объявления, для BUG-804: `load`/`error` принадлежат
 /// элементу `<link>`, а знает исход только этот проход. Раньше провал просто
 /// логировался, и страница не могла отличить загруженный лист от 404.
+/// Лист, оставшийся в пути (`FetchedSheet::Pending`), в этот список не входит:
+/// его `load`/`error` доставит `LoadEvent::LateStylesheet` (LOAD-4).
 ///
 /// Третий элемент — GAP-CSPENF срез 7: resolved URL каждого `<link>`, чей
 /// фетч `style-src`/`default-src` документа запретил. Фетч для них не
@@ -98,7 +105,15 @@ pub(crate) fn document_encoding(doc: &Document) -> lumen_encoding::Encoding {
 /// BUG-1413: тексты листов возвращаются кусками по узлам `<link>` (с переводом строки
 /// в конце каждого), а не одной строкой — порядок относительно инлайновых
 /// `<style>` выбирает `doc_extract::merge_sheet_chunks`.
-pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn EventSink>, cookie_jar: Option<DocCookieJar>, media_ctx: &lumen_css_parser::MediaContext) -> (SheetChunks, Vec<(NodeId, bool)>, Vec<String>) {
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn load_linked_stylesheets(
+    doc: &Document,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<DocCookieJar>,
+    media_ctx: &lumen_css_parser::MediaContext,
+    late: Option<&LateCssFeed>,
+) -> (SheetChunks, Vec<(NodeId, bool)>, Vec<String>) {
     let mut hrefs = Vec::new();
     collect_link_hrefs(doc, doc.root(), &mut hrefs, media_ctx);
     let doc_encoding = document_encoding(doc);
@@ -128,7 +143,7 @@ pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink:
     // pre-request check; read it here, before the parallel phase.
     let nonces: Vec<Option<String>> =
         hrefs.iter().map(|(id, ..)| doc.get(*id).get_attr("nonce").map(str::to_owned)).collect();
-    let parts = parallel_map(&hrefs, |i, (_, href, charset_attr, referrer_policy_attr)| {
+    let parts = parallel_map(&hrefs, |i, (node, href, charset_attr, referrer_policy_attr)| {
         // GAP-REFERRER срез 6: `referrerpolicy` на этом конкретном `<link>`
         // переопределяет политику документа только для его собственного
         // запроса (и для `@import`-ов внутри его листа — тот же источник,
@@ -137,20 +152,31 @@ pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink:
             .as_deref()
             .and_then(lumen_network::ReferrerPolicy::parse)
             .unwrap_or(doc_referrer_policy);
-        if let Some((policy, _original)) = &csp_gate {
-            let resolved_url = base.resolve_str(href);
-            // GAP-CSPENF срез 47: гейт `style-src` обязан видеть тот же
-            // апгрейженный адрес, что и фактический фетч ниже
-            // (`fetch_stylesheet_text`, теперь принимающая тот же
-            // `gate_ref`) — тем же порядком Fetch §4.1, что срезы 43-45 уже
-            // дали картинкам и `<script src>`.
-            let upgraded = crate::csp_enforce::upgrade_insecure_url(policy, &resolved_url);
-            let gate_url = upgraded.as_deref().unwrap_or(&resolved_url);
-            if crate::csp_enforce::style_link_blocked(policy, gate_url, self_origin.as_ref(), nonces[i].as_deref()) {
-                return Err(Some(gate_url.to_owned()));
-            }
+        // GAP-CSPENF срез 47: гейт `style-src` обязан видеть тот же
+        // апгрейженный адрес, что и фактический фетч ниже
+        // (`fetch_stylesheet_text`) — тем же порядком Fetch §4.1, что срезы
+        // 43-45 уже дали картинкам и `<script src>`. Он же — ключ слотов
+        // `PREFETCH_CACHE` (`stylesheet_gate_url`).
+        let gate_url = stylesheet_gate_url(href, base, gate_ref);
+        if let Some((policy, _original)) = &csp_gate
+            && crate::csp_enforce::style_link_blocked(policy, &gate_url, self_origin.as_ref(), nonces[i].as_deref())
+        {
+            return FetchedSheet::Blocked(gate_url);
         }
-        let (text, sheet_base, encoding) = fetch_stylesheet_for_cascade(
+        // LOAD-4: живое окно строит каскад из пришедших листов — незавершённую
+        // загрузку не ждём, а подписываемся на неё. Файловая база читается с
+        // диска мгновенно, поэтому решается только URL-ветка.
+        if let Some(feed) = late
+            && matches!(base.resolve(href), ResolvedResource::Url(_))
+            && crate::prefetch::PREFETCH_CACHE.try_fetch_current(&gate_url).is_none()
+        {
+            subscribe_late_stylesheet(
+                feed, *node, href, &gate_url, base, sink, cookie_jar.clone(), charset_attr.as_deref(),
+                doc_encoding, csp_gate.clone(), self_origin.clone(), referrer_policy, media_ctx,
+            );
+            return FetchedSheet::Pending;
+        }
+        match fetch_stylesheet_for_cascade(
             href,
             base,
             sink,
@@ -159,20 +185,24 @@ pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink:
             doc_encoding,
             gate_ref,
             referrer_policy,
-        )
-        .ok_or(None)?;
-        Ok(inline_css_imports(
-            &text,
-            &sheet_base,
-            sink,
-            cookie_jar.clone(),
-            media_ctx,
-            &mut std::collections::HashSet::new(),
-            0,
-            encoding,
-            gate_ref,
-            referrer_policy,
-        ))
+        ) {
+            Some((text, sheet_base, encoding)) => {
+                let (text, blocked) = inline_css_imports(
+                    &text,
+                    &sheet_base,
+                    sink,
+                    cookie_jar.clone(),
+                    media_ctx,
+                    &mut std::collections::HashSet::new(),
+                    0,
+                    encoding,
+                    gate_ref,
+                    referrer_policy,
+                );
+                FetchedSheet::Ready(text, blocked)
+            }
+            None => FetchedSheet::Failed,
+        }
     });
 
     let mut css = Vec::with_capacity(parts.len());
@@ -180,24 +210,202 @@ pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink:
     let mut blocked_by_style_src = Vec::new();
     for ((node, _, _, _), part) in hrefs.iter().zip(parts) {
         match part {
-            Ok((text, blocked_imports)) => {
+            FetchedSheet::Ready(text, blocked) => {
                 outcomes.push((*node, true));
                 // BUG-1413: кусок по узлу — склейка с инлайновыми `<style>` идёт
                 // в порядке документа (`doc_extract::merge_sheet_chunks`).
                 let mut text = text;
                 text.push('\n');
                 css.push((*node, text));
-                blocked_by_style_src.extend(blocked_imports);
+                blocked_by_style_src.extend(blocked);
             }
-            Err(blocked_url) => {
+            FetchedSheet::Blocked(blocked_url) => {
                 outcomes.push((*node, false));
-                if let Some(blocked_url) = blocked_url {
-                    blocked_by_style_src.push(blocked_url);
-                }
+                blocked_by_style_src.push(blocked_url);
             }
+            FetchedSheet::Failed => outcomes.push((*node, false)),
+            // LOAD-4: `load`/`error` придут вместе с байтами — от `Lumen`.
+            FetchedSheet::Pending => {}
         }
     }
     (css, outcomes, blocked_by_style_src)
+}
+
+/// LOAD-4: куда финальный проход живого окна сообщает о `<link>`-листе,
+/// пришедшем позже собранного каскада. `None` у вызывающего — прежний
+/// блокирующий путь (headless, `--deterministic`, dump-режимы).
+pub(crate) struct LateCssFeed {
+    /// `Lumen::load_proxy` — доставка `LoadEvent::LateStylesheet` в шелл.
+    pub(crate) proxy: winit::event_loop::EventLoopProxy<crate::page_load::LoadEvent>,
+    /// BUG-1214: события маршрутизируются к вкладке, начавшей загрузку.
+    pub(crate) tab_id: usize,
+    /// Навигация, чей каскад этот фид обслуживает.
+    pub(crate) generation: u64,
+    /// LOAD-4: сколько листов ещё в пути. HTML LS §4.6.7 держит `load` окна
+    /// до готовности листа — `Lumen::maybe_fire_window_load` читает этот счётчик
+    /// (`Lumen::pending_late_css`): `+1` при подписке, `−1` в шелле, когда
+    /// `LateStylesheet` уже применён. Счётчик у навигации свой: он создаётся
+    /// в `LoadDone`.
+    pub(crate) outstanding: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+/// Исход одного `<link rel=stylesheet>` в параллельной фазе
+/// [`load_linked_stylesheets`].
+enum FetchedSheet {
+    /// Текст листа + URL `@import`-ов, заблокированных `style-src`.
+    Ready(String, Vec<String>),
+    /// `style-src` запретил фетч; значение — адрес цели.
+    Blocked(String),
+    /// Сеть/разбор: элемент получает `error` (BUG-804).
+    Failed,
+    /// LOAD-4: лист ещё в пути; исход доставит `LoadEvent::LateStylesheet`.
+    Pending,
+}
+
+/// Ключ слотов `PREFETCH_CACHE` и цель `style-src` для `<link href>` —
+/// `upgrade-insecure-requests` переписывает схему ДО запроса (GAP-CSPENF
+/// срез 47, Fetch §4.1), и гейт, прогрев кэша и фактический фетч обязаны
+/// видеть один и тот же адрес. Один на все три места: иначе промах слота
+/// даёт второй запрос.
+fn stylesheet_gate_url(
+    href: &str,
+    base: &ResourceBase,
+    csp_gate: Option<(&[CspPolicy], Option<&Origin>)>,
+) -> String {
+    let resolved = base.resolve_str(href);
+    csp_gate
+        .and_then(|(policy, _)| crate::csp_enforce::upgrade_insecure_url(policy, &resolved))
+        .unwrap_or(resolved)
+}
+
+/// LOAD-4: подписаться на `<link>`-лист, не пришедший к финальному каскаду.
+///
+/// `warm_with` либо ждёт уже идущую загрузку (прогрев стримингового сканера),
+/// либо заводит свою — слот [`crate::prefetch::PREFETCH_CACHE`] в обоих
+/// случаях заполняется [`fetch_stylesheet_bytes`], тем же фетчем, что у
+/// синхронного пути. Байты проходят ровно тот же разбор, что дала бы
+/// синхронная ветка (`fetch_stylesheet_for_cascade` → `inline_css_imports`,
+/// BUG-509/1127 и `@import` включены), и уходят в шелл
+/// `LoadEvent::LateStylesheet`: вставить лист на его место в порядке документа
+/// может только он — там `DynamicCssBase` и порядок `merge_sheet_chunks`.
+#[allow(clippy::too_many_arguments)]
+fn subscribe_late_stylesheet(
+    feed: &LateCssFeed,
+    node: NodeId,
+    href: &str,
+    gate_url: &str,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<DocCookieJar>,
+    charset_attr: Option<&str>,
+    referring_encoding: lumen_encoding::Encoding,
+    csp_gate: Option<(Vec<CspPolicy>, String)>,
+    self_origin: Option<Origin>,
+    referrer_policy: lumen_network::ReferrerPolicy,
+    media_ctx: &lumen_css_parser::MediaContext,
+) {
+    let proxy = feed.proxy.clone();
+    let (tab_id, generation) = (feed.tab_id, feed.generation);
+    let node_raw = node.index() as u32;
+    // LOAD-4: `load` окна ждёт этот лист (HTML LS §4.6.7) — `−1` уходит
+    // в шелле, когда событие обработано и лист применён
+    // (`Lumen::pending_late_css`), чтобы `load` не обогнал стили.
+    let outstanding = std::sync::Arc::clone(&feed.outstanding);
+    outstanding.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let Ok(sub_url) = lumen_core::url::Url::parse(gate_url) else {
+        // Битая цель не даст ответа никогда — как и синхронная ветка, она
+        // означает провал загрузки.
+        let _ = proxy.send_event(crate::page_load::LoadEvent::LateStylesheet(
+            Box::new(crate::page_load::LateStylesheet {
+                node: node_raw,
+                ok: false,
+                text: String::new(),
+                blocked_imports: Vec::new(),
+            }),
+            tab_id,
+            generation,
+        ));
+        return;
+    };
+    let fetch_base = base.clone();
+    let fetch_sink = Arc::clone(sink);
+    let fetch_jar = cookie_jar.clone();
+    // Разбор идёт на потоке пула прогрева — тот же код, что у синхронной ветки.
+    let href = href.to_owned();
+    let charset_attr = charset_attr.map(str::to_owned);
+    let base = base.clone();
+    let sink = Arc::clone(sink);
+    let media_ctx = media_ctx.clone();
+    crate::prefetch::PREFETCH_CACHE.warm_with(
+        generation,
+        gate_url,
+        move || fetch_stylesheet_bytes(&sub_url, &fetch_base, &fetch_sink, fetch_jar, referrer_policy),
+        move |_result| {
+            let gate_ref = csp_gate.as_ref().map(|(p, _)| (p.as_slice(), self_origin.as_ref()));
+            let import_jar = cookie_jar.clone();
+            let payload = match fetch_stylesheet_for_cascade(
+                &href,
+                &base,
+                &sink,
+                cookie_jar,
+                charset_attr.as_deref(),
+                referring_encoding,
+                gate_ref,
+                referrer_policy,
+            ) {
+                Some((text, sheet_base, encoding)) => {
+                    let (text, blocked) = inline_css_imports(
+                        &text,
+                        &sheet_base,
+                        &sink,
+                        import_jar,
+                        &media_ctx,
+                        &mut std::collections::HashSet::new(),
+                        0,
+                        encoding,
+                        gate_ref,
+                        referrer_policy,
+                    );
+                    // LOAD-4: нарушение `style-src` на `@import` позднего листа —
+                    // тем же `securitypolicyviolation`-путём, что синхронный
+                    // проход диспатчит из `blocked_by_style_src`; пустой список
+                    // текстов заменяется объединённым текстом политики, как и там.
+                    let blocked = match csp_gate.as_ref() {
+                        Some((policy, original)) => blocked
+                            .into_iter()
+                            .map(|url| {
+                                let texts = crate::csp_enforce::violating_fetch_policy(
+                                    policy,
+                                    &lumen_network::csp::CspDirective::StyleSrcElem,
+                                    &url,
+                                    self_origin.as_ref(),
+                                );
+                                let texts: Vec<String> = if texts.is_empty() {
+                                    vec![original.clone()]
+                                } else {
+                                    texts.iter().map(|t| (*t).to_owned()).collect()
+                                };
+                                (url, texts)
+                            })
+                            .collect(),
+                        None => Vec::new(),
+                    };
+                    crate::page_load::LateStylesheet { node: node_raw, ok: true, text, blocked_imports: blocked }
+                }
+                None => crate::page_load::LateStylesheet {
+                    node: node_raw,
+                    ok: false,
+                    text: String::new(),
+                    blocked_imports: Vec::new(),
+                },
+            };
+            let _ = proxy.send_event(crate::page_load::LoadEvent::LateStylesheet(
+                Box::new(payload),
+                tab_id,
+                generation,
+            ));
+        },
+    );
 }
 
 /// Тексты листов по узлам-владельцам в порядке документа (BUG-1413).
@@ -303,17 +511,15 @@ fn fetch_stylesheet_text(
                 None
             }
         },
-        ResolvedResource::Url(raw_url) => {
+        ResolvedResource::Url(_) => {
             use lumen_core::url::Url;
-            use lumen_network::RequestDestination;
 
             // GAP-CSPENF срез 47: апгрейженный адрес идёт в фактический
             // запрос, тем же принципом, что `scripts.rs::resolve_script_sources`
             // уже даёт `<script src>` (срез 45) — гейт (вызывающая сторона) и
-            // фетч обязаны видеть один и тот же `https://`-адрес.
-            let url = csp_gate
-                .and_then(|(policy, _)| crate::csp_enforce::upgrade_insecure_url(policy, &raw_url))
-                .unwrap_or(raw_url);
+            // фетч обязаны видеть один и тот же `https://`-адрес. LOAD-4: он же
+            // ключ слотов `PREFETCH_CACHE` у поздней подписки.
+            let url = stylesheet_gate_url(href, base, csp_gate);
 
             let sub_url = match Url::parse(&url) {
                 Ok(u) => u,
@@ -334,19 +540,7 @@ fn fetch_stylesheet_text(
             // PERF-1: one span per stylesheet fetch.
             let mut fetch_span = lumen_core::trace::span(format!("css {url}"), "net");
             let resource = crate::prefetch::PREFETCH_CACHE.fetch_current(&url, || {
-                let client = base.http_client_for_subresource_with_policy(
-                    sink.clone(),
-                    cookie_jar.clone(),
-                    referrer_policy,
-                );
-                client
-                    .fetch_subresource_with_links(&sub_url, RequestDestination::Style)
-                    .map(|(body, content_type, links)| {
-                        // BUG-906: `Link:` header of the stylesheet response.
-                        crate::page_source::emit_link_hints(&links, &sub_url, sink, cookie_jar.clone(), &[]);
-                        crate::prefetch::CachedResource { body, content_type }
-                    })
-                    .map_err(|e| e.to_string())
+                fetch_stylesheet_bytes(&sub_url, base, sink, cookie_jar.clone(), referrer_policy)
             });
             match resource {
                 Ok(resource) => {
@@ -367,6 +561,36 @@ fn fetch_stylesheet_text(
             }
         }
     }
+}
+
+/// Сырые байты внешнего листа через клиент подресурсов.
+///
+/// LOAD-4: один фетч на два пути — синхронный ([`fetch_stylesheet_text`] через
+/// [`crate::prefetch::PrefetchCache::fetch_current`]) и позднюю подписку
+/// ([`subscribe_late_stylesheet`] через
+/// [`crate::prefetch::PrefetchCache::warm_with`]). Оба кладут в слот
+/// `PREFETCH_CACHE` одни и те же байты, поэтому каскад и поздний лист не
+/// расходятся (BUG-1116: дубля запроса тоже нет).
+fn fetch_stylesheet_bytes(
+    sub_url: &lumen_core::url::Url,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<DocCookieJar>,
+    referrer_policy: lumen_network::ReferrerPolicy,
+) -> Result<crate::prefetch::CachedResource, String> {
+    let client = base.http_client_for_subresource_with_policy(
+        Arc::clone(sink),
+        cookie_jar.clone(),
+        referrer_policy,
+    );
+    client
+        .fetch_subresource_with_links(sub_url, lumen_network::RequestDestination::Style)
+        .map(|(body, content_type, links)| {
+            // BUG-906: `Link:` header of the stylesheet response.
+            crate::page_source::emit_link_hints(&links, sub_url, sink, cookie_jar, &[]);
+            crate::prefetch::CachedResource { body, content_type }
+        })
+        .map_err(|e| e.to_string())
 }
 
 /// [`fetch_stylesheet_text`] для каскада: относительные `url()` листа
@@ -593,11 +817,17 @@ enum StylesheetOwner {
 /// только в [`collect_link_hrefs`] для каскада. Лист, чей `<link>` не
 /// загрузился, в реестр не попадает — `element.sheet` для него останется
 /// `null` на стороне JS (срез 3), как и для реального провала загрузки.
+///
+/// LOAD-4: `late` — живое окно; `<link>`, чья загрузка ещё идёт, в реестр
+/// сейчас не входит (ждать её здесь — та же блокировка финала, что снята в
+/// [`load_linked_stylesheets`]). Такой лист допишет
+/// `Lumen::apply_late_stylesheet`, когда байты придут.
 pub(crate) fn build_stylesheet_node_registry(
     doc: &Document,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<DocCookieJar>,
+    late: bool,
 ) -> Vec<StylesheetNodeEntry> {
     let mut owners = Vec::new();
     collect_stylesheet_owners(doc, doc.root(), &mut owners);
@@ -641,13 +871,21 @@ pub(crate) fn build_stylesheet_node_registry(
                 // в `document.styleSheets`, а через него в `getComputedStyle`.
                 // Нарушение здесь не сообщается: его уже отправил путь каскада.
                 if let Some((policy, _original)) = &csp_gate {
-                    let resolved_url = base.resolve_str(&href);
-                    let upgraded = crate::csp_enforce::upgrade_insecure_url(policy, &resolved_url);
-                    let gate_url = upgraded.as_deref().unwrap_or(&resolved_url);
+                    let gate_url = stylesheet_gate_url(&href, base, gate_ref);
                     let nonce = doc.get(id).get_attr("nonce");
-                    if crate::csp_enforce::style_link_blocked(policy, gate_url, self_origin.as_ref(), nonce) {
+                    if crate::csp_enforce::style_link_blocked(policy, &gate_url, self_origin.as_ref(), nonce) {
                         continue;
                     }
+                }
+                // LOAD-4: незавершённая загрузка не блокирует финальный проход —
+                // запись реестра появится вместе с поздним листом.
+                if late
+                    && matches!(base.resolve(&href), ResolvedResource::Url(_))
+                    && crate::prefetch::PREFETCH_CACHE
+                        .try_fetch_current(&stylesheet_gate_url(&href, base, gate_ref))
+                        .is_none()
+                {
+                    continue;
                 }
                 if let Some((text, _, _)) = fetch_stylesheet_text(
                     &href,
@@ -669,6 +907,26 @@ pub(crate) fn build_stylesheet_node_registry(
         }
     }
     out
+}
+
+/// LOAD-4: позиция узла-владельца листа в `document.styleSheets` — сколько
+/// владельцев (`<style>`/`<link rel=stylesheet>`) стоит раньше него в порядке
+/// дерева. Поздний лист вставляет свою запись по ней
+/// (`Lumen::apply_late_stylesheet`); сам каскад порядок берёт из
+/// `doc_extract::merge_sheet_chunks`, а реестру CSSOM нужен свой. Владелец,
+/// чей лист в реестр не попал (не загрузился/`disabled`), сдвигает позицию на
+/// единицу вниз — `document.styleSheets` от этого не ломается, а каскад
+/// считается по дереву и от позиции не зависит.
+pub(crate) fn stylesheet_owner_index(doc: &Document, node: NodeId) -> usize {
+    let mut owners = Vec::new();
+    collect_stylesheet_owners(doc, doc.root(), &mut owners);
+    owners
+        .iter()
+        .position(|o| match o {
+            StylesheetOwner::Style(id) => *id == node,
+            StylesheetOwner::Link(id, ..) => *id == node,
+        })
+        .unwrap_or(owners.len())
 }
 
 /// Рекурсивная половина [`build_stylesheet_node_registry`] — один обход,
