@@ -491,9 +491,22 @@ function _sw_make_event_target() {
 
 var _sw_wid_counter = 0;
 
+// SW-MODULE s6: the interface name must be visible as a global for
+// `is_service_worker()`'s `'ServiceWorker' in global_scope` check — the
+// objects themselves are brand-tagged in `_sw_make_worker`. shortcut: no
+// constructible `ServiceWorker` (new ServiceWorker() throws nowhere), only
+// the brand exists — add a real interface when something needs instanceof.
+globalThis.ServiceWorker = function ServiceWorker() {
+    throw new TypeError("Illegal constructor");
+};
+
 function _sw_make_worker(scriptUrl, initState, scope) {
     var et = _sw_make_event_target();
     var w = Object.assign({
+        // SW-MODULE s6: testharness's `is_service_worker()` brand-checks with
+        // `Object.prototype.toString` — without the tag the object reads as
+        // '[object Object]' and the harness skips the `connect` handshake.
+        [Symbol.toStringTag]: 'ServiceWorker',
         scriptURL: String(scriptUrl),
         state: initState || 'installing',
         onstatechange: null,
@@ -704,7 +717,13 @@ function _sw_install_script_text(scope, scriptUrl, type, text) {
     reg.scriptURL = String(scriptUrl);
     reg.type = (type === 'module') ? 'module' : 'classic';
     var sw = _sw_make_worker(scriptUrl, 'installing', scope);
+    // SW-MODULE s6: the worker's own type — reg.type may be replaced by a
+    // racing register() before the isolate starts.
+    sw._type = reg.type;
     reg.installing = sw;
+    // SW-MODULE s6: identity of the worker this install's evaluation/lifecycle
+    // belongs to (see `_sw_run_lifecycle`).
+    reg._evalWorker = sw;
     _sw_registrations[scope] = reg;
     // Register immediately in Rust-side map (for _lumen_sw_has_registration sync checks).
     _lumen_sw_register(scope, String(scriptUrl));
@@ -718,7 +737,7 @@ function _sw_install_script_text(scope, scriptUrl, type, text) {
 function _sw_start_isolate(reg, text) {
     if (typeof _lumen_sw_activate_script !== 'function' || !reg.installing) return false;
     reg._isolateStarted = true;
-    _lumen_sw_activate_script(reg.scope, text, reg.scriptURL, reg.type, reg.installing._wid);
+    _lumen_sw_activate_script(reg.scope, text, reg.scriptURL, reg.installing._type || reg.type, reg.installing._wid);
     return true;
 }
 
@@ -751,7 +770,14 @@ function _sw_update_with_script(reg, type, res, text) {
     if (reg._scriptText === text && reg.type === type) {
         return false;
     }
+    // SW-MODULE s6: a register() racing this update replaced the script/type —
+    // the fetched (stale) text must not install over it (SW §9.4: the update
+    // job compares against the *current* registration state).
+    if (reg.type !== type || reg.installing) {
+        return false;
+    }
     var sw = _sw_make_worker(reg.scriptURL, 'installing', reg.scope);
+    sw._type = type;
     reg.installing = sw;
     reg._scriptText = text;
     // The lifecycle starts on the isolate's evaluation result (see register()).
@@ -776,7 +802,12 @@ function _sw_persist() {
 }
 
 function _sw_run_lifecycle(reg, scriptText) {
-    var sw = reg.installing;
+    // SW-MODULE s6: the worker this lifecycle drives is the one whose script
+    // evaluation triggered it — a register() racing a pending lifecycle (same
+    // scope) replaces `reg.installing`, and transitioning the NEW worker here
+    // would leave it half-installed (`installing` nulled, no isolate start).
+    var sw = reg._evalWorker || reg.installing;
+    reg._evalWorker = null;
     // installing → install event → installed → activating → activate → activated
     setTimeout(function() {
         // SW §9.2 step 8: `updatefound` fires after the script fetch, i.e.
@@ -789,17 +820,30 @@ function _sw_run_lifecycle(reg, scriptText) {
         installEvt.waitUntil = function() {};
         if (sw.state === 'installing') {
             sw._setState('installed');
-            reg.waiting = sw;
-            reg.installing = null;
+            // SW-MODULE s6: only touch the registration's pointers if they
+            // still hold THIS worker — a register() racing this lifecycle may
+            // have installed a newer one (SW §9.2: the old worker's
+            // installation was discarded).
+            if (reg.installing === sw) {
+                reg.waiting = sw;
+                reg.installing = null;
+            }
             _lumen_sw_register(reg.scope, reg.scriptURL);
             setTimeout(function() {
-                reg.waiting = null;
+                if (reg.waiting === sw) reg.waiting = null;
                 sw._setState('activating');
                 reg.active = sw;
                 _sw_container.controller = sw;
                 var activateEvt = new Event('activate');
                 activateEvt.waitUntil = function() {};
                 sw._setState('activated');
+                // SW-MODULE s6: messages queued for this worker while it was
+                // installing are delivered at its activation (SW §3.1.3) —
+                // the isolate spawned before the lifecycle (s4), so the
+                // spawn-time drain already ran.
+                if (typeof _lumen_sw_flush_pending === 'function') {
+                    _lumen_sw_flush_pending(reg.scope);
+                }
                 _sw_persist();
                 // PH3-20/SW-MODULE: hand the SW script to the Rust execution
                 // thread. A registration created by update() carries the text
@@ -1171,6 +1215,16 @@ Object.defineProperty(_sw_container, 'onmessage', {
     },
     enumerable: true, configurable: true,
 });
+// SW-MODULE s6: the queue also enables when a `message`/`messageerror`
+// listener is added to the container (SW §3.1.4) — testharness's
+// `fetch_tests_from_worker` uses `addEventListener` without `onmessage`.
+(function() {
+    var origAddEventListener = _sw_container_et.addEventListener;
+    _sw_container.addEventListener = function(type) {
+        if (type === 'message' || type === 'messageerror') this.startMessages();
+        return origAddEventListener.call(this, type, arguments[1], arguments[2]);
+    };
+})();
 _sw_container.startMessages = function() {
     if (_sw_msg_queue_open) return;
     _sw_msg_queue_open = true;

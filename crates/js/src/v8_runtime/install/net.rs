@@ -307,6 +307,38 @@ pub(crate) fn install_service_worker(
             });
         }
 
+        // SW-MODULE s6: pending page→SW messages queued for an installing
+        // worker are flushed when THAT worker activates — since s4 the isolate
+        // spawns before the lifecycle, so the spawn-time drain in
+        // `_lumen_sw_activate_script` no longer sees them (SW §3.1.3).
+        {
+            let sws = sw_worker_store.clone();
+            let o = page_origin.clone();
+            let sw_pending_flush = Arc::clone(&sw_pending);
+            reg!(scope, ctx, store, "_lumen_sw_flush_pending", move |scope: String| {
+                let origin = o.clone();
+                let queued = sw_pending_flush
+                    .lock()
+                    .unwrap()
+                    .remove(&(origin.clone(), scope.clone()))
+                    .unwrap_or_default();
+                if queued.is_empty() {
+                    return;
+                }
+                // No live worker (the queued-for one went redundant): the
+                // messages die with it — nothing will activate to receive.
+                if let Some(store) = sws.as_ref() {
+                    let handle_tx = store.lock().unwrap().get(&(origin.clone(), scope)).map(|h| h.tx.clone());
+                    if let Some(tx) = handle_tx {
+                        for (data_json, source_json) in queued {
+                            let _ = tx.send(lumen_core::ext::SwWorkerMessage::Message(
+                                lumen_core::ext::SwClientMessage { data_json, source_json },
+                            ));
+                        }
+                    }
+                }
+            });
+        }
         // Dispatch helpers: use SQLite backend when provided, fall back to in-memory map.
         let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);

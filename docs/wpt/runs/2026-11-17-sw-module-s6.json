@@ -1,0 +1,107 @@
+{
+  "batch_small": 0,
+  "binary": "D:\\RustProjects\\lumen-browser\\target\\release\\lumen.exe",
+  "commit": "a718f12a2",
+  "exclude_prefixes": [],
+  "finished": "2026-11-17T17:58:59",
+  "heavy_tests": [
+    "/html/syntax/parsing/html5lib_url.html",
+    "/html/syntax/parsing/html5lib_write.html",
+    "/html/syntax/parsing/html5lib_write_single.html"
+  ],
+  "ids_file": "2026-11-17-sw-module-s6.ids.tsv.gz",
+  "kill_free_gb": 2.0,
+  "low_free_kills": 0,
+  "max_browser_gb": 4.0,
+  "memory": {
+    "low_free_polls": 0,
+    "max_swap_gb": 1.22,
+    "min_free_seen_gb": 3.22
+  },
+  "min_free_gb": 6.0,
+  "no_paint": true,
+  "parallel_shards": 1,
+  "prefixes": [
+    "service-workers/service-worker"
+  ],
+  "processes": 6,
+  "rss_cap_kills": 0,
+  "scope": [
+    "service-workers"
+  ],
+  "scored": {
+    "coverage": {
+      "by_type": {},
+      "dropped": 0,
+      "dropped_examples": [],
+      "leaked_examples": [],
+      "lost": 0,
+      "lost_by_shard": [],
+      "lost_in_ran_shards": 0,
+      "no_executor": 0,
+      "no_executor_by_type": {},
+      "shard_empty": 0
+    },
+    "empty_shards": [],
+    "per_category": {
+      "service-workers": {
+        "by_type": {
+          "crashtest": 1,
+          "reftest": 1,
+          "testharness": 274
+        },
+        "harness_ok": 213,
+        "ids": 276,
+        "not_run": 0,
+        "pass_rate": 0.2012,
+        "ran": 276,
+        "score": 55.52,
+        "subtests_passed": 316,
+        "subtests_total": 1627
+      }
+    },
+    "recovered_shards": [],
+    "status_counts": {
+      "CRASH": 1,
+      "ERROR": 5,
+      "FAIL": 1,
+      "OK": 212,
+      "PASS": 1,
+      "TIMEOUT": 56
+    },
+    "totals": {
+      "harness_ok": 213,
+      "ids": 276,
+      "not_run": 0,
+      "pass_rate": 0.2012,
+      "ran": 276,
+      "score": 55.52,
+      "subtests_passed": 316,
+      "subtests_total": 1627
+    }
+  },
+  "serial_tests": [
+    "/IndexedDB/abort-in-initial-upgradeneeded.any.html",
+    "/IndexedDB/abort-in-initial-upgradeneeded.any.serviceworker.html",
+    "/IndexedDB/abort-in-initial-upgradeneeded.any.sharedworker.html",
+    "/IndexedDB/abort-in-initial-upgradeneeded.any.worker.html",
+    "/IndexedDB/database-names-by-origin.html",
+    "/IndexedDB/get-databases.any.html",
+    "/IndexedDB/get-databases.any.worker.html",
+    "/IndexedDB/idbfactory-databases-opaque-origin.html",
+    "/IndexedDB/idbfactory-origin-isolation.html"
+  ],
+  "shards": [
+    {
+      "auto_ids": 276,
+      "ids": 281,
+      "name": "service-workers/service-worker",
+      "outcome": "ran",
+      "prefix": "/service-workers/service-worker/",
+      "report": ".tmp\\wpt-corpus\\service-workers__service-worker.json",
+      "returncode": 1,
+      "seconds": 370.4
+    }
+  ],
+  "shared_queue": false
+}
