@@ -75,12 +75,12 @@
 {
  "generated": "2026-11-17",
  "counts": {
-  "open": 313,
+  "open": 314,
   "fixed": 1438,
   "inprogress": 0,
   "wontfix": 4
  },
- "total_bugs": 1755,
+ "total_bugs": 1756,
  "phases": [
   {
    "id": "P0",
@@ -3305,9 +3305,9 @@
       {
        "id": "PERF-INVALIDATION",
        "title": "PERF-INVALIDATION: инвалидационные наборы правил и перенос грязных поддеревьев",
-       "status": "active",
+       "status": "done",
        "size": "L",
-       "note": "Архитектурная задача вместо микро-срезов BUG-935 (101 срез): инвалидационные наборы правил (флаш ebay — 610 тыс. кандидатов и 1,34 млн match-вызовов, проход github — 3,77 млн) плюс перенос грязных поддеревьев через REUSED_SUBTREE (хвост среза 101). Ворота — локальные стенды bug935_cascade_bench и v8_bug935_s101_stand; живой github.com — подтверждение, ebay 403 с 2026-11-12. Лимит 3 среза, дальше ADR. Бриф — [docs/tasks/PERF-INVALIDATION.md](docs/tasks/PERF-INVALIDATION.md). **Готово, когда:** стенды ≤50 % и ≤70 % от HEAD, под LUMEN_VERIFY_INCR_CASCADE=1 полный и инкрементальный каскад равны, ADR записан."
+       "note": "ЗАКРЫТ 2026-11-17: S1+S2 в `main` — кандидатов 6 464 → 18 на флаш (359×), лучший флаш 34 % от HEAD, сумма 300 флашей 59–69 %; живой github под `LUMEN_VERIFY_INCR_CASCADE=1` — 11/11 «equal to a full cascade», но узкая рука там инертна (авторский shadow root), поэтому `BUG-935` остаётся DEBTOR с явной границей — [ADR-036](docs/decisions/ADR-036-incremental-restyle-invalidation.md). Архитектурная задача вместо микро-срезов BUG-935 (101 срез): инвалидационные наборы правил (флаш ebay — 610 тыс. кандидатов и 1,34 млн match-вызовов, проход github — 3,77 млн) плюс перенос грязных поддеревьев через REUSED_SUBTREE (хвост среза 101). Ворота — локальные стенды bug935_cascade_bench и v8_bug935_s101_stand; живой github.com — подтверждение, ebay 403 с 2026-11-12. Лимит 3 среза, дальше ADR. Бриф — [docs/tasks/PERF-INVALIDATION.md](docs/tasks/PERF-INVALIDATION.md). **Готово, когда:** стенды ≤50 % и ≤70 % от HEAD, под LUMEN_VERIFY_INCR_CASCADE=1 полный и инкрементальный каскад равны, ADR записан."
       }
      ]
     },
@@ -11965,6 +11965,13 @@
    "status": "open",
    "title": "`clippy -p lumen-js --all-targets` красный на чистом main `14a917d79`: `mod v8_bug935_s101_stand` (cd454631c, BUG-935 с101) и `mod v8_bug1408_font_cssom` (da0f0…",
    "component": "js (`crates/js/src/dom/tests/mod.rs:335,388`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1821": {
+   "status": "open",
+   "title": "`lumen --dump-layout <url> --trace-nav <out.json>` молча читает out.json как источник `--trace-nav` («os error 2» в предупреждении) — режимы с позиционными аргу…",
+   "component": "shell (`crates/shell/src/cli_args.rs` — позиционные аргументы двух режимов)",
    "date": null,
    "debtor": false
   },
@@ -25174,6 +25181,9 @@
   ],
   "shell (`crates/shell/src/cli_args.rs` — `init_global` до `extract_proxy`/`extract_tor_mode`; `config.rs:49` — результат `OnceLock::set` игнорировался)": [
    "BUG-1210"
+  ],
+  "shell (`crates/shell/src/cli_args.rs` — позиционные аргументы двух режимов)": [
+   "BUG-1821"
   ],
   "shell (`crates/shell/src/download.rs:1781` — тест поверх `start_download`, который поднимает настоящий поток загрузки)": [
    "BUG-1201"
