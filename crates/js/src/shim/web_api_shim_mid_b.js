@@ -664,14 +664,15 @@ function _sw_make_registration(scope, scriptUrl, type) {
                     // register() runs.
                     _sw_check_script_resource(String(reg.scriptURL), res, reg.scope);
                     return res.text().then(function(text) {
-                        return _sw_script_bytes(reg.scriptURL, text).then(function(bytes) {
+                        return _sw_script_bytes(reg.scriptURL, text).then(function(result) {
+                            reg._importScripts = result.imports;
                             // SW-MODULE s4: a freshly installed worker gates the
                             // update() promise on the isolate's evaluation
                             // result and starts the isolate itself (raw text —
                             // the byte-check input is not executable); an
                             // unchanged script (byte-check hit) resolves
                             // without one.
-                            var installed = _sw_update_with_script(reg, type, bytes);
+                            var installed = _sw_update_with_script(reg, type, result.bytes);
                             if (installed) {
                                 _sw_start_isolate(_sw_registrations[reg.scope], text);
                             }
@@ -833,14 +834,24 @@ function _sw_script_bytes(scriptUrl, mainText) {
     var re = /importScripts\(\s*(['"])(.*?)\1[^)]*\)|import\s+[^'";()]*?from\s*(['"])(.*?)\3|import\s*(['"])(.*?)\5/g;
     var m;
     while ((m = re.exec(mainText))) urls.push(m[2] || m[4] || m[6]);
-    if (!urls.length) return Promise.resolve(mainText);
+    if (!urls.length) return Promise.resolve({ bytes: mainText, imports: {} });
     var base = new URL(scriptUrl, _sw_origin).href;
     return Promise.all(urls.map(function(u) {
-        return fetch(new URL(u, base)).then(function(r) {
-            return r.text();
-        }).catch(function() { return '<import fetch error>'; });
-    })).then(function(ts) {
-        return mainText + '\n' + ts.join('\n');
+        var abs = new URL(u, base).href;
+        return fetch(abs).then(function(r) {
+            return r.text().then(function(t) { return { url: abs, text: t }; });
+        }).catch(function() { return { url: abs, text: '<import fetch error>' }; });
+    })).then(function(items) {
+        // BUG-1742: the imports map (absolute URL → text) rides along with the
+        // byte-check string — the isolate reuses these bytes in `importScripts`
+        // instead of fetching them a second time.
+        var imports = {};
+        var texts = [];
+        for (var i = 0; i < items.length; i++) {
+            imports[items[i].url] = items[i].text;
+            texts.push(items[i].text);
+        }
+        return { bytes: mainText + '\n' + texts.join('\n'), imports: imports };
     });
 }
 
@@ -882,7 +893,8 @@ function _sw_install_script_text(scope, scriptUrl, type, uvc, text) {
 function _sw_start_isolate(reg, text) {
     if (typeof _lumen_sw_activate_script !== 'function' || !reg.installing) return false;
     reg._isolateStarted = true;
-    _lumen_sw_activate_script(reg.scope, text, reg.scriptURL, reg.installing._type || reg.type, reg.installing._wid);
+    _lumen_sw_activate_script(reg.scope, text, reg.scriptURL, reg.installing._type || reg.type, reg.installing._wid,
+        JSON.stringify(reg._importScripts || {}));
     return true;
 }
 
@@ -1033,8 +1045,8 @@ function _sw_finish_install(reg, sw, scriptText) {
                                     // worker is redundant (SW §9.2 step 7.4).
                                     return undefined;
                                 }
-                                return _sw_script_bytes(scriptURL, t).then(function(bytes) {
-                                    return [t, bytes];
+                                return _sw_script_bytes(scriptURL, t).then(function(result) {
+                                    return [t, result.bytes, result.imports];
                                 });
                             });
                         })
@@ -1042,7 +1054,9 @@ function _sw_finish_install(reg, sw, scriptText) {
                             if (pair) {
                                 var reg = _sw_registrations[scope];
                                 if (reg) reg._scriptText = pair[1];
-                                _lumen_sw_activate_script(scope, pair[0], scriptURL, type, wid);
+                                if (reg) reg._importScripts = pair[2];
+                                _lumen_sw_activate_script(scope, pair[0], scriptURL, type, wid,
+                                    JSON.stringify(pair[2] || {}));
                             }
                         })
                         .catch(function() {}); // ignore fetch errors — lifecycle still simulated
@@ -1258,10 +1272,11 @@ var _sw_container = Object.assign({
                     // The isolate evaluates the script while the page lifecycle
                     // (updatefound → install → activate) is parked on the eval
                     // result — spec order: register() resolves before updatefound.
-                    return _sw_script_bytes(scriptUrl, text).then(function(bytes) {
+                    return _sw_script_bytes(scriptUrl, text).then(function(result) {
                         var r2 = _sw_registrations[scope];
                         if (!r2) return;
-                        r2._scriptText = bytes;
+                        r2._scriptText = result.bytes;
+                        r2._importScripts = result.imports;
                         _sw_start_isolate(r2, text);
                     });
                 });
