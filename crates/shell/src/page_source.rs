@@ -108,6 +108,20 @@ impl PageSource {
         }
     }
 
+    /// BUG-1780: `history.pushState`/`replaceState` переписывают URL текущей
+    /// записи истории (HTML LS §7.4.3) — это и есть URL документа. reload
+    /// (`location.reload()`, F5) перечитывает `self.source`, поэтому источник
+    /// обязан следовать за same-document rewrite, иначе перезагрузка уходит на
+    /// адрес, с которого документ когда-то стартовал (afisha `/auth/cb/`
+    /// зацикливается: страница делает replaceState('/') + reload()).
+    /// Обновляет только сетевой вариант; остальным same-document URL по
+    /// построению не принадлежит.
+    pub(crate) fn retarget_url(&mut self, url: &str) {
+        if let PageSource::Url { url: u, .. } = self {
+            *u = url.to_owned();
+        }
+    }
+
     /// Забыть тело навигации, оставив адрес.
     ///
     /// Вызывается ровно один раз — из `reload()`, сразу после того, как

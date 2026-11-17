@@ -73,6 +73,30 @@ fn forget_nav_body_keeps_url_and_drops_body() {
     assert_eq!(src.url_str(), Some("https://example.com/login"));
 }
 
+/// BUG-1780: same-document rewrite (`pushState`/`replaceState`) обязан вести
+/// за собой URL источника — reload читает `self.source`, и страница-пружина
+/// afisha (`replaceState('/') + reload()`) иначе перечитывает свой старый
+/// `/auth/cb/?error=…` вечно. Несетевые варианты URL не имеют — их не трогать.
+#[test]
+fn retarget_url_follows_same_document_rewrite() {
+    let mut src = PageSource::url("https://example.com/auth/cb/?error=sso_error&state=w");
+    src.retarget_url("https://example.com/");
+    assert_eq!(src.url_str(), Some("https://example.com/"));
+    assert_eq!(src.describe(), "https://example.com/");
+    assert_eq!(src.origin_str().as_deref(), Some("https://example.com"));
+    // Повторный rewrite — обычное дело (SPA-роутер водит URL постоянно).
+    src.retarget_url("https://example.com/products/42");
+    assert_eq!(src.url_str(), Some("https://example.com/products/42"));
+
+    // Варианты без сетевого URL остаются собой.
+    let mut file = PageSource::File(std::path::PathBuf::from("page.html"));
+    file.retarget_url("https://example.com/");
+    assert!(matches!(file, PageSource::File(ref p) if p == std::path::Path::new("page.html")));
+    let mut about = PageSource::AboutBlank;
+    about.retarget_url("https://example.com/");
+    assert!(matches!(about, PageSource::AboutBlank));
+}
+
 /// Снимок сессии хранит только адрес: тело не попадает на диск даже если бы
 /// `forget_nav_body` кто-то не вызвал. Пароль из формы входа переживать
 /// перезапуск браузера не должен.

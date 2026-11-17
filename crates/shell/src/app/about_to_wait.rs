@@ -769,12 +769,16 @@ impl Lumen {
             let mut replaced = false;
             for (is_push, url, new_state_json) in updates {
                 if is_push {
-                    self.push_same_document_entry(url, new_state_json);
+                    self.push_same_document_entry(url.clone(), new_state_json);
+                    // BUG-1780: строго ПОСЛЕ снимка в `push_same_document_entry` —
+                    // запись back-стека хранит свой (предыдущий) URL источника.
+                    self.source.retarget_url(&url);
                     pushed = true;
                 } else {
                     // replaceState: update URL + state, no nav_back push.
                     self.current_history_state_json = new_state_json;
-                    self.display_url = Some(url);
+                    self.display_url = Some(url.clone());
+                    self.source.retarget_url(&url);
                     replaced = true;
                 }
             }
@@ -901,6 +905,9 @@ impl Lumen {
                                         self.display_url = Some(new_url.clone());
                                         self.current_history_state_json = state.clone();
                                     }
+                                    // BUG-1780: same-document URL и здесь — URL документа;
+                                    // для push строго после снимка записи (см. дренаж pushState).
+                                    self.source.retarget_url(&new_url);
                                     if let Some(t) = title {
                                         self.title = Some(t.clone());
                                         if let Some(w) = self.window.as_ref() {
