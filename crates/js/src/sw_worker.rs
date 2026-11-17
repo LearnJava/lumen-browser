@@ -840,16 +840,30 @@ fn run_sw_thread_v8(
         // in a SW is forbidden by spec and must reject.
         rt.set_module_context(&script_url, fetch_provider.clone());
         rt.set_dynamic_import_denied(true);
+        // SW-MODULE s4: the evaluation result routes back to the page
+        // (SW §9.2 "Expect evaluation failed"): a pending `register()` /
+        // `update()` promise resolves on success, rejects with TypeError on
+        // failure — `sw_clients::push_eval_result` fans out to every live
+        // client of this origin.
         match rt.eval_module_at(&script_url, &script) {
-            Ok(()) => {}
+            Ok(()) => {
+                crate::sw_clients::push_eval_result(&origin, scope.clone(), true);
+            }
             Err(e) => {
                 eprintln!("[sw {origin}{scope}] v8 module script eval error: {e:?}");
-                // Continue РІР‚вЂќ partial install may still handle some fetches.
+                crate::sw_clients::push_eval_result(&origin, scope.clone(), false);
             }
         }
-    } else if let Err(e) = rt.eval(&script) {
-        eprintln!("[sw {origin}{scope}] v8 script eval error: {e:?}");
-        // Continue РІР‚вЂќ partial install may still handle some fetches.
+    } else {
+        match rt.eval(&script) {
+            Ok(_) => {
+                crate::sw_clients::push_eval_result(&origin, scope.clone(), true);
+            }
+            Err(e) => {
+                eprintln!("[sw {origin}{scope}] v8 script eval error: {e:?}");
+                crate::sw_clients::push_eval_result(&origin, scope.clone(), false);
+            }
+        }
     }
 
     // Fire install then activate. No manual microtask pump needed (V8 runs

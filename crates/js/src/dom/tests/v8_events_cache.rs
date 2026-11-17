@@ -549,12 +549,16 @@ fn sw_register_returns_promise() {
 fn sw_register_calls_lumen_primitive() {
     // The registry is keyed by the document's own origin (BUG-674). Not a
     // `file:` page: its `/sw.js` resolves to a `file:` script URL, which
-    // `register()` rejects (BUG-675).
-    let rt = v8_runtime_with_url("https://example.com/");
+    // `register()` rejects (BUG-675). SW-MODULE s4: register() settles only
+    // after the fetched script evaluated in a live isolate, so this rig
+    // serves the script and spawns the isolate.
+    let (rt, _store) = v8_sw_runtime_at("https://example.com/", "self.onmessage = function() {};");
     rt.eval("navigator.serviceWorker.register('/sw.js', { scope: '/' });")
         .unwrap();
-    let result = rt.eval("_lumen_sw_has_registration()").unwrap();
-    assert_eq!(result, lumen_core::JsValue::Bool(true));
+    assert!(
+        sw_wait_flag(&rt, "_lumen_sw_has_registration()"),
+        "registration never recorded"
+    );
 }
 
 /// BUG-675: evaluates `register(args)` and returns the rejection's `name`,
@@ -574,9 +578,33 @@ fn sw_register_outcome(page: &str, args: &str) -> (String, bool) {
     (out, has)
 }
 
+/// BUG-675: evaluates `register(args)` and returns the rejection's `name`,
+/// or `"resolved:<scriptURL>"`, plus whether a registration was recorded.
+/// Served variant: pump until the promise settles (register() now gates on
+/// the isolate's evaluation result, SW-MODULE s4).
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+fn sw_register_outcome_served(page: &str, args: &str) -> (String, bool) {
+    let (rt, _store) = v8_sw_runtime_at(page, "self.onmessage = function() {};");
+    rt.eval(&format!(
+        "var out = null; navigator.serviceWorker.register({args})         .then(function(r) {{ out = 'resolved:' + r.scriptURL; }})         .catch(function(e) {{ out = e.name; }});"
+    ))
+    .unwrap();
+    assert!(
+        sw_wait_flag(&rt, "out !== null"),
+        "register() promise did not settle"
+    );
+    let lumen_core::JsValue::String(out) = rt.eval("out").unwrap() else {
+        panic!("out is not a string");
+    };
+    let lumen_core::JsValue::Bool(has) = rt.eval("_lumen_sw_has_registration()").unwrap() else {
+        panic!("_lumen_sw_has_registration() is not a bool");
+    };
+    (out, has)
+}
+
 #[test]
 fn sw_register_resolves_script_url_against_document() {
-    let (out, has) = sw_register_outcome("https://example.com/app/page.html", "'sw.js'");
+    let (out, has) = sw_register_outcome_served("https://example.com/app/page.html", "'sw.js'");
     assert_eq!(out, "resolved:https://example.com/app/sw.js");
     assert!(has);
 }
@@ -615,21 +643,28 @@ fn sw_register_rejects_unknown_worker_type() {
 }
 
 // SW-MODULE: the registration remembers its WorkerType ('classic' by default).
+// SW-MODULE s4: the registration persists only on a served rig — register()
+// gates on the isolate's evaluation, so pump until the type is readable.
 #[test]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn sw_register_records_worker_type() {
-    let rt = v8_runtime_with_url("https://example.com/");
+    let (rt, _store) = v8_sw_runtime_at("https://example.com/", "self.onmessage = function() {};");
     rt.eval("navigator.serviceWorker.register('/sw.js', { type: 'module' });")
         .unwrap();
-    let classic = v8_runtime_with_url("https://example.com/");
+    let (classic, _s2) = v8_sw_runtime_at("https://example.com/", "self.onmessage = function() {};");
     classic.eval("navigator.serviceWorker.register('/sw.js');").unwrap();
-    let lumen_core::JsValue::String(t1) = rt.eval(
+    rt.eval(
         "var t = null; navigator.serviceWorker.getRegistration('/').then(function(r){ t = r ? r.type : 'none'; });"
-    ).and_then(|_| rt.eval("t")).unwrap() else {
+    ).unwrap();
+    classic.eval(
+        "var t = null; navigator.serviceWorker.getRegistration('/').then(function(r){ t = r ? r.type : 'none'; });"
+    ).unwrap();
+    assert!(sw_wait_flag(&rt, "t !== null"), "module registration type missing");
+    assert!(sw_wait_flag(&classic, "t !== null"), "classic registration type missing");
+    let lumen_core::JsValue::String(t1) = rt.eval("t").unwrap() else {
         panic!("module registration type missing");
     };
-    let lumen_core::JsValue::String(t2) = classic.eval(
-        "var t = null; navigator.serviceWorker.getRegistration('/').then(function(r){ t = r ? r.type : 'none'; });"
-    ).and_then(|_| classic.eval("t")).unwrap() else {
+    let lumen_core::JsValue::String(t2) = classic.eval("t").unwrap() else {
         panic!("classic registration type missing");
     };
     assert_eq!(t1, "module");
@@ -665,15 +700,18 @@ fn sw_register_rejects_bad_scope() {
 #[test]
 fn sw_registration_has_installing_worker() {
     let rt = v8_runtime_with_url("https://example.com/");
+    // SW-MODULE s4: capture the registration synchronously — the promise
+    // settles only after the fetched script evaluated in a live isolate,
+    // which this bare rig does not spawn.
     rt.eval(
         r#"
-                var reg = null;
-                navigator.serviceWorker.register('/sw.js', { scope: '/' })
-                    .then(function(r) { reg = r; });
+                navigator.serviceWorker.register('/sw.js', { scope: '/' });
+                var reg = _sw_registrations['/'];
+                var ok = reg !== null && reg.installing !== null;
                 "#,
     )
     .unwrap();
-    let result = rt.eval("reg !== null && reg.installing !== null").unwrap();
+    let result = rt.eval("ok").unwrap();
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
 
@@ -682,13 +720,13 @@ fn sw_worker_has_state_installing() {
     let rt = v8_runtime_with_url("https://example.com/");
     rt.eval(
         r#"
-                var reg = null;
-                navigator.serviceWorker.register('/sw.js')
-                    .then(function(r) { reg = r; });
+                navigator.serviceWorker.register('/sw.js');
+                var reg = _sw_registrations['/'];
+                var st = reg.installing.state;
                 "#,
     )
     .unwrap();
-    let result = rt.eval("reg.installing.state").unwrap();
+    let result = rt.eval("st").unwrap();
     assert_eq!(result, lumen_core::JsValue::String("installing".into()));
 }
 
@@ -701,15 +739,17 @@ fn sw_statechange_event_has_target() {
     rt.eval(
         r#"
                 var reg = null, seen = null, seenCur = null, last = null;
-                navigator.serviceWorker.register('/sw.js')
-                    .then(function(r) { reg = r; });
+                navigator.serviceWorker.register('/sw.js');
+                reg = _sw_registrations['/'];
+                var w = reg.installing;
+                globalThis.w = w;
                 "#,
     )
     .unwrap();
     let result = rt
         .eval(
             r#"
-                var w = reg.installing;
+                var w = globalThis.w;
                 w.addEventListener('statechange', function(e) {
                     last = e;
                     seen = e.target === w ? e.target.state : 'bad-target';
@@ -731,15 +771,16 @@ fn sw_onstatechange_and_updatefound_have_target() {
     rt.eval(
         r#"
                 var reg = null, out = [];
-                navigator.serviceWorker.register('/sw.js')
-                    .then(function(r) { reg = r; });
+                navigator.serviceWorker.register('/sw.js');
+                reg = _sw_registrations['/'];
+                globalThis.w = reg.installing;
                 "#,
     )
     .unwrap();
     let result = rt
         .eval(
             r#"
-                var w = reg.installing;
+                var w = globalThis.w;
                 w.onstatechange = function(e) { out.push(e.target === w); };
                 w._setState('installed');
                 reg.addEventListener('updatefound', function(e) { out.push(e.target === reg); });
@@ -762,8 +803,8 @@ fn sw_registration_inherits_per_api_members() {
     rt.eval(
         r#"
                 var reg = null;
-                navigator.serviceWorker.register('/sw.js', { scope: '/' })
-                    .then(function(r) { reg = r; });
+                navigator.serviceWorker.register('/sw.js', { scope: '/' });
+                reg = _sw_registrations['/'];
                 "#,
     )
     .unwrap();
@@ -846,7 +887,7 @@ fn sw_get_registration_returns_promise() {
 
 #[test]
 fn sw_get_registrations_returns_array() {
-    let rt = v8_runtime_with_url("https://example.com/");
+    let (rt, _store) = v8_sw_runtime_at("https://example.com/", "self.onmessage = function() {};");
     rt.eval("navigator.serviceWorker.register('/sw.js');").unwrap();
     rt.eval(
         r#"
@@ -856,8 +897,7 @@ fn sw_get_registrations_returns_array() {
                 "#,
     )
     .unwrap();
-    let result = rt.eval("Array.isArray(arr) && arr.length === 1").unwrap();
-    assert_eq!(result, lumen_core::JsValue::Bool(true));
+    assert!(sw_wait_flag(&rt, "Array.isArray(arr) && arr.length === 1"));
 }
 
 #[test]
@@ -874,20 +914,14 @@ fn sw_registration_has_event_target() {
     let rt = v8_runtime_with_url("https://example.com/");
     rt.eval(
         r#"
-                var reg = null;
-                navigator.serviceWorker.register('/sw.js')
-                    .then(function(r) { reg = r; });
+                navigator.serviceWorker.register('/sw.js');
+                var reg = _sw_registrations['/'];
+                var ok = typeof reg.addEventListener === 'function' &&
+                         typeof reg.dispatchEvent === 'function';
                 "#,
     )
     .unwrap();
-    let result = rt
-        .eval(
-            r#"
-                    typeof reg.addEventListener === 'function' &&
-                    typeof reg.dispatchEvent === 'function'
-                    "#,
-        )
-        .unwrap();
+    let result = rt.eval("ok").unwrap();
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
 
@@ -933,9 +967,9 @@ fn sw_worker_post_message_does_not_throw() {
     let rt = v8_runtime_with_url("https://example.com/");
     rt.eval(
         r#"
-                var reg = null;
-                navigator.serviceWorker.register('/sw.js')
-                    .then(function(r) { reg = r; });
+                navigator.serviceWorker.register('/sw.js');
+                var reg = _sw_registrations['/'];
+                globalThis.iw = reg.installing;
                 "#,
     )
     .unwrap();
@@ -943,7 +977,7 @@ fn sw_worker_post_message_does_not_throw() {
         .eval(
             r#"
                     var threw = false;
-                    try { reg.installing.postMessage('hello'); } catch(e) { threw = true; }
+                    try { iw.postMessage('hello'); } catch(e) { threw = true; }
                     !threw
                     "#,
         )
@@ -1038,13 +1072,13 @@ fn sw_register_allowed_when_no_worker_src_policy() {
     let rt = v8_runtime_with_url("https://example.com/");
     rt.eval(
         r#"
-                var reg = null;
-                navigator.serviceWorker.register('/sw.js')
-                    .then(function(r) { reg = r; });
+                navigator.serviceWorker.register('/sw.js');
+                var reg = _sw_registrations['/'];
+                var ok = reg !== null && reg.installing !== null;
                 "#,
     )
     .unwrap();
-    let result = rt.eval("reg !== null && reg.installing !== null").unwrap();
+    let result = rt.eval("ok").unwrap();
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
 
@@ -1604,6 +1638,36 @@ impl lumen_core::ext::JsFetchProvider for SwScriptFetch {
     }
 }
 
+/// SW-MODULE s4: a rig whose page fetch serves `script` for any URL and whose
+/// SW isolates spawn into the returned store — `register()` now settles only
+/// after the fetched script has been evaluated in the isolate.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+fn v8_sw_runtime_at(url: &str, script: &'static str) -> (V8JsRuntime, lumen_core::ext::SwWorkerStore) {
+    let rt = V8JsRuntime::new().unwrap();
+    let store: lumen_core::ext::SwWorkerStore = Arc::default();
+    let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(SwScriptFetch(script));
+    rt.install_dom(
+        make_doc(), url, Some(provider), None, None, None, None, None,
+        Some(Arc::new(MockCacheBackend::new())), None, Some(Arc::clone(&store)), false, None,
+    )
+    .unwrap();
+    (rt, store)
+}
+
+/// Pump fetches, timers and the worker-message pump until `flag` turns true.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+fn sw_wait_flag(rt: &V8JsRuntime, flag: &str) -> bool {
+    for _ in 0..150 {
+        let _ = rt.eval("_lumen_fetch_pump(); _lumen_tick_timers();");
+        rt.pump_workers();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        if rt.eval(flag).unwrap() == lumen_core::JsValue::Bool(true) {
+            return true;
+        }
+    }
+    false
+}
+
 /// SW-MSG-S3: `ServiceWorker.postMessage` crosses threads and lands in the SW
 /// isolate as an `ExtendableMessageEvent` carrying `data`, the SW `origin`,
 /// and a `WindowClient` `source` — read back through a SW `fetch` response,
@@ -1637,16 +1701,24 @@ self.addEventListener('fetch', function(e) {
     )
     .unwrap();
     // Drive the register lifecycle: two `setTimeout(0)` hops plus the script
-    // fetch, whose promise settles only from the fetch pump.
-    for _ in 0..10 {
+    // fetch, whose promise settles only from the fetch pump, plus the
+    // isolate's evaluation result delivered through `pump_workers`
+    // (SW-MODULE s4).
+    let mut activated = false;
+    for _ in 0..100 {
         let _ = rt.eval("_lumen_fetch_pump(); _lumen_tick_timers();");
+        rt.pump_workers();
         std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    assert!(
-        matches!(
+        if matches!(
             rt.eval("reg !== null && reg.active !== null && reg.active._scope === '/'").unwrap(),
             lumen_core::JsValue::Bool(true)
-        ),
+        ) {
+            activated = true;
+            break;
+        }
+    }
+    assert!(
+        activated,
         "registration never reached active"
     );
     // The SW execution thread spawns from a settled fetch callback — wait for
@@ -1654,6 +1726,8 @@ self.addEventListener('fetch', function(e) {
     let key = ("https://example.com".to_string(), "/".to_string());
     let mut tx = None;
     for _ in 0..100 {
+        let _ = rt.eval("_lumen_fetch_pump(); _lumen_tick_timers();");
+        rt.pump_workers();
         if let Some(h) = store.lock().unwrap().get(&key) {
             tx = Some(h.tx.clone());
             break;
@@ -1697,16 +1771,21 @@ self.addEventListener('fetch', function(e) {
 fn v8_sw_page_post_message_without_worker_is_silent_noop() {
     let be = Arc::new(MockCacheBackend::new());
     let rt = runtime_on_shared_cache("https://example.com/", &be, Some(Arc::default()));
+    // SW-MODULE s4: capture the registration synchronously; the promise
+    // settles only after an isolate evaluation this bare rig never runs.
     rt.eval(
-        "var reg = null;
-         navigator.serviceWorker.register('/sw.js', { scope: '/' })
-             .then(function(r) { reg = r; });",
+        r#"
+         navigator.serviceWorker.register('/sw.js', { scope: '/' });
+         var reg = _sw_registrations['/'];
+         globalThis.iw = reg.installing;
+         "#,
     )
     .unwrap();
     rt.eval(
-        "globalThis.__threw = false;
-         try { reg.installing.postMessage({hello: 'world'}); }
-         catch (e) { globalThis.__threw = true; }",
+        r#"
+         globalThis.__threw = false;
+          try { iw.postMessage({hello: 'world'}); }
+          catch (e) { globalThis.__threw = true; }"#,
     )
     .unwrap();
     assert_eq!(rt.eval("__threw").unwrap(), lumen_core::JsValue::Bool(false));
@@ -1766,6 +1845,12 @@ self.addEventListener('message', function(e) {
         }
     }
     assert!(activated, "SW thread never activated");
+    // SW-MODULE s4: the register() promise settles only after the isolate's
+    // evaluation result is pumped back — wait for it before `_reg.active`.
+    assert!(
+        sw_wait_flag(&rt, "window._reg != null && window._reg.active != null"),
+        "register() promise never settled"
+    );
     rt.eval("window._reg.active.postMessage('ping');").unwrap();
     let mut got = String::new();
     for _ in 0..100 {
@@ -1826,6 +1911,10 @@ self.addEventListener('message', function(e) {
         }
     }
     assert!(activated, "SW thread never activated");
+    assert!(
+        sw_wait_flag(&rt, "window._reg != null && window._reg.active != null"),
+        "register() promise never settled"
+    );
     rt.eval("window._reg.active.postMessage('go');").unwrap();
     // Give the SW time to answer; the queue must still hold everything.
     let mut held = false;
@@ -1910,6 +1999,10 @@ self.addEventListener('message', function(e) {
         }
     }
     assert!(activated, "SW thread never activated");
+    assert!(
+        sw_wait_flag(&rt, "window._reg != null && window._reg.active != null"),
+        "register() promise never settled"
+    );
     rt.eval(
         "var mc = new MessageChannel();
          mc.port1.onmessage = function(e) { window._got.push(e.data); };
@@ -1977,6 +2070,10 @@ self.addEventListener('message', function(e) {
         }
     }
     assert!(activated, "SW thread never activated");
+    assert!(
+        sw_wait_flag(&rt, "window._reg != null && window._reg.active != null"),
+        "register() promise never settled"
+    );
     rt.eval(
         "var mc = new MessageChannel();
          mc.port1.onmessage = function(e) { window._got = e.data; };
@@ -2048,6 +2145,10 @@ self.addEventListener('message', function(e) {
         }
     }
     assert!(activated, "SW thread never activated");
+    assert!(
+        sw_wait_flag(&rt, "window._reg != null && window._reg.active != null"),
+        "register() promise never settled"
+    );
     rt.eval("window._reg.active.postMessage('list');").unwrap();
     let mut got = String::new();
     for _ in 0..100 {
@@ -2113,6 +2214,10 @@ self.addEventListener('message', function(e) {
         }
     }
     assert!(activated, "SW thread never activated");
+    assert!(
+        sw_wait_flag(&rt, "window._reg != null && window._reg.active != null"),
+        "register() promise never settled"
+    );
     rt.eval("window._reg.active.postMessage('get');").unwrap();
     let mut got = String::new();
     for _ in 0..100 {
@@ -2179,6 +2284,10 @@ self.addEventListener('message', function(e) {
         }
     }
     assert!(activated, "SW thread never activated");
+    assert!(
+        sw_wait_flag(&rt, "window._reg != null && window._reg.active != null"),
+        "register() promise never settled"
+    );
     // Before the claim the client is uncontrolled: `matchAll()` is empty.
     rt.eval("window._reg.active.postMessage('pre');").unwrap();
     let mut got = String::new();

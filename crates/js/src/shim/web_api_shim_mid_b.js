@@ -619,10 +619,28 @@ function _sw_make_registration(scope, scriptUrl, type) {
                 .then(function(res) {
                     return res.text().then(function(text) {
                         return _sw_script_bytes(reg.scriptURL, text).then(function(bytes) {
-                            _sw_update_with_script(reg, type, res, bytes);
-                            return _sw_registrations[reg.scope];
+                            // SW-MODULE s4: a freshly installed worker gates the
+                            // update() promise on the isolate's evaluation
+                            // result and starts the isolate itself (raw text —
+                            // the byte-check input is not executable); an
+                            // unchanged script (byte-check hit) resolves
+                            // without one.
+                            var installed = _sw_update_with_script(reg, type, res, bytes);
+                            if (installed) {
+                                _sw_start_isolate(_sw_registrations[reg.scope], text);
+                            }
                         });
                     });
+                })
+                .then(function() {
+                    var cur = _sw_registrations[reg.scope];
+                    if (!cur || !cur._awaitLifecycle) return _sw_registrations[reg.scope];
+                    return _sw_eval_promise(cur).then(function() {
+                        return _sw_registrations[reg.scope];
+                    });
+                })
+                .catch(function(e) {
+                    _sw_fail_eval(reg.scope, e);
                 });
         },
         unregister: function() {
@@ -673,9 +691,10 @@ function _sw_script_bytes(scriptUrl, mainText) {
     });
 }
 
-// SW §9.2: create the registration for `scriptUrl` of `type` and start the
-// lifecycle with the already fetched script `text` (byte-check keeps it on
-// the registration for a later update()).
+// SW §9.2: create the registration for `scriptUrl` of `type`. The lifecycle
+// is started separately (`_sw_run_lifecycle`) once the script has been
+// fetched and validated — register() gates its promise on the isolate's
+// evaluation result before that (SW-MODULE s4).
 function _sw_install_script_text(scope, scriptUrl, type, text) {
     // SW 9.2 Start Register: a script URL resolving to an existing scope's
     // registration reuses the SAME registration object - a changed scriptURL
@@ -684,14 +703,32 @@ function _sw_install_script_text(scope, scriptUrl, type, text) {
     var reg = _sw_registrations[scope] || _sw_make_registration(scope, scriptUrl, type);
     reg.scriptURL = String(scriptUrl);
     reg.type = (type === 'module') ? 'module' : 'classic';
-    reg._scriptText = text;
     var sw = _sw_make_worker(scriptUrl, 'installing', scope);
     reg.installing = sw;
     _sw_registrations[scope] = reg;
     // Register immediately in Rust-side map (for _lumen_sw_has_registration sync checks).
     _lumen_sw_register(scope, String(scriptUrl));
-    _sw_run_lifecycle(reg, text);
+    if (text !== undefined) reg._scriptText = text;
     return reg;
+}
+
+// SW-MODULE s4: start the SW isolate as soon as the script text is in hand —
+// the register()/update() promise stays pending until the isolate's
+// evaluation result comes back (SW §9.2 "Expect evaluation failed").
+function _sw_start_isolate(reg, text) {
+    if (typeof _lumen_sw_activate_script !== 'function' || !reg.installing) return false;
+    reg._isolateStarted = true;
+    _lumen_sw_activate_script(reg.scope, text, reg.scriptURL, reg.type, reg.installing._wid);
+    return true;
+}
+
+// SW-MODULE s4: a promise that settles with the SW isolate's main-script
+// evaluation result for `reg`'s scope (SW §9.2 "Expect evaluation failed").
+function _sw_eval_promise(reg) {
+    return new Promise(function(resolve, reject) {
+        if (!reg._evalSettles) reg._evalSettles = [];
+        reg._evalSettles.push({ resolve: resolve, reject: reject });
+    });
 }
 
 // SW §9.4 «update»: fetch + checks already done by the caller; install a new
@@ -712,13 +749,14 @@ function _sw_update_with_script(reg, type, res, text) {
     }
     // Byte-check (SW §9.4 step 7): same bytes and same type — no new worker.
     if (reg._scriptText === text && reg.type === type) {
-        return reg;
+        return false;
     }
     var sw = _sw_make_worker(reg.scriptURL, 'installing', reg.scope);
     reg.installing = sw;
     reg._scriptText = text;
-    _sw_run_lifecycle(reg, text);
-    return reg;
+    // The lifecycle starts on the isolate's evaluation result (see register()).
+    reg._awaitLifecycle = true;
+    return true;
 }
 
 function _sw_persist() {
@@ -767,7 +805,9 @@ function _sw_run_lifecycle(reg, scriptText) {
                 // thread. A registration created by update() carries the text
                 // already; otherwise fetch it here — a module script with a
                 // non-JS MIME type never activates (SW §2.2.2).
-                if (typeof _lumen_sw_activate_script === 'function') {
+                // SW-MODULE s4: register()/update() already started the
+                // isolate before the lifecycle — don't spawn a second one.
+                if (typeof _lumen_sw_activate_script === 'function' && !reg._isolateStarted) {
                     (function(scope, scriptURL, type, text, wid) {
                         if (text) {
                             _lumen_sw_activate_script(scope, text, scriptURL, type, wid);
@@ -952,19 +992,60 @@ var _sw_container = Object.assign({
                 ));
             }
         }
-        // SW-MODULE: the script fetch happens in the lifecycle below (as
-        // before) — register() stays synchronous so existing callers observe
-        // the registration immediately. shortcut: a bad module MIME type or a
-        // failed fetch cannot reject this promise (it already resolved); the
-        // worker just never activates — upgrade when WPT register-MIME tests
-        // matter more than the sync contract.
+        // SW-MODULE s4: the registration installs synchronously (existing
+        // callers still observe it immediately), but the promise stays
+        // pending until the script has actually run in the isolate; a failed
+        // fetch, a bad module MIME type or a failed evaluation rejects it and
+        // rolls the worker back (SW §9.2 steps 7.1–7.4 "Expect evaluation
+        // failed").
         var existing = _sw_registrations[scope];
         if (existing && existing.active && existing.scriptURL === String(scriptUrl)
             && existing.type === type) {
             return Promise.resolve(existing);
         }
-        _sw_install_script_text(scope, scriptUrl, type, undefined);
-        return Promise.resolve(_sw_registrations[scope]);
+        var reg = _sw_install_script_text(scope, scriptUrl, type, undefined);
+        reg._awaitLifecycle = true;
+        var pending = _sw_eval_promise(reg).then(function() {
+            return _sw_registrations[scope];
+        });
+        if (typeof fetch !== 'function') {
+            // shortcut: no page fetch (bare harness) — no fetch/MIME checks
+            // and no isolate; the old flow, the promise stays pending;
+            // upgrade when a harness needs it.
+            _sw_run_lifecycle(reg, undefined);
+            return pending;
+        }
+        fetch(scriptUrl).then(function(res) {
+            if (res.status < 200 || res.status >= 300) {
+                throw new TypeError('Failed to register a ServiceWorker: the script '
+                    + 'resource fetch failed (HTTP ' + res.status + ').');
+            }
+            return res.text().then(function(text) {
+                if (type === 'module') {
+                    var ct = res.headers && typeof res.headers.get === 'function'
+                        ? res.headers.get('Content-Type') : null;
+                    if (!_sw_is_js_mime(ct)) {
+                        throw new TypeError('Failed to register a ServiceWorker: The script '
+                            + 'has an unsupported MIME type (' + (ct || 'none')
+                            + ') for a module service worker.');
+                    }
+                }
+                var r = _sw_registrations[scope];
+                if (!r) return;
+                // The isolate evaluates the script while the page lifecycle
+                // (updatefound → install → activate) is parked on the eval
+                // result — spec order: register() resolves before updatefound.
+                return _sw_script_bytes(scriptUrl, text).then(function(bytes) {
+                    var r2 = _sw_registrations[scope];
+                    if (!r2) return;
+                    r2._scriptText = bytes;
+                    _sw_start_isolate(r2, text);
+                });
+            });
+        }).catch(function(e) {
+            _sw_fail_eval(scope, e);
+        });
+        return pending;
     },
     getRegistration: function(url) {
         var u = url || _sw_origin + '/';
@@ -978,6 +1059,50 @@ var _sw_container = Object.assign({
     },
 }, _sw_container_et);
 
+// SW-MODULE s4: a failed registration (fetch failure, bad MIME or failed
+// isolate evaluation) rejects everything parked on the evaluation result and
+// rolls the redundant worker back out of the registration (SW §9.2 step 7.4).
+function _sw_fail_eval(scope, err) {
+    var reg = _sw_registrations[scope];
+    if (!reg) return;
+    var settles = reg._evalSettles || [];
+    reg._evalSettles = [];
+    for (var j = 0; j < settles.length; j++) settles[j].reject(err);
+    var sw = reg.installing || reg.waiting || reg.active;
+    if (sw && typeof sw._setState === 'function') sw._setState('redundant');
+    if (reg.active === sw) reg.active = null;
+    reg.waiting = null;
+    reg.installing = null;
+    delete _sw_registrations[scope];
+    _lumen_sw_unregister(scope);
+    _sw_persist();
+}
+
+// SW-MODULE s4: evaluation results of SW isolates (Rust pump → hub → here).
+// `ok` resolves every promise `register()`/`update()` parked on the isolate's
+// evaluation; a failure rejects them with TypeError and rolls the redundant
+// worker back out of the registration (SW §9.2 step 7.4).
+function _lumen_deliver_sw_eval_results(msgs) {
+    for (var i = 0; i < msgs.length; i++) {
+        if (!msgs[i].ok) {
+            _sw_fail_eval(msgs[i].scope, new TypeError('ServiceWorker script evaluation failed.'));
+            continue;
+        }
+        var reg = _sw_registrations[msgs[i].scope];
+        if (!reg) continue;
+        var settles = reg._evalSettles || [];
+        reg._evalSettles = [];
+        for (var j = 0; j < settles.length; j++) settles[j].resolve();
+        // The evaluation finished — only now does the page lifecycle run
+        // (updatefound → install → activate), so register()/update() resolves
+        // before updatefound fires (SW §9.2 job ordering).
+        if (reg._awaitLifecycle) {
+            reg._awaitLifecycle = false;
+            _sw_run_lifecycle(reg, undefined);
+        }
+    }
+}
+
 // ── SW → page messages (SW §3.1.4 client message queue, SW-MSG-S4) ───────────
 // The Rust pump (`V8JsRuntime::pump_workers`) calls `_lumen_deliver_sw_messages`
 // with already-parsed envelopes `[{scope, json}]` — `json` is embedded as raw
@@ -988,8 +1113,7 @@ var _sw_container = Object.assign({
 // an explicit `startMessages()` — `addEventListener('message')` alone does not
 // open it (the spec only enables the queue via `startMessages`).
 var _sw_msg_queue = [];
-var _sw_msg_queue_open = false;
-function _sw_drain_msg_queue() {
+var _sw_msg_queue_open = false;function _sw_drain_msg_queue() {
     while (_sw_msg_queue_open && _sw_msg_queue.length) {
         (function(queued) {
             setTimeout(function() {
