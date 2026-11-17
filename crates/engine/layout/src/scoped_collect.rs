@@ -29,6 +29,15 @@ pub type PseudoMaps = HashMap<(u32, String), HashMap<String, String>>;
 /// The published resolved custom properties, keyed by node index.
 pub type CustomPropMaps = HashMap<u32, Arc<HashMap<String, String>>>;
 
+/// `LUMEN_NO_CUSTOM_ONLY_PLAN=1` — a carried subtree whose styles differ in `custom_props` alone
+/// is planned box by box again: the A/B arm of PERF-INVALIDATION S2 (the collector half of the
+/// BUG-935 срез 102 licence) and the way back if a page ever shows a stale custom property after
+/// a flush. Read once per process.
+fn custom_only_plan_disabled() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| std::env::var_os("LUMEN_NO_CUSTOM_ONLY_PLAN").is_some_and(|v| v != "0"))
+}
+
 /// BUG-935 срез 59 — which nodes of an incremental flush really changed, as far
 /// as a computed-style entry can tell.
 ///
@@ -68,11 +77,22 @@ impl ChangedNodes {
             return None;
         }
         let styles = counters.styles();
+        // PERF-INVALIDATION S2 — a node the custom-property flow rewrote differs from the
+        // previous pass in `custom_props` alone, which the cascade already proved when it
+        // classified the subtree (BUG-935 срез 102): comparing two whole `ComputedStyle`s for
+        // every one of them was the largest item of the plan on the `--scrollbar-compensation`
+        // stand (5,3 of 7,7 ms) and cannot find anything the classification missed.
+        let no_custom_only = IdSet::default();
+        let custom_only = if custom_only_plan_disabled() { &no_custom_only } else { counters.custom_only_subtrees() };
         let mut own = IdSet::default();
         let mut context = IdSet::default();
         for (&id, old) in counters.replaced_styles() {
             match styles.get(&id) {
-                Some(new) if Arc::ptr_eq(old, new) || **old == **new => {}
+                Some(new) if Arc::ptr_eq(old, new) => {}
+                Some(_) if custom_only.contains(&id) => {
+                    own.insert(id);
+                }
+                Some(new) if **old == **new => {}
                 Some(new) => {
                     own.insert(id);
                     if !context_style_eq(old, new) {
@@ -265,6 +285,12 @@ pub struct ScopedCollection<'a> {
     /// The boxes of subtrees inside a dirty root that moved but whose computed-style entries did
     /// not ([`translation_keeps_styles`]): their rects are collected, their styles stay.
     style_kept_ids: IdSet<u32>,
+    /// PERF-INVALIDATION S2: the top boxes of the carried subtrees whose styles differ from the
+    /// previous pass in `custom_props` alone ([`CounterMap::custom_only_subtrees`], BUG-935
+    /// срез 102). Everything a collector publishes about them is the previous pass's except the
+    /// resolved custom properties, so the plan leaves them alone and
+    /// [`Self::collect_custom_properties`] walks just these tops.
+    custom_prop_tops: Vec<&'a LayoutBox>,
 }
 
 /// What [`ScopedCollection::plan_with`] may do beyond the plain BUG-1238 walk.
@@ -311,7 +337,8 @@ impl<'a> ScopedCollection<'a> {
         changed: Option<&ChangedNodes>,
     ) -> Self {
         let opts = PlanOptions { styles: true, prune: false, ids: true };
-        Self::plan_with(root, dirty_roots, clean_subtrees, layout_rects, viewport, changed, opts)
+        let custom_only = IdSet::default();
+        Self::plan_with(root, dirty_roots, clean_subtrees, &custom_only, layout_rects, viewport, changed, opts)
     }
 
     /// [`Self::plan`] with the options of [`PlanOptions`].
@@ -324,11 +351,17 @@ impl<'a> ScopedCollection<'a> {
     /// left alone ([`Self::keeps_published`]); a box that changed is collected for its own
     /// entries and the walk goes on to its children; a box that moved, or is new, is collected
     /// whole as it was before.
+    ///
+    /// PERF-INVALIDATION S2: `custom_only_subtrees` — carried subtrees whose styles differ in
+    /// `custom_props` alone (BUG-935 срез 102) — are left alone by the same rule, under the same
+    /// `opts.prune` switch. The collector that does read them rebuilds their entries from
+    /// [`Self::custom_prop_tops`] instead of walking the plan.
     #[allow(clippy::too_many_arguments)]
     pub fn plan_with<S: BuildHasher>(
         root: &'a LayoutBox,
         dirty_roots: &HashSet<NodeId, S>,
         clean_subtrees: &IdSet<NodeId>,
+        custom_only_subtrees: &IdSet<NodeId>,
         layout_rects: &HashMap<u32, [f32; 4]>,
         viewport: lumen_core::geom::Size,
         changed: Option<&ChangedNodes>,
@@ -336,10 +369,15 @@ impl<'a> ScopedCollection<'a> {
     ) -> Self {
         let prune_changed = changed.filter(|_| opts.prune);
         let style_changed = changed.filter(|_| opts.styles);
+        // The custom-property licence belongs to the same "leave the unchanged alone" mechanism:
+        // `LUMEN_NO_SCOPE_PRUNE=1` must bring the old whole-area walk back for it too.
+        let no_custom_only = IdSet::default();
+        let custom_only = if opts.prune && !custom_only_plan_disabled() { custom_only_subtrees } else { &no_custom_only };
         let mut items = Vec::new();
         let mut pruned = Vec::new();
         let mut skipped = Vec::new();
         let mut translated = Vec::new();
+        let mut custom_prop_tops = Vec::new();
         let mut skips = StyleSkips::default();
         let mut seen = IdSet::default();
         // The third member: the parent's published `x`/`width` are where the map
@@ -369,12 +407,18 @@ impl<'a> ScopedCollection<'a> {
             // out different with no DOM change inside it (an image whose size just became known), and
             // its entries must be rebuilt. Only the principal box of an element can say "unchanged";
             // an anonymous box carries its owner's node but not the rect published for it.
-            let untouched = match prune_changed {
-                Some(changed) if in_root => {
-                    b.origin.role == BoxRole::Element && clean_subtrees.contains(&b.node) && changed.untouched(b.node)
-                }
-                _ => clean_subtrees.contains(&b.node),
-            };
+            // PERF-INVALIDATION S2: a subtree the custom-property flow rewrote differs from the
+            // previous pass in `custom_props` alone — it moved no box and changed no published
+            // entry but the resolved custom properties. The cascade already proved that for the
+            // whole subtree (BUG-935 срез 102), so it is left alone like a clean one.
+            let custom_kept = custom_only.contains(&b.node) && b.origin.role == BoxRole::Element;
+            let untouched = custom_kept
+                || match prune_changed {
+                    Some(changed) if in_root => {
+                        b.origin.role == BoxRole::Element && clean_subtrees.contains(&b.node) && changed.untouched(b.node)
+                    }
+                    _ => clean_subtrees.contains(&b.node),
+                };
             if untouched {
                 let unmoved = published == Some(&[r.x, r.y, r.width, r.height]);
                 let safe = if in_root {
@@ -393,6 +437,9 @@ impl<'a> ScopedCollection<'a> {
                 };
                 if unmoved && safe {
                     skipped.push(b);
+                    if custom_kept {
+                        custom_prop_tops.push(b);
+                    }
                     if in_root {
                         pruned.push(b);
                     }
@@ -460,7 +507,16 @@ impl<'a> ScopedCollection<'a> {
                 walk.extend(b.children.iter());
             }
         }
-        Self { items, skipped, skips, pruned_ids, pruned_raw_ids, pruned_tops: pruned.len(), style_kept_ids }
+        Self {
+            items,
+            skipped,
+            skips,
+            pruned_ids,
+            pruned_raw_ids,
+            pruned_tops: pruned.len(),
+            style_kept_ids,
+            custom_prop_tops,
+        }
     }
 
     /// Whether the plan leaves `node`'s published computed-style entry alone, so the
@@ -602,6 +658,12 @@ impl<'a> ScopedCollection<'a> {
 
     /// [`Self::collect_pseudo_computed_styles`] for the resolved custom properties
     /// ([`crate::collect_custom_properties`]); the caller evicts by node index first.
+    ///
+    /// PERF-INVALIDATION S2: a carried subtree whose styles differ only in `custom_props`
+    /// (BUG-935 срез 102) is not an item — its boxes were refreshed by the box build — so the
+    /// values of the changed names are read back here from [`Self::custom_prop_tops`] alone
+    /// instead of a plan-wide walk. An entry whose map became empty is dropped, or a removed
+    /// property would stay published.
     pub fn collect_custom_properties(&self, viewport: lumen_core::geom::Size, out: &mut CustomPropMaps) {
         let mut fresh = HashMap::new();
         let mut resolved = HashMap::new();
@@ -614,6 +676,19 @@ impl<'a> ScopedCollection<'a> {
             let mut stack = vec![it.b];
             while let Some(b) = stack.pop() {
                 crate::collect_custom_properties_box(b, viewport, held, &mut fresh, &mut resolved);
+                stack.extend(b.children.iter().rev());
+            }
+        }
+        for &top in &self.custom_prop_tops {
+            let mut stack = vec![top];
+            while let Some(b) = stack.pop() {
+                let idx = b.node.index() as u32;
+                if b.style.custom_props.is_empty() {
+                    fresh.remove(&idx);
+                    out.remove(&idx);
+                } else {
+                    crate::collect_custom_properties_box(b, viewport, None, &mut fresh, &mut resolved);
+                }
                 stack.extend(b.children.iter().rev());
             }
         }
@@ -1124,7 +1199,7 @@ mod tests {
             let changed = ChangedNodes::new(&doc, &counters, &content).expect("no shadow root");
             let scope: HashSet<NodeId> = dirty.iter().chain(&shallow).copied().collect();
             let plan = ScopedCollection::plan_with(
-                &after, &scope, counters.clean_subtrees(), &published, VIEWPORT, Some(&changed),
+                &after, &scope, counters.clean_subtrees(), &IdSet::default(), &published, VIEWPORT, Some(&changed),
                 PlanOptions { styles: false, prune: true, ids: true },
             );
             let (cached, next, (served, walked)) = plan.scroll_containers_cached(std::mem::take(&mut cache));
@@ -1221,6 +1296,125 @@ mod tests {
         plan.collect_computed_styles(&doc, VIEWPORT, &mut styles);
         assert_eq!(styles[&(a.index() as u32)].get("sentinel").map(String::as_str), Some("kept"));
         assert_ne!(styles[&(b.index() as u32)], before_b, "b's entry was rebuilt with its new background");
+    }
+
+    /// PERF-INVALIDATION S2 (BUG-935 срез 102's licence): a flush whose only change is an
+    /// inherited custom property moves no box, so the plan leaves the carried subtree alone and
+    /// only the resolved custom properties are republished — from the refreshed box styles,
+    /// exactly as a full collect does.
+    #[test]
+    fn a_custom_property_only_subtree_is_left_alone_with_its_custom_properties_refreshed() {
+        use crate::box_tree::{layout_measured_hyp_with_counters, layout_mutation_incremental_restyle};
+        use crate::counters::{set_incremental_restyle, ContentDirty, RestyleDelta};
+        use lumen_core::ext::NullHyphenationProvider;
+
+        let html = "<body id=\"body\" style=\"margin:0\"><div id=\"a\"><div id=\"b\"><span id=\"c\">x</span></div></div></body>";
+        let css = "body { padding: 1px } #a { height: 10px }";
+        let mut doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let hp = NullHyphenationProvider;
+        let (prev, prev_counters) = layout_measured_hyp_with_counters(&doc, &sheet, VIEWPORT, &Fixed, &hp, false);
+        let published_rects = crate::collect_layout_rects(&prev, &doc);
+        let published_styles = crate::collect_computed_styles(&prev, &doc, Some(&prev_counters), VIEWPORT);
+        let published_custom = crate::collect_custom_properties_for(&prev, Some(&prev_counters), VIEWPORT);
+
+        let body = doc.find_by_id("body").unwrap();
+        let a = doc.find_by_id("a").unwrap();
+        let b = doc.find_by_id("b").unwrap();
+        let c = doc.find_by_id("c").unwrap();
+        // Start the document's own change record, then write an inherited custom property on
+        // `body`: a shallow root, as the flush reports a `style` attribute write.
+        assert!(doc.take_content_journal().is_none());
+        if let lumen_dom::NodeData::Element { attrs, .. } = &mut doc.get_mut(body).data {
+            attrs.iter_mut().find(|a| a.name.local == "style").unwrap().value =
+                "margin:0;--scrollbar-compensation:4px".to_string();
+        }
+        let journal = doc.take_content_journal().expect("recording was started");
+        let delta = RestyleDelta {
+            invalidation: None,
+            prev_styles: prev_counters.styles().clone(),
+            dirty_roots: Default::default(),
+            shallow_roots: HashSet::from([body]),
+            point_roots: Default::default(),
+            content_dirty: ContentDirty::Nodes(&journal),
+        };
+        set_incremental_restyle(true);
+        crate::box_tree::set_incremental_box_build(true);
+        let (after, mut counters) =
+            layout_mutation_incremental_restyle(&doc, &sheet, VIEWPORT, &Fixed, &hp, false, prev, delta);
+        crate::box_tree::set_incremental_box_build(false);
+        set_incremental_restyle(false);
+        assert!(
+            counters.custom_only_subtrees().contains(&a),
+            "the flow must classify the body's child — the element whose whole subtree moved no box"
+        );
+
+        let changed = ChangedNodes::new(&doc, &counters, &journal).expect("no shadow root");
+        let plan = ScopedCollection::plan_with(
+            &after,
+            &HashSet::new(),
+            counters.clean_subtrees(),
+            counters.custom_only_subtrees(),
+            &published_rects,
+            VIEWPORT,
+            Some(&changed),
+            PlanOptions { styles: true, prune: true, ids: true },
+        );
+        assert!(plan.skipped.iter().any(|s| s.node == a), "the carried subtree is left alone");
+        assert!(
+            plan.items.iter().all(|it| it.b.node != a && it.b.node != b && it.b.node != c),
+            "nothing of the carried subtree is planned: {:?}",
+            plan.items.iter().map(|it| it.b.node).collect::<Vec<_>>()
+        );
+
+        // The three maps a flush publishes, collected the way `style_flush` does.
+        let released = counters.take_released().unwrap_or_default();
+        let (mut evict, mut evict_raw) = (released.index, released.raw);
+        plan.evictable(&mut evict, &mut evict_raw);
+        let mut rects = published_rects.clone();
+        for nid in &evict {
+            rects.remove(nid);
+        }
+        plan.collect_layout_rects(&doc, &mut rects);
+        assert_eq!(rects, crate::collect_layout_rects(&after, &doc), "carried rects stay published");
+        let mut styles = published_styles.clone();
+        for nid in &evict {
+            if !plan.keeps_computed_style(*nid) {
+                styles.remove(nid);
+            }
+        }
+        plan.collect_computed_styles(&doc, VIEWPORT, &mut styles);
+        assert_eq!(
+            styles,
+            crate::collect_computed_styles(&after, &doc, Some(&counters), VIEWPORT),
+            "the carried computed styles stay published"
+        );
+        let mut custom = published_custom.clone();
+        for nid in &evict {
+            if !plan.keeps_published(*nid) {
+                custom.remove(nid);
+            }
+        }
+        plan.collect_custom_properties(VIEWPORT, &mut custom);
+        assert_eq!(
+            custom,
+            crate::collect_custom_properties_for(&after, Some(&counters), VIEWPORT),
+            "the changed custom properties are republished from the refreshed boxes"
+        );
+        assert_eq!(
+            custom[&(body.index() as u32)].get("--scrollbar-compensation").map(String::as_str),
+            Some("4px"),
+            "the new value is what gets published"
+        );
+        assert_eq!(
+            rects.get(&(b.index() as u32)),
+            published_rects.get(&(b.index() as u32)),
+            "a carried box keeps its published rect"
+        );
+        assert!(
+            styles.contains_key(&(c.index() as u32)),
+            "the carried inline element keeps its published entry"
+        );
     }
 
     /// BUG-1776: a leading `<br>` is laid out as an InlineRun that publishes itself
@@ -1403,7 +1597,8 @@ mod tests {
         let changed = ChangedNodes::new(&doc, &counters, &content).expect("no shadow root");
         let opts = PlanOptions { styles: true, prune: true, ids: true };
         let plan = ScopedCollection::plan_with(
-            &after, &HashSet::from([p]), counters.clean_subtrees(), &published, VIEWPORT, Some(&changed), opts,
+            &after, &HashSet::from([p]), counters.clean_subtrees(), &IdSet::default(), &published, VIEWPORT,
+            Some(&changed), opts,
         );
         // The flush evicts by the ids the build released plus the boxes the plan collects.
         let released = counters.take_released().expect("the pass records what it released");
@@ -1414,6 +1609,7 @@ mod tests {
             &after,
             &HashSet::from([p]),
             counters.clean_subtrees(),
+            &IdSet::default(),
             &published,
             VIEWPORT,
             Some(&changed),

@@ -5342,3 +5342,13 @@ ok; `dump_golden.py` (dev-release): 12/12; clippy `-p lumen-layout --all-targets
 `CustomOnly`: держать опубликованную публикацию и подменять в ней только изменившиеся имена (флаш уже знает их из
 `CustomFlow`), чтобы обрезка плана снова работала. Статус `OPEN (DEBTOR)` не меняется.
 
+## PERF-INVALIDATION S2 (P6, 2026-11-17) — перенесённое поддерево обходит только коллектор custom properties
+
+**Вопрос из среза 102.** Коллекторы: план не может оставить перенесённое поддерево (`planned=2200`, `pruned_subtrees=0`), потому что его опубликованные `--*` меняются; на `rbc.ru` `flush.custom_props` стоил 24,8 мс.
+
+**Что сделано.** `ScopedCollection::plan_with` получил `custom_only_subtrees` третьей лицензией (под тем же `PlanOptions::prune`): rects/client rects/computed styles/псевдостили/text frags/scroll-rollup перенесённого — прошлого прохода по построению, план его не обходит. `collect_custom_properties` обходит только верхушки (`custom_prop_tops`), читает значения из уже обновлённых боксов (`refresh_carried_custom_props`, срез 102) и снимает запись, чья карта опустела. `ChangedNodes::new` не сравнивает полные `ComputedStyle` для узлов из `custom_only_subtrees` — каскад уже доказал, что различаются только `custom_props`. Предохранитель псевдоэлементов (`CustomDep::pseudo`) остаётся: такое поддерево не переносится вовсе.
+
+**Замер** (стенд `v8_bug935_s101_stand`, 2 200 элементов, 300 флашей, dev-release, плечи `LUMEN_NO_CUSTOM_ONLY_PLAN=1` ↔ выключено, интерливинг, по два прогона под чужой нагрузкой): сумма флашей 19 444 / 18 143 → 13 349 / 10 745 мс (59–69 %); `flush.collectors` 17,7 / 16,7 → 1,6 / 1,4 мс на флаш, из них `flush.collect_plan` 9,2 / 8,6 → 1,6 / 1,4 (`changed_nodes` 6,3 / 6,0 → 1,5 / 1,3); rect/client/scroll-коллекторы 2,4 / 3,4 / 2,3 → 0,00 / 0,01 / 0,01; каскад, `build_box` и `basis_publish` у плеч совпадают. `LUMEN_VERIFY_SCOPE_PRUNE=1`: 300 флашей, каждый — `0 stale`, `cache differs 0, incremental tree differs 0`. JS-дифференциал под сверкой без `STALE` (`v8_bug935` 23, `custom` 129, `bug1238` 1, `v8_computedstyle` 20); `cargo test -p lumen-layout` 6 064 + известная флака `deep_chain` (соло зелёная); clippy чисто; `dump_golden.py` 12/12.
+
+**Что осталось.** Каскадная половина того же шаблона — `CustomFlow::inherit` клонирует `ComputedStyle` на каждого потомка (21–25 мс флаша под нагрузкой). Это следующий класс; граница и решение — S3 PERF-INVALIDATION. Статус `OPEN (DEBTOR)` не меняется.
+
