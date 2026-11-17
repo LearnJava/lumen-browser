@@ -150,6 +150,57 @@ pub(crate) fn install_service_worker(
                 }
             );
         }
+        // SW-MSG-S5: page → SW delivery for a `MessagePort` transferred into
+        // the SW via `ServiceWorker.postMessage(data, [port])` — the
+        // port-addressed sibling of `_lumen_sw_post_message`, routed through
+        // the same `SwWorkerMessage` channel via the `PortPost` variant.
+        {
+            let sws = sw_worker_store.clone();
+            let o = page_origin.clone();
+            reg!(scope, ctx, store,
+                "_lumen_sw_port_post",
+                move |scope: String, port_id: u32, json: String| {
+                    let origin = o.clone();
+                    let Some(store) = sws.as_ref() else { return };
+                    if let Some(handle) = store.lock().unwrap().get(&(origin, scope)) {
+                        let _ = handle.tx.send(lumen_core::ext::SwWorkerMessage::PortPost(port_id, json));
+                    }
+                }
+            );
+        }
+        // SW-MSG-S5: the page endpoint of a port bridged to a SW isolate —
+        // recorded in the hub so this page's pump (and no other page's)
+        // drains that port's outbox traffic.
+        {
+            let cid = sw_client_id.clone();
+            reg!(scope, ctx, store,
+                "_lumen_sw_port_bind",
+                move |port_id: u32| {
+                    crate::sw_clients::bind_port(
+                        std::sync::atomic::AtomicU64::load(&cid, std::sync::atomic::Ordering::Relaxed),
+                        port_id,
+                    );
+                }
+            );
+        }
+        // SW-MSG-S6: this page's client record in the process-global hub —
+        // the shim syncs it at init and on `pushState`/`replaceState` URL
+        // moves; `matchAll`/`get` in a SW isolate read it back.
+        {
+            let cid = sw_client_id.clone();
+            let o = page_origin.clone();
+            reg!(scope, ctx, store,
+                "_lumen_sw_client_update",
+                move |url: String, visibility: String| {
+                    crate::sw_clients::upsert_client(
+                        std::sync::atomic::AtomicU64::load(&cid, std::sync::atomic::Ordering::Relaxed),
+                        o.clone(),
+                        url,
+                        visibility,
+                    );
+                }
+            );
+        }
         // SW-MSG-S3: this page's `Client.id` (SW §5.2) — read by the shim when
         // it stamps the `source` descriptor of an outgoing message.
         {

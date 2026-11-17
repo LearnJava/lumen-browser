@@ -708,6 +708,19 @@ impl V8JsRuntime {
             &self.worker_errors,
             &self.worker_port_messages,
         );
+        // SW-MSG-S4: deliver messages service workers posted to this page
+        // (`Client.postMessage` in the SW isolate), keyed by this page's
+        // client id.
+        crate::sw_clients::deliver(
+            self,
+            self.sw_client_id.load(std::sync::atomic::Ordering::Relaxed),
+        );
+        // SW-MSG-S5: port-addressed traffic from `MessagePort`s living inside
+        // SW isolates, routed by port id like the dedicated-worker queue above.
+        crate::sw_clients::deliver_ports(
+            self,
+            self.sw_client_id.load(std::sync::atomic::Ordering::Relaxed),
+        );
     }
 
     /// Deliver messages posted by `SharedWorker` threads to this page's
@@ -2040,6 +2053,11 @@ impl Drop for V8JsRuntime {
         // port this page ever opened, so a worker left with no other client
         // notices and terminates itself instead of outliving the page.
         crate::shared_worker::close_all_client_ports_v8(&self.shared_worker_client_ports);
+        // SW-MSG-S6: this page leaves the process-global SW client registry —
+        // its `Client` must vanish from live SWs' `clients.matchAll()`.
+        crate::sw_clients::unregister_client(
+            self.sw_client_id.load(std::sync::atomic::Ordering::Relaxed),
+        );
         // COMPAT-HANG: закрытие вкладки или навигация роняют последний `Arc`
         // рантайма, а `join` ниже ждал бы зависший скрипт вечно, замораживая
         // тот поток, где случился drop. Рантайму всё равно конец — прерываем.

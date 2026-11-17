@@ -66,6 +66,12 @@ MessagePort.prototype.postMessage = function(message) {
             if (typeof _lumen_port_post_frame === 'function') {
                 _lumen_port_post_frame(this._lumenPortId, json);
             }
+        } else if (this._remoteSwScope) {
+            // SW-MSG-S5: другой конец — порт в изоляте сервис-воркера; маршрут
+            // по (scope, port id), канал — `SwWorkerMessage::PortPost`.
+            if (typeof _lumen_sw_port_post === 'function') {
+                _lumen_sw_port_post(this._remoteSwScope, this._lumenPortId, json);
+            }
         } else if (this._remoteWorkerId !== null && this._remoteWorkerId !== undefined) {
             if (typeof _lumen_port_post_to_worker === 'function') {
                 _lumen_port_post_to_worker(this._remoteWorkerId, this._lumenPortId, json);
@@ -201,7 +207,16 @@ function _lumen_port_prepare_transfer(transfer, bindWorkerId, bindFrame) {
             partner._lumenPortId   = id;
             partner._remoteBound   = true;
             partner._remoteFrame   = !!bindFrame;
-            partner._remoteWorkerId = (bindWorkerId === undefined) ? null : bindWorkerId;
+            // SW-MSG-S5: a string `bindWorkerId` is a service worker's
+            // registration scope — the partner posts through
+            // `_lumen_sw_port_post` instead of `_lumen_port_post_to_worker`,
+            // and registers with the hub so this page's pump drains its
+            // replies.
+            partner._remoteSwScope = (typeof bindWorkerId === 'string') ? bindWorkerId : null;
+            partner._remoteWorkerId = (typeof bindWorkerId === 'number') ? bindWorkerId : null;
+            if (partner._remoteSwScope && typeof _lumen_sw_port_bind === 'function') {
+                _lumen_sw_port_bind(id);
+            }
             partner._other = null;
             _lumenPortRegistry[id] = partner;
         }
