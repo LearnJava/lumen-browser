@@ -373,13 +373,13 @@
 
 Срез 2026-11-13: топ-30 из 168 TIMEOUT/HUNG базового прогона abroad (31 сайт веса 3, взяты первые 30 по алфавиту). Базовый прогон 2026-10-20 старше фикса [BUG-1676](../../../bugs/BUG-1676-FIXED.md) (2026-10-28), поэтому сначала перепрогон всех 30 свежей сборкой `dev-release` от HEAD main живым окном (`compat_crawl.py --corpus .tmp/hang30.txt --env LUMEN_NO_ADBLOCK=1 --restart-every 1 --timeout 40 --chrome-arg=--no-proxy-server`, `.tmp/hang30-rerun/results.jsonl`), затем для оставшихся зависаний — стадия по `--trace-nav` (headless, 60–90 с).
 
-**Главный вывод.** 22 из 30 зависаний на свежей сборке ушли (эффект фиксов после 2026-10-28, прежде всего BUG-1676; 13 сайтов теперь OK/DEGRADED с контентом). Осталось 8 TIMEOUT; «наших» среди них три: cnn (зависание движка, BUG-1778), discord (зависание живого окна при исправном headless, BUG-1778), rutube (нет `navigator.serviceWorker.startMessages`, новый [BUG-1805](../../../bugs/BUG-1805-OPEN.md)). intuit — медленная загрузка на границе порога (headless завершается за 45 с при лимите 40 с); qq/imgsrc — «не наши» (Chrome в той же точке падает/зависает); bbc/t-online — флап TLS-рукопожатия без прокси (os error 10060, `unexpected end of file`), по одной попытке из двух загружаются.
+**Главный вывод.** 22 из 30 зависаний на свежей сборке ушли (эффект фиксов после 2026-10-28, прежде всего BUG-1676; 13 сайтов теперь OK/DEGRADED с контентом). Осталось 8 TIMEOUT; «наших» среди них три: cnn (зависание движка, BUG-1778), discord (зависание живого окна при исправном headless, BUG-1778), rutube (нет `navigator.serviceWorker.startMessages`, новый [BUG-1805](../../../bugs/BUG-1805-FIXED.md)). intuit — медленная загрузка на границе порога (headless завершается за 45 с при лимите 40 с); qq/imgsrc — «не наши» (Chrome в той же точке падает/зависает); bbc/t-online — флап TLS-рукопожатия без прокси (os error 10060, `unexpected end of file`), по одной попытке из двух загружаются.
 
 | сайт | вес | было | стало | причина (стадия) | пояснение |
 |---|---|---|---|---|---|
 | cnn-com | 3 | TIMEOUT | TIMEOUT | движок занят: [BUG-1778](../../../bugs/BUG-1778-OPEN.md) | живое окно 2/2 `wait timeout: DocumentReady` после 301; headless `--trace-nav` не завершается за 90 с |
 | discord-com | 3 | TIMEOUT | TIMEOUT | зависание живого окна: [BUG-1778](../../../bugs/BUG-1778-OPEN.md) | headless завершается за 23 с (краска есть), живое окно — «engine busy»/DocumentReady-таймаут 2/2, текст 0 |
-| rutube-ru | 3 | TIMEOUT | TIMEOUT | нет API: [BUG-1805](../../../bugs/BUG-1805-OPEN.md) | `navigator.serviceWorker.startMessages is not a function` убивает инициализацию; headless красится за 34 с, текст в окне 0 |
+| rutube-ru | 3 | TIMEOUT | TIMEOUT | нет API: [BUG-1805](../../../bugs/BUG-1805-FIXED.md) | `navigator.serviceWorker.startMessages is not a function` убивает инициализацию; headless красится за 34 с, текст в окне 0 |
 | intuit-com | 3 | TIMEOUT | TIMEOUT | медленная загрузка, порог | headless завершается за 45 с (run-scripts 17 с, paint 2,4 с) при лимите 40 с; в базе 2002× `TransactionInactiveError` (IDB, см. BUG-914) |
 | bbc-com | 3 | HUNG | TIMEOUT | сеть: TLS-флап | run1 `Navigate error` на старте; в базе TLS handshake os error 10060; одна попытка из двух грузится (18,9 с) |
 | t-online-de | 3 | TIMEOUT | TIMEOUT | сеть: TLS-флап | run0 OK за 20,8 с (6467 знаков), run1 навигация не стартовала; результат нестабилен |
@@ -422,7 +422,7 @@
 
 | баг | действие | сайты | суть |
 |---|---|---|---|
-| [BUG-1805](../../../bugs/BUG-1805-OPEN.md) | заведён (P2) | rutube-ru | нет `navigator.serviceWorker.startMessages` |
+| [BUG-1805](../../../bugs/BUG-1805-FIXED.md) | заведён (P2) | rutube-ru | нет `navigator.serviceWorker.startMessages` |
 | [BUG-1778](../../../bugs/BUG-1778-OPEN.md) | дополнен | cnn-com (подтверждён headless), discord-com, magnit-ru, ebay-com (разовый) | поток движка занят тиком `about_to_wait.rs` |
 | [BUG-1779](../../../bugs/BUG-1779-FIXED.md) | дополнен | smi2-ru | `[object Object] is not a valid selector` |
 | [BUG-1790](../../../bugs/BUG-1790-FIXED.md) | дополнен | medium-com | Turnstile не выдаёт токен → 403 |
