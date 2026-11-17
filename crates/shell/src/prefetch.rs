@@ -409,6 +409,14 @@ impl WarmPool {
 /// Пул прогрева, общий для всех навигаций процесса.
 pub(crate) static WARM_POOL: WarmPool = WarmPool::new(MAX_WARM_THREADS);
 
+/// LOAD-5: `LUMEN_NO_IMG_POOL=1` откатывает прогрев и пул картинок к
+/// прежнему поведению (поток на каждую картинку, байтовый прогрев сканера
+/// выключен) — A/B-рычаг в семействе `LUMEN_NO_*` (`docs/automation.md`).
+pub(crate) fn img_pool_disabled() -> bool {
+    static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DISABLED.get_or_init(|| std::env::var_os("LUMEN_NO_IMG_POOL").is_some_and(|v| v != "0"))
+}
+
 /// Process-global prefetch cache shared between the streaming thread and the
 /// UI-thread page pipeline. Reset per navigation via [`PrefetchCache::reset`].
 pub static PREFETCH_CACHE: LazyLock<PrefetchCache> = LazyLock::new(PrefetchCache::new);
@@ -756,5 +764,51 @@ mod tests {
         cache.warm_with(1, "http://x/old.css", || Ok(resource(b"old")), move |r| tx.send(r.is_ok()).unwrap());
         assert!(rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap());
         assert!(cache.lookup_current("http://x/old.css").is_none(), "stale warm must not fill the slot");
+    }
+
+    #[test]
+    fn warm_30_images_fetches_each_once_on_at_most_8_threads() {
+        // LOAD-5: 30 не-lazy `<img>`-хинтов сканера, каждый URL объявлен
+        // дважды (стриминговый скан и повторный скан финального прохода —
+        // слот уже занят, второго запроса нет), плюс декодирующий
+        // потребитель читает те же байты через `lookup_current`.
+        let cache: &'static PrefetchCache = Box::leak(Box::new(PrefetchCache::new()));
+        cache.reset(1);
+        let fetches = Arc::new(AtomicUsize::new(0));
+        let running = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let (tx, rx) = std::sync::mpsc::channel();
+        for round in 0..2 {
+            for i in 0..30 {
+                let (fetches, running, peak) = (Arc::clone(&fetches), Arc::clone(&running), Arc::clone(&peak));
+                let tx = tx.clone();
+                cache.warm_with(
+                    1,
+                    &format!("http://x/{i}.png"),
+                    move || {
+                        fetches.fetch_add(1, Ordering::SeqCst);
+                        let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+                        peak.fetch_max(now, Ordering::SeqCst);
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        running.fetch_sub(1, Ordering::SeqCst);
+                        Ok(resource(format!("img{i}").as_bytes()))
+                    },
+                    move |result| tx.send((round, i, result.map(|r| r.body.clone()))).unwrap(),
+                );
+            }
+        }
+        drop(tx);
+        let mut seen = 0;
+        while let Ok((_, i, body)) = rx.recv_timeout(std::time::Duration::from_secs(10)) {
+            assert_eq!(body.unwrap(), format!("img{i}").into_bytes());
+            seen += 1;
+        }
+        assert_eq!(seen, 60, "every hint gets its outcome");
+        assert_eq!(fetches.load(Ordering::SeqCst), 30, "each image downloaded once");
+        assert!(peak.load(Ordering::SeqCst) <= MAX_WARM_THREADS);
+        // Потребитель (`fetch_image_bytes` → `lookup_current`) берёт те же
+        // байты, не выходя в сеть.
+        let hit = cache.lookup_current("http://x/7.png").unwrap().unwrap();
+        assert_eq!(&hit.body, b"img7");
     }
 }

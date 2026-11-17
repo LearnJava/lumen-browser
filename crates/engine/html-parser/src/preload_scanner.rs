@@ -105,6 +105,10 @@ pub enum PreloadHint {
         sizes: Option<String>,
         /// См. `Stylesheet::fetch_priority`.
         fetch_priority: Option<String>,
+        /// `loading="lazy"` (HTML LS §2.6.6.9): байтовый прогрев (LOAD-5)
+        /// такую картинку пропускает — ближе к вьюпорту её грузит
+        /// IntersectionObserver-путь, греть заранее запрещает сам атрибут.
+        lazy: bool,
     },
     /// `<source srcset="...">` внутри `<picture>` / `<video>` / `<audio>`.
     /// `media`-атрибут специально не учитываем — речь о preload, fetch
@@ -261,7 +265,10 @@ fn collect_img_hint(attrs: &[(String, String)], out: &mut Vec<PreloadHint>) {
     if src.is_none() && srcset.is_none() {
         return;
     }
-    out.push(PreloadHint::Image { url: src, srcset, sizes, fetch_priority: normalize_fetch_priority(attrs) });
+    let lazy = find_attr(attrs, "loading")
+        .map(|v| v.trim().eq_ignore_ascii_case("lazy"))
+        .unwrap_or(false);
+    out.push(PreloadHint::Image { url: src, srcset, sizes, fetch_priority: normalize_fetch_priority(attrs), lazy });
 }
 
 /// Нормализует `fetchpriority` (HTML LS §2.5.7) на `<link>`/`<img>`/`<script>`:
@@ -754,7 +761,7 @@ mod tests {
             vec![PreloadHint::Image {
                 url: Some("actual.jpg".into()),
                 srcset: None,
-                sizes: None, fetch_priority: None }]
+                sizes: None, fetch_priority: None, lazy: false }]
         );
     }
 
@@ -766,7 +773,7 @@ mod tests {
             vec![PreloadHint::Image {
                 url: Some("cat.png".into()),
                 srcset: None,
-                sizes: None, fetch_priority: None }]
+                sizes: None, fetch_priority: None, lazy: false }]
         );
     }
 
@@ -780,7 +787,7 @@ mod tests {
             vec![PreloadHint::Image {
                 url: Some("fb.png".into()),
                 srcset: Some("s.png 480w, m.png 1024w".into()),
-                sizes: Some("100vw".into()), fetch_priority: None }]
+                sizes: Some("100vw".into()), fetch_priority: None, lazy: false }]
         );
     }
 
@@ -794,7 +801,7 @@ mod tests {
             vec![PreloadHint::Image {
                 url: None,
                 srcset: Some("hi.png 2x".into()),
-                sizes: None, fetch_priority: None }]
+                sizes: None, fetch_priority: None, lazy: false }]
         );
     }
 
@@ -822,7 +829,7 @@ mod tests {
                 PreloadHint::Image {
                     url: Some("hi.jpg".into()),
                     srcset: None,
-                    sizes: None, fetch_priority: None },
+                    sizes: None, fetch_priority: None, lazy: false },
             ]
         );
     }
@@ -1131,8 +1138,28 @@ mod tests {
                 srcset: None,
                 sizes: None,
                 fetch_priority: Some("high".into()),
+                lazy: false,
             }]
         );
+    }
+
+    #[test]
+    fn img_loading_lazy_flagged() {
+        // LOAD-5: байтовый прогрев сканера пропускает `loading="lazy"`.
+        let hints = scan_preload_hints(r#"<img src="cat.png" loading="lazy">"#);
+        assert_eq!(
+            hints,
+            vec![PreloadHint::Image {
+                url: Some("cat.png".into()),
+                srcset: None,
+                sizes: None,
+                fetch_priority: None,
+                lazy: true,
+            }]
+        );
+        // Любое другое значение атрибута — eager, как отсутствие атрибута.
+        let hints = scan_preload_hints(r#"<img src="cat.png" loading="eager">"#);
+        assert!(matches!(hints[..], [PreloadHint::Image { lazy: false, .. }]));
     }
 
     #[test]
@@ -1366,7 +1393,7 @@ mod streaming_tests {
             vec![PreloadHint::Image {
                 url: Some("real.png".into()),
                 srcset: None,
-                sizes: None, fetch_priority: None }]
+                sizes: None, fetch_priority: None, lazy: false }]
         );
     }
 

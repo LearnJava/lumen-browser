@@ -222,6 +222,28 @@ RenderDone.
 до RenderDone (журнал сервера); первый кадр и `load` не хуже значений §LOAD-1/1B;
 `ready_s` на корпусе `docs/perf/corpus-user-ru.txt` не хуже.
 
+**Сделано (2026-11-17).** Сканер (`preload_scanner.rs`) несёт `lazy`-флаг в
+`PreloadHint::Image`; `feed_preload_and_emit` греет байты не-lazy `<img src>` (без
+srcset/`<picture>`) в `PREFETCH_CACHE` общим `WarmClient` с политикой документа — гейт CSP
+`img-src` через новую ветку `Image` в `speculative_fetch_blocked`, `upgrade-insecure-requests`
+переписывает адрес до гейта и до ключа слота. `spawn_image_requests` больше не поднимает
+поток на каждую картинку: декод-задачи идут на общий `WARM_POOL` (≤ 8, LOAD-3C), stable-сорт
+по `fetchpriority` (high вперёд; геометрический приоритет вьюпорта не считается — обход
+layout-дерева на каждый стриминговый кадр дороже выигрыша, над строкой текста картинки почти
+всегда раньше в разметке). Откат — `LUMEN_NO_IMG_POOL=1` (`prefetch::img_pool_disabled`):
+без него прежний `std::thread::spawn` на картинку и без прогрева. Тесты:
+`prefetch.rs::warm_30_images_fetches_each_once_on_at_most_8_threads` (30 URL × 2 объявления =
+30 загрузок, пик ≤ 8), `preload_scanner.rs::img_loading_lazy_flagged`,
+`csp_enforce.rs::speculative_fetch_blocked_follows_element_directives`. Стенд
+`--frame-ms 0 --img-ms 3000`, dev-release, по два прогона на плечо: GET первой волны уходят
+на 0,03–0,10 с (прогрев сканера, до CSS) против ~0,9 с прежде (стриминговый продюсер ждал
+CSS-pending); первый кадр 1,1–1,9 с (прежде 1,2 — кадру всё равно ждать CSS+layout);
+`load` 6,09–6,19 с против 3,92–4,09 с у старого поведения — цена глобального потолка ≤ 8
+на однобоковом стенде с равными задержками: 12 картинок идут волнами 8+4 (браузерный лимит
+~6/хост даёт тот же размен), обе цифры внутри конверта §LOAD-1/1B (8,5 с на нагруженной
+машине). Корпус `ready_s` не перепрогонялся: разброс между прогонами LOAD-0 (vk 4,8/15,7 с)
+больше эффекта, следящим прогоном снимет SITES-RECRAWL-1; рычаг A/B — `LUMEN_NO_IMG_POOL=1`.
+
 ## LOAD-4 — финальный проход не ждёт последний CSS (P6, M)
 
 **Depends on:** — (LOAD-2 и PERF-INVALIDATION S1/S2 в `main`). **Files:**

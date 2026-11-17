@@ -1639,6 +1639,18 @@ impl Lumen {
         let referrer_policy = self.layout_source.as_ref().and_then(|src| {
             src.document.lock().ok().map(|d| crate::resource_base::document_referrer_policy(&d))
         }).unwrap_or_else(lumen_network::ReferrerPolicy::default_policy);
+        // LOAD-5: явный `fetchpriority` вперёд остальных (high → 0, low → 2,
+        // auto/нет → 1); stable-сорт сохраняет порядок документа внутри
+        // уровня. shortcut: геометрический приоритет вьюпорта не считается —
+        // полный обход layout-дерева ради сортировки на каждый стриминговый
+        // кадр дороже выигрыша; над строкой текста картинки почти всегда
+        // раньше в разметке, когда требуется настоящая геометрия.
+        let mut requests = requests;
+        requests.sort_by_key(|req| match req.fetch_priority.as_deref() {
+            Some("high") => 0,
+            Some("low") => 2,
+            _ => 1,
+        });
         for req in requests {
             if req.is_lazy {
                 continue;
@@ -1692,7 +1704,7 @@ impl Lumen {
             let cookie_jar = self.active_cookie_jar();
             let proxy = self.load_proxy.clone();
             let target = self.target_color_space();
-            std::thread::spawn(move || {
+            let job = move || {
                 // Fill the shared cache so the final `fetch_and_decode_images` pass
                 // reuses these pixels instead of re-fetching+re-decoding (BUG-172).
                 // Ключ кэша — сырой `req.url` (его знают layout/рендерер);
@@ -1748,7 +1760,20 @@ impl Lumen {
                         });
                     }
                 }
-            });
+            };
+            // LOAD-5: декод-задача идёт на общий пул прогрева (`WARM_POOL`,
+            // ≤ 8 потоков — тот же, что прогрев сканера), а не на отдельный
+            // поток под каждую картинку: страница с 30 картинками больше не
+            // поднимает 30 потоков и 30 соединений разом. FIFO пула держит
+            // задачу-потребителя позади задачи-прогрева того же URL (сканер
+            // увидел `<img>` раньше, чем UI-поток собрал запрос) — взаимных
+            // блокировок нет, см. `WarmPool`'s doc-comment. Откат —
+            // `LUMEN_NO_IMG_POOL=1` (`prefetch::img_pool_disabled`).
+            if crate::prefetch::img_pool_disabled() {
+                std::thread::spawn(job);
+            } else {
+                crate::prefetch::WARM_POOL.submit(job);
+            }
         }
     }
 
@@ -2531,6 +2556,57 @@ fn feed_preload_and_emit(
                         }
                     },
                 );
+            }
+        }
+    }
+    // LOAD-5: грееть байты не-lazy `<img src>` сканера. После LOAD-1 не-lazy
+    // картинки в живом режиме стартуют только когда UI-поток разберёт чанк,
+    // построит частичный layout и соберёт запросы (`spawn_stream_image_loads`)
+    // — а до того сеть простаивает, пока идут HTML+CSS+скрипты. Байты ложатся
+    // в `PREFETCH_CACHE` тем же общим клиентом `WarmClient` (один пул
+    // keep-alive-соединений на документ), и `fetch_image_bytes` потребителя
+    // (`spawn_image_requests` → `IMAGE_CACHE::get_or_decode` → `decode_image`)
+    // берёт их через `lookup_current` без второго запроса. Не греются:
+    // `loading="lazy"` (сам атрибут запрещает), srcset/`<picture>` (кандидата
+    // выбирает picker по вьюпорту — адрес до него неизвестен), `crossorigin`
+    // (CORS-путь справедливо не доверяет no-cors байтам — греется впустую,
+    // потребитель перекачает сам).
+    if crate::prefetch::img_pool_disabled() {
+        return;
+    }
+    for hint in &early {
+        let lumen_html_parser::PreloadHint::Image {
+            url: Some(raw_url),
+            srcset: None,
+            lazy: false,
+            ..
+        } = hint
+        else {
+            continue;
+        };
+        // GAP-CSPENF срез 43: upgrade-insecure-requests переписывает схему до
+        // гейта (Fetch §4.1, шаг 5 раньше шага 6) и до ключа слота — адрес
+        // прогрева обязан совпасть с адресом, по которому потребитель ищет
+        // байты (`spawn_image_requests` строит свой fetch_url так же).
+        let resolved = base.resolve_str(raw_url);
+        let upgraded = crate::csp_enforce::upgrade_insecure_url(&doc_csp, &resolved);
+        let resolved = upgraded.unwrap_or(resolved);
+        if crate::csp_enforce::speculative_fetch_blocked(&doc_csp, hint, &resolved, self_origin.as_ref()) {
+            eprintln!("  ⤷ прогрев картинки пропущен (CSP): {resolved}");
+            continue;
+        }
+        match base.resolve(raw_url) {
+            // Локальные файлы читаются мгновенно — греть нечего.
+            ResolvedResource::File(_) => continue,
+            ResolvedResource::Url(_) => {
+                let Ok(parsed) = lumen_core::url::Url::parse(&resolved) else { continue };
+                let client = warm_client.client(base, referrer_policy);
+                crate::prefetch::PREFETCH_CACHE.warm(generation, &resolved, move || {
+                    client
+                        .fetch_subresource_with_content_type(&parsed, RequestDestination::Image)
+                        .map(|(body, content_type)| crate::prefetch::CachedResource { body, content_type })
+                        .map_err(|e| e.to_string())
+                });
             }
         }
     }

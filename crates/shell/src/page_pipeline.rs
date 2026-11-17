@@ -254,10 +254,13 @@ pub(crate) fn dispatch_preload_hints(
 /// каким его читает `HttpClient::fetch_preload_cached`. Остальные виды
 /// хинтов (stylesheet/script/image/preconnect сканера) сюда не попадают — у
 /// stylesheet/script уже есть свой ранний прогрев (`feed_preload_and_emit`),
-/// `<img>` сканера и preconnect в байтовом кэше не нужны. `as=image`/`as=font`
-/// греются здесь же: их настоящий потребитель
-/// (`subresources.rs::fetch_subresource_bytes` — `<img>`, CSS-фон,
-/// `@font-face`) сначала смотрит в этот кэш и берёт уже пришедшие байты.
+/// `<img>` сканера греется там же с LOAD-5 (этот финальный скан слот не
+/// дублирует: URL уже занят стриминговым прогревом, а headless-путь
+/// `fetch_and_decode_images` прогревом не трогаем), preconnect в байтовом
+/// кэше не нужен. `as=image`/`as=font` греются здесь же: их настоящий
+/// потребитель (`subresources.rs::fetch_subresource_bytes` — `<img>`,
+/// CSS-фон, `@font-face`) сначала смотрит в этот кэш и берёт уже пришедшие
+/// байты.
 ///
 /// Потоки стартуют параллельно, а не по одному — именно это убирает
 /// сериализацию `14 хинтов × 700 мс`, замеренную на стенде: сеть, а не
