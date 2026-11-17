@@ -1961,6 +1961,13 @@ impl V8JsRuntime {
         });
     }
 
+    /// Forbid dynamic `import()` in this runtime (SW-MODULE: a module service
+    /// worker must reject it per SW §Run Service Worker). Static imports and
+    /// the module graph keep working; thread-local, like the loader context.
+    pub(crate) fn set_dynamic_import_denied(&self, denied: bool) {
+        self.run(move |_inner| crate::v8_esm::set_dynamic_import_denied(denied));
+    }
+
     /// Dispatch `f` to the JS thread, blocking until it completes.
     ///
     /// # Safety

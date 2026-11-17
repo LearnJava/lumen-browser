@@ -605,6 +605,37 @@ fn sw_register_rejects_file_page_script_with_type_error() {
     assert!(!has);
 }
 
+// SW-MODULE: the WorkerType option — only 'classic' (default) and 'module'
+// are valid; anything else rejects with TypeError before any state exists.
+#[test]
+fn sw_register_rejects_unknown_worker_type() {
+    let (out, has) = sw_register_outcome("https://example.com/", "'/sw.js', { type: 'other' }");
+    assert_eq!(out, "TypeError");
+    assert!(!has);
+}
+
+// SW-MODULE: the registration remembers its WorkerType ('classic' by default).
+#[test]
+fn sw_register_records_worker_type() {
+    let rt = v8_runtime_with_url("https://example.com/");
+    rt.eval("navigator.serviceWorker.register('/sw.js', { type: 'module' });")
+        .unwrap();
+    let classic = v8_runtime_with_url("https://example.com/");
+    classic.eval("navigator.serviceWorker.register('/sw.js');").unwrap();
+    let lumen_core::JsValue::String(t1) = rt.eval(
+        "var t = null; navigator.serviceWorker.getRegistration('/').then(function(r){ t = r ? r.type : 'none'; });"
+    ).and_then(|_| rt.eval("t")).unwrap() else {
+        panic!("module registration type missing");
+    };
+    let lumen_core::JsValue::String(t2) = classic.eval(
+        "var t = null; navigator.serviceWorker.getRegistration('/').then(function(r){ t = r ? r.type : 'none'; });"
+    ).and_then(|_| classic.eval("t")).unwrap() else {
+        panic!("classic registration type missing");
+    };
+    assert_eq!(t1, "module");
+    assert_eq!(t2, "classic");
+}
+
 #[test]
 fn sw_register_rejects_encoded_separator_in_script_path() {
     let (out, _) = sw_register_outcome("https://example.com/", "'/a%2Fb/sw.js'");
@@ -1542,7 +1573,7 @@ fn sw_worker_store_is_keyed_by_document_origin_not_js_string() {
     let be = Arc::new(MockCacheBackend::new());
     let store: lumen_core::ext::SwWorkerStore = Arc::default();
     let rt = runtime_on_shared_cache("https://attacker.example/", &be, Some(Arc::clone(&store)));
-    rt.eval("_lumen_sw_activate_script('/', ''); _lumen_sw_register('https://victim.example', '/', '/evil.js');")
+    rt.eval("_lumen_sw_activate_script('/', '', '', 'classic'); _lumen_sw_register('https://victim.example', '/', '/evil.js');")
         .unwrap();
     let keys: Vec<(String, String)> = store.lock().unwrap().keys().cloned().collect();
     assert_eq!(keys, vec![("https://attacker.example".to_string(), "/".to_string())]);

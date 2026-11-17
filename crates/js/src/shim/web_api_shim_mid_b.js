@@ -564,17 +564,44 @@ if (_lumen_secure_context !== false) {
     });
 }
 
-function _sw_make_registration(scope, scriptUrl) {
+function _sw_make_registration(scope, scriptUrl, type) {
     var et = _sw_make_event_target();
     var reg = Object.assign(Object.create(_lumen_sw_registration_iface.prototype), {
         scope: scope,
         scriptURL: String(scriptUrl),
+        type: (type === 'module') ? 'module' : 'classic',
         updateViaCache: 'imports',
         installing: null,
         waiting: null,
         active: null,
         onupdatefound: null,
-        update: function() { return Promise.resolve(); },
+        update: function(options) {
+            var reg = this;
+            // SW §9.4 «update»: re-fetch the script, run the MIME and byte
+            // checks; identical bytes and type resolve without a new worker,
+            // anything else installs a new worker on this registration.
+            var type = reg.type;
+            if (options && options.type !== undefined && options.type !== null) {
+                type = String(options.type);
+                if (type !== 'classic' && type !== 'module') {
+                    return Promise.reject(new TypeError(
+                        "Failed to update a ServiceWorkerRegistration: The provided value '"
+                        + type + "' is not a valid enum value of type WorkerType."));
+                }
+            }
+            if (typeof fetch !== 'function') {
+                return Promise.reject(new TypeError(
+                    'Failed to update a ServiceWorkerRegistration: script fetch is unavailable.'));
+            }
+            return Promise.resolve()
+                .then(function() { return fetch(String(reg.scriptURL)); })
+                .then(function(res) {
+                    return res.text().then(function(text) {
+                        _sw_update_with_script(reg, type, res, text);
+                        return _sw_registrations[reg.scope];
+                    });
+                });
+        },
         unregister: function() {
             _lumen_sw_unregister(scope);
             delete _sw_registrations[scope];
@@ -582,6 +609,66 @@ function _sw_make_registration(scope, scriptUrl) {
             return Promise.resolve(true);
         },
     }, et);
+    return reg;
+}
+
+// SW-MODULE: a JavaScript MIME type (SW §2.2.2 «script resource MIME type»).
+// Parameters after ';' are ignored; anything that is not a JS MIME type fails
+// a module script fetch.
+function _sw_is_js_mime(ct) {
+    if (!ct) return false;
+    var m = String(ct).split(';')[0].trim().toLowerCase();
+    switch (m) {
+        case 'text/javascript':
+        case 'application/javascript':
+        case 'application/x-javascript':
+        case 'text/ecmascript':
+        case 'application/ecmascript':
+            return true;
+        default:
+            return false;
+    }
+}
+
+// SW §9.2: create the registration for `scriptUrl` of `type` and start the
+// lifecycle with the already fetched script `text` (byte-check keeps it on
+// the registration for a later update()).
+function _sw_install_script_text(scope, scriptUrl, type, text) {
+    var reg = _sw_make_registration(scope, scriptUrl, type);
+    reg._scriptText = text;
+    var sw = _sw_make_worker(scriptUrl, 'installing', scope);
+    reg.installing = sw;
+    _sw_registrations[scope] = reg;
+    // Register immediately in Rust-side map (for _lumen_sw_has_registration sync checks).
+    _lumen_sw_register(scope, String(scriptUrl));
+    _sw_run_lifecycle(reg, text);
+    return reg;
+}
+
+// SW §9.4 «update»: fetch + checks already done by the caller; install a new
+// worker on the existing registration (it keeps its identity) and fire
+// updatefound via the lifecycle.
+function _sw_update_with_script(reg, type, res, text) {
+    if (!res || res.status < 200 || res.status >= 300) {
+        throw new TypeError('Failed to update a ServiceWorkerRegistration: the script '
+            + 'resource fetch failed (HTTP ' + (res ? res.status : 'error') + ').');
+    }
+    if (type === 'module') {
+        var ct = res.headers && typeof res.headers.get === 'function'
+            ? res.headers.get('Content-Type') : null;
+        if (!_sw_is_js_mime(ct)) {
+            throw new TypeError('Failed to update a ServiceWorkerRegistration: The script '
+                + 'has an unsupported MIME type (' + (ct || 'none') + ') for a module service worker.');
+        }
+    }
+    // Byte-check (SW §9.4 step 7): same bytes and same type — no new worker.
+    if (reg._scriptText === text && reg.type === type) {
+        return reg;
+    }
+    var sw = _sw_make_worker(reg.scriptURL, 'installing', reg.scope);
+    reg.installing = sw;
+    reg._scriptText = text;
+    _sw_run_lifecycle(reg, text);
     return reg;
 }
 
@@ -593,6 +680,7 @@ function _sw_persist() {
             snap.push({
                 scope: r.scope,
                 scriptURL: r.scriptURL,
+                type: r.type,
                 state: r.active ? 'activated' : (r.waiting ? 'installed' : 'installing'),
             });
         }
@@ -600,7 +688,7 @@ function _sw_persist() {
     } catch(e) {}
 }
 
-function _sw_run_lifecycle(reg) {
+function _sw_run_lifecycle(reg, scriptText) {
     var sw = reg.installing;
     // Notify updatefound
     var uf = new Event('updatefound');
@@ -624,16 +712,39 @@ function _sw_run_lifecycle(reg) {
                 activateEvt.waitUntil = function() {};
                 sw._setState('activated');
                 _sw_persist();
-                // PH3-20: fetch SW script and hand it to the Rust execution thread.
-                if (typeof fetch !== 'undefined' && typeof _lumen_sw_activate_script === 'function') {
-                    (function(scope, scriptURL) {
+                // PH3-20/SW-MODULE: hand the SW script to the Rust execution
+                // thread. A registration created by update() carries the text
+                // already; otherwise fetch it here — a module script with a
+                // non-JS MIME type never activates (SW §2.2.2).
+                if (typeof _lumen_sw_activate_script === 'function') {
+                    (function(scope, scriptURL, type, text) {
+                        if (text) {
+                            _lumen_sw_activate_script(scope, text, scriptURL, type);
+                            return;
+                        }
+                        if (typeof fetch !== 'function') return;
                         fetch(scriptURL)
-                            .then(function(res) { return res.text(); })
+                            .then(function(res) {
+                                return res.text().then(function(t) {
+                                    if (type === 'module' && !_sw_is_js_mime(
+                                        res.headers && typeof res.headers.get === 'function'
+                                            ? res.headers.get('Content-Type') : null)) {
+                                        // Bad MIME: the script never runs; the
+                                        // worker is redundant (SW §9.2 step 7.4).
+                                        return undefined;
+                                    }
+                                    return t;
+                                });
+                            })
                             .then(function(text) {
-                                _lumen_sw_activate_script(scope, text);
+                                if (typeof text === 'string') {
+                                    var reg = _sw_registrations[scope];
+                                    if (reg && reg._scriptText === undefined) reg._scriptText = text;
+                                    _lumen_sw_activate_script(scope, text, scriptURL, type);
+                                }
                             })
                             .catch(function() {}); // ignore fetch errors — lifecycle still simulated
-                    })(reg.scope, reg.scriptURL);
+                    })(reg.scope, reg.scriptURL, reg.type, scriptText);
                 }
                 // Fire controllerchange
                 var ce = new Event('controllerchange');
@@ -656,7 +767,7 @@ function _sw_run_lifecycle(reg) {
             var arr = JSON.parse(snap);
             for (var i = 0; i < arr.length; i++) {
                 var item = arr[i];
-                var reg = _sw_make_registration(item.scope, item.scriptURL);
+                var reg = _sw_make_registration(item.scope, item.scriptURL, item.type);
                 if (item.state === 'activated' || item.state === 'installed') {
                     var sw = _sw_make_worker(item.scriptURL, item.state, item.scope);
                     reg.active = sw;
@@ -747,6 +858,17 @@ var _sw_container = Object.assign({
     onmessageerror: null,
     register: function(scriptUrl, options) {
         var scope = (options && options.scope) ? String(options.scope) : '/';
+        // SW §3.4.3: the WorkerType option — anything but 'classic'/'module'
+        // (undefined counts as 'classic') rejects with TypeError.
+        var type = 'classic';
+        if (options && options.type !== undefined && options.type !== null) {
+            type = String(options.type);
+            if (type !== 'classic' && type !== 'module') {
+                return Promise.reject(new TypeError(
+                    "Failed to register a ServiceWorker: The provided value '" + type
+                    + "' is not a valid enum value of type WorkerType."));
+            }
+        }
         // BUG-675: SW §3.4.3 register() + §9.2 Start Register — the script URL
         // (and an explicit scope) is parsed against the document's base URL and
         // must be http(s), same-origin with the document, and free of encoded
@@ -755,10 +877,6 @@ var _sw_container = Object.assign({
         var checked = _sw_check_register_urls(scriptUrl, options && options.scope);
         if (checked.error) return Promise.reject(checked.error);
         scriptUrl = checked.script;
-        var existing = _sw_registrations[scope];
-        if (existing && existing.active && existing.scriptURL === String(scriptUrl)) {
-            return Promise.resolve(existing);
-        }
         // GAP-CSPENF срез 30: `worker-src` (falling back to `default-src`) gates
         // the registration script itself — checked synchronously, before any
         // registration state is created, so a blocked `register()` behaves as
@@ -776,14 +894,19 @@ var _sw_container = Object.assign({
                 ));
             }
         }
-        var reg = _sw_make_registration(scope, scriptUrl);
-        var sw = _sw_make_worker(scriptUrl, 'installing', scope);
-        reg.installing = sw;
-        _sw_registrations[scope] = reg;
-        // Register immediately in Rust-side map (for _lumen_sw_has_registration sync checks).
-        _lumen_sw_register(scope, String(scriptUrl));
-        _sw_run_lifecycle(reg);
-        return Promise.resolve(reg);
+        // SW-MODULE: the script fetch happens in the lifecycle below (as
+        // before) — register() stays synchronous so existing callers observe
+        // the registration immediately. shortcut: a bad module MIME type or a
+        // failed fetch cannot reject this promise (it already resolved); the
+        // worker just never activates — upgrade when WPT register-MIME tests
+        // matter more than the sync contract.
+        var existing = _sw_registrations[scope];
+        if (existing && existing.active && existing.scriptURL === String(scriptUrl)
+            && existing.type === type) {
+            return Promise.resolve(existing);
+        }
+        _sw_install_script_text(scope, scriptUrl, type, undefined);
+        return Promise.resolve(_sw_registrations[scope]);
     },
     getRegistration: function(url) {
         var u = url || _sw_origin + '/';

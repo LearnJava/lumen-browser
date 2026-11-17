@@ -5,7 +5,7 @@
 //! `ServiceWorkerInterceptor` (lumen-storage) sends `SwWorkerMessage::Fetch`
 //! messages to the thread, which dispatches a `FetchEvent` and returns the
 //! response body; `lumen-js::push_api` sends `Push`/`PushSubscriptionChange`
-//! (Ph3 push-api срез 5). The rquickjs-backed `spawn_sw_worker` was removed
+//! (Ph3 push-api РЎРѓРЎР‚Р ВµР В· 5). The rquickjs-backed `spawn_sw_worker` was removed
 //! in S12b-B17.
 //!
 //! SW-MSG-S1: timer-task loop with `run_worker_tasks` + `recv_timeout` (modeled
@@ -15,11 +15,11 @@
 //! `waitUntil` collecting lifetime promises, and `install`/`activate` waiting
 //! for them via `_sw_extend_pending()` (capped by [`EXTEND_TIMEOUT`]).
 //!
-//! SW-MSG-S3: page → worker messages — `ServiceWorker.postMessage` on the
+//! SW-MSG-S3: page РІвЂ вЂ™ worker messages РІР‚вЂќ `ServiceWorker.postMessage` on the
 //! page sends [`SwWorkerMessage::Message`], dispatched here as an
 //! `ExtendableMessageEvent` with a `WindowClient` `source`.
 //!
-//! SW-MSG-S4: the return channel — `Client.prototype.postMessage` in the
+//! SW-MSG-S4: the return channel РІР‚вЂќ `Client.prototype.postMessage` in the
 //! isolate calls `_lumen_sw_post_to_client`, which queues into the
 //! process-global hub (`crate::sw_clients`); the destination page's
 //! `V8JsRuntime::pump_workers` delivers it as a `message` event on
@@ -57,12 +57,12 @@ const EXTEND_TIMEOUT: Duration = Duration::from_secs(30);
 /// Build the `ServiceWorkerGlobalScope` shim source for a given (already
 /// JS-string-literal-quoted) `scope_str`.
 ///
-/// Pure JS (no engine-specific bits) — used by [`install_sw_globals_v8`].
+/// Pure JS (no engine-specific bits) РІР‚вЂќ used by [`install_sw_globals_v8`].
 /// Provides `self`, `location`, `registration`, `skipWaiting`, `clients`,
 /// `addEventListener`/
 /// `removeEventListener`, minimal `Request`/`Response` classes (`Headers` is
 /// [`crate::dom::HEADERS_SHIM`], part of `worker_exposed_shim` evaluated
-/// before this shim — see [`install_sw_globals_v8`]), the `caches`
+/// before this shim РІР‚вЂќ see [`install_sw_globals_v8`]), the `caches`
 /// API (backed by the Rust `CacheBackend` via `_lumen_sw_cache_*` natives),
 /// a cache-first `fetch` stub, `_sw_fire_event`/`_sw_fire_fetch` dispatch
 /// hooks called by the Rust message loop, `console`, and
@@ -72,29 +72,29 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     format!(r#"
 (function(scope, origin) {{
   globalThis.self = globalThis;
-  // `ServiceWorkerGlobalScope` (BUG-777) — the third flavour of the same
+  // `ServiceWorkerGlobalScope` (BUG-777) РІР‚вЂќ the third flavour of the same
   // factory, see `crate::dom::WORKER_LOCATION_NAVIGATOR_SHIM`.
   if (typeof _lumen_define_worker_scope === 'function') {{
     _lumen_define_worker_scope('ServiceWorkerGlobalScope');
   }}
-  // `WorkerLocation` (HTML LS §8.1.5.4) целиком, а не два поля: сервис-воркеры
-  // ветвятся по `location.host`/`location.search` прямо на верхнем уровне, и
-  // `undefined.includes(...)` роняет установку всего воркера ещё до первого
-  // слушателя (живой пример — `sw.js` t-банка). Объект строит тот же
-  // `_lumen_make_worker_location`, что и у двух других видов воркера
-  // (BUG-776 — до него это был литерал прямо здесь), поэтому `origin` —
-  // настоящий, а не `scope` без последнего сегмента пути, и
-  // `location instanceof WorkerLocation` истинно и тут.
+  // `WorkerLocation` (HTML LS Р’В§8.1.5.4) РЎвЂ Р ВµР В»Р С‘Р С”Р С•Р С, Р В° Р Р…Р Вµ Р Т‘Р Р†Р В° Р С—Р С•Р В»РЎРЏ: РЎРѓР ВµРЎР‚Р Р†Р С‘РЎРѓ-Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚РЎвЂ№
+  // Р Р†Р ВµРЎвЂљР Р†РЎРЏРЎвЂљРЎРѓРЎРЏ Р С—Р С• `location.host`/`location.search` Р С—РЎР‚РЎРЏР СР С• Р Р…Р В° Р Р†Р ВµРЎР‚РЎвЂ¦Р Р…Р ВµР С РЎС“РЎР‚Р С•Р Р†Р Р…Р Вµ, Р С‘
+  // `undefined.includes(...)` РЎР‚Р С•Р Р…РЎРЏР ВµРЎвЂљ РЎС“РЎРѓРЎвЂљР В°Р Р…Р С•Р Р†Р С”РЎС“ Р Р†РЎРѓР ВµР С–Р С• Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚Р В° Р ВµРЎвЂ°РЎвЂ Р Т‘Р С• Р С—Р ВµРЎР‚Р Р†Р С•Р С–Р С•
+  // РЎРѓР В»РЎС“РЎв‚¬Р В°РЎвЂљР ВµР В»РЎРЏ (Р В¶Р С‘Р Р†Р С•Р в„– Р С—РЎР‚Р С‘Р СР ВµРЎР‚ РІР‚вЂќ `sw.js` t-Р В±Р В°Р Р…Р С”Р В°). Р С›Р В±РЎР‰Р ВµР С”РЎвЂљ РЎРѓРЎвЂљРЎР‚Р С•Р С‘РЎвЂљ РЎвЂљР С•РЎвЂљ Р В¶Р Вµ
+  // `_lumen_make_worker_location`, РЎвЂЎРЎвЂљР С• Р С‘ РЎС“ Р Т‘Р Р†РЎС“РЎвЂ¦ Р Т‘РЎР‚РЎС“Р С–Р С‘РЎвЂ¦ Р Р†Р С‘Р Т‘Р С•Р Р† Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚Р В°
+  // (BUG-776 РІР‚вЂќ Р Т‘Р С• Р Р…Р ВµР С–Р С• РЎРЊРЎвЂљР С• Р В±РЎвЂ№Р В» Р В»Р С‘РЎвЂљР ВµРЎР‚Р В°Р В» Р С—РЎР‚РЎРЏР СР С• Р В·Р Т‘Р ВµРЎРѓРЎРЉ), Р С—Р С•РЎРЊРЎвЂљР С•Р СРЎС“ `origin` РІР‚вЂќ
+  // Р Р…Р В°РЎРѓРЎвЂљР С•РЎРЏРЎвЂ°Р С‘Р в„–, Р В° Р Р…Р Вµ `scope` Р В±Р ВµР В· Р С—Р С•РЎРѓР В»Р ВµР Т‘Р Р…Р ВµР С–Р С• РЎРѓР ВµР С–Р СР ВµР Р…РЎвЂљР В° Р С—РЎС“РЎвЂљР С‘, Р С‘
+  // `location instanceof WorkerLocation` Р С‘РЎРѓРЎвЂљР С‘Р Р…Р Р…Р С• Р С‘ РЎвЂљРЎС“РЎвЂљ.
   globalThis.location = _lumen_make_worker_location(
     (scope.indexOf('://') !== -1) ? scope
       : (origin + (scope.charAt(0) === '/' ? scope : '/' + scope)));
-  // BUG-1208: `WindowOrWorkerGlobalScope.origin` — same URL as `location`
+  // BUG-1208: `WindowOrWorkerGlobalScope.origin` РІР‚вЂќ same URL as `location`
   // above (a service worker's scope URL doubles as its own location URL,
   // per the comment just above).
   if (typeof _lumen_make_worker_origin === 'function') {{
     globalThis.origin = _lumen_make_worker_origin(globalThis.location.href);
   }}
-  // `isSecureContext` (BUG-766) — same rule as the other two worker
+  // `isSecureContext` (BUG-766) РІР‚вЂќ same rule as the other two worker
   // flavours; a service worker's scope URL doubles as its own location URL.
   if (typeof _lumen_worker_secure_context_for === 'function') {{
     Object.defineProperty(globalThis, 'isSecureContext', {{
@@ -114,7 +114,7 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     installing: null, waiting: null,
   }};
   globalThis.skipWaiting = function() {{ return Promise.resolve(); }};
-  // SW-MSG-S6: `Clients` (SW §5.1) — backed by the hub's client registry
+  // SW-MSG-S6: `Clients` (SW Р’В§5.1) РІР‚вЂќ backed by the hub's client registry
   // through natives bound to this worker's origin and scope. `Client` /
   // `WindowClient` are declared further down; the lookups run at call time.
   globalThis.clients = {{
@@ -133,7 +133,7 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     }},
     claim: function() {{
       if (typeof _lumen_sw_clients_claim === 'function') _lumen_sw_clients_claim();
-      // SW §5.1: resolves to undefined either way.
+      // SW Р’В§5.1: resolves to undefined either way.
       return Promise.resolve(undefined);
     }},
   }};
@@ -150,13 +150,13 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     }}
   }};
 
-  // base64 → «байтовая» строка (по символу на байт) и она же → текст UTF-8.
+  // base64 РІвЂ вЂ™ Р’В«Р В±Р В°Р в„–РЎвЂљР С•Р Р†Р В°РЎРЏР’В» РЎРѓРЎвЂљРЎР‚Р С•Р С”Р В° (Р С—Р С• РЎРѓР С‘Р СР Р†Р С•Р В»РЎС“ Р Р…Р В° Р В±Р В°Р в„–РЎвЂљ) Р С‘ Р С•Р Р…Р В° Р В¶Р Вµ РІвЂ вЂ™ РЎвЂљР ВµР С”РЎРѓРЎвЂљ UTF-8.
   //
-  // Нативный `atob` здесь отдаёт `undefined` на любом теле, которое не
-  // является корректным UTF-8 (он декодирует через `String::from_utf8`), а
-  // сетевой ответ может быть каким угодно. Свой разбор держит байты целыми:
-  // `Response.arrayBuffer` читает их через `charCodeAt`, а `text()` уже
-  // собирает из них UTF-8.
+  // Р СњР В°РЎвЂљР С‘Р Р†Р Р…РЎвЂ№Р в„– `atob` Р В·Р Т‘Р ВµРЎРѓРЎРЉ Р С•РЎвЂљР Т‘Р В°РЎвЂРЎвЂљ `undefined` Р Р…Р В° Р В»РЎР‹Р В±Р С•Р С РЎвЂљР ВµР В»Р Вµ, Р С”Р С•РЎвЂљР С•РЎР‚Р С•Р Вµ Р Р…Р Вµ
+  // РЎРЏР Р†Р В»РЎРЏР ВµРЎвЂљРЎРѓРЎРЏ Р С”Р С•РЎР‚РЎР‚Р ВµР С”РЎвЂљР Р…РЎвЂ№Р С UTF-8 (Р С•Р Р… Р Т‘Р ВµР С”Р С•Р Т‘Р С‘РЎР‚РЎС“Р ВµРЎвЂљ РЎвЂЎР ВµРЎР‚Р ВµР В· `String::from_utf8`), Р В°
+  // РЎРѓР ВµРЎвЂљР ВµР Р†Р С•Р в„– Р С•РЎвЂљР Р†Р ВµРЎвЂљ Р СР С•Р В¶Р ВµРЎвЂљ Р В±РЎвЂ№РЎвЂљРЎРЉ Р С”Р В°Р С”Р С‘Р С РЎС“Р С–Р С•Р Т‘Р Р…Р С•. Р РЋР Р†Р С•Р в„– РЎР‚Р В°Р В·Р В±Р С•РЎР‚ Р Т‘Р ВµРЎР‚Р В¶Р С‘РЎвЂљ Р В±Р В°Р в„–РЎвЂљРЎвЂ№ РЎвЂ Р ВµР В»РЎвЂ№Р СР С‘:
+  // `Response.arrayBuffer` РЎвЂЎР С‘РЎвЂљР В°Р ВµРЎвЂљ Р С‘РЎвЂ¦ РЎвЂЎР ВµРЎР‚Р ВµР В· `charCodeAt`, Р В° `text()` РЎС“Р В¶Р Вµ
+  // РЎРѓР С•Р В±Р С‘РЎР‚Р В°Р ВµРЎвЂљ Р С‘Р В· Р Р…Р С‘РЎвЂ¦ UTF-8.
   var _B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
   function _sw_b64_to_bin(s) {{
     var out = '', buf = 0, bits = 0;
@@ -185,13 +185,13 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
 
   // `Headers` (BUG-748): the real class (`crate::dom::HEADERS_SHIM`, shared
   // with the page and BUG-369, part of `worker_exposed_shim`), evaluated
-  // before this shim — not a second, independent mini-class. That second
+  // before this shim РІР‚вЂќ not a second, independent mini-class. That second
   // class used to store headers on a plain object, so `Set-Cookie` duplicates
   // collapsed into one and `for..of`/`.append()`/`.forEach()` were missing.
 
-  // Request (Fetch §5.1) — минимально, но с теми полями, по которым воркер
-  // ветвится в обработчике `fetch`: без класса `new Request(url)` в теле
-  // воркера падало на первой же строке, и обработчик не регистрировался.
+  // Request (Fetch Р’В§5.1) РІР‚вЂќ Р СР С‘Р Р…Р С‘Р СР В°Р В»РЎРЉР Р…Р С•, Р Р…Р С• РЎРѓ РЎвЂљР ВµР СР С‘ Р С—Р С•Р В»РЎРЏР СР С‘, Р С—Р С• Р С”Р С•РЎвЂљР С•РЎР‚РЎвЂ№Р С Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚
+  // Р Р†Р ВµРЎвЂљР Р†Р С‘РЎвЂљРЎРѓРЎРЏ Р Р† Р С•Р В±РЎР‚Р В°Р В±Р С•РЎвЂљРЎвЂЎР С‘Р С”Р Вµ `fetch`: Р В±Р ВµР В· Р С”Р В»Р В°РЎРѓРЎРѓР В° `new Request(url)` Р Р† РЎвЂљР ВµР В»Р Вµ
+  // Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚Р В° Р С—Р В°Р Т‘Р В°Р В»Р С• Р Р…Р В° Р С—Р ВµРЎР‚Р Р†Р С•Р в„– Р В¶Р Вµ РЎРѓРЎвЂљРЎР‚Р С•Р С”Р Вµ, Р С‘ Р С•Р В±РЎР‚Р В°Р В±Р С•РЎвЂљРЎвЂЎР С‘Р С” Р Р…Р Вµ РЎР‚Р ВµР С–Р С‘РЎРѓРЎвЂљРЎР‚Р С‘РЎР‚Р С•Р Р†Р В°Р В»РЎРѓРЎРЏ.
   function Request(input, init) {{
     init = init || {{}};
     this.url = (typeof input === 'string') ? input : (input && input.url) || '';
@@ -225,10 +225,10 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     this.type = init.type || 'basic';
     this.redirected = false;
     this.bodyUsed = false;
-    // Тело из сети/кэша приходит «байтовой» строкой (символ = байт), и в
-    // текст его превращает разбор UTF-8. Тело, собранное самим воркером
-    // (`new Response('привет')`), уже текст — второй разбор его бы испортил,
-    // поэтому происхождение помечается, а не угадывается по содержимому.
+    // Р СћР ВµР В»Р С• Р С‘Р В· РЎРѓР ВµРЎвЂљР С‘/Р С”РЎРЊРЎв‚¬Р В° Р С—РЎР‚Р С‘РЎвЂ¦Р С•Р Т‘Р С‘РЎвЂљ Р’В«Р В±Р В°Р в„–РЎвЂљР С•Р Р†Р С•Р в„–Р’В» РЎРѓРЎвЂљРЎР‚Р С•Р С”Р С•Р в„– (РЎРѓР С‘Р СР Р†Р С•Р В» = Р В±Р В°Р в„–РЎвЂљ), Р С‘ Р Р†
+    // РЎвЂљР ВµР С”РЎРѓРЎвЂљ Р ВµР С–Р С• Р С—РЎР‚Р ВµР Р†РЎР‚Р В°РЎвЂ°Р В°Р ВµРЎвЂљ РЎР‚Р В°Р В·Р В±Р С•РЎР‚ UTF-8. Р СћР ВµР В»Р С•, РЎРѓР С•Р В±РЎР‚Р В°Р Р…Р Р…Р С•Р Вµ РЎРѓР В°Р СР С‘Р С Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚Р С•Р С
+    // (`new Response('Р С—РЎР‚Р С‘Р Р†Р ВµРЎвЂљ')`), РЎС“Р В¶Р Вµ РЎвЂљР ВµР С”РЎРѓРЎвЂљ РІР‚вЂќ Р Р†РЎвЂљР С•РЎР‚Р С•Р в„– РЎР‚Р В°Р В·Р В±Р С•РЎР‚ Р ВµР С–Р С• Р В±РЎвЂ№ Р С‘РЎРѓР С—Р С•РЎР‚РЎвЂљР С‘Р В»,
+    // Р С—Р С•РЎРЊРЎвЂљР С•Р СРЎС“ Р С—РЎР‚Р С•Р С‘РЎРѓРЎвЂ¦Р С•Р В¶Р Т‘Р ВµР Р…Р С‘Р Вµ Р С—Р С•Р СР ВµРЎвЂЎР В°Р ВµРЎвЂљРЎРѓРЎРЏ, Р В° Р Р…Р Вµ РЎС“Р С–Р В°Р Т‘РЎвЂ№Р Р†Р В°Р ВµРЎвЂљРЎРѓРЎРЏ Р С—Р С• РЎРѓР С•Р Т‘Р ВµРЎР‚Р В¶Р С‘Р СР С•Р СРЎС“.
     this._binary = !!init._binary;
   }}
   Response.prototype._text = function() {{
@@ -256,14 +256,19 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
   }};
   globalThis.Response = Response;
 
-  // importScripts(...) (HTML LS §8.1.5.1) — синхронно по сети.
+  // importScripts(...) (HTML LS Р’В§8.1.5.1) РІР‚вЂќ РЎРѓР С‘Р Р…РЎвЂ¦РЎР‚Р С•Р Р…Р Р…Р С• Р С—Р С• РЎРѓР ВµРЎвЂљР С‘.
   //
-  // До этого в области сервис-воркера функции не было вовсе, и воркер,
-  // подключающий библиотеку (push-SDK, workbox), падал на первой строке с
-  // `importScripts is not defined` — то есть не регистрировал НИ ОДНОГО
-  // обработчика. Исполняем непрямым `eval`, чтобы объявления легли в
-  // глобальную область, как требует спецификация.
+  // Р вЂќР С• РЎРЊРЎвЂљР С•Р С–Р С• Р Р† Р С•Р В±Р В»Р В°РЎРѓРЎвЂљР С‘ РЎРѓР ВµРЎР‚Р Р†Р С‘РЎРѓ-Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚Р В° РЎвЂћРЎС“Р Р…Р С”РЎвЂ Р С‘Р С‘ Р Р…Р Вµ Р В±РЎвЂ№Р В»Р С• Р Р†Р С•Р Р†РЎРѓР Вµ, Р С‘ Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚,
+  // Р С—Р С•Р Т‘Р С”Р В»РЎР‹РЎвЂЎР В°РЎР‹РЎвЂ°Р С‘Р в„– Р В±Р С‘Р В±Р В»Р С‘Р С•РЎвЂљР ВµР С”РЎС“ (push-SDK, workbox), Р С—Р В°Р Т‘Р В°Р В» Р Р…Р В° Р С—Р ВµРЎР‚Р Р†Р С•Р в„– РЎРѓРЎвЂљРЎР‚Р С•Р С”Р Вµ РЎРѓ
+  // `importScripts is not defined` РІР‚вЂќ РЎвЂљР С• Р ВµРЎРѓРЎвЂљРЎРЉ Р Р…Р Вµ РЎР‚Р ВµР С–Р С‘РЎРѓРЎвЂљРЎР‚Р С‘РЎР‚Р С•Р Р†Р В°Р В» Р СњР В Р С›Р вЂќР СњР С›Р вЂњР С›
+  // Р С•Р В±РЎР‚Р В°Р В±Р С•РЎвЂљРЎвЂЎР С‘Р С”Р В°. Р ВРЎРѓР С—Р С•Р В»Р Р…РЎРЏР ВµР С Р Р…Р ВµР С—РЎР‚РЎРЏР СРЎвЂ№Р С `eval`, РЎвЂЎРЎвЂљР С•Р В±РЎвЂ№ Р С•Р В±РЎР‰РЎРЏР Р†Р В»Р ВµР Р…Р С‘РЎРЏ Р В»Р ВµР С–Р В»Р С‘ Р Р†
+  // Р С–Р В»Р С•Р В±Р В°Р В»РЎРЉР Р…РЎС“РЎР‹ Р С•Р В±Р В»Р В°РЎРѓРЎвЂљРЎРЉ, Р С”Р В°Р С” РЎвЂљРЎР‚Р ВµР В±РЎС“Р ВµРЎвЂљ РЎРѓР С—Р ВµРЎвЂ Р С‘РЎвЂћР С‘Р С”Р В°РЎвЂ Р С‘РЎРЏ.
   globalThis.importScripts = function() {{
+    // SW-MODULE: Р Р† Р СР С•Р Т‘РЎС“Р В»РЎРЉР Р…Р С•Р С РЎРѓР ВµРЎР‚Р Р†Р С‘РЎРѓ-Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚Р Вµ importScripts Р В·Р В°Р С—РЎР‚Р ВµРЎвЂ°РЎвЂР Р… (SW
+    // Р’В§Run Service Worker) РІР‚вЂќ РЎвЂћР В»Р В°Р С– РЎРѓРЎвЂљР В°Р Р†Р С‘РЎвЂљ run_sw_thread_v8 Р С—Р ВµРЎР‚Р ВµР Т‘ РЎв‚¬Р С‘Р СР С•Р С.
+    if (globalThis._lumen_sw_is_module__) {{
+      throw new TypeError('importScripts is not allowed in module service workers.');
+    }}
     for (var i = 0; i < arguments.length; i++) {{
       var u = String(arguments[i]);
       var abs = (u.indexOf('://') !== -1) ? u : new URL(u, location.href).href;
@@ -280,7 +285,7 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     }}
   }};
 
-  // caches API — backed by Rust CacheStorage via _lumen_sw_cache_* bindings.
+  // caches API РІР‚вЂќ backed by Rust CacheStorage via _lumen_sw_cache_* bindings.
   var _cache_obj = {{
     match: function(req, _opts) {{
       var url = (typeof req === 'string') ? req : req.url;
@@ -324,20 +329,20 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     globalThis.btoa = function(s) {{ return s; }};
   }}
 
-  // fetch() — настоящая сеть, в обход перехвата этим же воркером.
+  // fetch() РІР‚вЂќ Р Р…Р В°РЎРѓРЎвЂљР С•РЎРЏРЎвЂ°Р В°РЎРЏ РЎРѓР ВµРЎвЂљРЎРЉ, Р Р† Р С•Р В±РЎвЂ¦Р С•Р Т‘ Р С—Р ВµРЎР‚Р ВµРЎвЂ¦Р Р†Р В°РЎвЂљР В° РЎРЊРЎвЂљР С‘Р С Р В¶Р Вµ Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚Р С•Р С.
   //
-  // Прежняя версия отвечала только из CacheStorage и отклоняла всё остальное,
-  // поэтому воркер, который обновляет кэш («достань из сети — положи в кэш»),
-  // не мог наполнить его ни разу: его первый же `fetch` отклонялся, и цепочка
-  // `install` обрывалась. Сеть идёт мимо `FetchInterceptor` — иначе запрос
-  // вернулся бы в этот же воркер, а он стоит внутри своего же `fetch`.
+  // Р СџРЎР‚Р ВµР В¶Р Р…РЎРЏРЎРЏ Р Р†Р ВµРЎР‚РЎРѓР С‘РЎРЏ Р С•РЎвЂљР Р†Р ВµРЎвЂЎР В°Р В»Р В° РЎвЂљР С•Р В»РЎРЉР С”Р С• Р С‘Р В· CacheStorage Р С‘ Р С•РЎвЂљР С”Р В»Р С•Р Р…РЎРЏР В»Р В° Р Р†РЎРѓРЎвЂ Р С•РЎРѓРЎвЂљР В°Р В»РЎРЉР Р…Р С•Р Вµ,
+  // Р С—Р С•РЎРЊРЎвЂљР С•Р СРЎС“ Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚, Р С”Р С•РЎвЂљР С•РЎР‚РЎвЂ№Р в„– Р С•Р В±Р Р…Р С•Р Р†Р В»РЎРЏР ВµРЎвЂљ Р С”РЎРЊРЎв‚¬ (Р’В«Р Т‘Р С•РЎРѓРЎвЂљР В°Р Р…РЎРЉ Р С‘Р В· РЎРѓР ВµРЎвЂљР С‘ РІР‚вЂќ Р С—Р С•Р В»Р С•Р В¶Р С‘ Р Р† Р С”РЎРЊРЎв‚¬Р’В»),
+  // Р Р…Р Вµ Р СР С•Р С– Р Р…Р В°Р С—Р С•Р В»Р Р…Р С‘РЎвЂљРЎРЉ Р ВµР С–Р С• Р Р…Р С‘ РЎР‚Р В°Р В·РЎС“: Р ВµР С–Р С• Р С—Р ВµРЎР‚Р Р†РЎвЂ№Р в„– Р В¶Р Вµ `fetch` Р С•РЎвЂљР С”Р В»Р С•Р Р…РЎРЏР В»РЎРѓРЎРЏ, Р С‘ РЎвЂ Р ВµР С—Р С•РЎвЂЎР С”Р В°
+  // `install` Р С•Р В±РЎР‚РЎвЂ№Р Р†Р В°Р В»Р В°РЎРѓРЎРЉ. Р РЋР ВµРЎвЂљРЎРЉ Р С‘Р Т‘РЎвЂРЎвЂљ Р СР С‘Р СР С• `FetchInterceptor` РІР‚вЂќ Р С‘Р Р…Р В°РЎвЂЎР Вµ Р В·Р В°Р С—РЎР‚Р С•РЎРѓ
+  // Р Р†Р ВµРЎР‚Р Р…РЎС“Р В»РЎРѓРЎРЏ Р В±РЎвЂ№ Р Р† РЎРЊРЎвЂљР С•РЎвЂљ Р В¶Р Вµ Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚, Р В° Р С•Р Р… РЎРѓРЎвЂљР С•Р С‘РЎвЂљ Р Р†Р Р…РЎС“РЎвЂљРЎР‚Р С‘ РЎРѓР Р†Р С•Р ВµР С–Р С• Р В¶Р Вµ `fetch`.
   globalThis.fetch = function(resource, init) {{
     var url = (typeof resource === 'string') ? resource : (resource && resource.url) || '';
     var method = (init && init.method) || (resource && resource.method) || 'GET';
     var abs = (url.indexOf('://') !== -1) ? url : new URL(url, location.href).href;
     var raw = _lumen_sw_net_fetch(abs, String(method).toUpperCase());
     if (!raw) {{
-      // Сеть не ответила — последний шанс отдать из кэша, как раньше.
+      // Р РЋР ВµРЎвЂљРЎРЉ Р Р…Р Вµ Р С•РЎвЂљР Р†Р ВµРЎвЂљР С‘Р В»Р В° РІР‚вЂќ Р С—Р С•РЎРѓР В»Р ВµР Т‘Р Р…Р С‘Р в„– РЎв‚¬Р В°Р Р…РЎРѓ Р С•РЎвЂљР Т‘Р В°РЎвЂљРЎРЉ Р С‘Р В· Р С”РЎРЊРЎв‚¬Р В°, Р С”Р В°Р С” РЎР‚Р В°Р Р…РЎРЉРЎв‚¬Р Вµ.
       var b64 = _lumen_sw_cache_match(abs);
       if (b64) {{
         return Promise.resolve(new Response(_sw_b64_to_bin(b64), {{ status: 200, url: abs, _binary: true }}));
@@ -351,7 +356,7 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     }}));
   }};
 
-  // ── ExtendableEvent (SW §4.5) / ExtendableMessageEvent (SW §4.7) ────────────
+  // РІвЂќР‚РІвЂќР‚ ExtendableEvent (SW Р’В§4.5) / ExtendableMessageEvent (SW Р’В§4.7) РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚
   // SW-MSG-S2: `waitUntil` collects the lifetime promises of the dispatch in
   // flight; the Rust thread polls `_sw_extend_pending()` and keeps running
   // timers until it drops to zero or EXTEND_TIMEOUT. `waitUntil` outside a
@@ -363,7 +368,7 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     pr.then(function() {{ pr._sw_settled = true; }},
             function(reason) {{
               pr._sw_settled = true;
-              // Read (and logged) by the Rust thread after `install` only —
+              // Read (and logged) by the Rust thread after `install` only РІР‚вЂќ
               // full failed-install behaviour is BUG-1742, not here.
               globalThis._sw_extend_error__ = String((reason && reason.message) || reason);
             }});
@@ -395,7 +400,7 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     this.origin = (init.origin != null) ? String(init.origin) : '';
     this.lastEventId = (init.lastEventId != null) ? String(init.lastEventId) : '';
     var s = init.source;
-    // SW §4.7: `source` is `Client`/`ServiceWorker`/`MessagePort` or null —
+    // SW Р’В§4.7: `source` is `Client`/`ServiceWorker`/`MessagePort` or null РІР‚вЂќ
     // anything else is a TypeError. `Client`/`ServiceWorker` classes may not
     // exist in this isolate yet (SW-MSG-S3/S5), so match by constructor name.
     var ok = (s == null)
@@ -428,7 +433,7 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     return n;
   }};
 
-  // SW-MSG-S2: dispatch an extendable event — reset the collector, run the
+  // SW-MSG-S2: dispatch an extendable event РІР‚вЂќ reset the collector, run the
   // listeners inside the dispatch window, close the window. The matching
   // `self.on<type>` handler runs inside the same window, so its `waitUntil`
   // calls are collected too.
@@ -454,7 +459,7 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     globalThis._sw_dispatch_extendable(new ExtendableEvent(type));
   }};
 
-  // ── Client / WindowClient (SW §5.2/§5.3, SW-MSG-S3) ─────────────────────────
+  // РІвЂќР‚РІвЂќР‚ Client / WindowClient (SW Р’В§5.2/Р’В§5.3, SW-MSG-S3) РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚
   // The `source` of an incoming `message` event, rebuilt from the JSON
   // descriptor the page stamps onto the envelope. `postMessage` (the return
   // channel) landed in SW-MSG-S4; `focus()`/`navigate()` still arrive with
@@ -462,7 +467,7 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
   function Client(info) {{
     info = info || {{}};
     this.id = (info.id != null) ? String(info.id) : '';
-    // SW-MSG-S4: the numeric client id of the posting page — the key
+    // SW-MSG-S4: the numeric client id of the posting page РІР‚вЂќ the key
     // `_lumen_sw_post_to_client` routes the reply by.
     this._cid = (typeof info.id === 'number') ? info.id : Number(info.id) || 0;
     this.url = String(info.url || '');
@@ -470,11 +475,11 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     this.frameType = String(info.frameType || 'top-level');
   }}
   globalThis.Client = Client;
-  // SW-MSG-S4: the return channel (SW §3.2.5) — posts into the process-global
+  // SW-MSG-S4: the return channel (SW Р’В§3.2.5) РІР‚вЂќ posts into the process-global
   // hub under this page's client id; the page's own pump delivers it.
   // SW-MSG-S5: transferred `MessagePort`s ride as ids in a `__lumen_msg__`
-  // envelope — the same wire shape the page's `ServiceWorker.postMessage`
-  // builds — and the local partners bind through the hub's port outbox.
+  // envelope РІР‚вЂќ the same wire shape the page's `ServiceWorker.postMessage`
+  // builds РІР‚вЂќ and the local partners bind through the hub's port outbox.
   // A dead client's id is simply never drained.
   Client.prototype.postMessage = function(data, transfer) {{
     if (typeof _lumen_sw_post_to_client !== 'function') return;
@@ -500,23 +505,23 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     value: 'WindowClient', configurable: true,
   }});
   globalThis.WindowClient = WindowClient;
-  // SW-MSG-S6: `WindowClient.focus()` (SW §5.3) resolves to `this` without
+  // SW-MSG-S6: `WindowClient.focus()` (SW Р’В§5.3) resolves to `this` without
   // actually focusing the window (real focus is out of scope for the
-  // slices); `navigate()`/`openWindow()` need shell navigation — rejected.
+  // slices); `navigate()`/`openWindow()` need shell navigation РІР‚вЂќ rejected.
   WindowClient.prototype.focus = function() {{
     return Promise.resolve(this);
   }};
   WindowClient.prototype.navigate = function() {{
-    // SW-MSG: нужна навигация оболочки
+    // SW-MSG: Р Р…РЎС“Р В¶Р Р…Р В° Р Р…Р В°Р Р†Р С‘Р С–Р В°РЎвЂ Р С‘РЎРЏ Р С•Р В±Р С•Р В»Р С•РЎвЂЎР С”Р С‘
     return Promise.reject(new DOMException(
       'WindowClient.navigate() is not supported.', 'NotSupportedError'));
   }};
 
-  // SW-MSG-S3: dispatch a page→SW message as an ExtendableMessageEvent (SW
-  // §4.7). Data and the client descriptor arrive JSON-encoded (the same wire
-  // shape the page side built); `origin` is this SW's own origin — only
+  // SW-MSG-S3: dispatch a pageРІвЂ вЂ™SW message as an ExtendableMessageEvent (SW
+  // Р’В§4.7). Data and the client descriptor arrive JSON-encoded (the same wire
+  // shape the page side built); `origin` is this SW's own origin РІР‚вЂќ only
   // same-origin pages can post, so the page's origin equals it.
-  // SW-MSG-S5: a `__lumen_msg__` envelope carries transferred ports — reify
+  // SW-MSG-S5: a `__lumen_msg__` envelope carries transferred ports РІР‚вЂќ reify
   // them (page-side `_lumenPortRegistry` ids) into `e.ports` and resolve port
   // sentinels embedded in `data`, exactly like the dedicated worker's
   // `_lumen_worker_dispatch_message`.
@@ -540,7 +545,7 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
   }};
 
   // SW-MSG-S5: the SW twin of the dedicated worker's
-  // `_lumen_worker_deliver_port_message` — a message posted by the page
+  // `_lumen_worker_deliver_port_message` РІР‚вЂќ a message posted by the page
   // endpoint of a bridge whose other end is a `MessagePort` inside this
   // isolate. `json` is the raw JSON text of the cloned payload.
   globalThis._sw_deliver_port_message = function(portId, json) {{
@@ -587,7 +592,7 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     }}
   }};
 
-  // PushMessageData (Push API L1 §6) — wraps the plaintext bytes handed over
+  // PushMessageData (Push API L1 Р’В§6) РІР‚вЂќ wraps the plaintext bytes handed over
   // by `_sw_fire_push`. Bytes cross the JS boundary as base64 (same reason as
   // everywhere else in this file), decoded once and cached on first access
   // to each accessor's own representation, per spec ("Get the data content").
@@ -607,7 +612,7 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
   globalThis.PushMessageData = PushMessageData;
 
   // A minimal PushSubscription-shaped object for `pushsubscriptionchange`'s
-  // `oldSubscription`/`newSubscription` (Push API L1 §5) — not the page-side
+  // `oldSubscription`/`newSubscription` (Push API L1 Р’В§5) РІР‚вЂќ not the page-side
   // `PushSubscription` class (`crate::push_api`'s shim, a different global
   // scope); this one only needs to carry the fields the spec puts on the
   // event, `endpoint` and `getKey()`.
@@ -625,8 +630,8 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     }};
   }}
 
-  // _sw_fire_push: dispatch PushEvent (Push API L1 §5) as an ExtendableEvent
-  // (SW-MSG-S2). No respondWith-style return value — the SW's job is
+  // _sw_fire_push: dispatch PushEvent (Push API L1 Р’В§5) as an ExtendableEvent
+  // (SW-MSG-S2). No respondWith-style return value РІР‚вЂќ the SW's job is
   // `waitUntil(showNotification(...))` side effects, nothing the Rust side
   // reads back.
   globalThis._sw_fire_push = function(payloadB64) {{
@@ -636,7 +641,7 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
   }};
 
   // _sw_fire_push_subscription_change: dispatch PushSubscriptionChangeEvent
-  // (Push API L1 §5) — fired when `subscribe()` replaces an existing
+  // (Push API L1 Р’В§5) РІР‚вЂќ fired when `subscribe()` replaces an existing
   // subscription for this scope (see `crate::push_api`'s `subscribe` native).
   globalThis._sw_fire_push_subscription_change = function(
       oldEndpoint, oldP256dhB64, oldAuthB64, newEndpoint, newP256dhB64, newAuthB64) {{
@@ -655,7 +660,7 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
 
   // Timers come from the shim shared with the dedicated-worker scope
   // (`crate::worker_shims::WORKER_TIMERS_SHIM`, evaluated as its own IIFE right
-  // after this one) — deadline-ordered and driven by this thread's own wait
+  // after this one) РІР‚вЂќ deadline-ordered and driven by this thread's own wait
   // rather than only by an incoming message (SW-MSG-S1).
 
 }})({scope_str}, {origin_str});
@@ -688,7 +693,7 @@ pub(crate) fn base64_encode(data: &[u8]) -> String {
 ///
 /// `None` on any character outside the alphabet. Also used by
 /// [`crate::filesystem_access`], which moves file bytes across the JS boundary
-/// as base64 — a JS string cannot carry arbitrary bytes intact.
+/// as base64 РІР‚вЂќ a JS string cannot carry arbitrary bytes intact.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn base64_decode(encoded: &str) -> Option<Vec<u8>> {
     const INVALID: u8 = 0xFF;
@@ -721,30 +726,32 @@ pub(crate) fn base64_decode(encoded: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-// ─── V8 backend port (Ph3 V8 migration S10) ──────────────────────────────────
+// РІвЂќР‚РІвЂќР‚РІвЂќР‚ V8 backend port (Ph3 V8 migration S10) РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚
 //
 // Mirrors `worker.rs`/`shared_worker.rs`'s V8 port: the SW thread owns a full
 // `V8JsRuntime` instead of a bare `rquickjs::Runtime`/`Context`. Unlike the
 // QuickJS version, no `flush_jobs`/`execute_pending_job` equivalent is
-// needed here — V8's microtask queue auto-runs (`MicrotasksPolicy::kAuto`,
+// needed here РІР‚вЂќ V8's microtask queue auto-runs (`MicrotasksPolicy::kAuto`,
 // confirmed by the S3 slice notes in `docs/tasks/ph3-v8-migration.md`), so a
 // `Promise` chain started by `_sw_fire_fetch`/`_sw_fire_event` fully drains
-// by the time `V8JsRuntime::eval` returns — verified empirically by
+// by the time `V8JsRuntime::eval` returns РІР‚вЂќ verified empirically by
 // `tests_v8::v8_sw_responds_from_cache` below (the QuickJS version's
 // `caches.match(...).then(...)` chain needs the manual pump; the V8 version
 // does not).
 //
 // `SwWorkerHandle`/`SwFetchRequest` (from `lumen_core::ext`) are reused
-// unchanged — plain channel plumbing, no engine-specific types.
+// unchanged РІР‚вЂќ plain channel plumbing, no engine-specific types.
 
 /// V8 port of [`spawn_sw_worker`].
 #[cfg(feature = "v8-backend")]
-#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::expect_used)]  // РЎС“Р Р…Р В°РЎРѓР В»Р ВµР Т‘Р С•Р Р†Р В°Р Р…Р С•, docs/lint-policy.md Р’В§10
 #[allow(clippy::too_many_arguments)]  // BUG-768 added determinism, same shape as worker.rs's spawn_worker_v8
 pub(crate) fn spawn_sw_worker_v8(
     origin: String,
     scope: String,
     script: String,
+    script_url: String,
+    is_module: bool,
     cache_backend: Arc<dyn CacheBackend>,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
@@ -755,7 +762,7 @@ pub(crate) fn spawn_sw_worker_v8(
     let handle = std::thread::Builder::new()
         .name(thread_name)
         .spawn(move || {
-            run_sw_thread_v8(origin, scope, script, rx, cache_backend, fetch_provider, idb_backend, determinism)
+            run_sw_thread_v8(origin, scope, script, script_url, is_module, rx, cache_backend, fetch_provider, idb_backend, determinism)
         })
         .expect("failed to spawn SW thread (v8)");
     SwWorkerHandle { tx, _thread: handle }
@@ -767,6 +774,8 @@ fn run_sw_thread_v8(
     origin: String,
     scope: String,
     script: String,
+    script_url: String,
+    is_module: bool,
     rx: Receiver<SwWorkerMessage>,
     cache_backend: Arc<dyn CacheBackend>,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
@@ -781,13 +790,20 @@ fn run_sw_thread_v8(
         }
     };
 
+    // SW-MODULE: a module SW's `importScripts` must throw and its dynamic
+    // `import()` must reject (SW Р’В§Run Service Worker) РІР‚вЂќ the shim checks the
+    // flag, the ESM loader the thread-local denial.
+    if is_module {
+        let _ = rt.eval("globalThis._lumen_sw_is_module__ = true;");
+    }
+
     if let Err(e) =
         install_sw_globals_v8(
             &rt,
             &origin,
             &scope,
             Arc::clone(&cache_backend),
-            fetch_provider,
+            fetch_provider.clone(),
             idb_backend,
             determinism,
         )
@@ -796,13 +812,28 @@ fn run_sw_thread_v8(
         return;
     }
 
-    if let Err(e) = rt.eval(&script) {
+    // SW-MODULE: the script of a `{type:'module'}` registration evaluates as
+    // an ES module under its own URL (static imports fetch at install time
+    // and join the byte-check input), same shape as a module dedicated worker.
+    if is_module {
+        // Static imports need the ESM loader's base+fetcher; dynamic `import()`
+        // in a SW is forbidden by spec and must reject.
+        rt.set_module_context(&script_url, fetch_provider.clone());
+        rt.set_dynamic_import_denied(true);
+        match rt.eval_module_at(&script_url, &script) {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("[sw {origin}{scope}] v8 module script eval error: {e:?}");
+                // Continue РІР‚вЂќ partial install may still handle some fetches.
+            }
+        }
+    } else if let Err(e) = rt.eval(&script) {
         eprintln!("[sw {origin}{scope}] v8 script eval error: {e:?}");
-        // Continue — partial install may still handle some fetches.
+        // Continue РІР‚вЂќ partial install may still handle some fetches.
     }
 
     // Fire install then activate. No manual microtask pump needed (V8 runs
-    // its own queue to completion inside `eval`) — see module doc comment.
+    // its own queue to completion inside `eval`) РІР‚вЂќ see module doc comment.
     // SW-MSG-S2: each phase waits for its `waitUntil` promises (timers keep
     // running) before the next one starts.
     let _ = rt.eval("if(typeof _sw_fire_event==='function'){_sw_fire_event('install');}");
@@ -810,13 +841,13 @@ fn run_sw_thread_v8(
     let _ = rt.eval("if(typeof _sw_fire_event==='function'){_sw_fire_event('activate');}");
     drain_extend_v8(&rt, false);
 
-    // SW-MSG-S1: timer‑task loop modelled on the dedicated worker's (BUG‑815).
+    // SW-MSG-S1: timerРІР‚вЂtask loop modelled on the dedicated worker's (BUGРІР‚вЂ815).
     loop {
         let wait = run_worker_tasks(&rt);
         let msg = match wait {
             Some(d) => match rx.recv_timeout(d) {
                 Ok(m) => m,
-                // Deadline reached with nothing incoming — go round and let
+                // Deadline reached with nothing incoming РІР‚вЂќ go round and let
                 // `run_worker_tasks` fire the timer that woke us.
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
@@ -845,7 +876,7 @@ fn run_sw_thread_v8(
             }
             SwWorkerMessage::PortPost(port_id, json) => {
                 // SW-MSG-S5: message for a `MessagePort` reconstructed inside
-                // this isolate from a page-side transfer — the SW twin of the
+                // this isolate from a page-side transfer РІР‚вЂќ the SW twin of the
                 // dedicated worker's `_lumen_worker_deliver_port_message`.
                 let _ = rt.set_global("_sw_port_id__", lumen_core::JsValue::Number(port_id as f64));
                 let _ = rt.set_global("_sw_port_json__", lumen_core::JsValue::String(json));
@@ -878,7 +909,7 @@ fn drain_extend_v8(rt: &V8JsRuntime, log_rejected: bool) {
         if start.elapsed() >= EXTEND_TIMEOUT {
             break;
         }
-        // `None` — no timer left that could settle anything (microtasks drain
+        // `None` РІР‚вЂќ no timer left that could settle anything (microtasks drain
         // inside each `eval`), so the promises can only be stuck.
         let Some(wait) = run_worker_tasks(rt) else {
             break;
@@ -936,7 +967,7 @@ fn dispatch_fetch_v8(rt: &V8JsRuntime, url: &str, method: &str) -> Option<Vec<u8
     }
 }
 
-/// Dispatch a `push` event (Ph3 push-api срез 5): plaintext bytes cross as
+/// Dispatch a `push` event (Ph3 push-api РЎРѓРЎР‚Р ВµР В· 5): plaintext bytes cross as
 /// base64, same convention as every other byte-carrying native in this file.
 #[cfg(feature = "v8-backend")]
 fn dispatch_push_v8(rt: &V8JsRuntime, payload: &[u8]) {
@@ -947,14 +978,14 @@ fn dispatch_push_v8(rt: &V8JsRuntime, payload: &[u8]) {
     let _ = rt.eval("if(typeof _sw_fire_push==='function'){_sw_fire_push(_sw_push_payload__);}");
 }
 
-/// Dispatch a `pushsubscriptionchange` event (Ph3 push-api срез 5).
+/// Dispatch a `pushsubscriptionchange` event (Ph3 push-api РЎРѓРЎР‚Р ВµР В· 5).
 #[cfg(feature = "v8-backend")]
 fn dispatch_push_subscription_change_v8(
     rt: &V8JsRuntime,
     change: &lumen_core::ext::SwPushSubscriptionChangeMessage,
 ) {
     // Endpoints/keys are already plain strings (endpoint) or base64
-    // (p256dh/auth) courtesy of `PushBackend::push_get`'s wire shape — no
+    // (p256dh/auth) courtesy of `PushBackend::push_get`'s wire shape РІР‚вЂќ no
     // further encoding needed before crossing into JS.
     let args = [
         change.old.0.clone(),
@@ -976,7 +1007,7 @@ fn dispatch_push_subscription_change_v8(
 
 /// V8 port of [`install_sw_globals`]. Registers the same three cache natives
 /// (`_lumen_sw_cache_match`, `_lumen_sw_cache_put`, `_lumen_sw_cache_names`)
-/// plus `atob`/`btoa` (non-throwing here, unlike `worker.rs`'s — matching
+/// plus `atob`/`btoa` (non-throwing here, unlike `worker.rs`'s РІР‚вЂќ matching
 /// [`install_sw_globals`]'s own `Option<String>`/plain-`String` signatures,
 /// so the plain `into_v8_fnN` path is sufficient; no scoped native needed)
 /// and evaluates the same globals shim JS used by the QuickJS SW thread.
@@ -991,24 +1022,24 @@ fn install_sw_globals_v8(
     idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
     determinism: Option<crate::worker::WorkerDeterminism>,
 ) -> JsResult<()> {
-    // Сеть области воркера: `importScripts` и `fetch` внутри него. Ответ едет
-    // одной JSON-строкой, тело — base64: сетевой ответ не обязан быть текстом,
-    // а строка JS не переносит произвольные байты.
+    // Р РЋР ВµРЎвЂљРЎРЉ Р С•Р В±Р В»Р В°РЎРѓРЎвЂљР С‘ Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚Р В°: `importScripts` Р С‘ `fetch` Р Р†Р Р…РЎС“РЎвЂљРЎР‚Р С‘ Р Р…Р ВµР С–Р С•. Р С›РЎвЂљР Р†Р ВµРЎвЂљ Р ВµР Т‘Р ВµРЎвЂљ
+    // Р С•Р Т‘Р Р…Р С•Р в„– JSON-РЎРѓРЎвЂљРЎР‚Р С•Р С”Р С•Р в„–, РЎвЂљР ВµР В»Р С• РІР‚вЂќ base64: РЎРѓР ВµРЎвЂљР ВµР Р†Р С•Р в„– Р С•РЎвЂљР Р†Р ВµРЎвЂљ Р Р…Р Вµ Р С•Р В±РЎРЏР В·Р В°Р Р… Р В±РЎвЂ№РЎвЂљРЎРЉ РЎвЂљР ВµР С”РЎРѓРЎвЂљР С•Р С,
+    // Р В° РЎРѓРЎвЂљРЎР‚Р С•Р С”Р В° JS Р Р…Р Вµ Р С—Р ВµРЎР‚Р ВµР Р…Р С•РЎРѓР С‘РЎвЂљ Р С—РЎР‚Р С•Р С‘Р В·Р Р†Р С•Р В»РЎРЉР Р…РЎвЂ№Р Вµ Р В±Р В°Р в„–РЎвЂљРЎвЂ№.
     //
-    // `fetch_bypassing_sw`, а не `fetch_sync`: обычный путь отдал бы запрос
-    // перехватчику, тот выбрал бы по scope ЭТОТ ЖЕ воркер и послал бы ему
-    // сообщение, которого воркер не разберёт — он стоит внутри своего же
-    // запроса. Поток ждал бы сам себя.
-    // _lumen_sw_check_worker_src(url) → true if `worker-src`/`default-src`
+    // `fetch_bypassing_sw`, Р В° Р Р…Р Вµ `fetch_sync`: Р С•Р В±РЎвЂ№РЎвЂЎР Р…РЎвЂ№Р в„– Р С—РЎС“РЎвЂљРЎРЉ Р С•РЎвЂљР Т‘Р В°Р В» Р В±РЎвЂ№ Р В·Р В°Р С—РЎР‚Р С•РЎРѓ
+    // Р С—Р ВµРЎР‚Р ВµРЎвЂ¦Р Р†Р В°РЎвЂљРЎвЂЎР С‘Р С”РЎС“, РЎвЂљР С•РЎвЂљ Р Р†РЎвЂ№Р В±РЎР‚Р В°Р В» Р В±РЎвЂ№ Р С—Р С• scope Р В­Р СћР С›Р Сћ Р вЂ“Р вЂў Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚ Р С‘ Р С—Р С•РЎРѓР В»Р В°Р В» Р В±РЎвЂ№ Р ВµР СРЎС“
+    // РЎРѓР С•Р С•Р В±РЎвЂ°Р ВµР Р…Р С‘Р Вµ, Р С”Р С•РЎвЂљР С•РЎР‚Р С•Р С–Р С• Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚ Р Р…Р Вµ РЎР‚Р В°Р В·Р В±Р ВµРЎР‚РЎвЂРЎвЂљ РІР‚вЂќ Р С•Р Р… РЎРѓРЎвЂљР С•Р С‘РЎвЂљ Р Р†Р Р…РЎС“РЎвЂљРЎР‚Р С‘ РЎРѓР Р†Р С•Р ВµР С–Р С• Р В¶Р Вµ
+    // Р В·Р В°Р С—РЎР‚Р С•РЎРѓР В°. Р СџР С•РЎвЂљР С•Р С” Р В¶Р Т‘Р В°Р В» Р В±РЎвЂ№ РЎРѓР В°Р С РЎРѓР ВµР В±РЎРЏ.
+    // _lumen_sw_check_worker_src(url) РІвЂ вЂ™ true if `worker-src`/`default-src`
     // would refuse `url` as an `importScripts()` target inside the SW's own
     // execution.
     //
-    // GAP-CSPENF срез 31: срез 28 gated `importScripts()` for dedicated/
+    // GAP-CSPENF РЎРѓРЎР‚Р ВµР В· 31: РЎРѓРЎР‚Р ВµР В· 28 gated `importScripts()` for dedicated/
     // shared workers but explicitly left the Service Worker's own
-    // `importScripts` (this file, not `worker.rs`) unnarrowed — its
-    // constructor was never in scope for срез 13 either, so the whole call
+    // `importScripts` (this file, not `worker.rs`) unnarrowed РІР‚вЂќ its
+    // constructor was never in scope for РЎРѓРЎР‚Р ВµР В· 13 either, so the whole call
     // path had no precheck at all. Reuses `worker::import_scripts_csp_blocked`
-    // rather than re-deriving the `data:`/`blob:` skip logic — same
+    // rather than re-deriving the `data:`/`blob:` skip logic РІР‚вЂќ same
     // I/O-free precheck shape, different runtime.
     {
         let provider = fetch_provider.clone();
@@ -1029,7 +1060,7 @@ fn install_sw_globals_v8(
                 let res = match provider.fetch_bypassing_sw(&url, &method) {
                     Ok(res) => res,
                     Err(e) => {
-                        eprintln!("[sw] сеть: {url}: {e}");
+                        eprintln!("[sw] РЎРѓР ВµРЎвЂљРЎРЉ: {url}: {e}");
                         return None;
                     }
                 };
@@ -1087,7 +1118,7 @@ fn install_sw_globals_v8(
         )?;
     }
 
-    // SW-MSG-S4: the return channel — a SW's `Client.postMessage` lands here
+    // SW-MSG-S4: the return channel РІР‚вЂќ a SW's `Client.postMessage` lands here
     // keyed by the page client id stamped into every incoming message's
     // source descriptor; this worker's scope is captured (the page pump
     // routes by client id alone).
@@ -1101,7 +1132,7 @@ fn install_sw_globals_v8(
         )?;
     }
 
-    // SW-MSG-S6: `Clients` (SW §5.1) — `matchAll`/`get` read the hub's
+    // SW-MSG-S6: `Clients` (SW Р’В§5.1) РІР‚вЂќ `matchAll`/`get` read the hub's
     // client registry scoped to this worker's origin; `claim` takes same-
     // origin clients in scope over and queues their `controllerchange`.
     {
@@ -1141,8 +1172,8 @@ fn install_sw_globals_v8(
         )?;
     }
 
-    // SW-MSG-S5: page → port delivery inside this isolate (the SW twin of the
-    // dedicated worker's `_lumen_port_post_reply`) — posts into the hub's
+    // SW-MSG-S5: page РІвЂ вЂ™ port delivery inside this isolate (the SW twin of the
+    // dedicated worker's `_lumen_port_post_reply`) РІР‚вЂќ posts into the hub's
     // port-addressed outbox; the page's pump routes by port id alone.
     {
         rt.register_native(
@@ -1158,7 +1189,7 @@ fn install_sw_globals_v8(
     //
     // shortcut: base offset 1<<30 instead of sharing each page's exact
     // counter (that would mean plumbing an Arc through ext.rs's
-    // SwWorkerStore) — page windows are 1M wide, so this stays collision-free
+    // SwWorkerStore) РІР‚вЂќ page windows are 1M wide, so this stays collision-free
     // for the first ~4096 pages per session; revisit if that bites.
     {
         static SW_PORT_NEXT_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1 << 30);
@@ -1170,10 +1201,10 @@ fn install_sw_globals_v8(
         )?;
     }
 
-    // BUG-1193: the same HTML LS §8.3 `atob`/`btoa` as the dedicated worker
+    // BUG-1193: the same HTML LS Р’В§8.3 `atob`/`btoa` as the dedicated worker
     // (binary strings, forgiving-base64, `InvalidCharacterError`). The throwing
     // wrapper needs `DOMException`, which `install_worker_scope_globals_v8`
-    // below provides — it is only looked up at call time.
+    // below provides РІР‚вЂќ it is only looked up at call time.
     rt.register_native_scoped("_lumen_atob_impl", Box::new(crate::worker::atob_native_v8))?;
     rt.register_native_scoped("_lumen_btoa_impl", Box::new(crate::worker::btoa_native_v8))?;
     rt.eval(crate::worker::WORKER_ATOB_BTOA_SHIM)?;
@@ -1182,11 +1213,11 @@ fn install_sw_globals_v8(
     // same `EventTarget`/`performance` surface as the dedicated worker (BUG-401).
     crate::worker::install_worker_scope_globals_v8(rt, determinism)?;
 
-    // IndexedDB — тот же блок шима, что у страницы (`[Exposed=(Window,Worker)]`),
-    // и та же база: воркер, который пишет свою очередь в `indexedDB`, иначе
-    // умирал на первой строке обращения к ней. Нативы ставятся только при
-    // наличии backend-а — без него шим держит базу в куче (его собственные
-    // охраны `typeof … === 'function'`).
+    // IndexedDB РІР‚вЂќ РЎвЂљР С•РЎвЂљ Р В¶Р Вµ Р В±Р В»Р С•Р С” РЎв‚¬Р С‘Р СР В°, РЎвЂЎРЎвЂљР С• РЎС“ РЎРѓРЎвЂљРЎР‚Р В°Р Р…Р С‘РЎвЂ РЎвЂ№ (`[Exposed=(Window,Worker)]`),
+    // Р С‘ РЎвЂљР В° Р В¶Р Вµ Р В±Р В°Р В·Р В°: Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚, Р С”Р С•РЎвЂљР С•РЎР‚РЎвЂ№Р в„– Р С—Р С‘РЎв‚¬Р ВµРЎвЂљ РЎРѓР Р†Р С•РЎР‹ Р С•РЎвЂЎР ВµРЎР‚Р ВµР Т‘РЎРЉ Р Р† `indexedDB`, Р С‘Р Р…Р В°РЎвЂЎР Вµ
+    // РЎС“Р СР С‘РЎР‚Р В°Р В» Р Р…Р В° Р С—Р ВµРЎР‚Р Р†Р С•Р в„– РЎРѓРЎвЂљРЎР‚Р С•Р С”Р Вµ Р С•Р В±РЎР‚Р В°РЎвЂ°Р ВµР Р…Р С‘РЎРЏ Р С” Р Р…Р ВµР в„–. Р СњР В°РЎвЂљР С‘Р Р†РЎвЂ№ РЎРѓРЎвЂљР В°Р Р†РЎРЏРЎвЂљРЎРѓРЎРЏ РЎвЂљР С•Р В»РЎРЉР С”Р С• Р С—РЎР‚Р С‘
+    // Р Р…Р В°Р В»Р С‘РЎвЂЎР С‘Р С‘ backend-Р В° РІР‚вЂќ Р В±Р ВµР В· Р Р…Р ВµР С–Р С• РЎв‚¬Р С‘Р С Р Т‘Р ВµРЎР‚Р В¶Р С‘РЎвЂљ Р В±Р В°Р В·РЎС“ Р Р† Р С”РЎС“РЎвЂЎР Вµ (Р ВµР С–Р С• РЎРѓР С•Р В±РЎРѓРЎвЂљР Р†Р ВµР Р…Р Р…РЎвЂ№Р Вµ
+    // Р С•РЎвЂ¦РЎР‚Р В°Р Р…РЎвЂ№ `typeof РІР‚В¦ === 'function'`).
     if let Some(idb) = idb_backend {
         let b = Arc::clone(&idb);
         rt.register_native(
@@ -1256,13 +1287,13 @@ fn install_sw_globals_v8(
 
     let scope_js = scope.replace('\'', "\\'");
     let scope_str = format!("'{scope_js}'");
-    // `scope` приходит путём (`/invest/`), а `WorkerLocation` обязан быть
-    // абсолютным адресом — иначе `location.host` пуст, и ветвление воркера по
-    // хосту молча выбирает не ту ветку.
+    // `scope` Р С—РЎР‚Р С‘РЎвЂ¦Р С•Р Т‘Р С‘РЎвЂљ Р С—РЎС“РЎвЂљРЎвЂР С (`/invest/`), Р В° `WorkerLocation` Р С•Р В±РЎРЏР В·Р В°Р Р… Р В±РЎвЂ№РЎвЂљРЎРЉ
+    // Р В°Р В±РЎРѓР С•Р В»РЎР‹РЎвЂљР Р…РЎвЂ№Р С Р В°Р Т‘РЎР‚Р ВµРЎРѓР С•Р С РІР‚вЂќ Р С‘Р Р…Р В°РЎвЂЎР Вµ `location.host` Р С—РЎС“РЎРѓРЎвЂљ, Р С‘ Р Р†Р ВµРЎвЂљР Р†Р В»Р ВµР Р…Р С‘Р Вµ Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚Р В° Р С—Р С•
+    // РЎвЂ¦Р С•РЎРѓРЎвЂљРЎС“ Р СР С•Р В»РЎвЂЎР В° Р Р†РЎвЂ№Р В±Р С‘РЎР‚Р В°Р ВµРЎвЂљ Р Р…Р Вµ РЎвЂљРЎС“ Р Р†Р ВµРЎвЂљР С”РЎС“.
     let origin_js = origin.trim_end_matches('/').replace('\'', "\\'");
     let origin_str = format!("'{origin_js}'");
-    // `Headers` (BUG-748) — the real class shared with the page scope — already
-    // came from `install_worker_scope_globals_v8` above (WORKER-1 срез 5); the
+    // `Headers` (BUG-748) РІР‚вЂќ the real class shared with the page scope РІР‚вЂќ already
+    // came from `install_worker_scope_globals_v8` above (WORKER-1 РЎРѓРЎР‚Р ВµР В· 5); the
     // shim below constructs it via `new Headers`.
     rt.eval(&sw_globals_shim(&scope_str, &origin_str))?;
     // `MessageChannel`/`MessagePort` already came from
@@ -1274,22 +1305,22 @@ fn install_sw_globals_v8(
 
 /// Test coverage for the SW execution thread (Ph3 V8 migration S10, extended
 /// to full parity in S12b-B17 when the rquickjs-backed `spawn_sw_worker` was
-/// removed). Same three scenarios (cache hit, cache miss, no fetch handler) —
+/// removed). Same three scenarios (cache hit, cache miss, no fetch handler) РІР‚вЂќ
 /// the cache-hit case is the load-bearing proof that `_sw_fire_fetch`'s
 /// `respondWith(caches.match(...))` promise chain fully resolves by the time
 /// `dispatch_fetch_v8` reads `_sw_resp_body__`, with no manual microtask
 /// pump (see the V8-port module doc comment above `spawn_sw_worker_v8`).
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests_v8 {
-    // Хелперы тестового модуля: исключение из clippy.toml покрывает
-    // только тело `#[test]` (docs/lint-policy.md §10).
+    // Р ТђР ВµР В»Р С—Р ВµРЎР‚РЎвЂ№ РЎвЂљР ВµРЎРѓРЎвЂљР С•Р Р†Р С•Р С–Р С• Р СР С•Р Т‘РЎС“Р В»РЎРЏ: Р С‘РЎРѓР С”Р В»РЎР‹РЎвЂЎР ВµР Р…Р С‘Р Вµ Р С‘Р В· clippy.toml Р С—Р С•Р С”РЎР‚РЎвЂ№Р Р†Р В°Р ВµРЎвЂљ
+    // РЎвЂљР С•Р В»РЎРЉР С”Р С• РЎвЂљР ВµР В»Р С• `#[test]` (docs/lint-policy.md Р’В§10).
     #![allow(clippy::unwrap_used)]
     use super::*;
     use lumen_core::ext::CacheBackend;
     use std::sync::Mutex;
 
     /// BUG-401: `ServiceWorkerGlobalScope` is a `WorkerGlobalScope` too, so it
-    /// gets the same `performance` as the page and the other worker flavours —
+    /// gets the same `performance` as the page and the other worker flavours РІР‚вЂќ
     /// same shim source, hence the same prototype chain.
     #[test]
     fn sw_global_scope_has_performance() {
@@ -1309,7 +1340,7 @@ mod tests_v8 {
     }
 
     /// BUG-766: `ServiceWorkerGlobalScope.isSecureContext` follows the same
-    /// rule as the other two worker flavours' — see `worker.rs`'s sibling
+    /// rule as the other two worker flavours' РІР‚вЂќ see `worker.rs`'s sibling
     /// test on the dedicated scope.
     #[test]
     fn sw_global_scope_has_is_secure_context() {
@@ -1322,10 +1353,10 @@ mod tests_v8 {
         );
     }
 
-    /// `WorkerLocation` целиком + `URL`/`URLSearchParams` в области воркера:
-    /// ровно то, чем сервис-воркеры ветвятся на верхнем уровне. Пока полей не
-    /// было, `self.location.host.includes(...)` роняло установку воркера
-    /// целиком (живой пример — `sw.js` t-банка, 2026-08-17).
+    /// `WorkerLocation` РЎвЂ Р ВµР В»Р С‘Р С”Р С•Р С + `URL`/`URLSearchParams` Р Р† Р С•Р В±Р В»Р В°РЎРѓРЎвЂљР С‘ Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚Р В°:
+    /// РЎР‚Р С•Р Р†Р Р…Р С• РЎвЂљР С•, РЎвЂЎР ВµР С РЎРѓР ВµРЎР‚Р Р†Р С‘РЎРѓ-Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚РЎвЂ№ Р Р†Р ВµРЎвЂљР Р†РЎРЏРЎвЂљРЎРѓРЎРЏ Р Р…Р В° Р Р†Р ВµРЎР‚РЎвЂ¦Р Р…Р ВµР С РЎС“РЎР‚Р С•Р Р†Р Р…Р Вµ. Р СџР С•Р С”Р В° Р С—Р С•Р В»Р ВµР в„– Р Р…Р Вµ
+    /// Р В±РЎвЂ№Р В»Р С•, `self.location.host.includes(...)` РЎР‚Р С•Р Р…РЎРЏР В»Р С• РЎС“РЎРѓРЎвЂљР В°Р Р…Р С•Р Р†Р С”РЎС“ Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚Р В°
+    /// РЎвЂ Р ВµР В»Р С‘Р С”Р С•Р С (Р В¶Р С‘Р Р†Р С•Р в„– Р С—РЎР‚Р С‘Р СР ВµРЎР‚ РІР‚вЂќ `sw.js` t-Р В±Р В°Р Р…Р С”Р В°, 2026-08-17).
     #[test]
     fn sw_global_scope_has_full_location_and_url_classes() {
         let rt = V8JsRuntime::new().unwrap();
@@ -1350,14 +1381,14 @@ mod tests_v8 {
         }
     }
 
-    /// Сетевой двойник области воркера. Различает два входа провайдера:
-    /// обычный `fetch_sync` (через него запрос попал бы в перехватчик, то есть
-    /// обратно в этот же воркер) и `fetch_bypassing_sw`. Тела разные — поэтому
-    /// тест видит, каким путём ушёл запрос, а не только что «что-то вернулось».
+    /// Р РЋР ВµРЎвЂљР ВµР Р†Р С•Р в„– Р Т‘Р Р†Р С•Р в„–Р Р…Р С‘Р С” Р С•Р В±Р В»Р В°РЎРѓРЎвЂљР С‘ Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚Р В°. Р В Р В°Р В·Р В»Р С‘РЎвЂЎР В°Р ВµРЎвЂљ Р Т‘Р Р†Р В° Р Р†РЎвЂ¦Р С•Р Т‘Р В° Р С—РЎР‚Р С•Р Р†Р В°Р в„–Р Т‘Р ВµРЎР‚Р В°:
+    /// Р С•Р В±РЎвЂ№РЎвЂЎР Р…РЎвЂ№Р в„– `fetch_sync` (РЎвЂЎР ВµРЎР‚Р ВµР В· Р Р…Р ВµР С–Р С• Р В·Р В°Р С—РЎР‚Р С•РЎРѓ Р С—Р С•Р С—Р В°Р В» Р В±РЎвЂ№ Р Р† Р С—Р ВµРЎР‚Р ВµРЎвЂ¦Р Р†Р В°РЎвЂљРЎвЂЎР С‘Р С”, РЎвЂљР С• Р ВµРЎРѓРЎвЂљРЎРЉ
+    /// Р С•Р В±РЎР‚Р В°РЎвЂљР Р…Р С• Р Р† РЎРЊРЎвЂљР С•РЎвЂљ Р В¶Р Вµ Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚) Р С‘ `fetch_bypassing_sw`. Р СћР ВµР В»Р В° РЎР‚Р В°Р В·Р Р…РЎвЂ№Р Вµ РІР‚вЂќ Р С—Р С•РЎРЊРЎвЂљР С•Р СРЎС“
+    /// РЎвЂљР ВµРЎРѓРЎвЂљ Р Р†Р С‘Р Т‘Р С‘РЎвЂљ, Р С”Р В°Р С”Р С‘Р С Р С—РЎС“РЎвЂљРЎвЂР С РЎС“РЎв‚¬РЎвЂР В» Р В·Р В°Р С—РЎР‚Р С•РЎРѓ, Р В° Р Р…Р Вµ РЎвЂљР С•Р В»РЎРЉР С”Р С• РЎвЂЎРЎвЂљР С• Р’В«РЎвЂЎРЎвЂљР С•-РЎвЂљР С• Р Р†Р ВµРЎР‚Р Р…РЎС“Р В»Р С•РЎРѓРЎРЉР’В».
     struct SwNet {
-        /// URL → тело, отдаваемое обходным путём.
+        /// URL РІвЂ вЂ™ РЎвЂљР ВµР В»Р С•, Р С•РЎвЂљР Т‘Р В°Р Р†Р В°Р ВµР СР С•Р Вµ Р С•Р В±РЎвЂ¦Р С•Р Т‘Р Р…РЎвЂ№Р С Р С—РЎС“РЎвЂљРЎвЂР С.
         bodies: std::collections::HashMap<String, String>,
-        /// Сколько раз позвали обычный путь (должен остаться нулём).
+        /// Р РЋР С”Р С•Р В»РЎРЉР С”Р С• РЎР‚Р В°Р В· Р С—Р С•Р В·Р Р†Р В°Р В»Р С‘ Р С•Р В±РЎвЂ№РЎвЂЎР Р…РЎвЂ№Р в„– Р С—РЎС“РЎвЂљРЎРЉ (Р Т‘Р С•Р В»Р В¶Р ВµР Р… Р С•РЎРѓРЎвЂљР В°РЎвЂљРЎРЉРЎРѓРЎРЏ Р Р…РЎС“Р В»РЎвЂР С).
         via_intercepted: Mutex<usize>,
     }
 
@@ -1369,7 +1400,7 @@ mod tests_v8 {
             })
         }
 
-        /// Сколько запросов ушло перехватываемым путём.
+        /// Р РЋР С”Р С•Р В»РЎРЉР С”Р С• Р В·Р В°Р С—РЎР‚Р С•РЎРѓР С•Р Р† РЎС“РЎв‚¬Р В»Р С• Р С—Р ВµРЎР‚Р ВµРЎвЂ¦Р Р†Р В°РЎвЂљРЎвЂ№Р Р†Р В°Р ВµР СРЎвЂ№Р С Р С—РЎС“РЎвЂљРЎвЂР С.
         fn intercepted(&self) -> usize {
             self.via_intercepted.lock().map(|n| *n).unwrap_or(usize::MAX)
         }
@@ -1388,7 +1419,7 @@ mod tests_v8 {
                 status: 200,
                 status_text: "OK".into(),
                 headers: vec![],
-                body: "путь через перехватчик".as_bytes().to_vec(),
+                body: "Р С—РЎС“РЎвЂљРЎРЉ РЎвЂЎР ВµРЎР‚Р ВµР В· Р С—Р ВµРЎР‚Р ВµРЎвЂ¦Р Р†Р В°РЎвЂљРЎвЂЎР С‘Р С”".as_bytes().to_vec(),
                 url: url.to_string(),
             })
         }
@@ -1417,7 +1448,7 @@ mod tests_v8 {
         }
     }
 
-    /// Рантайм области воркера с сетью.
+    /// Р В Р В°Р Р…РЎвЂљР В°Р в„–Р С Р С•Р В±Р В»Р В°РЎРѓРЎвЂљР С‘ Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚Р В° РЎРѓ РЎРѓР ВµРЎвЂљРЎРЉРЎР‹.
     fn sw_rt(origin: &str, scope: &str, net: &Arc<SwNet>) -> V8JsRuntime {
         let rt = V8JsRuntime::new().unwrap();
         let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::clone(net) as _;
@@ -1425,26 +1456,26 @@ mod tests_v8 {
         rt
     }
 
-    /// `importScripts` по сети. До правки функции в области воркера не было
-    /// вовсе, и воркер, подключающий библиотеку (push-SDK t-банка), умирал на
-    /// первой же строке с `importScripts is not defined` — то есть не
-    /// регистрировал ни одного обработчика.
+    /// `importScripts` Р С—Р С• РЎРѓР ВµРЎвЂљР С‘. Р вЂќР С• Р С—РЎР‚Р В°Р Р†Р С”Р С‘ РЎвЂћРЎС“Р Р…Р С”РЎвЂ Р С‘Р С‘ Р Р† Р С•Р В±Р В»Р В°РЎРѓРЎвЂљР С‘ Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚Р В° Р Р…Р Вµ Р В±РЎвЂ№Р В»Р С•
+    /// Р Р†Р С•Р Р†РЎРѓР Вµ, Р С‘ Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚, Р С—Р С•Р Т‘Р С”Р В»РЎР‹РЎвЂЎР В°РЎР‹РЎвЂ°Р С‘Р в„– Р В±Р С‘Р В±Р В»Р С‘Р С•РЎвЂљР ВµР С”РЎС“ (push-SDK t-Р В±Р В°Р Р…Р С”Р В°), РЎС“Р СР С‘РЎР‚Р В°Р В» Р Р…Р В°
+    /// Р С—Р ВµРЎР‚Р Р†Р С•Р в„– Р В¶Р Вµ РЎРѓРЎвЂљРЎР‚Р С•Р С”Р Вµ РЎРѓ `importScripts is not defined` РІР‚вЂќ РЎвЂљР С• Р ВµРЎРѓРЎвЂљРЎРЉ Р Р…Р Вµ
+    /// РЎР‚Р ВµР С–Р С‘РЎРѓРЎвЂљРЎР‚Р С‘РЎР‚Р С•Р Р†Р В°Р В» Р Р…Р С‘ Р С•Р Т‘Р Р…Р С•Р С–Р С• Р С•Р В±РЎР‚Р В°Р В±Р С•РЎвЂљРЎвЂЎР С‘Р С”Р В°.
     #[test]
     fn sw_import_scripts_loads_over_network() {
         let net = SwNet::new(&[(
             "https://cdn.example.com/lib.js",
-            "globalThis.__lib_loaded = 'да';",
+            "globalThis.__lib_loaded = 'Р Т‘Р В°';",
         )]);
         let rt = sw_rt("https://example.com", "/", &net);
         rt.eval("importScripts('https://cdn.example.com/lib.js');").unwrap();
         assert_eq!(
             rt.eval("globalThis.__lib_loaded").unwrap(),
-            lumen_core::JsValue::String("да".into())
+            lumen_core::JsValue::String("Р Т‘Р В°".into())
         );
-        assert_eq!(net.intercepted(), 0, "запрос воркера ушёл в перехватчик");
+        assert_eq!(net.intercepted(), 0, "Р В·Р В°Р С—РЎР‚Р С•РЎРѓ Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚Р В° РЎС“РЎв‚¬РЎвЂР В» Р Р† Р С—Р ВµРЎР‚Р ВµРЎвЂ¦Р Р†Р В°РЎвЂљРЎвЂЎР С‘Р С”");
     }
 
-    /// Относительный адрес считается от адреса самого воркера.
+    /// Р С›РЎвЂљР Р…Р С•РЎРѓР С‘РЎвЂљР ВµР В»РЎРЉР Р…РЎвЂ№Р в„– Р В°Р Т‘РЎР‚Р ВµРЎРѓ РЎРѓРЎвЂЎР С‘РЎвЂљР В°Р ВµРЎвЂљРЎРѓРЎРЏ Р С•РЎвЂљ Р В°Р Т‘РЎР‚Р ВµРЎРѓР В° РЎРѓР В°Р СР С•Р С–Р С• Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚Р В°.
     #[test]
     fn sw_import_scripts_resolves_relative_to_scope() {
         let net = SwNet::new(&[(
@@ -1456,8 +1487,8 @@ mod tests_v8 {
         assert_eq!(rt.eval("globalThis.__rel").unwrap(), lumen_core::JsValue::Number(1.0));
     }
 
-    /// Отказ сети обязан быть исключением, а не молчаливым пропуском: воркер с
-    /// недогруженной библиотекой хуже, чем воркер, который честно не встал.
+    /// Р С›РЎвЂљР С”Р В°Р В· РЎРѓР ВµРЎвЂљР С‘ Р С•Р В±РЎРЏР В·Р В°Р Р… Р В±РЎвЂ№РЎвЂљРЎРЉ Р С‘РЎРѓР С”Р В»РЎР‹РЎвЂЎР ВµР Р…Р С‘Р ВµР С, Р В° Р Р…Р Вµ Р СР С•Р В»РЎвЂЎР В°Р В»Р С‘Р Р†РЎвЂ№Р С Р С—РЎР‚Р С•Р С—РЎС“РЎРѓР С”Р С•Р С: Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚ РЎРѓ
+    /// Р Р…Р ВµР Т‘Р С•Р С–РЎР‚РЎС“Р В¶Р ВµР Р…Р Р…Р С•Р в„– Р В±Р С‘Р В±Р В»Р С‘Р С•РЎвЂљР ВµР С”Р С•Р в„– РЎвЂ¦РЎС“Р В¶Р Вµ, РЎвЂЎР ВµР С Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚, Р С”Р С•РЎвЂљР С•РЎР‚РЎвЂ№Р в„– РЎвЂЎР ВµРЎРѓРЎвЂљР Р…Р С• Р Р…Р Вµ Р Р†РЎРѓРЎвЂљР В°Р В».
     #[test]
     fn sw_import_scripts_throws_on_http_error() {
         let net = SwNet::new(&[]);
@@ -1465,9 +1496,9 @@ mod tests_v8 {
         assert!(rt.eval("importScripts('https://example.com/gone.js');").is_err());
     }
 
-    /// GAP-CSPENF срез 31: `worker-src`/`default-src` gates the Service
+    /// GAP-CSPENF РЎРѓРЎР‚Р ВµР В· 31: `worker-src`/`default-src` gates the Service
     /// Worker's own `importScripts()`, mirroring `worker.rs`'s
-    /// `CspBlockedImportNet` — `check_worker_src` refuses unconditionally
+    /// `CspBlockedImportNet` РІР‚вЂќ `check_worker_src` refuses unconditionally
     /// while `fetch_bypassing_sw` would succeed if reached, proving the
     /// precheck short-circuits before any network I/O.
     struct CspBlockedSwNet;
@@ -1511,21 +1542,21 @@ mod tests_v8 {
     /// impl) must never be treated as a block.
     #[test]
     fn sw_import_scripts_allowed_when_no_worker_src_policy() {
-        let net = SwNet::new(&[("https://cdn.example.com/lib.js", "globalThis.__lib_loaded = 'да';")]);
+        let net = SwNet::new(&[("https://cdn.example.com/lib.js", "globalThis.__lib_loaded = 'Р Т‘Р В°';")]);
         let rt = sw_rt("https://example.com", "/", &net);
         rt.eval("importScripts('https://cdn.example.com/lib.js');").unwrap();
         assert_eq!(
             rt.eval("globalThis.__lib_loaded").unwrap(),
-            lumen_core::JsValue::String("да".into())
+            lumen_core::JsValue::String("Р Т‘Р В°".into())
         );
     }
 
-    /// `fetch` в воркере — настоящая сеть и мимо перехватчика. Прежняя версия
-    /// отвечала только из CacheStorage, поэтому воркер не мог НАПОЛНИТЬ кэш:
-    /// его первый же `fetch` отклонялся.
+    /// `fetch` Р Р† Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚Р Вµ РІР‚вЂќ Р Р…Р В°РЎРѓРЎвЂљР С•РЎРЏРЎвЂ°Р В°РЎРЏ РЎРѓР ВµРЎвЂљРЎРЉ Р С‘ Р СР С‘Р СР С• Р С—Р ВµРЎР‚Р ВµРЎвЂ¦Р Р†Р В°РЎвЂљРЎвЂЎР С‘Р С”Р В°. Р СџРЎР‚Р ВµР В¶Р Р…РЎРЏРЎРЏ Р Р†Р ВµРЎР‚РЎРѓР С‘РЎРЏ
+    /// Р С•РЎвЂљР Р†Р ВµРЎвЂЎР В°Р В»Р В° РЎвЂљР С•Р В»РЎРЉР С”Р С• Р С‘Р В· CacheStorage, Р С—Р С•РЎРЊРЎвЂљР С•Р СРЎС“ Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚ Р Р…Р Вµ Р СР С•Р С– Р СњР С’Р СџР С›Р вЂєР СњР ВР СћР В¬ Р С”РЎРЊРЎв‚¬:
+    /// Р ВµР С–Р С• Р С—Р ВµРЎР‚Р Р†РЎвЂ№Р в„– Р В¶Р Вµ `fetch` Р С•РЎвЂљР С”Р В»Р С•Р Р…РЎРЏР В»РЎРѓРЎРЏ.
     #[test]
     fn sw_fetch_goes_to_network_bypassing_interception() {
-        let net = SwNet::new(&[("https://example.com/api", "тело из сети")]);
+        let net = SwNet::new(&[("https://example.com/api", "РЎвЂљР ВµР В»Р С• Р С‘Р В· РЎРѓР ВµРЎвЂљР С‘")]);
         let rt = sw_rt("https://example.com", "/", &net);
         rt.eval(
             "fetch('https://example.com/api').then(function(r) {
@@ -1536,13 +1567,13 @@ mod tests_v8 {
         assert_eq!(rt.eval("globalThis.__st").unwrap(), lumen_core::JsValue::Number(200.0));
         assert_eq!(
             rt.eval("globalThis.__body").unwrap(),
-            lumen_core::JsValue::String("тело из сети".into())
+            lumen_core::JsValue::String("РЎвЂљР ВµР В»Р С• Р С‘Р В· РЎРѓР ВµРЎвЂљР С‘".into())
         );
-        assert_eq!(net.intercepted(), 0, "fetch воркера ушёл в перехватчик");
+        assert_eq!(net.intercepted(), 0, "fetch Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚Р В° РЎС“РЎв‚¬РЎвЂР В» Р Р† Р С—Р ВµРЎР‚Р ВµРЎвЂ¦Р Р†Р В°РЎвЂљРЎвЂЎР С‘Р С”");
     }
 
-    /// Заголовки ответа доезжают до `Response.headers` — по ним воркер решает,
-    /// класть ли ответ в кэш.
+    /// Р вЂ”Р В°Р С–Р С•Р В»Р С•Р Р†Р С”Р С‘ Р С•РЎвЂљР Р†Р ВµРЎвЂљР В° Р Т‘Р С•Р ВµР В·Р В¶Р В°РЎР‹РЎвЂљ Р Т‘Р С• `Response.headers` РІР‚вЂќ Р С—Р С• Р Р…Р С‘Р С Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚ РЎР‚Р ВµРЎв‚¬Р В°Р ВµРЎвЂљ,
+    /// Р С”Р В»Р В°РЎРѓРЎвЂљРЎРЉ Р В»Р С‘ Р С•РЎвЂљР Р†Р ВµРЎвЂљ Р Р† Р С”РЎРЊРЎв‚¬.
     #[test]
     fn sw_fetch_exposes_response_headers() {
         let net = SwNet::new(&[("https://example.com/a.txt", "x")]);
@@ -1558,11 +1589,11 @@ mod tests_v8 {
         );
     }
 
-    /// BUG-748: скоуп service worker получает тот же `Headers`, что и
-    /// страница (`crate::dom::HEADERS_SHIM`), а не отдельный мини-шим на
-    /// плоском объекте — `append`/`forEach`/итерация присутствуют,
-    /// одноимённые заголовки не схлопываются, а `clone()` переносит их
-    /// полностью (раньше опирался на приватное поле `_h`, которого больше нет).
+    /// BUG-748: РЎРѓР С”Р С•РЎС“Р С— service worker Р С—Р С•Р В»РЎС“РЎвЂЎР В°Р ВµРЎвЂљ РЎвЂљР С•РЎвЂљ Р В¶Р Вµ `Headers`, РЎвЂЎРЎвЂљР С• Р С‘
+    /// РЎРѓРЎвЂљРЎР‚Р В°Р Р…Р С‘РЎвЂ Р В° (`crate::dom::HEADERS_SHIM`), Р В° Р Р…Р Вµ Р С•РЎвЂљР Т‘Р ВµР В»РЎРЉР Р…РЎвЂ№Р в„– Р СР С‘Р Р…Р С‘-РЎв‚¬Р С‘Р С Р Р…Р В°
+    /// Р С—Р В»Р С•РЎРѓР С”Р С•Р С Р С•Р В±РЎР‰Р ВµР С”РЎвЂљР Вµ РІР‚вЂќ `append`/`forEach`/Р С‘РЎвЂљР ВµРЎР‚Р В°РЎвЂ Р С‘РЎРЏ Р С—РЎР‚Р С‘РЎРѓРЎС“РЎвЂљРЎРѓРЎвЂљР Р†РЎС“РЎР‹РЎвЂљ,
+    /// Р С•Р Т‘Р Р…Р С•Р С‘Р СРЎвЂР Р…Р Р…РЎвЂ№Р Вµ Р В·Р В°Р С–Р С•Р В»Р С•Р Р†Р С”Р С‘ Р Р…Р Вµ РЎРѓРЎвЂ¦Р В»Р С•Р С—РЎвЂ№Р Р†Р В°РЎР‹РЎвЂљРЎРѓРЎРЏ, Р В° `clone()` Р С—Р ВµРЎР‚Р ВµР Р…Р С•РЎРѓР С‘РЎвЂљ Р С‘РЎвЂ¦
+    /// Р С—Р С•Р В»Р Р…Р С•РЎРѓРЎвЂљРЎРЉРЎР‹ (РЎР‚Р В°Р Р…РЎРЉРЎв‚¬Р Вµ Р С•Р С—Р С‘РЎР‚Р В°Р В»РЎРѓРЎРЏ Р Р…Р В° Р С—РЎР‚Р С‘Р Р†Р В°РЎвЂљР Р…Р С•Р Вµ Р С—Р С•Р В»Р Вµ `_h`, Р С”Р С•РЎвЂљР С•РЎР‚Р С•Р С–Р С• Р В±Р С•Р В»РЎРЉРЎв‚¬Р Вµ Р Р…Р ВµРЎвЂљ).
     #[test]
     fn sw_headers_support_full_fetch_api() {
         let rt = V8JsRuntime::new().unwrap();
@@ -1595,9 +1626,9 @@ mod tests_v8 {
         );
     }
 
-    /// Ph3 push-api срез 5: `_sw_fire_push` builds a `PushEvent` whose `.data`
+    /// Ph3 push-api РЎРѓРЎР‚Р ВµР В· 5: `_sw_fire_push` builds a `PushEvent` whose `.data`
     /// (`PushMessageData`) round-trips through `.text()`/`.json()`/
-    /// `.arrayBuffer()` — the three accessors a `push` handler actually uses.
+    /// `.arrayBuffer()` РІР‚вЂќ the three accessors a `push` handler actually uses.
     #[test]
     fn sw_fire_push_dispatches_push_event_with_data() {
         let rt = V8JsRuntime::new().unwrap();
@@ -1611,7 +1642,7 @@ mod tests_v8 {
              });",
         )
         .unwrap();
-        let json_text = r#"{"hello":"мир"}"#;
+        let json_text = r#"{"hello":"Р СР С‘РЎР‚"}"#;
         let payload_b64 = base64_encode(json_text.as_bytes());
         rt.eval(&format!("_sw_fire_push('{payload_b64}');")).unwrap();
         assert_eq!(
@@ -1620,7 +1651,7 @@ mod tests_v8 {
         );
         assert_eq!(
             rt.eval("globalThis.__json").unwrap(),
-            lumen_core::JsValue::String("мир".into())
+            lumen_core::JsValue::String("Р СР С‘РЎР‚".into())
         );
         assert_eq!(
             rt.eval("globalThis.__abLen").unwrap(),
@@ -1628,7 +1659,7 @@ mod tests_v8 {
         );
     }
 
-    /// BUG-1193: SW `atob`/`btoa` follow HTML LS §8.3 like the dedicated worker's.
+    /// BUG-1193: SW `atob`/`btoa` follow HTML LS Р’В§8.3 like the dedicated worker's.
     #[test]
     fn sw_atob_btoa_follow_html_spec() {
         let rt = V8JsRuntime::new().unwrap();
@@ -1653,7 +1684,7 @@ mod tests_v8 {
         );
     }
 
-    /// A `push` handler is optional (spec allows a SW with none registered) —
+    /// A `push` handler is optional (spec allows a SW with none registered) РІР‚вЂќ
     /// firing must not panic/throw when `_handlers['push']` is empty.
     #[test]
     fn sw_fire_push_without_handler_is_a_no_op() {
@@ -1663,7 +1694,7 @@ mod tests_v8 {
         assert!(rt.eval(&format!("_sw_fire_push('{}');", base64_encode(b"x"))).is_ok());
     }
 
-    /// Ph3 push-api срез 5: `_sw_fire_push_subscription_change` exposes both
+    /// Ph3 push-api РЎРѓРЎР‚Р ВµР В· 5: `_sw_fire_push_subscription_change` exposes both
     /// `oldSubscription`/`newSubscription` with a working `endpoint`/`getKey()`.
     #[test]
     fn sw_fire_push_subscription_change_dispatches_event() {
@@ -1700,7 +1731,7 @@ mod tests_v8 {
     /// `handle.tx` reaches the running V8 isolate and fires the `push`
     /// handler. There is no response channel for `Push` (unlike `Fetch`), so
     /// the push handler stashes its result where a follow-up `fetch` can read
-    /// it back — the SW's message loop is a single `rx.recv()` FIFO, so the
+    /// it back РІР‚вЂќ the SW's message loop is a single `rx.recv()` FIFO, so the
     /// `Fetch` sent right after is guaranteed to process after the `Push`.
     #[test]
     fn v8_sw_push_message_dispatches_through_worker_thread() {
@@ -1712,10 +1743,12 @@ mod tests_v8 {
 var __received = null;
 self.addEventListener('push', function(event) { __received = event.data.text(); });
 self.addEventListener('fetch', function(event) {
-    event.respondWith(Promise.resolve(new Response(__received || 'ничего')));
+    event.respondWith(Promise.resolve(new Response(__received || 'Р Р…Р С‘РЎвЂЎР ВµР С–Р С•')));
 });
 "#
             .to_string(),
+            String::new(),
+            false,
             Arc::clone(&cache) as Arc<dyn CacheBackend>,
             None,
             None,
@@ -1725,7 +1758,7 @@ self.addEventListener('fetch', function(event) {
         handle
             .tx
             .send(lumen_core::ext::SwWorkerMessage::Push(lumen_core::ext::SwPushMessage {
-                payload: "привет с сервера".as_bytes().to_vec(),
+                payload: "Р С—РЎР‚Р С‘Р Р†Р ВµРЎвЂљ РЎРѓ РЎРѓР ВµРЎР‚Р Р†Р ВµРЎР‚Р В°".as_bytes().to_vec(),
             }))
             .unwrap();
 
@@ -1740,14 +1773,14 @@ self.addEventListener('fetch', function(event) {
             .unwrap();
 
         let result = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
-        assert_eq!(result, Some("привет с сервера".as_bytes().to_vec()));
+        assert_eq!(result, Some("Р С—РЎР‚Р С‘Р Р†Р ВµРЎвЂљ РЎРѓ РЎРѓР ВµРЎР‚Р Р†Р ВµРЎР‚Р В°".as_bytes().to_vec()));
     }
 
-    /// SW-MSG-S2: `waitUntil` в обработчике `install` продлевает его жизнь —
-    /// `activate` стартует не раньше, чем разрешится промис. Порядок виден в
-    /// массиве, который читается через fetch-ответ: таймер 5 мс внутри окна
-    /// продления выставляет `__wait_done`, и если `activate` успел раньше
-    /// конца 40-мс промиса, там остался бы `undefined`.
+    /// SW-MSG-S2: `waitUntil` Р Р† Р С•Р В±РЎР‚Р В°Р В±Р С•РЎвЂљРЎвЂЎР С‘Р С”Р Вµ `install` Р С—РЎР‚Р С•Р Т‘Р В»Р ВµР Р†Р В°Р ВµРЎвЂљ Р ВµР С–Р С• Р В¶Р С‘Р В·Р Р…РЎРЉ РІР‚вЂќ
+    /// `activate` РЎРѓРЎвЂљР В°РЎР‚РЎвЂљРЎС“Р ВµРЎвЂљ Р Р…Р Вµ РЎР‚Р В°Р Р…РЎРЉРЎв‚¬Р Вµ, РЎвЂЎР ВµР С РЎР‚Р В°Р В·РЎР‚Р ВµРЎв‚¬Р С‘РЎвЂљРЎРѓРЎРЏ Р С—РЎР‚Р С•Р СР С‘РЎРѓ. Р СџР С•РЎР‚РЎРЏР Т‘Р С•Р С” Р Р†Р С‘Р Т‘Р ВµР Р… Р Р†
+    /// Р СР В°РЎРѓРЎРѓР С‘Р Р†Р Вµ, Р С”Р С•РЎвЂљР С•РЎР‚РЎвЂ№Р в„– РЎвЂЎР С‘РЎвЂљР В°Р ВµРЎвЂљРЎРѓРЎРЏ РЎвЂЎР ВµРЎР‚Р ВµР В· fetch-Р С•РЎвЂљР Р†Р ВµРЎвЂљ: РЎвЂљР В°Р в„–Р СР ВµРЎР‚ 5 Р СРЎРѓ Р Р†Р Р…РЎС“РЎвЂљРЎР‚Р С‘ Р С•Р С”Р Р…Р В°
+    /// Р С—РЎР‚Р С•Р Т‘Р В»Р ВµР Р…Р С‘РЎРЏ Р Р†РЎвЂ№РЎРѓРЎвЂљР В°Р Р†Р В»РЎРЏР ВµРЎвЂљ `__wait_done`, Р С‘ Р ВµРЎРѓР В»Р С‘ `activate` РЎС“РЎРѓР С—Р ВµР В» РЎР‚Р В°Р Р…РЎРЉРЎв‚¬Р Вµ
+    /// Р С”Р С•Р Р…РЎвЂ Р В° 40-Р СРЎРѓ Р С—РЎР‚Р С•Р СР С‘РЎРѓР В°, РЎвЂљР В°Р С Р С•РЎРѓРЎвЂљР В°Р В»РЎРѓРЎРЏ Р В±РЎвЂ№ `undefined`.
     #[test]
     fn sw_extendable_event_wait_until_extends_install() {
         let cache = MockCache::new();
@@ -1769,6 +1802,8 @@ self.addEventListener('fetch', function(e) {
 });
 "#
             .to_string(),
+            String::new(),
+            false,
             Arc::clone(&cache) as Arc<dyn CacheBackend>,
             None,
             None,
@@ -1786,17 +1821,17 @@ self.addEventListener('fetch', function(e) {
         let result = rx
             .recv_timeout(std::time::Duration::from_secs(5))
             .unwrap()
-            .expect("SW должен ответить на fetch");
+            .expect("SW Р Т‘Р С•Р В»Р В¶Р ВµР Р… Р С•РЎвЂљР Р†Р ВµРЎвЂљР С‘РЎвЂљРЎРЉ Р Р…Р В° fetch");
         let order = String::from_utf8(result).unwrap();
         assert!(order.contains("install"), "{order}");
         assert!(
             order.contains("activate:true"),
-            "activate должен прийти после конца waitUntil-промиса (40 мс), а не сразу: {order}"
+            "activate Р Т‘Р С•Р В»Р В¶Р ВµР Р… Р С—РЎР‚Р С‘Р в„–РЎвЂљР С‘ Р С—Р С•РЎРѓР В»Р Вµ Р С”Р С•Р Р…РЎвЂ Р В° waitUntil-Р С—РЎР‚Р С•Р СР С‘РЎРѓР В° (40 Р СРЎРѓ), Р В° Р Р…Р Вµ РЎРѓРЎР‚Р В°Р В·РЎС“: {order}"
         );
     }
 
-    /// SW-MSG-S2: `waitUntil` вне окна диспатча, когда ожидающих промисов
-    /// больше нет — спецификационный `InvalidStateError` (SW §4.5).
+    /// SW-MSG-S2: `waitUntil` Р Р†Р Р…Р Вµ Р С•Р С”Р Р…Р В° Р Т‘Р С‘РЎРѓР С—Р В°РЎвЂљРЎвЂЎР В°, Р С”Р С•Р С–Р Т‘Р В° Р С•Р В¶Р С‘Р Т‘Р В°РЎР‹РЎвЂ°Р С‘РЎвЂ¦ Р С—РЎР‚Р С•Р СР С‘РЎРѓР С•Р Р†
+    /// Р В±Р С•Р В»РЎРЉРЎв‚¬Р Вµ Р Р…Р ВµРЎвЂљ РІР‚вЂќ РЎРѓР С—Р ВµРЎвЂ Р С‘РЎвЂћР С‘Р С”Р В°РЎвЂ Р С‘Р С•Р Р…Р Р…РЎвЂ№Р в„– `InvalidStateError` (SW Р’В§4.5).
     #[test]
     fn sw_extendable_event_wait_until_after_dispatch_throws_invalid_state() {
         let rt = V8JsRuntime::new().unwrap();
@@ -1816,9 +1851,9 @@ self.addEventListener('fetch', function(e) {
         );
     }
 
-    /// SW-MSG-S2: конструктор `ExtendableMessageEvent` (SW §4.7) — значения
-    /// по умолчанию, наследование от `ExtendableEvent`, замороженный `ports`
-    /// и `TypeError` на постороннем `source`.
+    /// SW-MSG-S2: Р С”Р С•Р Р…РЎРѓРЎвЂљРЎР‚РЎС“Р С”РЎвЂљР С•РЎР‚ `ExtendableMessageEvent` (SW Р’В§4.7) РІР‚вЂќ Р В·Р Р…Р В°РЎвЂЎР ВµР Р…Р С‘РЎРЏ
+    /// Р С—Р С• РЎС“Р СР С•Р В»РЎвЂЎР В°Р Р…Р С‘РЎР‹, Р Р…Р В°РЎРѓР В»Р ВµР Т‘Р С•Р Р†Р В°Р Р…Р С‘Р Вµ Р С•РЎвЂљ `ExtendableEvent`, Р В·Р В°Р СР С•РЎР‚Р С•Р В¶Р ВµР Р…Р Р…РЎвЂ№Р в„– `ports`
+    /// Р С‘ `TypeError` Р Р…Р В° Р С—Р С•РЎРѓРЎвЂљР С•РЎР‚Р С•Р Р…Р Р…Р ВµР С `source`.
     #[test]
     fn sw_extendable_message_event_constructor() {
         let rt = V8JsRuntime::new().unwrap();
@@ -1845,18 +1880,18 @@ self.addEventListener('fetch', function(e) {
         .unwrap();
         match rt.eval("globalThis.__r.every(function(v) { return v === true; })") {
             Ok(lumen_core::JsValue::Bool(true)) => {}
-            other => panic!("поля ExtendableMessageEvent: {other:?}"),
+            other => panic!("Р С—Р С•Р В»РЎРЏ ExtendableMessageEvent: {other:?}"),
         }
         assert_eq!(
             rt.eval("globalThis.__bad").unwrap(),
             lumen_core::JsValue::Bool(true),
-            "посторонний source обязан дать TypeError"
+            "Р С—Р С•РЎРѓРЎвЂљР С•РЎР‚Р С•Р Р…Р Р…Р С‘Р в„– source Р С•Р В±РЎРЏР В·Р В°Р Р… Р Т‘Р В°РЎвЂљРЎРЉ TypeError"
         );
     }
 
-    /// `indexedDB` в области воркера. `sw.js` t-банка обращается к ней на
-    /// верхнем уровне; пока класса не было, воркер умирал там же, где и на
-    /// `importScripts` — до регистрации обработчиков.
+    /// `indexedDB` Р Р† Р С•Р В±Р В»Р В°РЎРѓРЎвЂљР С‘ Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚Р В°. `sw.js` t-Р В±Р В°Р Р…Р С”Р В° Р С•Р В±РЎР‚Р В°РЎвЂ°Р В°Р ВµРЎвЂљРЎРѓРЎРЏ Р С” Р Р…Р ВµР в„– Р Р…Р В°
+    /// Р Р†Р ВµРЎР‚РЎвЂ¦Р Р…Р ВµР С РЎС“РЎР‚Р С•Р Р†Р Р…Р Вµ; Р С—Р С•Р С”Р В° Р С”Р В»Р В°РЎРѓРЎРѓР В° Р Р…Р Вµ Р В±РЎвЂ№Р В»Р С•, Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚ РЎС“Р СР С‘РЎР‚Р В°Р В» РЎвЂљР В°Р С Р В¶Р Вµ, Р С–Р Т‘Р Вµ Р С‘ Р Р…Р В°
+    /// `importScripts` РІР‚вЂќ Р Т‘Р С• РЎР‚Р ВµР С–Р С‘РЎРѓРЎвЂљРЎР‚Р В°РЎвЂ Р С‘Р С‘ Р С•Р В±РЎР‚Р В°Р В±Р С•РЎвЂљРЎвЂЎР С‘Р С”Р С•Р Р†.
     #[test]
     fn sw_global_scope_has_indexed_db() {
         let rt = V8JsRuntime::new().unwrap();
@@ -1872,10 +1907,10 @@ self.addEventListener('fetch', function(e) {
         }
     }
 
-    /// Полный цикл: открыть базу, создать хранилище, записать и прочитать —
-    /// внутри области воркера. Очередь запросов IndexedDB прокачивается
-    /// `queueMicrotask`, который в области воркера свой, поэтому проверяется
-    /// не наличие классов, а доехавшее до `onsuccess` значение.
+    /// Р СџР С•Р В»Р Р…РЎвЂ№Р в„– РЎвЂ Р С‘Р С”Р В»: Р С•РЎвЂљР С”РЎР‚РЎвЂ№РЎвЂљРЎРЉ Р В±Р В°Р В·РЎС“, РЎРѓР С•Р В·Р Т‘Р В°РЎвЂљРЎРЉ РЎвЂ¦РЎР‚Р В°Р Р…Р С‘Р В»Р С‘РЎвЂ°Р Вµ, Р В·Р В°Р С—Р С‘РЎРѓР В°РЎвЂљРЎРЉ Р С‘ Р С—РЎР‚Р С•РЎвЂЎР С‘РЎвЂљР В°РЎвЂљРЎРЉ РІР‚вЂќ
+    /// Р Р†Р Р…РЎС“РЎвЂљРЎР‚Р С‘ Р С•Р В±Р В»Р В°РЎРѓРЎвЂљР С‘ Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚Р В°. Р С›РЎвЂЎР ВµРЎР‚Р ВµР Т‘РЎРЉ Р В·Р В°Р С—РЎР‚Р С•РЎРѓР С•Р Р† IndexedDB Р С—РЎР‚Р С•Р С”Р В°РЎвЂЎР С‘Р Р†Р В°Р ВµРЎвЂљРЎРѓРЎРЏ
+    /// `queueMicrotask`, Р С”Р С•РЎвЂљР С•РЎР‚РЎвЂ№Р в„– Р Р† Р С•Р В±Р В»Р В°РЎРѓРЎвЂљР С‘ Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚Р В° РЎРѓР Р†Р С•Р в„–, Р С—Р С•РЎРЊРЎвЂљР С•Р СРЎС“ Р С—РЎР‚Р С•Р Р†Р ВµРЎР‚РЎРЏР ВµРЎвЂљРЎРѓРЎРЏ
+    /// Р Р…Р Вµ Р Р…Р В°Р В»Р С‘РЎвЂЎР С‘Р Вµ Р С”Р В»Р В°РЎРѓРЎРѓР С•Р Р†, Р В° Р Т‘Р С•Р ВµРЎвЂ¦Р В°Р Р†РЎв‚¬Р ВµР Вµ Р Т‘Р С• `onsuccess` Р В·Р Р…Р В°РЎвЂЎР ВµР Р…Р С‘Р Вµ.
     #[test]
     fn sw_indexed_db_round_trip() {
         let rt = V8JsRuntime::new().unwrap();
@@ -1889,7 +1924,7 @@ self.addEventListener('fetch', function(e) {
              req.onsuccess = function(e) {
                  var db = e.target.result;
                  var tx = db.transaction('items', 'readwrite');
-                 tx.objectStore('items').put({ id: 1, v: 'из воркера' });
+                 tx.objectStore('items').put({ id: 1, v: 'Р С‘Р В· Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚Р В°' });
                  var get = db.transaction('items').objectStore('items').get(1);
                  get.onsuccess = function(ev) { globalThis.__idb = ev.target.result.v; };
              };",
@@ -1898,13 +1933,13 @@ self.addEventListener('fetch', function(e) {
         rt.eval("_lumen_idb_flush();").unwrap();
         assert_eq!(
             rt.eval("globalThis.__idb").unwrap(),
-            lumen_core::JsValue::String("из воркера".into())
+            lumen_core::JsValue::String("Р С‘Р В· Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚Р В°".into())
         );
     }
 
-    /// Без провайдера (headless-режимы дампа) сети нет, но область воркера
-    /// обязана остаться живой: `fetch` отклоняется, `importScripts` бросает —
-    /// вместо `_lumen_sw_net_fetch is not defined`.
+    /// Р вЂР ВµР В· Р С—РЎР‚Р С•Р Р†Р В°Р в„–Р Т‘Р ВµРЎР‚Р В° (headless-РЎР‚Р ВµР В¶Р С‘Р СРЎвЂ№ Р Т‘Р В°Р СР С—Р В°) РЎРѓР ВµРЎвЂљР С‘ Р Р…Р ВµРЎвЂљ, Р Р…Р С• Р С•Р В±Р В»Р В°РЎРѓРЎвЂљРЎРЉ Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚Р В°
+    /// Р С•Р В±РЎРЏР В·Р В°Р Р…Р В° Р С•РЎРѓРЎвЂљР В°РЎвЂљРЎРЉРЎРѓРЎРЏ Р В¶Р С‘Р Р†Р С•Р в„–: `fetch` Р С•РЎвЂљР С”Р В»Р С•Р Р…РЎРЏР ВµРЎвЂљРЎРѓРЎРЏ, `importScripts` Р В±РЎР‚Р С•РЎРѓР В°Р ВµРЎвЂљ РІР‚вЂќ
+    /// Р Р†Р СР ВµРЎРѓРЎвЂљР С• `_lumen_sw_net_fetch is not defined`.
     #[test]
     fn sw_without_provider_rejects_instead_of_crashing() {
         let rt = V8JsRuntime::new().unwrap();
@@ -1915,12 +1950,12 @@ self.addEventListener('fetch', function(e) {
         );
         rt.eval(
             "fetch('https://example.com/x').then(function() { globalThis.__r = 'ok'; },
-                                                function() { globalThis.__r = 'отказ'; });",
+                                                function() { globalThis.__r = 'Р С•РЎвЂљР С”Р В°Р В·'; });",
         )
         .unwrap();
         assert_eq!(
             rt.eval("globalThis.__r").unwrap(),
-            lumen_core::JsValue::String("отказ".into())
+            lumen_core::JsValue::String("Р С•РЎвЂљР С”Р В°Р В·".into())
         );
         assert!(rt.eval("importScripts('https://example.com/x.js');").is_err());
     }
@@ -1977,6 +2012,8 @@ self.addEventListener('fetch', function(event) {
 });
 "#
             .to_string(),
+            String::new(),
+            false,
             Arc::clone(&cache) as Arc<dyn CacheBackend>,
             None,
             None,
@@ -2010,6 +2047,8 @@ self.addEventListener('fetch', function(event) {
 });
 "#
             .to_string(),
+            String::new(),
+            false,
             Arc::clone(&cache) as Arc<dyn CacheBackend>,
             None,
             None,
@@ -2038,6 +2077,8 @@ self.addEventListener('fetch', function(event) {
             "https://example.com".to_string(),
             "/".to_string(),
             "// no fetch handler".to_string(),
+            String::new(),
+            false,
             Arc::clone(&cache) as Arc<dyn CacheBackend>,
             None,
             None,
@@ -2056,6 +2097,120 @@ self.addEventListener('fetch', function(event) {
 
         let result = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
         assert_eq!(result, None);
+    }
+
+    // SW-MODULE tests ========================================================
+
+    /// Модульный SW исполняется как ES-модуль: статический `import` графа
+    /// грузится загрузчиком по своим URL и переменная попадает в изолят.
+    #[test]
+    fn v8_sw_module_script_loads_static_import_graph() {
+        let cache = MockCache::new();
+        struct DepNet;
+        impl lumen_core::ext::JsFetchProvider for DepNet {
+            fn fetch_sync(
+                &self,
+                url: &str,
+                _method: &str,
+            ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+                let body = if url.ends_with("/dep.js") {
+                    b"export const dep = 'module-dep';".to_vec()
+                } else {
+                    Vec::new()
+                };
+                Ok(lumen_core::ext::JsFetchResult {
+                    status: 200,
+                    status_text: "OK".into(),
+                    headers: vec![],
+                    body,
+                    url: url.to_string(),
+                })
+            }
+        }
+        let handle = spawn_sw_worker_v8(
+            "https://example.com".to_string(),
+            "/".to_string(),
+            r#"
+import { dep } from './dep.js';
+globalThis.__dep = dep;
+self.addEventListener('fetch', function(event) {
+    event.respondWith(Promise.resolve(new Response(globalThis.__dep)));
+});
+"#
+            .to_string(),
+            "https://example.com/sw.js".to_string(),
+            true,
+            Arc::clone(&cache) as Arc<dyn CacheBackend>,
+            Some(Arc::new(DepNet) as Arc<dyn lumen_core::ext::JsFetchProvider>),
+            None,
+            None,
+        );
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        handle
+            .tx
+            .send(lumen_core::ext::SwWorkerMessage::Fetch(lumen_core::ext::SwFetchRequest {
+                url: "https://example.com/page".to_string(),
+                method: "GET".to_string(),
+                response_tx: tx,
+            }))
+            .unwrap();
+
+        let result = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&result.unwrap_or_default()),
+            "module-dep"
+        );
+    }
+
+    /// В модульном SW `importScripts` бросает TypeError, динамический
+    /// `import()` отклоняется (SW §Run Service Worker); в классическом оба
+    /// пути не меняются — dynamic import здесь не проверяем, у шима SW его
+    /// нет.
+    #[test]
+    fn v8_sw_module_rejects_import_scripts_and_dynamic_import() {
+        let cache = MockCache::new();
+        let handle = spawn_sw_worker_v8(
+            "https://example.com".to_string(),
+            "/".to_string(),
+            r#"
+globalThis.__verdict = 'untouched';
+try { importScripts('lib.js'); } catch (e) { __verdict += '|importScripts:' + e.constructor.name + '|flag:' + globalThis._lumen_sw_is_module__; }
+import('./late.js').then(function() { __verdict += '|dyn:fulfilled'; },
+                          function(e) { __verdict += '|dyn:' + e.constructor.name; });
+self.addEventListener('fetch', function(event) {
+    event.respondWith(Promise.resolve(new Response(__verdict)));
+});
+"#
+            .to_string(),
+            "https://example.com/sw.js".to_string(),
+            true,
+            Arc::clone(&cache) as Arc<dyn CacheBackend>,
+            None,
+            None,
+            None,
+        );
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        handle
+            .tx
+            .send(lumen_core::ext::SwWorkerMessage::Fetch(lumen_core::ext::SwFetchRequest {
+                url: "https://example.com/page".to_string(),
+                method: "GET".to_string(),
+                response_tx: tx,
+            }))
+            .unwrap();
+
+        let result = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        let verdict = String::from_utf8_lossy(&result.unwrap_or_default()).into_owned();
+        assert!(
+            verdict.contains("importScripts:TypeError"),
+            "importScripts must throw TypeError in a module SW, got: {verdict}"
+        );
+        assert!(
+            verdict.contains("dyn:TypeError"),
+            "dynamic import() must reject with TypeError in a module SW, got: {verdict}"
+        );
     }
 
     // SW-MSG-S1 tests ========================================================
@@ -2122,6 +2277,8 @@ self.addEventListener('fetch', function(event) {
     }));
 });
 "#.to_string(),
+            String::new(),
+            false,
             Arc::clone(&cache) as Arc<dyn CacheBackend>,
             None,
             None,

@@ -229,13 +229,15 @@ pub(crate) fn install_service_worker(
             let idb_sw = idb_sw.clone();
             let det_sw = determinism.clone();
             let o = page_origin.clone();
-            reg!(scope, ctx, store, "_lumen_sw_activate_script", move |scope: String, text: String| {
+            reg!(scope, ctx, store, "_lumen_sw_activate_script", move |scope: String, text: String, script_url: String, sw_type: String| {
                 let origin = o.clone();
                 if let (Some(store), Some(cache)) = (sws.as_ref(), cbe_sw.as_ref()) {
                     let handle = crate::sw_worker::spawn_sw_worker_v8(
                         origin.clone(),
                         scope.clone(),
                         text,
+                        script_url,
+                        sw_type == "module",
                         Arc::clone(cache),
                         fp_sw.clone(),
                         idb_sw.clone(),

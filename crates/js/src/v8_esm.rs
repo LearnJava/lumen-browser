@@ -73,6 +73,10 @@ struct EsmState {
     /// Повторная попытка на каждый импорт означала бы новый синхронный
     /// сетевой поход на том же JS-потоке при каждом обращении.
     failed: HashMap<String, String>,
+    /// SW-MODULE: dynamic `import()` запрещён — изолят сервис-воркера
+    /// обязателен отклонять его (SW §Run Service Worker). Ставится только
+    /// в SW-потоке перед исполнением модульного скрипта.
+    deny_dynamic_import: bool,
 }
 
 thread_local! {
@@ -109,6 +113,11 @@ pub(crate) fn set_import_map(map: ImportMap) {
 /// потому что реестр модулей thread-local (резолв-колбэк V8 бескаптурный).
 pub(crate) fn set_fetch_provider(provider: Option<Arc<dyn JsFetchProvider>>) {
     with_state(|s| s.fetcher = provider);
+}
+
+/// SW-MODULE: включить/выключить отказ динамического `import()` (SW-изолят).
+pub(crate) fn set_dynamic_import_denied(denied: bool) {
+    with_state(|s| s.deny_dynamic_import = denied);
 }
 
 /// Прочитать модуль с диска по `file://`-спецификатору.
@@ -739,6 +748,16 @@ fn dynamic_import_callback<'s>(
 ) -> Option<v8::Local<'s, v8::Promise>> {
     let resolver = v8::PromiseResolver::new(scope)?;
     let promise = resolver.get_promise(scope);
+
+    // SW-MODULE: a service worker isolate rejects dynamic `import()` outright.
+    if with_state(|s| s.deny_dynamic_import) {
+        v8::tc_scope!(let tc, scope);
+        let exc = v8::String::new(tc, "dynamic import() is not allowed in service workers")
+            .map(|m| v8::Exception::type_error(tc, m))
+            .unwrap_or_else(|| v8::undefined(tc).into());
+        resolver.reject(tc, exc);
+        return Some(promise);
+    }
 
     let raw = specifier.to_rust_string_lossy(scope);
     // The importer's own specifier is V8's "resource name" — the script origin
