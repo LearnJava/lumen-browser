@@ -1826,6 +1826,103 @@ fn v8_sw_runtime_at(url: &str, script: &'static str) -> (V8JsRuntime, lumen_core
     (rt, store)
 }
 
+/// BUG-1742: records which requests went through the SW-script fetch path
+/// (`fetch_bypassing_sw_with_headers`) versus the plain page fetch, so a test
+/// can assert the `Service-Worker: script` header rides only on the main script.
+type BypassCall = (String, Vec<(String, String)>);
+
+struct HeaderRecordingFetch {
+    bypass_calls: std::sync::Mutex<Vec<BypassCall>>,
+    plain_calls: std::sync::Mutex<Vec<String>>,
+}
+
+impl HeaderRecordingFetch {
+    fn new() -> Self {
+        HeaderRecordingFetch {
+            bypass_calls: std::sync::Mutex::new(Vec::new()),
+            plain_calls: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl lumen_core::ext::JsFetchProvider for HeaderRecordingFetch {
+    fn fetch_sync(
+        &self,
+        url: &str,
+        _method: &str,
+    ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        self.plain_calls.lock().unwrap().push(url.to_string());
+        Ok(lumen_core::ext::JsFetchResult {
+            status: 200,
+            status_text: "OK".into(),
+            headers: vec![("content-type".to_string(), "text/javascript".to_string())],
+            body: b"self.onmessage = function() {};".to_vec(),
+            url: url.to_string(),
+        })
+    }
+
+    fn fetch_bypassing_sw_with_headers(
+        &self,
+        url: &str,
+        _method: &str,
+        headers: &[(&str, &str)],
+    ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        self.bypass_calls.lock().unwrap().push((
+            url.to_string(),
+            headers
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        ));
+        Ok(lumen_core::ext::JsFetchResult {
+            status: 200,
+            status_text: "OK".into(),
+            headers: vec![("content-type".to_string(), "text/javascript".to_string())],
+            body: b"importScripts('/import.js'); self.onmessage = function() {};".to_vec(),
+            url: url.to_string(),
+        })
+    }
+}
+
+/// BUG-1742: the registration script fetch sends the UA `Service-Worker: script`
+/// header (bypassing the interceptor), while the imported script fetch does not —
+/// WPT `service-worker-header.https.html`.
+#[test]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+fn sw_register_sends_service_worker_script_header() {
+    let recording = Arc::new(HeaderRecordingFetch::new());
+    let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = recording.clone();
+    let rt = V8JsRuntime::new().unwrap();
+    let store: lumen_core::ext::SwWorkerStore = Arc::default();
+    rt.install_dom(
+        make_doc(), "https://example.com/", Some(provider), None, None, None, None, None,
+        Some(Arc::new(MockCacheBackend::new())), None, Some(Arc::clone(&store)), false, None,
+    )
+    .unwrap();
+    rt.eval(
+        "var _settled = false;
+         navigator.serviceWorker.register('/sw.js', { scope: '/' })
+             .then(function() { _settled = true; });",
+    )
+    .unwrap();
+    assert!(sw_wait_flag(&rt, "_settled"), "register() never settled");
+
+    let bypass = recording.bypass_calls.lock().unwrap();
+    assert_eq!(bypass.len(), 1, "the main script must be fetched once with the header");
+    assert_eq!(bypass[0].0, "https://example.com/sw.js");
+    assert_eq!(
+        bypass[0].1,
+        vec![("service-worker".to_string(), "script".to_string())]
+    );
+
+    let plain = recording.plain_calls.lock().unwrap();
+    assert!(
+        plain.iter().any(|u| u == "https://example.com/import.js"),
+        "the imported script must be fetched without the header, got {:?}",
+        *plain
+    );
+}
+
 /// Pump fetches, timers and the worker-message pump until `flag` turns true.
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn sw_wait_flag(rt: &V8JsRuntime, flag: &str) -> bool {

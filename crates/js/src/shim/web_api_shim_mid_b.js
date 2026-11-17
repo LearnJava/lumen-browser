@@ -657,7 +657,7 @@ function _sw_make_registration(scope, scriptUrl, type) {
                     // `_scriptPromise` in the lifecycle below).
                     return reg._scriptPromise;
                 })
-                .then(function() { return fetch(String(reg.scriptURL)); })
+                .then(function() { return _sw_fetch_script(String(reg.scriptURL)); })
                 .then(function(res) {
                     // SW §Update fetch hook: redirect rejection, MIME (classic
                     // included) and the path restriction — the same checks
@@ -784,6 +784,46 @@ function _sw_is_js_mime(ct) {
         default:
             return false;
     }
+}
+
+// BUG-1742: fetch the main SW script with the UA `Service-Worker: script`
+// header (SW §Update) and bypassing the fetch interceptor — the page `fetch()`
+// cannot set that forbidden header. Falls back to plain fetch() in a bare
+// harness where the native is not installed.
+function _sw_fetch_script(scriptUrl) {
+    if (typeof _lumen_sw_fetch_script === 'function') {
+        var raw = _lumen_sw_fetch_script(scriptUrl);
+        if (raw !== undefined && raw !== null) {
+            return Promise.resolve(_lumen_sw_script_response(raw, scriptUrl));
+        }
+        return Promise.reject(new TypeError(
+            'Failed to register a ServiceWorker: the script resource fetch failed.'));
+    }
+    return fetch(scriptUrl);
+}
+
+// Response-shaped object over the native's JSON result — just the surface
+// `_sw_check_script_resource` and the callers read: status, redirected,
+// headers.get() and text(). Header names arrive lowercased from Rust.
+function _lumen_sw_script_response(raw, requestedUrl) {
+    var j = JSON.parse(raw);
+    var hdrs = {};
+    if (j.headers) {
+        for (var k in j.headers) hdrs[k] = j.headers[k];
+    }
+    return {
+        status: j.status,
+        statusText: j.statusText,
+        redirected: !!(j.url && requestedUrl && j.url !== requestedUrl),
+        url: j.url,
+        headers: {
+            get: function(n) {
+                var v = hdrs[String(n).toLowerCase()];
+                return (v === undefined || v === null) ? null : v;
+            },
+        },
+        text: function() { return Promise.resolve(j.body); },
+    };
 }
 
 // SW §Update fetch hook (shared by register() and update()): the script
@@ -1036,7 +1076,7 @@ function _sw_finish_install(reg, sw, scriptText) {
                     // compares bytes: otherwise an update() racing the
                     // activation fetch sees `_scriptText === undefined`
                     // and wrongly installs a new worker.
-                    reg._scriptPromise = fetch(scriptURL)
+                    reg._scriptPromise = _sw_fetch_script(scriptURL)
                         .then(function(res) {
                             return res.text().then(function(t) {
                                 var mimeOk = type !== 'module' || _sw_is_js_mime(
@@ -1262,7 +1302,7 @@ var _sw_container = Object.assign({
                 _sw_run_lifecycle(reg, undefined);
                 return pending;
             }
-            fetch(scriptUrl).then(function(res) {
+            _sw_fetch_script(scriptUrl).then(function(res) {
                 // SW §Update fetch hook: redirect rejection, MIME type (classic
                 // scripts included) and the path restriction with
                 // `Service-Worker-Allowed` — a failure here rejects and rolls the
