@@ -145,7 +145,7 @@ pub fn restyle_root_set_for_node_change<'a>(
     changes: impl IntoIterator<Item = (NodeId, NodeChange<'a>)>,
     index: &NodeRestyleIndex<'_>,
 ) -> HashSet<NodeId> {
-    root_set_impl(doc, changes, index, false, None).deep
+    root_set_impl(doc, changes, index, false, None, None).deep
 }
 
 /// BUG-935 срез 60 — the restyle roots of a batch of DOM changes, split by how much of
@@ -199,7 +199,7 @@ pub fn restyle_roots_for_node_changes<'a>(
     changes: impl IntoIterator<Item = (NodeId, NodeChange<'a>)>,
     index: &NodeRestyleIndex<'_>,
 ) -> RestyleRoots {
-    root_set_impl(doc, changes, index, true, None)
+    root_set_impl(doc, changes, index, true, None, None)
 }
 
 /// BUG-935 срез 82 — [`restyle_roots_for_node_changes`] for a caller that knows which
@@ -221,8 +221,9 @@ pub fn restyle_roots_for_node_changes_with_basis<'a>(
     changes: impl IntoIterator<Item = (NodeId, NodeChange<'a>)>,
     index: &NodeRestyleIndex<'_>,
     has_style: &dyn Fn(NodeId) -> bool,
+    mutation_epochs: Option<(u64, u64)>,
 ) -> RestyleRoots {
-    root_set_impl(doc, changes, index, true, Some(has_style))
+    root_set_impl(doc, changes, index, true, Some(has_style), mutation_epochs)
 }
 
 /// BUG-935 срез 82 — whether `change` on `n` is subsumed by the recascade `n` gets anyway
@@ -259,9 +260,26 @@ fn root_set_impl<'a>(
     index: &NodeRestyleIndex<'_>,
     allow_shallow: bool,
     has_style: Option<&dyn Fn(NodeId) -> bool>,
+    mutation_epochs: Option<(u64, u64)>,
 ) -> RestyleRoots {
     let mut roots = RestyleRoots::default();
     let shallow_ok = allow_shallow && !index.conservative;
+    // BUG-1800 срез 17 — мост «клон → лист» + эпохи для дифа `:has()`, раз на
+    // флаш; только у flush-пути есть мутационные эпохи (остальные анализаторы —
+    // широкая дорога, как до среза).
+    let sheet_args = mutation_epochs
+        .is_some()
+        .then(|| SheetHasArgs::build(index.sheet.stylesheet_ref()));
+    let mut has_memo: HashMap<(u32, usize), bool> = HashMap::new();
+    let mut diff = match (sheet_args.as_ref(), mutation_epochs, super::has_cache::diff_enabled()) {
+        (Some(args), Some((basis, stamp)), true) => Some(HasDiffCtx {
+            args,
+            basis_epoch: basis,
+            stamp_epoch: stamp,
+            memo: &mut has_memo,
+        }),
+        _ => None,
+    };
     // Containers whose every element child was asked `child_needs_deep_restyle`.
     let mut scanned_all: HashSet<NodeId> = HashSet::new();
     for (n, change) in changes {
@@ -280,7 +298,7 @@ fn root_set_impl<'a>(
             && fresh_node_change_is_covered(doc, n, &change)
         {
             if index.has_dependent && index.change_can_flip_has(doc, n, change_written(&change)) {
-                index.has_reach_roots(doc, n, &mut roots, shallow_ok);
+                index.has_reach_roots(doc, n, &mut roots, shallow_ok, diff.as_mut());
             }
             continue;
         }
@@ -362,7 +380,7 @@ fn root_set_impl<'a>(
                 {
                     roots.deep.insert(doc.get(n).parent.unwrap_or(n));
                     if index.has_dependent && index.change_can_flip_has(doc, n, written) {
-                        index.has_reach_roots(doc, n, &mut roots, shallow_ok);
+                        index.has_reach_roots(doc, n, &mut roots, shallow_ok, diff.as_mut());
                     }
                     continue;
                 }
@@ -397,7 +415,7 @@ fn root_set_impl<'a>(
             }
         }
         if index.has_dependent && index.change_can_flip_has(doc, n, change_written(&change)) {
-            index.has_reach_roots(doc, n, &mut roots, shallow_ok);
+            index.has_reach_roots(doc, n, &mut roots, shallow_ok, diff.as_mut());
         }
     }
     roots
