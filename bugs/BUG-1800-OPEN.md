@@ -1025,7 +1025,7 @@ lumen-driver/paint/media-native — красные вне среза (крейт
 **Статус `OPEN (DEBTOR)`:** негейтованных рычагов не осталось, P3 задачу не берёт. Остаток и его владельцы:
 
 1. **Каноничный живой ebay-замер** — сайт отдаёт 403 с 2026-11-12 на всех маршрутах; приёмочный сайт переехал на github ещё срезом 11 (§Приёмка), паритет с Chrome — цель [PERF-INVALIDATION](../docs/tasks/PERF-INVALIDATION.md), не отдельного среза бага.
-2. **Lift консерватизма shadow-стража** (срезы 12/13, два отката) — третьей попытки без нового факта не предпринимать; механизм того же класса, что [ADR-036](../docs/decisions/ADR-036-incremental-restyle-invalidation.md).
+2. **Lift консерватизма shadow-стража** (срезы 12/13, два отката) — третьей попытки без нового факта не предпринимать; разобран и отклонён в [ADR-036](../docs/decisions/ADR-036-incremental-restyle-invalidation.md) §Alternatives.
 3. **`forced_same`-хвост** (36–38 тыс. на сессию, github/cnn) — doc-wide корни sheet-дельт и стража, класс PERF-INVALIDATION/BUG-341, архитектурный контур P6.
 
 Сделано за 17 срезов: same-tick флаш вскрыт и сужен — пер-атрибутный fan-out, ancestor-bloom, `:has()`-reach по подлежащим правил, has-reach-диф (срез 17: живой github walk_sum −33…−46 %, verify 17/17 «equal to a full cascade»). Возобновление P3 — только по новому факту (доступ к ebay, новый негейтованный рычаг) и решению пользователя.
