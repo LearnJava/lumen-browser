@@ -183,7 +183,13 @@ pub fn claim(origin: &str, scope: &str) -> u32 {
     let mut claimed = 0;
     if let Ok(mut h) = hub().lock() {
         let mut newly: Vec<u64> = Vec::new();
-        let prefix = format!("{origin}{scope}");
+        // BUG-1742: scope is an absolute URL now — an absolute scope is its
+        // own prefix, a bare-path scope still takes the origin prefix.
+        let prefix = if scope.starts_with("http://") || scope.starts_with("https://") {
+            scope.to_string()
+        } else {
+            format!("{origin}{scope}")
+        };
         for c in h.clients.iter_mut() {
             if c.origin == origin
                 && c.url.starts_with(&prefix)

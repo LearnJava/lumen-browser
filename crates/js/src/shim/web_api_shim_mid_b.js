@@ -617,6 +617,13 @@ function _sw_make_registration(scope, scriptUrl, type) {
                         + type + "' is not a valid enum value of type WorkerType."));
                 }
             }
+            // SW §3.2.8: no newest worker on the registration — InvalidStateError.
+            var newest = reg.installing || reg.waiting || reg.active;
+            if (!newest) {
+                return Promise.reject(new DOMException(
+                    'Failed to update a ServiceWorkerRegistration: no service worker '
+                    + 'is associated with the registration.', 'InvalidStateError'));
+            }
             if (typeof fetch !== 'function') {
                 return Promise.reject(new TypeError(
                     'Failed to update a ServiceWorkerRegistration: script fetch is unavailable.'));
@@ -630,6 +637,10 @@ function _sw_make_registration(scope, scriptUrl, type) {
                 })
                 .then(function() { return fetch(String(reg.scriptURL)); })
                 .then(function(res) {
+                    // SW §Update fetch hook: redirect rejection, MIME (classic
+                    // included) and the path restriction — the same checks
+                    // register() runs.
+                    _sw_check_script_resource(String(reg.scriptURL), res, reg.scope);
                     return res.text().then(function(text) {
                         return _sw_script_bytes(reg.scriptURL, text).then(function(bytes) {
                             // SW-MODULE s4: a freshly installed worker gates the
@@ -638,7 +649,7 @@ function _sw_make_registration(scope, scriptUrl, type) {
                             // the byte-check input is not executable); an
                             // unchanged script (byte-check hit) resolves
                             // without one.
-                            var installed = _sw_update_with_script(reg, type, res, bytes);
+                            var installed = _sw_update_with_script(reg, type, bytes);
                             if (installed) {
                                 _sw_start_isolate(_sw_registrations[reg.scope], text);
                             }
@@ -657,10 +668,13 @@ function _sw_make_registration(scope, scriptUrl, type) {
                 });
         },
         unregister: function() {
-            _lumen_sw_unregister(scope);
+            // SW §Unregister: false when no registration is found at this
+            // scope — a second unregister() must not report true again.
+            var existed = _sw_registrations[scope] !== undefined;
             delete _sw_registrations[scope];
+            _lumen_sw_unregister(scope);
             _sw_persist();
-            return Promise.resolve(true);
+            return Promise.resolve(existed);
         },
     }, et);
     // SW-PRELOAD-ROUTER (SW §5.4): the navigation preload manager lives on the
@@ -720,21 +734,71 @@ function _sw_preload_attach(reg) {
     };
 }
 
-// SW-MODULE: a JavaScript MIME type (SW §2.2.2 «script resource MIME type»).
-// Parameters after ';' are ignored; anything that is not a JS MIME type fails
-// a module script fetch.
+// SW-MODULE: a JavaScript MIME type (SW §2.2.2 «script resource MIME type»,
+// the HTML Standard's full "JavaScript MIME type" list). Parameters after ';'
+// are ignored; anything that is not a JS MIME type fails the script fetch.
 function _sw_is_js_mime(ct) {
     if (!ct) return false;
     var m = String(ct).split(';')[0].trim().toLowerCase();
     switch (m) {
-        case 'text/javascript':
+        case 'application/ecmascript':
         case 'application/javascript':
+        case 'application/x-ecmascript':
         case 'application/x-javascript':
         case 'text/ecmascript':
-        case 'application/ecmascript':
+        case 'text/javascript':
+        case 'text/javascript1.0':
+        case 'text/javascript1.1':
+        case 'text/javascript1.2':
+        case 'text/javascript1.3':
+        case 'text/javascript1.4':
+        case 'text/javascript1.5':
+        case 'text/jscript':
+        case 'text/livescript':
+        case 'text/x-ecmascript':
+        case 'text/x-javascript':
             return true;
         default:
             return false;
+    }
+}
+
+// SW §Update fetch hook (shared by register() and update()): the script
+// resource response must not be a redirect, must carry a JavaScript MIME type
+// (classic scripts included — the rejection is SecurityError, not TypeError),
+// and the registration scope path must sit under the maximum scope path — the
+// `Service-Worker-Allowed` header resolved against the script URL, or the
+// script's own directory ("./" against it) when the header is absent.
+function _sw_check_script_resource(scriptUrl, res, scope) {
+    if (res.redirected) {
+        throw new DOMException('Failed to register a ServiceWorker: the script '
+            + 'resource request redirects.', 'SecurityError');
+    }
+    if (res.status < 200 || res.status >= 300) {
+        throw new TypeError('Failed to register a ServiceWorker: the script '
+            + 'resource fetch failed (HTTP ' + res.status + ').');
+    }
+    var ct = res.headers && typeof res.headers.get === 'function'
+        ? res.headers.get('Content-Type') : null;
+    if (!_sw_is_js_mime(ct)) {
+        throw new DOMException('Failed to register a ServiceWorker: The script '
+            + 'has an unsupported MIME type (' + (ct || 'none') + ').', 'SecurityError');
+    }
+    var maxScope = null;
+    var allowed = (res.headers && typeof res.headers.get === 'function')
+        ? res.headers.get('Service-Worker-Allowed') : null;
+    if (allowed !== null && allowed !== undefined && allowed !== '') {
+        try {
+            var parsed = new URL(allowed, scriptUrl);
+            if (parsed.origin === new URL(scriptUrl).origin) maxScope = parsed;
+        } catch (e) {}
+    }
+    if (!maxScope) maxScope = new URL('./', scriptUrl);
+    var scopePath = new URL(scope).pathname;
+    if (scopePath.indexOf(maxScope.pathname) !== 0) {
+        throw new DOMException('Failed to register a ServiceWorker: the scope path \''
+            + scopePath + '\' is not under the maximum allowed scope path \''
+            + maxScope.pathname + '\'.', 'SecurityError');
     }
 }
 
@@ -762,7 +826,7 @@ function _sw_script_bytes(scriptUrl, mainText) {
 // is started separately (`_sw_run_lifecycle`) once the script has been
 // fetched and validated — register() gates its promise on the isolate's
 // evaluation result before that (SW-MODULE s4).
-function _sw_install_script_text(scope, scriptUrl, type, text) {
+function _sw_install_script_text(scope, scriptUrl, type, uvc, text) {
     // SW 9.2 Start Register: a script URL resolving to an existing scope's
     // registration reuses the SAME registration object - a changed scriptURL
     // or WorkerType just installs a new worker on it (this is what keeps
@@ -770,6 +834,7 @@ function _sw_install_script_text(scope, scriptUrl, type, text) {
     var reg = _sw_registrations[scope] || _sw_make_registration(scope, scriptUrl, type);
     reg.scriptURL = String(scriptUrl);
     reg.type = (type === 'module') ? 'module' : 'classic';
+    if (uvc === 'imports' || uvc === 'all' || uvc === 'none') reg.updateViaCache = uvc;
     var sw = _sw_make_worker(scriptUrl, 'installing', scope);
     // SW-MODULE s6: the worker's own type — reg.type may be replaced by a
     // racing register() before the isolate starts.
@@ -804,22 +869,9 @@ function _sw_eval_promise(reg) {
     });
 }
 
-// SW §9.4 «update»: fetch + checks already done by the caller; install a new
-// worker on the existing registration (it keeps its identity) and fire
-// updatefound via the lifecycle.
-function _sw_update_with_script(reg, type, res, text) {
-    if (!res || res.status < 200 || res.status >= 300) {
-        throw new TypeError('Failed to update a ServiceWorkerRegistration: the script '
-            + 'resource fetch failed (HTTP ' + (res ? res.status : 'error') + ').');
-    }
-    if (type === 'module') {
-        var ct = res.headers && typeof res.headers.get === 'function'
-            ? res.headers.get('Content-Type') : null;
-        if (!_sw_is_js_mime(ct)) {
-            throw new TypeError('Failed to update a ServiceWorkerRegistration: The script '
-                + 'has an unsupported MIME type (' + (ct || 'none') + ') for a module service worker.');
-        }
-    }
+// SW §9.4 «update»: fetch + checks already done by the caller (`_sw_check_script_resource`);
+// install a new worker on the existing registration (it keeps its identity).
+function _sw_update_with_script(reg, type, text) {
     // Byte-check (SW §9.4 step 7): same bytes and same type — no new worker.
     if (reg._scriptText === text && reg.type === type) {
         return false;
@@ -963,6 +1015,11 @@ function _sw_run_lifecycle(reg, scriptText) {
             var arr = JSON.parse(snap);
             for (var i = 0; i < arr.length; i++) {
                 var item = arr[i];
+                // BUG-1742: snapshots written before the absolute-scope fix
+                // carry raw relative keys no lookup can match — drop them.
+                if (typeof item.scope !== 'string' || item.scope.indexOf('://') === -1) {
+                    continue;
+                }
                 var reg = _sw_make_registration(item.scope, item.scriptURL, item.type);
                 if (item.state === 'activated' || item.state === 'installed') {
                     var sw = _sw_make_worker(item.scriptURL, item.state, item.scope);
@@ -1028,16 +1085,24 @@ function _sw_check_register_urls(scriptUrl, scopeOpt) {
     if (s.error) return s;
     var err = checkShape(s.url, 'script');
     if (err) return { error: err };
-    var sc = null;
+    // SW §9.2 Start Register steps 5–9: an explicit scope parses against the
+    // API base URL (the document); with no scope the default is "./" parsed
+    // against the script URL. The registration key is the serialized URL with
+    // the fragment stripped, and the same scheme / %2f-%5c checks apply to it.
+    var scopeUrl;
     if (scopeOpt !== undefined && scopeOpt !== null) {
-        sc = parse(scopeOpt, 'scope');
+        var sc = parse(scopeOpt, 'scope');
         if (sc.error) return sc;
-        err = checkShape(sc.url, 'scope');
-        if (err) return { error: err };
+        scopeUrl = sc.url;
+    } else {
+        scopeUrl = new URL('./', s.url.href);
     }
-    err = checkOrigin(s.url, 'script') || (sc && checkOrigin(sc.url, 'scope'));
+    scopeUrl.hash = '';
+    err = checkShape(scopeUrl, 'scope');
     if (err) return { error: err };
-    return { script: s.url.href };
+    err = checkOrigin(s.url, 'script') || checkOrigin(scopeUrl, 'scope');
+    if (err) return { error: err };
+    return { script: s.url.href, scope: scopeUrl.href };
 }
 
 var _sw_container_et = _sw_make_event_target();
@@ -1053,7 +1118,6 @@ var _sw_container = Object.assign({
     onmessage: null,
     onmessageerror: null,
     register: function(scriptUrl, options) {
-        var scope = (options && options.scope) ? String(options.scope) : '/';
         // SW §3.4.3: the WorkerType option — anything but 'classic'/'module'
         // (undefined counts as 'classic') rejects with TypeError.
         var type = 'classic';
@@ -1065,14 +1129,26 @@ var _sw_container = Object.assign({
                     + "' is not a valid enum value of type WorkerType."));
             }
         }
+        var uvc = 'imports';
+        if (options && options.updateViaCache !== undefined && options.updateViaCache !== null) {
+            uvc = String(options.updateViaCache);
+            if (uvc !== 'imports' && uvc !== 'all' && uvc !== 'none') {
+                return Promise.reject(new TypeError(
+                    "Failed to register a ServiceWorker: The provided value '" + uvc
+                    + "' is not a valid enum value of type ServiceWorkerUpdateViaCache."));
+            }
+        }
         // BUG-675: SW §3.4.3 register() + §9.2 Start Register — the script URL
         // (and an explicit scope) is parsed against the document's base URL and
         // must be http(s), same-origin with the document, and free of encoded
         // path separators; otherwise the promise rejects before any
-        // registration state exists. The registry key stays the raw scope.
+        // registration state exists. The registry key is the absolute scope
+        // URL the check resolves (default "./" against the script URL,
+        // fragment stripped) — BUG-1742.
         var checked = _sw_check_register_urls(scriptUrl, options && options.scope);
         if (checked.error) return Promise.reject(checked.error);
         scriptUrl = checked.script;
+        var scope = checked.scope;
         // GAP-CSPENF срез 30: `worker-src` (falling back to `default-src`) gates
         // the registration script itself — checked synchronously, before any
         // registration state is created, so a blocked `register()` behaves as
@@ -1090,18 +1166,18 @@ var _sw_container = Object.assign({
                 ));
             }
         }
-        // SW-MODULE s4: the registration installs synchronously (existing
-        // callers still observe it immediately), but the promise stays
-        // pending until the script has actually run in the isolate; a failed
-        // fetch, a bad module MIME type or a failed evaluation rejects it and
-        // rolls the worker back (SW §9.2 steps 7.1–7.4 "Expect evaluation
-        // failed").
+        // SW §Register step 4.1: an existing registration whose newest worker
+        // has the same script URL, type and updateViaCache resolves with it —
+        // no new worker, no updatefound, whatever state that worker is in.
         var existing = _sw_registrations[scope];
-        if (existing && existing.active && existing.scriptURL === String(scriptUrl)
-            && existing.type === type) {
-            return Promise.resolve(existing);
+        if (existing) {
+            var newest = existing.installing || existing.waiting || existing.active;
+            if (newest && existing.scriptURL === String(scriptUrl)
+                && existing.type === type && existing.updateViaCache === uvc) {
+                return Promise.resolve(existing);
+            }
         }
-        var reg = _sw_install_script_text(scope, scriptUrl, type, undefined);
+        var reg = _sw_install_script_text(scope, scriptUrl, type, uvc, undefined);
         reg._awaitLifecycle = true;
         var pending = _sw_eval_promise(reg).then(function() {
             return _sw_registrations[scope];
@@ -1114,20 +1190,12 @@ var _sw_container = Object.assign({
             return pending;
         }
         fetch(scriptUrl).then(function(res) {
-            if (res.status < 200 || res.status >= 300) {
-                throw new TypeError('Failed to register a ServiceWorker: the script '
-                    + 'resource fetch failed (HTTP ' + res.status + ').');
-            }
+            // SW §Update fetch hook: redirect rejection, MIME type (classic
+            // scripts included) and the path restriction with
+            // `Service-Worker-Allowed` — a failure here rejects and rolls the
+            // just-created registration back (SW §Update steps 5–14).
+            _sw_check_script_resource(scriptUrl, res, scope);
             return res.text().then(function(text) {
-                if (type === 'module') {
-                    var ct = res.headers && typeof res.headers.get === 'function'
-                        ? res.headers.get('Content-Type') : null;
-                    if (!_sw_is_js_mime(ct)) {
-                        throw new TypeError('Failed to register a ServiceWorker: The script '
-                            + 'has an unsupported MIME type (' + (ct || 'none')
-                            + ') for a module service worker.');
-                    }
-                }
                 var r = _sw_registrations[scope];
                 if (!r) return;
                 // The isolate evaluates the script while the page lifecycle
@@ -1146,11 +1214,37 @@ var _sw_container = Object.assign({
         return pending;
     },
     getRegistration: function(url) {
-        var u = url || _sw_origin + '/';
-        for (var sc in _sw_registrations) {
-            if (String(u).indexOf(sc) === 0) return Promise.resolve(_sw_registrations[sc]);
+        // SW §3.4.4: the argument (default "") parses against the API base
+        // URL, its fragment is dropped; a parse failure rejects TypeError, a
+        // cross-origin clientURL — SecurityError.
+        var base = (typeof document !== 'undefined' && document && document.baseURI)
+            || (typeof location !== 'undefined' ? location.href : undefined);
+        var target;
+        try {
+            target = new URL(url === undefined || url === null ? '' : String(url), base);
+        } catch (e) {
+            return Promise.reject(new TypeError(
+                "Failed to execute 'getRegistration' on 'ServiceWorkerContainer': "
+                + 'the provided client URL is invalid.'));
         }
-        return Promise.resolve(undefined);
+        target.hash = '';
+        var docOrigin = (typeof location !== 'undefined') ? location.origin : undefined;
+        if (docOrigin !== undefined && target.origin !== docOrigin) {
+            return Promise.reject(new DOMException(
+                "Failed to execute 'getRegistration' on 'ServiceWorkerContainer': "
+                + 'the client URL\'s origin does not match the current origin.',
+                'SecurityError'));
+        }
+        var href = target.href;
+        var best = null;
+        for (var sc in _sw_registrations) {
+            // Match Service Worker Registration: the scope whose serialized URL
+            // prefixes the clientURL; the longest scope wins.
+            if (href.indexOf(sc) === 0 && (best === null || sc.length > best.scope.length)) {
+                best = _sw_registrations[sc];
+            }
+        }
+        return Promise.resolve(best || undefined);
     },
     getRegistrations: function() {
         return Promise.resolve(Object.values(_sw_registrations));
@@ -1166,13 +1260,17 @@ function _sw_fail_eval(scope, err) {
     var settles = reg._evalSettles || [];
     reg._evalSettles = [];
     for (var j = 0; j < settles.length; j++) settles[j].reject(err);
-    var sw = reg.installing || reg.waiting || reg.active;
+    // SW §Update/Install: a failed install rolls the NEW worker back out of
+    // the registration (state redundant); an already-active registration is
+    // untouched — only a registration with no newest worker is removed.
+    var sw = reg.installing || reg.waiting;
     if (sw && typeof sw._setState === 'function') sw._setState('redundant');
-    if (reg.active === sw) reg.active = null;
-    reg.waiting = null;
-    reg.installing = null;
-    delete _sw_registrations[scope];
-    _lumen_sw_unregister(scope);
+    if (reg.installing === sw) reg.installing = null;
+    if (reg.waiting === sw) reg.waiting = null;
+    if (!reg.installing && !reg.waiting && !reg.active) {
+        delete _sw_registrations[scope];
+        _lumen_sw_unregister(scope);
+    }
     _sw_persist();
 }
 
