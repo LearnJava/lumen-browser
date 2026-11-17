@@ -303,10 +303,10 @@ pub(crate) fn install_service_worker(
             let det_sw = determinism.clone();
             let o = page_origin.clone();
             let sw_pending_act = Arc::clone(&sw_pending);
-            reg!(scope, ctx, store, "_lumen_sw_activate_script", move |scope: String, text: String, script_url: String, sw_type: String, wid: f64| {
+            reg!(scope, ctx, store, "_lumen_sw_activate_script", move |scope: String, text: String, script_url: String, sw_type: String, wid: f64, script_resources_json: Option<String>| {
                 let origin = o.clone();
                 if let (Some(store), Some(cache)) = (sws.as_ref(), cbe_sw.as_ref()) {
-                    let handle = crate::sw_worker::spawn_sw_worker_v8(
+                    let handle = crate::sw_worker::spawn_sw_worker_v8_with_resources(
                         origin.clone(),
                         scope.clone(),
                         text,
@@ -317,6 +317,7 @@ pub(crate) fn install_service_worker(
                         idb_sw.clone(),
                         det_sw.clone(),
                         wid as u64,
+                        script_resources_json.unwrap_or_default(),
                     );
                     // Deliver messages queued while the worker was
                     // installing/waiting (SW §3.1.3), in order.
