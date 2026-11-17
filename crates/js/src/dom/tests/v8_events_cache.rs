@@ -1573,7 +1573,7 @@ fn sw_worker_store_is_keyed_by_document_origin_not_js_string() {
     let be = Arc::new(MockCacheBackend::new());
     let store: lumen_core::ext::SwWorkerStore = Arc::default();
     let rt = runtime_on_shared_cache("https://attacker.example/", &be, Some(Arc::clone(&store)));
-    rt.eval("_lumen_sw_activate_script('/', '', '', 'classic'); _lumen_sw_register('https://victim.example', '/', '/evil.js');")
+    rt.eval("_lumen_sw_activate_script('/', '', '', 'classic', 0); _lumen_sw_register('https://victim.example', '/', '/evil.js');")
         .unwrap();
     let keys: Vec<(String, String)> = store.lock().unwrap().keys().cloned().collect();
     assert_eq!(keys, vec![("https://attacker.example".to_string(), "/".to_string())]);

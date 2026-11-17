@@ -489,6 +489,8 @@ function _sw_make_event_target() {
     };
 }
 
+var _sw_wid_counter = 0;
+
 function _sw_make_worker(scriptUrl, initState, scope) {
     var et = _sw_make_event_target();
     var w = Object.assign({
@@ -499,6 +501,11 @@ function _sw_make_worker(scriptUrl, initState, scope) {
         // SW-MSG-S3: the registration scope this object belongs to — the key
         // `_lumen_sw_post_message` routes by.
         _scope: String(scope || '/'),
+        // SW-MODULE s3: page-side worker identity — `_lumen_sw_post_message`
+        // matches it against the store entry so a message addressed to a
+        // worker being replaced queues for the new one instead of reaching
+        // the old isolate.
+        _wid: ++_sw_wid_counter,
 
         // SW §3.2.5 `ServiceWorker.postMessage` (SW-MSG-S3): data crosses as
         // JSON (the same compromise as `Worker.prototype.postMessage`), the
@@ -526,7 +533,15 @@ function _sw_make_worker(scriptUrl, initState, scope) {
                 visibilityState: (typeof document !== 'undefined' && document.visibilityState) || 'visible',
                 focused: (typeof document !== 'undefined' && document.hasFocus && document.hasFocus()) || false,
             });
-            _lumen_sw_post_message(this._scope, payload, source);
+            // SW §3.1.3: a message to an installing/waiting worker is queued
+            // until THAT worker activates — sending it straight through the
+            // scope key would hand it to the still-live worker being replaced
+            // (re-register with a new script/type).
+            if (this.state !== 'activated' && typeof _lumen_sw_queue_message === 'function') {
+                _lumen_sw_queue_message(this._scope, payload, source);
+                return;
+            }
+            _lumen_sw_post_message(this._scope, this._wid || 0, payload, source);
         },
     }, et);
     w._setState = function(s) {
@@ -594,11 +609,19 @@ function _sw_make_registration(scope, scriptUrl, type) {
                     'Failed to update a ServiceWorkerRegistration: script fetch is unavailable.'));
             }
             return Promise.resolve()
+                .then(function() {
+                    // An update() racing the activation fetch must compare
+                    // bytes only after the fetch stored them (see
+                    // `_scriptPromise` in the lifecycle below).
+                    return reg._scriptPromise;
+                })
                 .then(function() { return fetch(String(reg.scriptURL)); })
                 .then(function(res) {
                     return res.text().then(function(text) {
-                        _sw_update_with_script(reg, type, res, text);
-                        return _sw_registrations[reg.scope];
+                        return _sw_script_bytes(reg.scriptURL, text).then(function(bytes) {
+                            _sw_update_with_script(reg, type, res, bytes);
+                            return _sw_registrations[reg.scope];
+                        });
                     });
                 });
         },
@@ -630,11 +653,37 @@ function _sw_is_js_mime(ct) {
     }
 }
 
+// SW-MODULE: byte-check input (SW §9.4) is the main script plus the bytes of
+// every script it imports. shortcut: import URLs are pulled with a regex over
+// `importScripts('…')` / `import … from '…'` / `import '…'` — the textual
+// shapes WPT and common workers use; exotic spellings fall back to main-only.
+function _sw_script_bytes(scriptUrl, mainText) {
+    var urls = [];
+    var re = /importScripts\(\s*(['"])(.*?)\1[^)]*\)|import\s+[^'";()]*?from\s*(['"])(.*?)\3|import\s*(['"])(.*?)\5/g;
+    var m;
+    while ((m = re.exec(mainText))) urls.push(m[2] || m[4] || m[6]);
+    if (!urls.length) return Promise.resolve(mainText);
+    var base = new URL(scriptUrl, _sw_origin).href;
+    return Promise.all(urls.map(function(u) {
+        return fetch(new URL(u, base)).then(function(r) {
+            return r.text();
+        }).catch(function() { return '<import fetch error>'; });
+    })).then(function(ts) {
+        return mainText + '\n' + ts.join('\n');
+    });
+}
+
 // SW §9.2: create the registration for `scriptUrl` of `type` and start the
 // lifecycle with the already fetched script `text` (byte-check keeps it on
 // the registration for a later update()).
 function _sw_install_script_text(scope, scriptUrl, type, text) {
-    var reg = _sw_make_registration(scope, scriptUrl, type);
+    // SW 9.2 Start Register: a script URL resolving to an existing scope's
+    // registration reuses the SAME registration object - a changed scriptURL
+    // or WorkerType just installs a new worker on it (this is what keeps
+    // `reg1 === reg2` across a classic<->module re-register).
+    var reg = _sw_registrations[scope] || _sw_make_registration(scope, scriptUrl, type);
+    reg.scriptURL = String(scriptUrl);
+    reg.type = (type === 'module') ? 'module' : 'classic';
     reg._scriptText = text;
     var sw = _sw_make_worker(scriptUrl, 'installing', scope);
     reg.installing = sw;
@@ -719,34 +768,41 @@ function _sw_run_lifecycle(reg, scriptText) {
                 // already; otherwise fetch it here — a module script with a
                 // non-JS MIME type never activates (SW §2.2.2).
                 if (typeof _lumen_sw_activate_script === 'function') {
-                    (function(scope, scriptURL, type, text) {
+                    (function(scope, scriptURL, type, text, wid) {
                         if (text) {
-                            _lumen_sw_activate_script(scope, text, scriptURL, type);
+                            _lumen_sw_activate_script(scope, text, scriptURL, type, wid);
                             return;
                         }
                         if (typeof fetch !== 'function') return;
-                        fetch(scriptURL)
+                        // Update()'s byte-check waits on this promise before it
+                        // compares bytes: otherwise an update() racing the
+                        // activation fetch sees `_scriptText === undefined`
+                        // and wrongly installs a new worker.
+                        reg._scriptPromise = fetch(scriptURL)
                             .then(function(res) {
                                 return res.text().then(function(t) {
-                                    if (type === 'module' && !_sw_is_js_mime(
+                                    var mimeOk = type !== 'module' || _sw_is_js_mime(
                                         res.headers && typeof res.headers.get === 'function'
-                                            ? res.headers.get('Content-Type') : null)) {
+                                            ? res.headers.get('Content-Type') : null);
+                                    if (!mimeOk) {
                                         // Bad MIME: the script never runs; the
                                         // worker is redundant (SW §9.2 step 7.4).
                                         return undefined;
                                     }
-                                    return t;
+                                    return _sw_script_bytes(scriptURL, t).then(function(bytes) {
+                                        return [t, bytes];
+                                    });
                                 });
                             })
-                            .then(function(text) {
-                                if (typeof text === 'string') {
+                            .then(function(pair) {
+                                if (pair) {
                                     var reg = _sw_registrations[scope];
-                                    if (reg && reg._scriptText === undefined) reg._scriptText = text;
-                                    _lumen_sw_activate_script(scope, text, scriptURL, type);
+                                    if (reg) reg._scriptText = pair[1];
+                                    _lumen_sw_activate_script(scope, pair[0], scriptURL, type, wid);
                                 }
                             })
                             .catch(function() {}); // ignore fetch errors — lifecycle still simulated
-                    })(reg.scope, reg.scriptURL, reg.type, scriptText);
+                    })(reg.scope, reg.scriptURL, reg.type, scriptText, sw._wid);
                 }
                 // Fire controllerchange
                 var ce = new Event('controllerchange');

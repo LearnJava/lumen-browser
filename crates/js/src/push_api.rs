@@ -773,6 +773,7 @@ mod tests {
             None,
             None,
             None,
+            0,
         );
         let mut map = std::collections::HashMap::new();
         map.insert((origin.to_string(), scope.to_string()), handle);

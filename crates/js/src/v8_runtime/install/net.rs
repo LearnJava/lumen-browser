@@ -146,25 +146,52 @@ pub(crate) fn install_service_worker(
             let o = page_origin.clone();
             reg!(scope, ctx, store,
                 "_lumen_sw_post_message",
-                move |scope: String, data_json: String, source_json: String| {
+                move |scope: String, wid: f64, data_json: String, source_json: String| {
+                    let wid = wid as u64;
                     let origin = o.clone();
                     let Some(store) = sws.as_ref() else { return };
                     if let Some(handle) = store.lock().unwrap().get(&(origin.clone(), scope.clone())) {
-                        // `send` never blocks on an unbounded channel — safe
-                        // to do under the store lock.
-                        let _ = handle.tx.send(lumen_core::ext::SwWorkerMessage::Message(
-                            lumen_core::ext::SwClientMessage { data_json, source_json },
-                        ));
-                    } else {
-                        // No live worker yet (installing/waiting): queue per
-                        // SW §3.1.3, delivered on activation.
-                        sw_pending_post
-                            .lock()
-                            .unwrap()
-                            .entry((origin, scope))
-                            .or_default()
-                            .push((data_json, source_json));
+                        // The store's worker must be the one the page addressed:
+                        // a `wid` mismatch means the page has replaced it (the
+                        // new worker is still installing) — queue instead.
+                        if handle.wid == wid {
+                            let _ = handle.tx.send(lumen_core::ext::SwWorkerMessage::Message(
+                                lumen_core::ext::SwClientMessage { data_json, source_json },
+                            ));
+                            return;
+                        }
                     }
+                    // No live worker (installing/waiting) or a replaced one:
+                    // queue per SW §3.1.3, delivered on the new activation.
+                    sw_pending_post
+                        .lock()
+                        .unwrap()
+                        .entry((origin, scope))
+                        .or_default()
+                        .push((data_json, source_json));
+                }
+            );
+        }
+        // SW §3.1.3: the explicit queueing half of `_lumen_sw_post_message` —
+        // the shim routes a message addressed to an installing/waiting worker
+        // here, so it reaches the NEW worker on its activation instead of the
+        // still-live one it replaces.
+        {
+            let sw_pending_queue = Arc::clone(&sw_pending);
+            let o = page_origin.clone();
+            reg!(scope, ctx, store,
+                "_lumen_sw_queue_message",
+                move |scope: String, data_json: String, source_json: String| {
+                    let origin = o.clone();
+                    // Queue unconditionally: the key may still hold the
+                    // worker being replaced — the queue is drained when the
+                    // NEW worker's `_lumen_sw_activate_script` spawns it.
+                    sw_pending_queue
+                        .lock()
+                        .unwrap()
+                        .entry((origin, scope))
+                        .or_default()
+                        .push((data_json, source_json));
                 }
             );
         }
@@ -248,7 +275,7 @@ pub(crate) fn install_service_worker(
             let det_sw = determinism.clone();
             let o = page_origin.clone();
             let sw_pending_act = Arc::clone(&sw_pending);
-            reg!(scope, ctx, store, "_lumen_sw_activate_script", move |scope: String, text: String, script_url: String, sw_type: String| {
+            reg!(scope, ctx, store, "_lumen_sw_activate_script", move |scope: String, text: String, script_url: String, sw_type: String, wid: f64| {
                 let origin = o.clone();
                 if let (Some(store), Some(cache)) = (sws.as_ref(), cbe_sw.as_ref()) {
                     let handle = crate::sw_worker::spawn_sw_worker_v8(
@@ -261,6 +288,7 @@ pub(crate) fn install_service_worker(
                         fp_sw.clone(),
                         idb_sw.clone(),
                         det_sw.clone(),
+                        wid as u64,
                     );
                     // Deliver messages queued while the worker was
                     // installing/waiting (SW §3.1.3), in order.

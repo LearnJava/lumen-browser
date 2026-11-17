@@ -280,7 +280,8 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     }}
     for (var i = 0; i < arguments.length; i++) {{
       var u = String(arguments[i]);
-      var abs = (u.indexOf('://') !== -1) ? u : new URL(u, location.href).href;
+      var abs = (u.indexOf('://') !== -1) ? u
+        : new URL(u, (typeof _lumen_sw_script_url__ !== 'undefined') ? _lumen_sw_script_url__ : location.href).href;
       if (_lumen_sw_check_worker_src(abs)) {{
         throw new Error('importScripts: cannot load script: ' + abs);
       }}
@@ -290,7 +291,7 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
       if (res.status < 200 || res.status >= 300) {{
         throw new Error('importScripts: HTTP ' + res.status + ' for ' + abs);
       }}
-      (0, eval)(_sw_bin_to_utf8(_sw_b64_to_bin(res.body)));
+      _lumen_sw_eval_script(_sw_bin_to_utf8(_sw_b64_to_bin(res.body)));
     }}
   }};
 
@@ -765,6 +766,7 @@ pub(crate) fn spawn_sw_worker_v8(
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
     determinism: Option<crate::worker::WorkerDeterminism>,
+    wid: u64,
 ) -> SwWorkerHandle {
     let (tx, rx) = std::sync::mpsc::channel::<SwWorkerMessage>();
     let thread_name = format!("lumen-sw-v8-{origin}{scope}");
@@ -774,7 +776,7 @@ pub(crate) fn spawn_sw_worker_v8(
             run_sw_thread_v8(origin, scope, script, script_url, is_module, rx, cache_backend, fetch_provider, idb_backend, determinism)
         })
         .expect("failed to spawn SW thread (v8)");
-    SwWorkerHandle { tx, _thread: handle }
+    SwWorkerHandle { tx, _thread: handle, wid }
 }
 
 #[cfg(feature = "v8-backend")]
@@ -820,6 +822,15 @@ fn run_sw_thread_v8(
         eprintln!("[sw {origin}{scope}] v8 globals failed: {e:?}");
         return;
     }
+
+    // importScripts resolves its (relative) arguments against the SW *script*
+    // URL, not the scope (HTML LS §8.1.5.1) — the shim reads this bare name
+    // (resolvable through the eval `with`-container). Plain quoted literal:
+    // helper functions are not reliably visible in a later eval.
+    let _ = rt.eval(&format!(
+        "_lumen_sw_script_url__ = {};",
+        crate::navigator_bindings::json_string(&script_url)
+    ));
 
     // SW-MODULE: the script of a `{type:'module'}` registration evaluates as
     // an ES module under its own URL (static imports fetch at install time
@@ -1059,6 +1070,25 @@ fn install_sw_globals_v8(
             }),
         )?;
     }
+
+    // importScripts executes its fetch as a top-level script (a real
+    // `v8::Script`, whose top-level `const`/`let` join the shared global
+    // lexical environment), not as an indirect `(0, eval)` — an eval's lexical
+    // bindings die with the eval, so a later `importScripts`/main script (and
+    // any closure it created) could not see them, unlike a real worker.
+    // The dedicated-worker twin is `_lumen_import_script` (worker.rs).
+    rt.register_native_scoped(
+        "_lumen_sw_eval_script",
+        Box::new(|scope: &mut v8::PinScope, args: &v8::FunctionCallbackArguments, _rv: &mut v8::ReturnValue| {
+            let Some(source) = args.get(0).to_string(scope) else {
+                return;
+            };
+            let Some(script) = v8::Script::compile(scope, source, None) else {
+                return;
+            };
+            let _ = script.run(scope);
+        }),
+    )?;
 
     {
         let provider = fetch_provider.clone();
@@ -1496,6 +1526,45 @@ mod tests_v8 {
         assert_eq!(rt.eval("globalThis.__rel").unwrap(), lumen_core::JsValue::Number(1.0));
     }
 
+    /// SW-MODULE: с глобальным `_lumen_sw_script_url__` (ставит
+    /// `run_sw_thread_v8`) относительный `importScripts` считается от URL
+    /// *скрипта*, а не от scope — под-каталог scope'а не «съедает» путь.
+    #[test]
+    fn sw_import_scripts_resolves_relative_to_script_url() {
+        let net = SwNet::new(&[(
+            "https://example.com/svc/resources/imported.js",
+            "globalThis.__rel = 1;",
+        )]);
+        let rt = sw_rt("https://example.com", "/svc/scope", &net);
+        rt.eval(&format!(
+            "_lumen_sw_script_url__ = {};",
+            crate::navigator_bindings::json_string(
+                "https://example.com/svc/resources/worker.py?classic_first=1"
+            )
+        ))
+        .unwrap();
+        rt.eval("importScripts('./imported.js');").unwrap();
+        assert_eq!(rt.eval("globalThis.__rel").unwrap(), lumen_core::JsValue::Number(1.0));
+    }
+
+    /// Top-level `const` из импортированного скрипта живёт в общей глобальной
+    /// лексической среде и виден последующим скриптам и их замыканиям (не
+    /// умирает вместе с eval, как было с `(0, eval)`).
+    #[test]
+    fn sw_import_scripts_const_visible_to_main_script() {
+        let net = SwNet::new(&[(
+            "https://example.com/lib.js",
+            "const __imported = 'A classic script.';",
+        )]);
+        let rt = sw_rt("https://example.com", "/", &net);
+        rt.eval("importScripts('https://example.com/lib.js');").unwrap();
+        rt.eval("globalThis.__handler = () => __imported;").unwrap();
+        assert_eq!(
+            rt.eval("globalThis.__handler()").unwrap(),
+            lumen_core::JsValue::String("A classic script.".into())
+        );
+    }
+
     /// Р С›РЎвЂљР С”Р В°Р В· РЎРѓР ВµРЎвЂљР С‘ Р С•Р В±РЎРЏР В·Р В°Р Р… Р В±РЎвЂ№РЎвЂљРЎРЉ Р С‘РЎРѓР С”Р В»РЎР‹РЎвЂЎР ВµР Р…Р С‘Р ВµР С, Р В° Р Р…Р Вµ Р СР С•Р В»РЎвЂЎР В°Р В»Р С‘Р Р†РЎвЂ№Р С Р С—РЎР‚Р С•Р С—РЎС“РЎРѓР С”Р С•Р С: Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚ РЎРѓ
     /// Р Р…Р ВµР Т‘Р С•Р С–РЎР‚РЎС“Р В¶Р ВµР Р…Р Р…Р С•Р в„– Р В±Р С‘Р В±Р В»Р С‘Р С•РЎвЂљР ВµР С”Р С•Р в„– РЎвЂ¦РЎС“Р В¶Р Вµ, РЎвЂЎР ВµР С Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚, Р С”Р С•РЎвЂљР С•РЎР‚РЎвЂ№Р в„– РЎвЂЎР ВµРЎРѓРЎвЂљР Р…Р С• Р Р…Р Вµ Р Р†РЎРѓРЎвЂљР В°Р В».
     #[test]
@@ -1762,6 +1831,7 @@ self.addEventListener('fetch', function(event) {
             None,
             None,
             None,
+            0,
         );
 
         handle
@@ -1817,6 +1887,7 @@ self.addEventListener('fetch', function(e) {
             None,
             None,
             None,
+            0,
         );
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         handle
@@ -2027,6 +2098,7 @@ self.addEventListener('fetch', function(event) {
             None,
             None,
             None,
+            0,
         );
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
@@ -2062,6 +2134,7 @@ self.addEventListener('fetch', function(event) {
             None,
             None,
             None,
+            0,
         );
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
@@ -2092,6 +2165,7 @@ self.addEventListener('fetch', function(event) {
             None,
             None,
             None,
+            0,
         );
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
@@ -2153,6 +2227,7 @@ self.addEventListener('fetch', function(event) {
             Some(Arc::new(DepNet) as Arc<dyn lumen_core::ext::JsFetchProvider>),
             None,
             None,
+            0,
         );
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
@@ -2198,6 +2273,7 @@ self.addEventListener('fetch', function(event) {
             None,
             None,
             None,
+            0,
         );
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
@@ -2245,6 +2321,7 @@ self.addEventListener('fetch', function(event) {
             None,
             None,
             None,
+            0,
         );
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
@@ -2335,6 +2412,7 @@ self.addEventListener('fetch', function(event) {
             None,
             None,
             None,
+            0,
         );
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);

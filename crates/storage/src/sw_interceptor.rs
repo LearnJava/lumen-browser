@@ -273,7 +273,7 @@ mod tests {
                 let _ = req.response_tx.send(resp);
             }
         });
-        lumen_core::ext::SwWorkerHandle { tx, _thread: thread }
+        lumen_core::ext::SwWorkerHandle { tx, _thread: thread, wid: 0 }
     }
 
     fn make_with_workers(store: SwWorkerStore) -> ServiceWorkerInterceptor {
