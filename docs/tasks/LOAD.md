@@ -318,6 +318,16 @@ BUG-804). `load` окна лист держит (HTML LS §4.6.7, счётчик
 окна, у `<img>` приходит `error`; на корпусе нет `ready_s` кратных 10 с сверх
 `final_applied_s` + дедлайн; статусы сайтов не ухудшаются.
 
+**Сделано (2026-11-18):** дедлайн 10 с от старта сетевого запроса — `ImageRequestLedger.started`
+(отметку ставит задача пула, очередь `WARM_POOL` стартом не считается) и метка в
+`pending_new_frames`; логика — `page_load/dead_subresource.rs`. Просроченный URL уходит в
+`stream_image_errors` (`<img>` получает `error` через `apply_stream_intrinsic_sizes`), фрейм
+перестаёт держать `load` (`deferred_frames_busy`), бронь фрейма живёт до ответа потока. Откат —
+`LUMEN_NO_LOAD_DEADLINE=1`. Живая проба (5 сайтов, зонд `LUMEN_LOAD_PROBE=1`, снят):
+сетевых держателей дольше 2,7 с нет, дедлайн не срабатывает; остаток
+`ready_s − final_applied_s` (36–50 с у ok-ru) — очередь задач движкового потока (BUG-1800, P3,
+брифом исключён), а не сеть. Цифры — [journal](../perf/journal.md) §2026-11-18 LOAD-7.
+
 ## LOAD-9 — одна экранная раскладка на загрузку (P6, M)
 
 **Depends on:** —. **Files:** `crates/shell/src/page_pipeline.rs` (`parse_and_layout`:
