@@ -28,6 +28,8 @@ WPT-SW-SCOUT, кластер D (`docs/wpt-vendor-notes/service-workers.md`): 21 
 ## Что делать
 
 1. Заменить `Option<Vec<u8>>` в `SwFetchRequest`/`FetchInterceptor` перечислением: `Fallback` (не перехвачено), `NetworkError`, `Response { status, status_text, headers, body, url, response_type }`.
+
+> **2026-11-17, SW-PRELOAD-ROUTER (частично сделано отсюда):** `FetchEvent` получил `preloadResponse` (получатель ответа сети в воркере — до полноценного пересорта ответа из `respondWith` этот баг остаётся OPEN); условия `requestMethod`/`requestMode`/`requestDestination` статик-роутера в `ServiceWorkerInterceptor` принимаются, но не вычисляются — ждут контекста запроса в `FetchInterceptor` из этого бага.
 2. `_sw_fire_fetch` (`sw_worker.rs:321`) сериализует весь `Response`; `preventDefault` без `respondWith`, reject и не-`Response` дают `NetworkError`.
 3. `network/src/lib.rs:4731` и `:4851` собирают `PageResponse` из полей ответа; `NetworkError` → ошибка запроса (`TypeError` в `fetch`, `error` у XHR).
 4. `SwFetchRequest` передаёт метод, заголовки, тело, mode/credentials/destination и id клиента; `sw_interceptor.rs` берёт метод из запроса.

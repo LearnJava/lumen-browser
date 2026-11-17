@@ -113,6 +113,33 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     active: {{ state: 'activated', scriptURL: '' }},
     installing: null, waiting: null,
   }};
+
+  // SW-PRELOAD-ROUTER: navigation preload state (SW §5.4). The page-side
+  // `registration.navigationPreload.enable()/…` reaches this isolate as a
+  // `SwWorkerMessage::Preload`; the worker's own `navigationPreload` manager
+  // writes the same slot directly.
+  globalThis._sw_preload__ = {{ enabled: false, headerValue: 'Service-Worker-Navigation-Preload' }};
+  globalThis.NavigationPreloadManager = function NavigationPreloadManager() {{
+    throw new TypeError('Illegal constructor');
+  }};
+  (function() {{
+    var np = Object.create(NavigationPreloadManager.prototype);
+    NavigationPreloadManager.prototype.enable = function() {{
+      _sw_preload__.enabled = true; return Promise.resolve();
+    }};
+    NavigationPreloadManager.prototype.disable = function() {{
+      _sw_preload__.enabled = false; return Promise.resolve();
+    }};
+    NavigationPreloadManager.prototype.setHeaderValue = function(value) {{
+      _sw_preload__.headerValue = String(value); return Promise.resolve();
+    }};
+    NavigationPreloadManager.prototype.getState = function() {{
+      return Promise.resolve({{
+        enabled: _sw_preload__.enabled, headerValue: _sw_preload__.headerValue,
+      }});
+    }};
+    globalThis.registration.navigationPreload = np;
+  }})();
   globalThis.skipWaiting = function() {{ return Promise.resolve(); }};
   // SW-MSG-S6: `Clients` (SW Р’В§5.1) РІР‚вЂќ backed by the hub's client registry
   // through natives bound to this worker's origin and scope. `Client` /
@@ -465,8 +492,36 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
   }};
 
   // _sw_fire_event: fire install/activate as ExtendableEvents.
+  // SW-PRELOAD-ROUTER: `install` fires an InstallEvent — `addRoutes(rules)`
+  // validates each rule's source (SW §6.4) and collects them; the Rust thread
+  // serialises `_sw_routes__` to `_sw_routes_json__` after the install drain.
+  globalThis._sw_routes__ = [];
   globalThis._sw_fire_event = function(type) {{
-    globalThis._sw_dispatch_extendable(new ExtendableEvent(type));
+    var evt = new ExtendableEvent(type);
+    if (type === 'install') {{
+      evt.addRoutes = function(rules) {{
+        if (!Array.isArray(rules)) {{
+          throw new TypeError(
+            "Failed to execute 'addRoutes' on 'InstallEvent': parameter 1 is not of type 'Array'.");
+        }}
+        var ok = {{ 'network': 1, 'cache': 1, 'fetch-event': 1,
+                   'race-network-and-fetch-handler': 1 }};
+        for (var i = 0; i < rules.length; i++) {{
+          var r = rules[i];
+          if (!r || typeof r !== 'object' || typeof r.source !== 'string'
+              || !ok[r.source]) {{
+            throw new TypeError(
+              "Failed to execute 'addRoutes' on 'InstallEvent': invalid rule source.");
+          }}
+          if (r.source === 'cache' && typeof r.cacheName !== 'string') {{
+            throw new TypeError(
+              "Failed to execute 'addRoutes' on 'InstallEvent': a 'cache' route requires a cacheName.");
+          }}
+          _sw_routes__.push(r);
+        }}
+      }};
+    }}
+    globalThis._sw_dispatch_extendable(evt);
   }};
 
   // РІвЂќР‚РІвЂќР‚ Client / WindowClient (SW Р’В§5.2/Р’В§5.3, SW-MSG-S3) РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚РІвЂќР‚
@@ -584,6 +639,24 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     var evt = {{
       type: 'fetch',
       request: request,
+      // SW-PRELOAD-ROUTER (SW §5.4.3): when the page enabled navigation
+      // preload, the response of the same navigation request — fetched from
+      // the network bypassing this SW, with the preload header — arrives here.
+      // The bypass native is synchronous, so the promise settles on the first
+      // read; the network failure rejects, like the spec's preload failure.
+      preloadResponse: new Promise(function(resolve, reject) {{
+        if (!_sw_preload__.enabled) {{ resolve(undefined); return; }}
+        var raw = _lumen_sw_preload_fetch(url, _sw_preload__.headerValue);
+        if (!raw) {{
+          reject(new TypeError('navigation preload: network error for ' + url));
+          return;
+        }}
+        var res = JSON.parse(raw);
+        resolve(new Response(_sw_b64_to_bin(res.body), {{
+          status: res.status, statusText: res.statusText,
+          headers: res.headers, url: url, _binary: true,
+        }}));
+      }}),
       respondWith: function(promise) {{
         if (responded) return;
         responded = true;
@@ -767,16 +840,21 @@ pub(crate) fn spawn_sw_worker_v8(
     idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
     determinism: Option<crate::worker::WorkerDeterminism>,
     wid: u64,
-) -> SwWorkerHandle {
-    let (tx, rx) = std::sync::mpsc::channel::<SwWorkerMessage>();
+) -> SwWorkerHandle {    let (tx, rx) = std::sync::mpsc::channel::<SwWorkerMessage>();
     let thread_name = format!("lumen-sw-v8-{origin}{scope}");
+    // SW-PRELOAD-ROUTER: static-router rules cross the thread boundary through
+    // this slot — the thread writes it after the install drain, the
+    // interceptor reads it at dispatch time.
+    let routes_json: std::sync::Arc<std::sync::Mutex<Option<String>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    let slot = std::sync::Arc::clone(&routes_json);
     let handle = std::thread::Builder::new()
         .name(thread_name)
         .spawn(move || {
-            run_sw_thread_v8(origin, scope, script, script_url, is_module, rx, cache_backend, fetch_provider, idb_backend, determinism)
+            run_sw_thread_v8(origin, scope, script, script_url, is_module, rx, cache_backend, fetch_provider, idb_backend, determinism, slot)
         })
         .expect("failed to spawn SW thread (v8)");
-    SwWorkerHandle { tx, _thread: handle, wid }
+    SwWorkerHandle { tx, _thread: handle, wid, routes_json }
 }
 
 #[cfg(feature = "v8-backend")]
@@ -792,6 +870,7 @@ fn run_sw_thread_v8(
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
     determinism: Option<crate::worker::WorkerDeterminism>,
+    routes_json: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 ) {
     let rt = match V8JsRuntime::new() {
         Ok(r) => r,
@@ -872,6 +951,20 @@ fn run_sw_thread_v8(
     // running) before the next one starts.
     let _ = rt.eval("if(typeof _sw_fire_event==='function'){_sw_fire_event('install');}");
     drain_extend_v8(&rt, true);
+    // SW-PRELOAD-ROUTER: serialise the routes `InstallEvent.addRoutes`
+    // collected — the interceptor applies them before dispatching any fetch.
+    let _ = rt.eval(
+        "globalThis._sw_routes_json__ = \
+         (typeof _sw_routes__ !== 'undefined' && _sw_routes__.length) \
+         ? JSON.stringify(_sw_routes__) : null;",
+    );
+    let routes = match rt.eval("_sw_routes_json__") {
+        Ok(lumen_core::JsValue::String(s)) => Some(s),
+        _ => None,
+    };
+    if let Ok(mut slot) = routes_json.lock() {
+        *slot = routes;
+    }
     let _ = rt.eval("if(typeof _sw_fire_event==='function'){_sw_fire_event('activate');}");
     drain_extend_v8(&rt, false);
 
@@ -918,6 +1011,16 @@ fn run_sw_thread_v8(
                     "if(typeof _sw_deliver_port_message==='function'){\
                          _sw_deliver_port_message(_sw_port_id__,_sw_port_json__);}",
                 );
+            }
+            SwWorkerMessage::Preload { enabled, header } => {
+                // SW-PRELOAD-ROUTER: the page-side navigationPreload manager
+                // updates the isolate's state so `FetchEvent.preloadResponse`
+                // starts resolving.
+                let _ = rt.eval(&format!(
+                    "globalThis._sw_preload__ = {{ enabled: {}, headerValue: {} }};",
+                    enabled,
+                    crate::navigator_bindings::json_string(&header),
+                ));
             }
             SwWorkerMessage::Push(push) => dispatch_push_v8(&rt, &push.payload),
             SwWorkerMessage::PushSubscriptionChange(change) => {
@@ -1114,6 +1217,41 @@ fn install_sw_globals_v8(
                     Ok(res) => res,
                     Err(e) => {
                         eprintln!("[sw] РЎРѓР ВµРЎвЂљРЎРЉ: {url}: {e}");
+                        return None;
+                    }
+                };
+                let headers: serde_json::Map<String, serde_json::Value> = res
+                    .headers
+                    .iter()
+                    .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                    .collect();
+                serde_json::to_string(&serde_json::json!({
+                    "status": res.status,
+                    "statusText": res.status_text,
+                    "headers": headers,
+                    "body": base64_encode(&res.body),
+                }))
+                .ok()
+            }),
+        )?;
+    }
+
+    // SW-PRELOAD-ROUTER: the navigation-preload twin of `_lumen_sw_net_fetch` —
+    // same bypass, plus the `Service-Worker-Navigation-Preload` header.
+    {
+        let provider = fetch_provider.clone();
+        rt.register_native(
+            "_lumen_sw_preload_fetch",
+            crate::v8_compat::into_v8_fn2(move |url: String, header: String| -> Option<String> {
+                let provider = provider.as_ref()?;
+                let res = match provider.fetch_bypassing_sw_with_headers(
+                    &url,
+                    "GET",
+                    &[("service-worker-navigation-preload", &header)],
+                ) {
+                    Ok(res) => res,
+                    Err(e) => {
+                        eprintln!("[sw] preload fetch: {url}: {e}");
                         return None;
                     }
                 };
@@ -1943,6 +2081,84 @@ self.addEventListener('fetch', function(e) {
             rt.eval("globalThis.__thrown").unwrap(),
             lumen_core::JsValue::String("InvalidStateError".into())
         );
+    }
+
+    /// SW-PRELOAD-ROUTER: при включённом navigation preload `preloadResponse`
+    /// resolves с сетевым ответом на navigation-запрос (с preload-заголовком),
+    /// при выключенном — с `undefined`.
+    #[test]
+    fn sw_navigation_preload_preload_response() {
+        let net = SwNet::new(&[("https://example.com/nav", "preload body")]);
+        let rt = sw_rt("https://example.com", "/", &net);
+        rt.eval(
+            r#"
+            globalThis.__out = [];
+            self.addEventListener('fetch', function(e) {
+                e.respondWith(e.preloadResponse.then(function(r) {
+                    return r ? r.text() : 'none';
+                }).then(function(t) { __out.push(t); return new Response(t); }));
+            });
+            registration.navigationPreload.enable();
+            "#,
+        )
+        .unwrap();
+        let body = dispatch_fetch_v8(&rt, "https://example.com/nav", "GET")
+            .expect("respondWith должен вернуть тело");
+        // The preload fetch bypasses the interceptor and hits SwNet's
+        // `bodies` map — the mocked `fetch_bypassing_sw` path, not the
+        // intercepted one.
+        assert_eq!(String::from_utf8(body).unwrap(), "preload body");
+        // Without preload the same event sees `undefined`.
+        rt.eval("registration.navigationPreload.disable(); __out.length = 0;")
+            .unwrap();
+        let body = dispatch_fetch_v8(&rt, "https://example.com/nav", "GET")
+            .expect("respondWith должен вернуть тело");
+        assert_eq!(String::from_utf8(body).unwrap(), "none");
+    }
+
+    /// SW-PRELOAD-ROUTER: `InstallEvent.addRoutes` собирает правила (и бросает
+    /// `TypeError` на неизвестном source); после install-дренажа серализуются
+    /// в `_sw_routes_json__`.
+    #[test]
+    fn sw_install_add_routes_collected() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None, None)
+            .unwrap();
+        rt.eval(
+            r#"
+            globalThis.__thrown = null;
+            self.addEventListener('install', function(e) {
+                e.addRoutes([
+                    { source: 'network', urlPattern: '/static/' },
+                    { source: 'cache', cacheName: 'v1', urlPattern: '/cache/' },
+                ]);
+                try {
+                    e.addRoutes([{ source: 'nonsense' }]);
+                } catch (err) { __thrown = err.name; }
+            });
+            _sw_fire_event('install');
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            rt.eval("globalThis.__thrown").unwrap(),
+            lumen_core::JsValue::String("TypeError".into())
+        );
+        // The same serialisation the SW thread does after the install drain.
+        rt.eval(
+            "globalThis._sw_routes_json__ = \
+             (typeof _sw_routes__ !== 'undefined' && _sw_routes__.length) \
+             ? JSON.stringify(_sw_routes__) : null;",
+        )
+        .unwrap();
+        let json = match rt.eval("_sw_routes_json__") {
+            Ok(lumen_core::JsValue::String(s)) => s,
+            other => panic!("_sw_routes_json__ не сериализовался: {other:?}"),
+        };
+        assert!(json.contains("\"network\""), "{json}");
+        assert!(json.contains("\"cache\""), "{json}");
+        assert!(json.contains("v1"), "{json}");
+        assert!(!json.contains("nonsense"), "{json}");
     }
 
     /// SW-MSG-S2: Р С”Р С•Р Р…РЎРѓРЎвЂљРЎР‚РЎС“Р С”РЎвЂљР С•РЎР‚ `ExtendableMessageEvent` (SW Р’В§4.7) РІР‚вЂќ Р В·Р Р…Р В°РЎвЂЎР ВµР Р…Р С‘РЎРЏ

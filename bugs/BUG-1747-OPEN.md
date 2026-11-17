@@ -22,6 +22,8 @@ WPT-SW-SCOUT, кластер G (`docs/wpt-vendor-notes/service-workers.md`): 8 i
 ## Что делать
 
 1. Классы `ServiceWorker`, `ServiceWorkerContainer`, `ServiceWorkerRegistration`, `NavigationPreloadManager` на глобале окна (и воркеров по `[Exposed]`), наследники `EventTarget`; конструкторы бросают `TypeError` («Illegal constructor»).
+
+> **2026-11-17, SW-PRELOAD-ROUTER (частично сделано отсюда):** `NavigationPreloadManager` теперь есть как интерфейсный объект на странице (`web_api_shim_mid_b.js`, `Illegal constructor`) и в изоляте SW (`sw_worker.rs`); остальные интерфейсы из этого бага остаются OPEN.
 2. Фабрики шима создают экземпляры через эти прототипы; атрибуты — геттеры на прототипе, а не собственные поля.
 3. В глобале SW — `ServiceWorkerGlobalScope`, `ExtendableEvent`, `FetchEvent`, `Clients`, `Client`, `WindowClient` с той же формой; прототип глобала неизменяем.
 

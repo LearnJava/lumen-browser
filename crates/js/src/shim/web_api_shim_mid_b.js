@@ -663,7 +663,61 @@ function _sw_make_registration(scope, scriptUrl, type) {
             return Promise.resolve(true);
         },
     }, et);
+    // SW-PRELOAD-ROUTER (SW §5.4): the navigation preload manager lives on the
+    // registration; its calls forward to the live worker isolate through
+    // `_lumen_sw_preload_set` (same routing as postMessage: scope key + wid).
+    reg.navigationPreload = Object.create(_lumen_sw_preload_iface.prototype);
+    _sw_preload_attach(reg);
     return reg;
+}
+
+// SW-PRELOAD-ROUTER / BUG-1747 (minimal piece): the `NavigationPreloadManager`
+// interface object on the page — instanceof and `Illegal constructor` shape
+// like `ServiceWorkerRegistration` above; the worker isolate keeps its own.
+var _lumen_sw_preload_iface = function NavigationPreloadManager() {
+    throw new TypeError('Illegal constructor');
+};
+if (_lumen_secure_context !== false) {
+    Object.defineProperty(globalThis, 'NavigationPreloadManager', {
+        value: _lumen_sw_preload_iface,
+        writable: true,
+        enumerable: false,
+        configurable: true,
+    });
+}
+_lumen_sw_preload_iface.prototype.enable = function() {
+    this._set(true);
+    return Promise.resolve();
+};
+_lumen_sw_preload_iface.prototype.disable = function() {
+    this._set(false);
+    return Promise.resolve();
+};
+_lumen_sw_preload_iface.prototype.setHeaderValue = function(value) {
+    this._header = String(value);
+    this._set(this._enabled || false, this._header);
+    return Promise.resolve();
+};
+_lumen_sw_preload_iface.prototype.getState = function() {
+    return Promise.resolve({
+        enabled: this._enabled || false,
+        headerValue: this._header !== undefined
+            ? this._header : 'Service-Worker-Navigation-Preload',
+    });
+};
+// Wire the manager to its registration: `_set` posts to the live worker of
+// `reg.active`'s identity; no live worker — quiet no-op (see the native).
+function _sw_preload_attach(reg) {
+    var np = reg.navigationPreload;
+    np._enabled = false;
+    np._header = 'Service-Worker-Navigation-Preload';
+    np._set = function(enabled, header) {
+        np._enabled = enabled;
+        if (typeof _lumen_sw_preload_set !== 'function') return;
+        _lumen_sw_preload_set(
+            reg.scope, (reg.active && reg.active._wid) || 0,
+            enabled, header);
+    };
 }
 
 // SW-MODULE: a JavaScript MIME type (SW §2.2.2 «script resource MIME type»).

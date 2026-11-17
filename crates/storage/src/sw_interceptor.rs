@@ -71,14 +71,52 @@ impl FetchInterceptor for ServiceWorkerInterceptor {
         // покрывающим путь URL (SW service-worker selection — longest match).
         if let Some(store) = &self.sw_worker_store {
             let path = url.path();
-            let tx_opt = {
+            let (tx_opt, routes_json) = {
                 let workers = store.lock().unwrap();
                 workers
                     .iter()
                     .filter(|((o, scope), _)| o == origin && path.starts_with(scope.as_str()))
                     .max_by_key(|((_, scope), _)| scope.len())
-                    .map(|(_, h)| h.tx.clone())
+                    .map(|(_, h)| (h.tx.clone(), h.routes_json.clone()))
+                    .map(|(tx, routes)| (Some(tx), Some(routes)))
+                    .unwrap_or((None, None))
             };
+            // SW-PRELOAD-ROUTER: static-router rules (`InstallEvent.addRoutes`)
+            // apply before the dispatch — the first matching rule wins. The
+            // engine only sees the URL here, so `requestMethod`/`requestMode`/
+            // `requestDestination`/`runningStatus` conditions are ignored
+            // (everything reaching this path is a GET; the rest would need
+            // request context in `FetchInterceptor`, BUG-1744 territory).
+            // shortcut: conditions other than urlPattern/or/not are not
+            // evaluated; upgrade when the interceptor carries the request.
+            if let Some(json) = routes_json.as_ref().and_then(|r| r.lock().unwrap().clone())
+                && let Some(source) = Self::match_routes(&json, url)
+            {
+                match source.as_str() {
+                    // `network`: the request goes to the network untouched —
+                    // no dispatch, no cache.
+                    "network" => return None,
+                    // `cache`: answer from CacheStorage only — check the
+                    // origin's named caches directly (the SQLite-fallback
+                    // section below requires a registration, which the shell
+                    // path does not have).
+                    "cache" => {
+                        let cache_names = self.cache_store.list_cache_names(origin).ok()?;
+                        for name in &cache_names {
+                            if let Ok(Some(entry)) =
+                                self.cache_store.match_(origin, name, url.as_str(), "GET")
+                            {
+                                return Some(entry.response_body);
+                            }
+                        }
+                        return None;
+                    }
+                    // `fetch-event` and `race-network-and-fetch-handler` both
+                    // dispatch to the SW (a real race needs the parallel
+                    // network leg — shortcut).
+                    _ => {}
+                }
+            }
             if let Some(tx) = tx_opt
                 && let Some(body) = Self::dispatch_to_worker(&tx, url)
             {
@@ -106,6 +144,42 @@ impl FetchInterceptor for ServiceWorkerInterceptor {
 }
 
 impl ServiceWorkerInterceptor {
+    /// SW-PRELOAD-ROUTER: evaluate the worker's static-router rules (the
+    /// JSON of `InstallEvent.addRoutes`) against the request URL. The first
+    /// rule whose condition matches wins; returns its `source`. A rule's
+    /// condition is either flat or `or: [conditions]`; each condition matches
+    /// when `urlPattern` is a prefix of the URL path or of the full URL
+    /// (string URLPattern shorthand — full URLPattern syntax is out of scope),
+    /// `not` inverts, unmatched/unspecified conditions are ignored.
+    fn match_routes(routes_json: &str, url: &Url) -> Option<String> {
+        let rules: serde_json::Value = serde_json::from_str(routes_json).ok()?;
+        let rules = rules.as_array()?;
+        for rule in rules {
+            let source = rule.get("source")?.as_str()?;
+            let matches = match rule.get("or").and_then(|v| v.as_array()) {
+                Some(conds) => conds.iter().any(|c| Self::cond_matches(c, url).unwrap_or(false)),
+                None => Self::cond_matches(rule, url)?,
+            };
+            let negated = rule.get("not").and_then(|v| v.as_bool()).unwrap_or(false)
+                || rule.get("condition").and_then(|c| c.get("not")).and_then(|v| v.as_bool()).unwrap_or(false);
+            if matches != negated {
+                return Some(source.to_string());
+            }
+        }
+        None
+    }
+
+    /// One routing condition: `urlPattern` (prefix shorthand), `not` inverted.
+    fn cond_matches(cond: &serde_json::Value, url: &Url) -> Option<bool> {
+        let pattern = cond.get("urlPattern")?.as_str()?;
+        if pattern.is_empty() {
+            return Some(true);
+        }
+        let matched = url.path().starts_with(pattern) || url.as_str().starts_with(pattern);
+        let negated = cond.get("not").and_then(|v| v.as_bool()).unwrap_or(false);
+        Some(matched != negated)
+    }
+
     /// Dispatch a GET fetch request to a SW execution thread and wait for its
     /// `respondWith()` body. Returns `None` on timeout, channel error, or when
     /// the SW did not call `respondWith()` with a body.
@@ -273,7 +347,12 @@ mod tests {
                 let _ = req.response_tx.send(resp);
             }
         });
-        lumen_core::ext::SwWorkerHandle { tx, _thread: thread, wid: 0 }
+        lumen_core::ext::SwWorkerHandle {
+        tx,
+        _thread: thread,
+        wid: 0,
+        routes_json: std::sync::Arc::new(std::sync::Mutex::new(None)),
+    }
     }
 
     fn make_with_workers(store: SwWorkerStore) -> ServiceWorkerInterceptor {
@@ -353,6 +432,101 @@ mod tests {
         assert_eq!(
             si.intercept(&url, "https://example.com"),
             Some(b"from cache".to_vec())
+        );
+    }
+
+    // ── SW-PRELOAD-ROUTER: static-router rules applied before dispatch ─────────
+
+    /// Point the live worker's `routes_json` slot at a rules JSON.
+    fn with_routes(handle: &lumen_core::ext::SwWorkerHandle, rules: &str) {
+        *handle.routes_json.lock().unwrap() = Some(rules.to_string());
+    }
+
+    #[test]
+    fn route_source_network_skips_dispatch_and_cache() {
+        let store: SwWorkerStore = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        let handle = fake_sw_thread("https://example.com/static/x", b"sw body");
+        with_routes(
+            &handle,
+            r#"[{"source":"network","urlPattern":"/static/"}]"#,
+        );
+        store.lock().unwrap().insert(
+            ("https://example.com".to_string(), "/".to_string()),
+            handle,
+        );
+        let si = make_with_workers(store);
+        // The worker WOULD answer this URL and a cache entry exists, but the
+        // `network` route must send the request straight to the network (None).
+        si.cache_store
+            .put("https://example.com", "v1", "https://example.com/static/x", "GET", 200, "", b"cached", 0)
+            .unwrap();
+        let url = Url::parse("https://example.com/static/x").unwrap();
+        assert_eq!(si.intercept(&url, "https://example.com"), None);
+    }
+
+    #[test]
+    fn route_source_cache_serves_cache_without_dispatch() {
+        let store: SwWorkerStore = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        // No SQLite registration — the SQLite fallback section would return
+        // None; the `cache` route must check the named caches directly.
+        let handle = fake_sw_thread("https://example.com/cache/y", b"sw body");
+        with_routes(
+            &handle,
+            r#"[{"source":"cache","cacheName":"v1","urlPattern":"/cache/"}]"#,
+        );
+        store.lock().unwrap().insert(
+            ("https://example.com".to_string(), "/".to_string()),
+            handle,
+        );
+        let si = make_with_workers(store);
+        si.cache_store
+            .put("https://example.com", "v1", "https://example.com/cache/y", "GET", 200, "", b"route cache", 0)
+            .unwrap();
+        let url = Url::parse("https://example.com/cache/y").unwrap();
+        assert_eq!(
+            si.intercept(&url, "https://example.com"),
+            Some(b"route cache".to_vec())
+        );
+    }
+
+    #[test]
+    fn route_source_fetch_event_dispatches() {
+        let store: SwWorkerStore = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        let handle = fake_sw_thread("https://example.com/app/z", b"sw body");
+        with_routes(
+            &handle,
+            r#"[{"source":"fetch-event","urlPattern":"/app/"}]"#,
+        );
+        store.lock().unwrap().insert(
+            ("https://example.com".to_string(), "/".to_string()),
+            handle,
+        );
+        let si = make_with_workers(store);
+        let url = Url::parse("https://example.com/app/z").unwrap();
+        assert_eq!(
+            si.intercept(&url, "https://example.com"),
+            Some(b"sw body".to_vec())
+        );
+    }
+
+    #[test]
+    fn route_url_pattern_mismatch_leaves_dispatch_alone() {
+        let store: SwWorkerStore = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        let handle = fake_sw_thread("https://example.com/other/w", b"sw body");
+        with_routes(
+            &handle,
+            r#"[{"source":"network","urlPattern":"/static/"}]"#,
+        );
+        store.lock().unwrap().insert(
+            ("https://example.com".to_string(), "/".to_string()),
+            handle,
+        );
+        let si = make_with_workers(store);
+        // The pattern does not match — no route fires, normal dispatch runs.
+        let url = Url::parse("https://example.com/other/w").unwrap();
+        assert_eq!(
+            si.intercept(&url, "https://example.com"),
+            Some(b"sw body".to_vec())
         );
     }
 }

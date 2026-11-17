@@ -259,6 +259,34 @@ pub(crate) fn install_service_worker(
             );
         }
 
+        // SW-PRELOAD-ROUTER: the page-side `registration.navigationPreload`
+        // manager forwards state changes here — same routing as
+        // `_lumen_sw_post_message` (registry key `(origin, scope)`, `wid`
+        // match). No pending queue: state set before activation dies with the
+        // page that set it — the spec keeps preload state on the registration,
+        // a registration-scoped store is BUG-1742/1744 territory.
+        // shortcut: `enable()` before the worker activates is a quiet no-op.
+        {
+            let sws = sw_worker_store.clone();
+            let o = page_origin.clone();
+            reg!(scope, ctx, store,
+                "_lumen_sw_preload_set",
+                move |scope: String, wid: f64, enabled: bool, header: String| {
+                    let wid = wid as u64;
+                    let origin = o.clone();
+                    let Some(store) = sws.as_ref() else { return };
+                    if let Some(handle) = store.lock().unwrap().get(&(origin, scope))
+                        && handle.wid == wid
+                    {
+                        let _ = handle.tx.send(lumen_core::ext::SwWorkerMessage::Preload {
+                            enabled,
+                            header,
+                        });
+                    }
+                }
+            );
+        }
+
         // _lumen_sw_activate_script(scope, script_text) — PH3-20: SW fetch interception.
         // Called from the _sw_run_lifecycle JS shim when a SW finishes the activate phase.
         // Spawns a dedicated V8 thread for the SW (Ph3 V8 migration S10 —
