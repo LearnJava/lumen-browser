@@ -952,7 +952,11 @@ fn run_sw_thread_v8(
     // SW-MSG-S2: each phase waits for its `waitUntil` promises (timers keep
     // running) before the next one starts.
     let _ = rt.eval("if(typeof _sw_fire_event==='function'){_sw_fire_event('install');}");
-    drain_extend_v8(&rt, true);
+    let install_failed = drain_extend_v8(&rt, true);
+    // SW §9.2: a `waitUntil` rejection in the install event fails the install —
+    // report it so the page transitions the worker to `redundant` instead of
+    // `activated` (BUG-1742).
+    crate::sw_clients::push_install_result(&origin, scope.clone(), !install_failed);
     // SW-PRELOAD-ROUTER: serialise the routes `InstallEvent.addRoutes`
     // collected — the interceptor applies them before dispatching any fetch.
     let _ = rt.eval(
@@ -1036,10 +1040,10 @@ fn run_sw_thread_v8(
 
 /// SW-MSG-S2: run the isolate's task loop until the last extendable dispatch
 /// has no unsettled `waitUntil` promises left, capped at [`EXTEND_TIMEOUT`].
-/// `log_rejected` is `install` only: a rejected promise there means a failed
-/// install (full failed-install behaviour is BUG-1742), so it is logged.
+/// Returns `true` when the install's `waitUntil` promise rejected — the page
+/// must fail the install and make the worker redundant (BUG-1742).
 #[cfg(feature = "v8-backend")]
-fn drain_extend_v8(rt: &V8JsRuntime, log_rejected: bool) {
+fn drain_extend_v8(rt: &V8JsRuntime, log_rejected: bool) -> bool {
     let start = std::time::Instant::now();
     while matches!(
         rt.eval("typeof _sw_extend_pending==='function'?_sw_extend_pending():0"),
@@ -1056,12 +1060,21 @@ fn drain_extend_v8(rt: &V8JsRuntime, log_rejected: bool) {
         std::thread::sleep(wait.min(Duration::from_millis(20)));
     }
     if log_rejected {
+        // A waitUntil rejection records `_sw_extend_error__` (the shim's
+        // `_sw_ext_track` rejection handler); its presence means install failed.
+        let failed = matches!(
+            rt.eval("globalThis._sw_extend_error__ === undefined ? false : true"),
+            Ok(lumen_core::JsValue::Bool(true))
+        );
         if let Ok(lumen_core::JsValue::String(e)) =
             rt.eval("globalThis._sw_extend_error__ === undefined ? null : _sw_extend_error__")
         {
             eprintln!("[sw] waitUntil rejected during install: {e}");
         }
         let _ = rt.eval("globalThis._sw_extend_error__ = undefined;");
+        failed
+    } else {
+        false
     }
 }
 
