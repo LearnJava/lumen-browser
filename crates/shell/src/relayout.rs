@@ -644,6 +644,8 @@ impl Lumen {
                 touched.changes.iter().map(|(n, c)| (*n, c.as_node_change())),
                 &node_index,
                 &|n| !crate::persistent_js::fresh_node_roots_enabled() || prev_styles.contains_key(&n),
+                // UI-путь без трекера мутационных эпох: диф `:has()` не сужает.
+                None,
             );
             if self.engine_thread.is_some() && m4_swap_mode() == M4Swap::Guarded {
                 // Элементы под глубокими корнями — остановка, как только их больше,

@@ -1407,6 +1407,7 @@ impl FlushHandles {
             changes.iter().copied(),
             &*node_index,
             &|n| !fresh_node_roots_enabled() || basis.cascade.contains_key(&n),
+            Some((basis.touch_epoch, touched.epoch)),
         );
         dirty_roots.extend(roots.deep);
         let point_roots = roots.point;

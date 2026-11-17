@@ -487,6 +487,7 @@ mod bug935_child_list_ends;
 mod bug935_shallow_roots;
 mod bug935_cascade_bench;
 mod bug935_invalidation;
+mod bug935_has_diff;
 mod bug935_svg_root_children;
 mod bug1287_svg_percent_lengths;
 mod bug1291_relative_inline_block;

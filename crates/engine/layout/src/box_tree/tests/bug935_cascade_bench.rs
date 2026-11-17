@@ -201,6 +201,85 @@ fn flush_walk_cost() {
     }
 }
 
+/// BUG-1800 срез 17 — форма шторма github: `:has()`-правило на вершине дерева
+/// (`body:has(.b0__cell) div`), под кандидатом непрерывно правится child list
+/// (append/detach пары узлов — аргумент продолжает матчиться, ФЛИПА НЕТ).
+/// Структурный вопрос называет `body` глубоким корнем (флаш всего документа);
+/// диф видит, что значение не перевернулось, и корня не ставит. Плечи в одном
+/// процессе (`set_diff_enabled_for_test`). Ворота: ON ≤ 50 % OFF по walk.
+#[test]
+#[ignore = "стенд: печатает время, ничего не проверяет"]
+fn has_diff_flush_cost() {
+    use crate::counters::{
+        incremental_precompute_counters, precompute_counters, set_incremental_restyle, take_cascade_stats,
+        ContentDirty, RestyleDelta,
+    };
+    use crate::style::{restyle_node_index, restyle_roots_for_node_changes, NodeChange};
+    let (html, mut css) = page();
+    css.push_str("body:has(.b0__cell) div { color: #654 }\n");
+    let mut doc = lumen_html_parser::parse(&html);
+    let sheet = lumen_css_parser::parse(&css);
+    let vp = Size::new(1280.0, 800.0);
+    let flat = lumen_dom::build_flat_tree(&doc);
+    let block = (0..doc.node_count() as u32)
+        .map(lumen_dom::NodeId::from_raw)
+        .find(|&n| doc.get(n).get_attr("class") == Some("b0"))
+        .expect("block .b0");
+    for diff_on in [false, true] {
+        crate::style::has_cache::set_diff_enabled_for_test(diff_on);
+        set_incremental_restyle(true);
+        let mut map = precompute_counters(&doc, &sheet, vp, &flat, false);
+        let (mut best, mut sum) = (u64::MAX, 0u64);
+        let mut recomputed = 0u32;
+        let mut fresh: Option<lumen_dom::NodeId> = None;
+        for round in 0..40 {
+            let change = if round % 2 == 0 {
+                let node = doc.create_element(lumen_dom::QualName::html("div"));
+                if let lumen_dom::NodeData::Element { attrs, .. } = &mut doc.get_mut(node).data {
+                    attrs.push(lumen_dom::Attribute { name: lumen_dom::QualName::html("class"), value: "tmp".to_string() });
+                }
+                doc.append_child(block, node);
+                fresh = Some(node);
+                NodeChange::ChildListEnds { front: false, back: true, edits: 1 }
+            } else {
+                let node = fresh.take().expect("even round created the node");
+                doc.detach(node);
+                NodeChange::ChildListEnds { front: false, back: true, edits: 1 }
+            };
+            let index = restyle_node_index(&doc, &sheet);
+            let roots = restyle_roots_for_node_changes(&doc, [(block, change)], &index);
+            let content: std::collections::HashSet<lumen_dom::NodeId> = [block].into_iter().collect();
+            let delta = RestyleDelta {
+                invalidation: None,
+                prev_styles: map.styles().clone(),
+                dirty_roots: roots.deep,
+                shallow_roots: roots.shallow,
+                point_roots: roots.point,
+                content_dirty: ContentDirty::Nodes(&content),
+            };
+            let _ = take_cascade_stats();
+            let next = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
+            let s = take_cascade_stats();
+            if round > 0 {
+                best = best.min(s.walk_ns);
+                sum += s.walk_ns;
+                recomputed += s.recomputed;
+            }
+            map = next;
+        }
+        set_incremental_restyle(false);
+        let n = 39.0;
+        println!(
+            "has_diff_flush_cost[{}]: лучший флаш {:.2} мс, средний {:.2} мс, recomputed {:.1}/флаш",
+            if diff_on { "diff-on" } else { "diff-off" },
+            best as f64 / 1e6,
+            sum as f64 / 1e6 / n,
+            recomputed as f64 / n,
+        );
+    }
+    crate::style::has_cache::set_diff_enabled_for_test(true);
+}
+
 #[test]
 #[ignore = "стенд: печатает время, ничего не проверяет"]
 fn cascade_matching_cost() {
