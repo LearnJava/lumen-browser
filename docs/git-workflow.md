@@ -49,16 +49,16 @@ Branch names: short kebab-case. **Developer sessions (P1–P6) must prefix the b
 Multiple Claude Code sessions may work simultaneously. Full workflow for task lifecycle:
 
 **Step 0: Sync with the remote (BEFORE step 1)**
-1. `git pull -q origin main` on the `main` worktree, before reading `STATUS-PN.md`/`ROADMAP.md` or creating any branch/worktree. Parallel sessions push to `origin/main` independently, so a session that skips this reads stale task-pointer/roadmap state and, if left long enough, turns what would have been a small conflict into a large multi-file one.
+1. `git pull -q origin main` in the session's slot, before reading `STATUS-PN.md`/`ROADMAP.md` or creating any branch. The slot may sit on a detached HEAD — `git pull origin main` fast-forwards it the same way. Parallel sessions push to `origin/main` independently, so a session that skips this reads stale task-pointer/roadmap state and, if left long enough, turns what would have been a small conflict into a large multi-file one.
 2. If `pull` fast-forwards or auto-merges cleanly — done, proceed to Step 1.
 3. If `pull` reports real conflicts (diverged history, `<<<<<<<` markers): resolve **file-by-file**, reading enough context on both sides to understand intent — do not run `git checkout --ours/--theirs` blindly across many files, and do not let an agent resolve a whole batch without spot-checking cross-file consistency (shared globals, renamed identifiers, feature-flag names). After resolving, re-verify: `cargo check`/`cargo clippy -- -D warnings` for every touched crate, plus scoped `cargo test` for crates with real logic conflicts (not just doc/config files) — a clean compile does not prove a merge is behaviorally correct. Only then commit the merge.
 4. Push the resolved `main` immediately (`git push origin main`) so other sessions see it before it can drift again.
 
 **Step 1: Task startup (BEFORE coding)** — one command does all four steps:
-`cd "$(bash scripts/task-claim.sh <N> <task-id> | tail -1)"` (exit 1 — taken, 2 — race; read the message).
+`bash scripts/task-claim.sh <N> <task-id>` (exit 1 — taken, 2 — race; read the message). The session already runs in its slot `.claude/worktrees/p<N>-work` (the manager starts it there), so the script switches the slot to the task branch — no `cd` needed.
 1. `git fetch origin --prune`, then look for **any** unmerged branch, local or on `origin`, whose name contains the task id (`1240`, `perf-10`) — not just the exact `p<N>-<task>` name: another machine may have named it `p1-bug1240-relative`. `git pull origin main` does **not** refresh `origin/*` refs, so `git branch -a` after it shows `origin` as of the last full fetch — that is how BUG-1240 was taken twice on 2026-10-07
 2. If such a branch exists — the task is taken, pick the next pointer line instead (or ask, per the top-down rule)
-3. Occupy your pool slot with the task branch: `bash scripts/worktree-pool.sh p<N>-work p<N>-task-name` — see "Worktree isolation" below
+3. Switch the pool slot to the task branch: `bash scripts/worktree-pool.sh p<N>-work p<N>-task-name` — see "Worktree isolation" below
 4. Push the branch **before the first code edit**: `git push origin p<N>-task-name` — its existence on `origin` reserves the task (the STATUS pointer line stays in place); a local-only branch reserves nothing for other machines. Then fetch again and re-check step 1: if another branch with the same id appeared in between, stop and ask the user
 
 **Step 2: During work** — see "Worktree isolation" section below
@@ -73,19 +73,11 @@ Multiple Claude Code sessions may work simultaneously. Full workflow for task li
 
 ---
 
-## Worktree isolation — mandatory
+## Worktree isolation — the manager owns the work folder
 
-**Every parallel Claude Code session MUST work in its own `git worktree`.** Two sessions doing `git checkout` in the same directory causes git to stash one session's work — recovery via `git stash pop` is fragile.
+**Every session runs in its own `git worktree` — the persistent pool slot `.claude/worktrees/p<N>-work`** (plus `perf-base` for A/B baselines). claude-manager (`use_worktree = true`) creates the slot once and starts the session inside it; the slot is reused forever, so `target/` stays warm. Two sessions doing `git checkout` in the same directory makes git stash one session's work — recovery via `git stash pop` is fragile; that is exactly why the folder is per-session.
 
-**Use your persistent pool slot, not a fresh worktree per task:**
-
-```bash
-cd "$(bash scripts/worktree-pool.sh p<N>-work p<N>-task-name | tail -1)"
-```
-
-One slot per developer — `.claude/worktrees/p1-work` … `p6-work` (plus `perf-base` for A/B baselines). The slot is created once (~3 min at the 62 000-file checkout of 2026-07; a fresh `add` of the 126 983-file tree of 2026-11-02 took 42 min — see "Docs-only changes" below) and then reused: only the branch changes, `target/` stays warm. A fresh worktree per task costs the `add` **plus** a cold build of 9–15 min, because `git worktree remove` deletes the warm `target/` with the directory (`docs/build-speed.md` §7, scenario S3). Measured on the session of 2026-07-27: 15.5 min for the first `cargo test -p lumen-shell --no-run` in a fresh worktree, and another 22 min for a second fresh worktree built only to get a baseline binary of `main`.
-
-This is **not** a shared `CARGO_TARGET_DIR` (rejected — `docs/build-speed.md` §6): each slot keeps its own `target/`, so the target lock never serializes parallel sessions.
+The slot is **not** a shared `CARGO_TARGET_DIR` (rejected — `docs/build-speed.md` §6): each slot keeps its own `target/`, so the target lock never serializes parallel sessions.
 
 Slot discipline:
 
@@ -119,7 +111,7 @@ Then push `main` to the real remote from the full checkout. The usual rules stil
 
 ### Traps
 
-- **Two sessions in one working tree** — checking out different branches makes git stash one session's work, and `stash pop` recovery is fragile. That is why worktrees are mandatory.
+- **Two sessions in one working tree** — checking out different branches makes git stash one session's work, and `stash pop` recovery is fragile. That is why the work folder is per-session.
 - **An interrupted `git worktree add` leaves an index in which the whole repository is staged as deleted**, and the leftover `index.lock` makes a later `reset --hard` exit 0 without repairing anything — a commit made in that state deletes the tree. Run `git status --short` in a fresh worktree before the first `git add`, and `git diff --cached --stat` before every commit made in one.
 - **`.ignore` (repo root) keeps ripgrep out of `.claude/worktrees/`** — full checkouts of other roles' branches, most of the `.rs` files reachable from the root. Git does not read it; do not delete it.
 

@@ -29,9 +29,9 @@ Write only inside the repository and its worktrees under `.claude/worktrees/`. N
 
 Protocol — [`docs/git-workflow.md`](docs/git-workflow.md). Closing a task — `/lumen-task-finish`; starting one — `/lumen-task-start` (explicit `/` invocation only).
 
-1. `git pull -q origin main` first, before reading STATUS files or branching.
+1. `git pull -q origin main` first, before reading STATUS files or branching. The manager starts the session in its own slot (`.claude/worktrees/p<N>-work`) — the pull happens there, never in the shared root checkout.
 2. "You are developer N" → continue your existing `p<N>-…` branch if there is one, else take the **first** line of `STATUS-PN.md`. Strictly top-down: the order encodes dependencies. If line 1 cannot start, say why and ask.
-3. Take the task: `cd "$(bash scripts/task-claim.sh <N> <task-id> | tail -1)"` — fetches origin, refuses if any unmerged branch carries the task id, occupies the pool slot and pushes the branch. Only a branch **on origin** reserves.
+3. Take the task: `bash scripts/task-claim.sh <N> <task-id>` — fetches origin, refuses if any unmerged branch carries the task id, switches the pool slot to the task branch and pushes it. Only a branch **on origin** reserves. The session already runs in its slot — no `cd` needed.
 4. Closing commit: gate → commit → `merge --no-ff` into `main` → push; a WIP commit (task unfinished) goes to the task branch only, `cargo check` instead of the gate. Never commit on `main`; no force-push, history rewrite, `git config`, `--no-verify` (also enforced by `.claude/settings.json`). CI is not awaited — watch `main` after the push.
 5. Commit message in Russian, subject under 80 chars, body says *why*. Stage explicit paths, never `git add -A`.
 

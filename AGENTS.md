@@ -31,9 +31,9 @@ Protocol — [`docs/git-workflow.md`](docs/git-workflow.md). When the user asks 
 
 The Git protocol is not blanket authorization for mutations or remote operations: pull, branch, commit, merge, and push only within the scope requested by the user.
 
-1. `git pull -q origin main` first, before reading STATUS files or branching.
+1. `git pull -q origin main` first, before reading STATUS files or branching. The manager starts the session in its own slot (`.claude/worktrees/p<N>-work`) — the pull happens there, never in the shared root checkout.
 2. "You are developer N" → continue your existing `p<N>-…` branch if there is one, else take the **first** line of `STATUS-PN.md`. Strictly top-down: the order encodes dependencies. If line 1 cannot start, say why and ask.
-3. Take the task: `cd "$(bash scripts/task-claim.sh <N> <task-id> | tail -1)"` — fetches origin, refuses if any unmerged branch carries the task id, occupies the pool slot and pushes the branch. Only a branch **on origin** reserves.
+3. Take the task: `bash scripts/task-claim.sh <N> <task-id>` — fetches origin, refuses if any unmerged branch carries the task id, switches the pool slot to the task branch and pushes it. Only a branch **on origin** reserves. The session already runs in its slot — no `cd` needed.
 4. Closing commit: gate → commit → `merge --no-ff` into `main` → push; a WIP commit (task unfinished) goes to the task branch only, `cargo check` instead of the gate. Never commit on `main`; no force-push, history rewrite, `git config`, `--no-verify`. CI is not awaited — watch `main` after the push.
 5. Commit message in Russian, subject under 80 chars, body says *why*. Stage explicit paths, never `git add -A`. Use truthful authorship attribution; never copy a hardcoded Claude model trailer for work authored by Kimi.
 
@@ -65,6 +65,8 @@ Find other task-specific protocols through [`docs/INDEX.md`](docs/INDEX.md).
 
 - **Never round-trip a repo markdown file through Python text mode.** Line-ending normalization can rewrite table rows and shift every `STATUS-PN.md` pointer below. Use `newline=''` on read *and* write, or `Edit`/`sed`.
 - **A fresh or interrupted worktree can have the whole repo staged as deleted** — `git status --short` before the first `git add`, `git diff --cached --stat` before every commit there ([`docs/git-workflow.md`](docs/git-workflow.md) §Worktree isolation).
+- **`bash` in PowerShell resolves to WSL (`C:\WINDOWS\system32\bash.exe`)** — WSL sees neither the Windows credential manager nor the localhost proxy, so `git fetch`/`push` inside it hangs or times out. Run repo bash scripts as `& "C:\Program Files\Git\bin\bash.exe" scripts/...`, or check `Get-Command bash` first.
+- **PowerShell has no `tail`/`grep`/`sed`** — use `Select-Object -Last`, `Select-String`, `-replace`.
 - **sccache must be ≥ 0.17.0** — `.cargo/config.toml` wraps every compiler call in it, and an older one kills each `rustc`/`clippy-driver` with `0xc0000409`.
 
 Area-specific traps go to `subsystems/<crate>.md`, `docs/engine-gaps.md` or a nested `CLAUDE.md`; a trap whose defect is fixed is deleted. Keep shared rules in their canonical documents listed in `docs/INDEX.md`; do not duplicate them here. **If no source answers the question — ask the user, don't assume.**
