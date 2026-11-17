@@ -114,10 +114,28 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     installing: null, waiting: null,
   }};
   globalThis.skipWaiting = function() {{ return Promise.resolve(); }};
+  // SW-MSG-S6: `Clients` (SW §5.1) — backed by the hub's client registry
+  // through natives bound to this worker's origin and scope. `Client` /
+  // `WindowClient` are declared further down; the lookups run at call time.
   globalThis.clients = {{
-    claim: function() {{ return Promise.resolve(); }},
-    get:   function() {{ return Promise.resolve(undefined); }},
-    matchAll: function() {{ return Promise.resolve([]); }},
+    get: function(id) {{
+      if (typeof _lumen_sw_clients_get !== 'function') return Promise.resolve(undefined);
+      var j = _lumen_sw_clients_get(Number(id));
+      return Promise.resolve(j ? new WindowClient(JSON.parse(j)) : undefined);
+    }},
+    matchAll: function(options) {{
+      options = options || {{}};
+      if (typeof _lumen_sw_clients_match_all !== 'function') return Promise.resolve([]);
+      var j = _lumen_sw_clients_match_all(
+        !!options.includeUncontrolled, String(options.type || 'window'));
+      var arr = j ? JSON.parse(j) : [];
+      return Promise.resolve(arr.map(function(i) {{ return new WindowClient(i); }}));
+    }},
+    claim: function() {{
+      if (typeof _lumen_sw_clients_claim === 'function') _lumen_sw_clients_claim();
+      // SW §5.1: resolves to undefined either way.
+      return Promise.resolve(undefined);
+    }},
   }};
 
   var _handlers = {{}};
@@ -482,6 +500,17 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     value: 'WindowClient', configurable: true,
   }});
   globalThis.WindowClient = WindowClient;
+  // SW-MSG-S6: `WindowClient.focus()` (SW §5.3) resolves to `this` without
+  // actually focusing the window (real focus is out of scope for the
+  // slices); `navigate()`/`openWindow()` need shell navigation — rejected.
+  WindowClient.prototype.focus = function() {{
+    return Promise.resolve(this);
+  }};
+  WindowClient.prototype.navigate = function() {{
+    // SW-MSG: нужна навигация оболочки
+    return Promise.reject(new DOMException(
+      'WindowClient.navigate() is not supported.', 'NotSupportedError'));
+  }};
 
   // SW-MSG-S3: dispatch a page→SW message as an ExtendableMessageEvent (SW
   // §4.7). Data and the client descriptor arrive JSON-encoded (the same wire
@@ -1068,6 +1097,46 @@ fn install_sw_globals_v8(
             "_lumen_sw_post_to_client",
             crate::v8_compat::into_v8_fn2(move |client_id: f64, data_json: String| {
                 crate::sw_clients::push_out(client_id as u64, sw_scope.clone(), data_json);
+            }),
+        )?;
+    }
+
+    // SW-MSG-S6: `Clients` (SW §5.1) — `matchAll`/`get` read the hub's
+    // client registry scoped to this worker's origin; `claim` takes same-
+    // origin clients in scope over and queues their `controllerchange`.
+    {
+        let orig = origin.to_string();
+        let sc = scope.to_string();
+        rt.register_native(
+            "_lumen_sw_clients_match_all",
+            crate::v8_compat::into_v8_fn2(
+                move |include_uncontrolled: bool, type_filter: String| -> Option<String> {
+                    crate::sw_clients::clients_json(
+                        &orig,
+                        &sc,
+                        &type_filter,
+                        include_uncontrolled,
+                    )
+                },
+            ),
+        )?;
+    }
+    {
+        let orig = origin.to_string();
+        rt.register_native(
+            "_lumen_sw_clients_get",
+            crate::v8_compat::into_v8_fn1(move |id: f64| -> Option<String> {
+                crate::sw_clients::client_json(&orig, id as u64)
+            }),
+        )?;
+    }
+    {
+        let orig = origin.to_string();
+        let sc = scope.to_string();
+        rt.register_native(
+            "_lumen_sw_clients_claim",
+            crate::v8_compat::into_v8_fn0(move || -> u32 {
+                crate::sw_clients::claim(&orig, &sc)
             }),
         )?;
     }

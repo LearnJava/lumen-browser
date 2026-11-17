@@ -42,3 +42,23 @@ Test category, added 2026-08-06 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 **Порядок.** J (BUG-1743) и C (BUG-1742) разблокируют больше всего и нужны SW-MSG; A (BUG-1226) зависит от резолва scope в BUG-1742. F → E (заголовок, затем форма Cache API). D и G — после C. SW-MSG — после BUG-1742; SW-MODULE — после BUG-1742; SW-PRELOAD-ROUTER — после BUG-1744 (`preloadResponse` у `FetchEvent`) и BUG-1747 (`NavigationPreloadManager`).
 
 **Проверка заметки.** Скрипты разбора не коммитились (лежали в `.tmp/` слота `p2-work`: `sw_an.py`, `sw_cl.py`, `sw_scan.py`, `sw_final.py sum|ids <кластер>`); после фикса кластера достаточно `run_corpus.py --prefixes service-workers/<подкаталог>` и сравнения статусов из таблицы.
+
+### Срез SW-MSG-S6 (Clients API, 2026-11-17)
+
+Ветка `p1-sw-msg`. Замки кластера B сняты частично: в изоляте SW вместо
+заглушек — настоящий `Clients` (`get`, `matchAll({type, includeUncontrolled})`,
+`claim`) поверх процесс-глобального реестра окон-клиентов в `sw_clients.rs`
+(страница регистрируется при старте рантайма и синхронизирует url при
+`pushState`/`replaceState`, снимается в `Drop`). `matchAll` возвращает
+`WindowClient` (id/url/type/frameType/visibilityState/focused), порядок —
+порядок регистрации; `claim()` забирает клиентов origin, чей url внутри scope,
+и доставляет на страницу управляющее сообщение → `controllerchange`.
+`WindowClient.focus()` резолвится `this` без смены фокуса окна;
+`navigate()`/`openWindow()` — отказ `NotSupportedError` (нужна навигация
+оболочки). Ограничения: `controlled_by` в реестре выставляется только
+`claim()` (контроль после активации без claim не распространяется — это
+уходит в перепись lifecycle BUG-1742); клиенты-iframe (BUG-1743) не
+регистрируются; порядок «от последнего фокусированного» — порядок
+регистрации. Тесты: `v8_sw_clients_match_all_lists_page`,
+`v8_sw_clients_get_by_id`, `v8_sw_clients_claim_sets_controller` в
+`v8_events_cache.rs`.

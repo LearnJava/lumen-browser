@@ -425,6 +425,18 @@ function _lumen_build_cache_object(cacheName) {
 // so reassigning this global cannot reach another origin's registrations/caches.
 var _sw_origin = (typeof location !== 'undefined') ? (location.protocol + '//' + location.host) : '';
 
+// SW-MSG-S6: keep this page's hub client record fresh — the shim calls it
+// at init, after `pushState`/`replaceState` move the document URL, and from
+// the runtime `Drop` the record is removed. Controller state is *not*
+// pushed here: the hub learns control only via `clients.claim()` (the
+// slice's model; finer propagation rides with BUG-1742).
+function _sw_client_sync() {
+    if (typeof _lumen_sw_client_update !== 'function' || typeof location === 'undefined') return;
+    _lumen_sw_client_update(location.href,
+        (typeof document !== 'undefined' && document.visibilityState) || 'visible');
+}
+_sw_client_sync();
+
 var caches = {
     open: function(name) {
         return Promise.resolve(_lumen_build_cache_object(String(name)));
@@ -831,6 +843,18 @@ function _lumen_deliver_sw_messages(msgs) {
         _sw_msg_queue.push(ev);
     }
     _sw_drain_msg_queue();
+}
+// SW-MSG-S6: `clients.claim()` control messages — fire `controllerchange`
+// for scopes this page has an active registration for (the getter picks the
+// controller up from `_sw_registrations`, so nothing to assign).
+function _lumen_deliver_sw_control(msgs) {
+    for (var i = 0; i < msgs.length; i++) {
+        var reg = _sw_registrations[msgs[i].scope];
+        if (reg && reg.active) {
+            var ce = new Event('controllerchange');
+            _sw_container_et.dispatchEvent.call(_sw_container, ce);
+        }
+    }
 }
 // The accessor (not the plain property Object.assign made) lets the setter
 // open the message queue, per `startMessages`' implicit call on assignment.
@@ -1364,6 +1388,8 @@ var _lumen_history_members = {
             _lumen_location_update(target);
             if (_sn_moved) _sn_note_url(target);
         }
+        // SW-MSG-S6: the hub client record follows the document URL.
+        _sw_client_sync();
         // A same-document entry is added regardless of whether `url` was
         // given (HTML LS §7.4.6 step 8) — the shell must learn about it
         // either way, or its nav_back stack never gains the entry and a
@@ -1383,6 +1409,8 @@ var _lumen_history_members = {
             if (_sn_moved) _sn_note_url(target);
         }
         _lumen_history_replace_url(target !== null ? target : _lumen_loc_parts.href, new_state_json);
+        // SW-MSG-S6: the hub client record follows the document URL.
+        _sw_client_sync();
     },
     back:    function() { _lumen_history_check(this); _lumen_history_instance.go(-1); },
     forward: function() { _lumen_history_check(this); _lumen_history_instance.go(1); },

@@ -183,6 +183,24 @@ pub(crate) fn install_service_worker(
                 }
             );
         }
+        // SW-MSG-S6: this page's client record in the process-global hub —
+        // the shim syncs it at init and on `pushState`/`replaceState` URL
+        // moves; `matchAll`/`get` in a SW isolate read it back.
+        {
+            let cid = sw_client_id.clone();
+            let o = page_origin.clone();
+            reg!(scope, ctx, store,
+                "_lumen_sw_client_update",
+                move |url: String, visibility: String| {
+                    crate::sw_clients::upsert_client(
+                        std::sync::atomic::AtomicU64::load(&cid, std::sync::atomic::Ordering::Relaxed),
+                        o.clone(),
+                        url,
+                        visibility,
+                    );
+                }
+            );
+        }
         // SW-MSG-S3: this page's `Client.id` (SW §5.2) — read by the shim when
         // it stamps the `source` descriptor of an outgoing message.
         {

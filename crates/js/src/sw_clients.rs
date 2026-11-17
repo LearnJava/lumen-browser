@@ -35,8 +35,44 @@ struct SwOutMessage {
     data_json: String,
 }
 
+/// SW-MSG-S6: a live page client known to the hub (SW §5.2 `Client` / §5.3
+/// `WindowClient`). `controlled_by` is the registration scope whose claim
+/// (`clients.claim()`) took this client over; `None` until a claim lands —
+/// the finer "controlled from activation" propagation is BUG-1742's
+/// lifecycle rewrite, not this slice.
+#[derive(Clone)]
+pub(crate) struct SwClientInfo {
+    pub id: u64,
+    pub origin: String,
+    pub url: String,
+    pub visibility_state: String,
+    pub focused: bool,
+    pub controlled_by: Option<String>,
+}
+
+impl SwClientInfo {
+    /// The JSON descriptor the SW shim reifies into a `WindowClient`.
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "id": self.id,
+            "url": self.url,
+            "type": "window",
+            "frameType": "top-level",
+            "visibilityState": self.visibility_state,
+            "focused": self.focused,
+        })
+    }
+}
+
 #[derive(Default)]
 struct SwHub {
+    /// SW-MSG-S6: live page clients in registration order (the order
+    /// `matchAll` reports — "most recently focused" needs focus tracking
+    /// the engine does not have yet).
+    clients: Vec<SwClientInfo>,
+    /// SW-MSG-S6: `clients.claim()` control messages awaiting delivery —
+    /// the page shim's `_lumen_deliver_sw_control` fires `controllerchange`.
+    controls: Vec<(u64, String)>,
     outbox: Vec<SwOutMessage>,
     /// SW-MSG-S5: messages posted by a `MessagePort` living inside a SW
     /// isolate to its transferred partner on a page — routed by port id
@@ -58,6 +94,123 @@ static HUB: OnceLock<Mutex<SwHub>> = OnceLock::new();
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn hub() -> &'static Mutex<SwHub> {
     HUB.get_or_init(|| Mutex::new(SwHub::default()))
+}
+
+/// SW-MSG-S6: create or refresh this page's hub record. Called by the page
+/// shim at init (`_sw_client_sync`), on `pushState` URL moves, and from the
+/// runtime `Drop` (as [`unregister_client`]).
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+pub fn upsert_client(id: u64, origin: String, url: String, visibility_state: String) {
+    if let Ok(mut h) = hub().lock() {
+        if let Some(c) = h.clients.iter_mut().find(|c| c.id == id) {
+            c.url = url;
+            c.visibility_state = visibility_state;
+        } else {
+            h.clients.push(SwClientInfo {
+                id,
+                origin,
+                url,
+                visibility_state,
+                focused: false,
+                controlled_by: None,
+            });
+        }
+    }
+}
+
+/// SW-MSG-S6: the page runtime died — drop its hub record (its outbox
+/// entries become undeliverable and are dropped lazily by [`take_for`]).
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+pub fn unregister_client(id: u64) {
+    if let Ok(mut h) = hub().lock() {
+        h.clients.retain(|c| c.id != id);
+    }
+}
+
+/// SW-MSG-S6: `clients.matchAll({type, includeUncontrolled})` — descriptor
+/// JSON for this worker's origin, restricted to `type` `'window'`/`'all'`
+/// (the engine has no worker/sharedworker clients) and, without
+/// `includeUncontrolled`, to clients this scope has claimed.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+pub fn clients_json(
+    origin: &str,
+    scope: &str,
+    type_filter: &str,
+    include_uncontrolled: bool,
+) -> Option<String> {
+    if type_filter != "window" && type_filter != "all" {
+        return Some("[]".to_string());
+    }
+    let h = hub().lock().ok()?;
+    let list: Vec<serde_json::Value> = h
+        .clients
+        .iter()
+        .filter(|c| {
+            c.origin == origin
+                && (include_uncontrolled || c.controlled_by.as_deref() == Some(scope))
+        })
+        .map(SwClientInfo::to_json)
+        .collect();
+    serde_json::to_string(&list).ok()
+}
+
+/// SW-MSG-S6: `clients.get(id)` — descriptor JSON for `id` within this
+/// worker's origin, `None` for an unknown or foreign-origin client.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+pub fn client_json(origin: &str, id: u64) -> Option<String> {
+    let h = hub().lock().ok()?;
+    h.clients
+        .iter()
+        .find(|c| c.origin == origin && c.id == id)
+        .map(SwClientInfo::to_json)
+        .and_then(|j| serde_json::to_string(&j).ok())
+}
+
+/// SW-MSG-S6: `clients.claim()` — take over every same-origin client whose
+/// url sits inside `scope` and is not yet controlled by this scope; each
+/// takeover queues a control message the page's pump delivers as
+/// `controllerchange`. Returns the number of clients claimed.
+///
+/// shortcut: "not controlled by a more specific registration" from SW
+/// §5.1 claim step 4 is not modelled — single-registration pages are the
+/// only shape the engine has (BUG-1742 owns the real registration model).
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+pub fn claim(origin: &str, scope: &str) -> u32 {
+    let mut claimed = 0;
+    if let Ok(mut h) = hub().lock() {
+        let mut newly: Vec<u64> = Vec::new();
+        let prefix = format!("{origin}{scope}");
+        for c in h.clients.iter_mut() {
+            if c.origin == origin
+                && c.url.starts_with(&prefix)
+                && c.controlled_by.as_deref() != Some(scope)
+            {
+                c.controlled_by = Some(scope.to_string());
+                newly.push(c.id);
+            }
+        }
+        claimed = newly.len() as u32;
+        for id in newly {
+            h.controls.push((id, scope.to_string()));
+        }
+    }
+    claimed
+}
+
+/// Drain the control messages queued for `client_id` (posting order).
+#[cfg(feature = "v8-backend")]
+fn take_controls(client_id: u64) -> Vec<String> {
+    let Ok(mut h) = hub().lock() else { return Vec::new() };
+    let (mut taken, mut kept) = (Vec::new(), Vec::new());
+    for (cid, scope) in h.controls.drain(..) {
+        if cid == client_id {
+            taken.push(scope);
+        } else {
+            kept.push((cid, scope));
+        }
+    }
+    h.controls = kept;
+    taken
 }
 
 /// Queue a message a service worker posted to a page client (SW §3.2.5).
@@ -110,23 +263,37 @@ pub fn bind_port(client_id: u64, port_id: u32) {
 #[cfg(feature = "v8-backend")]
 pub(crate) fn deliver(rt: &crate::v8_runtime::V8JsRuntime, client_id: u64) {
     let items = take_for(client_id);
-    if items.is_empty() {
+    let scopes = take_controls(client_id);
+    if items.is_empty() && scopes.is_empty() {
         return;
     }
-    let arr: Vec<serde_json::Value> = items
-        .iter()
-        .map(|(scope, data_json)| {
-            serde_json::json!({
-                "scope": scope,
-                "json": serde_json::from_str::<serde_json::Value>(data_json)
-                    .unwrap_or(serde_json::Value::Null),
+    if !items.is_empty() {
+        let arr: Vec<serde_json::Value> = items
+            .iter()
+            .map(|(scope, data_json)| {
+                serde_json::json!({
+                    "scope": scope,
+                    "json": serde_json::from_str::<serde_json::Value>(data_json)
+                        .unwrap_or(serde_json::Value::Null),
+                })
             })
-        })
-        .collect();
-    let json = serde_json::to_string(&arr).unwrap_or_else(|_| "[]".to_string());
-    let _ = rt.eval(&format!(
-        "if(typeof _lumen_deliver_sw_messages==='function')_lumen_deliver_sw_messages({json})"
-    ));
+            .collect();
+        let json = serde_json::to_string(&arr).unwrap_or_else(|_| "[]".to_string());
+        let _ = rt.eval(&format!(
+            "if(typeof _lumen_deliver_sw_messages==='function')_lumen_deliver_sw_messages({json})"
+        ));
+    }
+    // SW-MSG-S6: `clients.claim()` control messages — the page shim fires
+    // `controllerchange` for scopes it has an active registration for.
+    if !scopes.is_empty() {
+        let json = serde_json::to_string(
+            &scopes.iter().map(|s| serde_json::json!({ "scope": s })).collect::<Vec<_>>(),
+        )
+        .unwrap_or_else(|_| "[]".to_string());
+        let _ = rt.eval(&format!(
+            "if(typeof _lumen_deliver_sw_control==='function')_lumen_deliver_sw_control({json})"
+        ));
+    }
 }
 
 /// SW-MSG-S5: drain the port-addressed outbox entries whose endpoint is

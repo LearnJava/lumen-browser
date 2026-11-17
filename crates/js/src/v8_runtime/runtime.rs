@@ -2053,6 +2053,11 @@ impl Drop for V8JsRuntime {
         // port this page ever opened, so a worker left with no other client
         // notices and terminates itself instead of outliving the page.
         crate::shared_worker::close_all_client_ports_v8(&self.shared_worker_client_ports);
+        // SW-MSG-S6: this page leaves the process-global SW client registry —
+        // its `Client` must vanish from live SWs' `clients.matchAll()`.
+        crate::sw_clients::unregister_client(
+            self.sw_client_id.load(std::sync::atomic::Ordering::Relaxed),
+        );
         // COMPAT-HANG: закрытие вкладки или навигация роняют последний `Arc`
         // рантайма, а `join` ниже ждал бы зависший скрипт вечно, замораживая
         // тот поток, где случился drop. Рантайму всё равно конец — прерываем.
