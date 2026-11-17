@@ -229,8 +229,8 @@ Lumen пишется с нуля — собственный движок, а н�
 
 ## Лицензия
 
-- **Код Lumen:** [MPL-2.0](https://www.mozilla.org/MPL/2.0/).
-- **Bundled шрифт Inter:** [SIL Open Font License 1.1](assets/fonts/OFL.txt). Совместимо с MPL.
+- **Код Lumen:** [GPL-3.0](https://www.gnu.org/licenses/gpl-3.0.txt) (`LICENSE`). Форк с проприетарными обвесами запрещён: распространяемая производная версия обязана быть открытой под GPL-3.0.
+- **Bundled шрифт Inter:** [SIL Open Font License 1.1](assets/fonts/OFL.txt). Шрифты и сторонние каталоги (WPT) несут собственные лицензии.
 
 ## Куда дальше
 
