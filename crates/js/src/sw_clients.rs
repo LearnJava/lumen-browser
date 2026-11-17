@@ -78,6 +78,10 @@ struct SwHub {
     /// fanned out to every live client of the worker's origin — the page
     /// shim settles pending `register()`/`update()` promises with them.
     eval_results: Vec<(u64, String, bool)>,
+    /// BUG-1742: install outcome of a SW isolate (SW §9.2) — whether the
+    /// install event's `waitUntil` promises fulfilled. The page shim uses it
+    /// to transition the worker to `activated` or `redundant`.
+    install_results: Vec<(u64, String, bool)>,
     /// SW-MSG-S5: messages posted by a `MessagePort` living inside a SW
     /// isolate to its transferred partner on a page — routed by port id
     /// alone (the page's `_lumenPortRegistry` holds the endpoint), so the
@@ -297,6 +301,36 @@ fn take_eval_results(client_id: u64) -> Vec<(String, bool)> {
     taken
 }
 
+/// BUG-1742: report the install outcome of a SW isolate to every live client
+/// of `origin` — the registering page transitions the worker to `activated`
+/// (ok) or `redundant` (failed) based on it.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+pub fn push_install_result(origin: &str, scope: String, ok: bool) {
+    if let Ok(mut h) = hub().lock() {
+        let ids: Vec<u64> =
+            h.clients.iter().filter(|c| c.origin == origin).map(|c| c.id).collect();
+        for id in ids {
+            h.install_results.push((id, scope.clone(), ok));
+        }
+    }
+}
+
+/// BUG-1742: take the install results queued for `client_id`.
+#[cfg(feature = "v8-backend")]
+fn take_install_results(client_id: u64) -> Vec<(String, bool)> {
+    let Ok(mut h) = hub().lock() else { return Vec::new() };
+    let (mut taken, mut kept) = (Vec::new(), Vec::new());
+    for (cid, scope, ok) in h.install_results.drain(..) {
+        if cid == client_id {
+            taken.push((scope, ok));
+        } else {
+            kept.push((cid, scope, ok));
+        }
+    }
+    h.install_results = kept;
+    taken
+}
+
 /// Deliver everything queued for `client_id` to the page behind `rt` by
 /// calling `_lumen_deliver_sw_messages([{scope, json}, …])` — `json` is
 /// embedded as raw JSON, so the shim reads it already parsed (BUG-1814's
@@ -305,8 +339,9 @@ fn take_eval_results(client_id: u64) -> Vec<(String, bool)> {
 pub(crate) fn deliver(rt: &crate::v8_runtime::V8JsRuntime, client_id: u64) {
     let items = take_for(client_id);
     let scopes = take_controls(client_id);
+    let installs = take_install_results(client_id);
     let evals = take_eval_results(client_id);
-    if items.is_empty() && scopes.is_empty() && evals.is_empty() {
+    if items.is_empty() && scopes.is_empty() && evals.is_empty() && installs.is_empty() {
         return;
     }
     if !items.is_empty() {
@@ -334,6 +369,19 @@ pub(crate) fn deliver(rt: &crate::v8_runtime::V8JsRuntime, client_id: u64) {
         .unwrap_or_else(|_| "[]".to_string());
         let _ = rt.eval(&format!(
             "if(typeof _lumen_deliver_sw_control==='function')_lumen_deliver_sw_control({json})"
+        ));
+    }
+    // BUG-1742: install outcomes — delivered before the eval results so the
+    // page already knows whether the install failed when it runs the
+    // lifecycle that `_lumen_deliver_sw_eval_results` starts.
+    if !installs.is_empty() {
+        let arr: Vec<serde_json::Value> = installs
+            .iter()
+            .map(|(scope, ok)| serde_json::json!({ "scope": scope, "ok": ok }))
+            .collect();
+        let json = serde_json::to_string(&arr).unwrap_or_else(|_| "[]".to_string());
+        let _ = rt.eval(&format!(
+            "if(typeof _lumen_deliver_sw_install_results==='function')_lumen_deliver_sw_install_results({json})"
         ));
     }
     // SW-MODULE s4: main-script evaluation results — the page shim settles

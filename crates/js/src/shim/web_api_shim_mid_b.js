@@ -865,6 +865,10 @@ function _sw_install_script_text(scope, scriptUrl, type, uvc, text) {
     // SW-MODULE s6: identity of the worker this install's evaluation/lifecycle
     // belongs to (see `_sw_run_lifecycle`).
     reg._evalWorker = sw;
+    // BUG-1742: a fresh install has no install outcome yet — clear any parked
+    // callback / stale result from a previous worker on this scope.
+    reg._installOk = undefined;
+    reg._awaitInstall = null;
     _sw_registrations[scope] = reg;
     // Register immediately in Rust-side map (for _lumen_sw_has_registration sync checks).
     _lumen_sw_register(scope, String(scriptUrl));
@@ -908,6 +912,10 @@ function _sw_update_with_script(reg, type, text) {
     sw._type = type;
     reg.installing = sw;
     reg._scriptText = text;
+    // BUG-1742: clear any stale install outcome / parked callback from a
+    // previous worker before this one's install runs.
+    reg._installOk = undefined;
+    reg._awaitInstall = null;
     // The lifecycle starts on the isolate's evaluation result (see register()).
     reg._awaitLifecycle = true;
     return true;
@@ -943,90 +951,113 @@ function _sw_run_lifecycle(reg, scriptText) {
         // still catch it, so it can't fire synchronously inside register().
         var uf = new Event('updatefound');
         reg.dispatchEvent(uf);
-        // Fire install event (SW spec §8.2.4)
+        // Fire install event (SW spec §8.2.4) — placeholder: the real install
+        // event already ran inside the isolate, so this no-op `waitUntil` only
+        // keeps page-side listeners honest.
         var installEvt = new Event('install');
         installEvt.waitUntil = function() {};
-        if (sw.state === 'installing') {
-            sw._setState('installed');
-            // SW-MODULE s6: only touch the registration's pointers if they
-            // still hold THIS worker — a register() racing this lifecycle may
-            // have installed a newer one (SW §9.2: the old worker's
-            // installation was discarded).
-            if (reg.installing === sw) {
-                reg.waiting = sw;
-                reg.installing = null;
-            }
-            _lumen_sw_register(reg.scope, reg.scriptURL);
-            setTimeout(function() {
-                if (reg.waiting === sw) reg.waiting = null;
-                sw._setState('activating');
-                reg.active = sw;
-                _sw_container.controller = sw;
-                var activateEvt = new Event('activate');
-                activateEvt.waitUntil = function() {};
-                sw._setState('activated');
-                // SW-MODULE s6: messages queued for this worker while it was
-                // installing are delivered at its activation (SW §3.1.3) —
-                // the isolate spawned before the lifecycle (s4), so the
-                // spawn-time drain already ran.
-                if (typeof _lumen_sw_flush_pending === 'function') {
-                    _lumen_sw_flush_pending(reg.scope);
-                }
-                _sw_persist();
-                // PH3-20/SW-MODULE: hand the SW script to the Rust execution
-                // thread. A registration created by update() carries the text
-                // already; otherwise fetch it here — a module script with a
-                // non-JS MIME type never activates (SW §2.2.2).
-                // SW-MODULE s4: register()/update() already started the
-                // isolate before the lifecycle — don't spawn a second one.
-                if (typeof _lumen_sw_activate_script === 'function' && !reg._isolateStarted) {
-                    (function(scope, scriptURL, type, text, wid) {
-                        if (text) {
-                            _lumen_sw_activate_script(scope, text, scriptURL, type, wid);
-                            return;
-                        }
-                        if (typeof fetch !== 'function') return;
-                        // Update()'s byte-check waits on this promise before it
-                        // compares bytes: otherwise an update() racing the
-                        // activation fetch sees `_scriptText === undefined`
-                        // and wrongly installs a new worker.
-                        reg._scriptPromise = fetch(scriptURL)
-                            .then(function(res) {
-                                return res.text().then(function(t) {
-                                    var mimeOk = type !== 'module' || _sw_is_js_mime(
-                                        res.headers && typeof res.headers.get === 'function'
-                                            ? res.headers.get('Content-Type') : null);
-                                    if (!mimeOk) {
-                                        // Bad MIME: the script never runs; the
-                                        // worker is redundant (SW §9.2 step 7.4).
-                                        return undefined;
-                                    }
-                                    return _sw_script_bytes(scriptURL, t).then(function(bytes) {
-                                        return [t, bytes];
-                                    });
-                                });
-                            })
-                            .then(function(pair) {
-                                if (pair) {
-                                    var reg = _sw_registrations[scope];
-                                    if (reg) reg._scriptText = pair[1];
-                                    _lumen_sw_activate_script(scope, pair[0], scriptURL, type, wid);
-                                }
-                            })
-                            .catch(function() {}); // ignore fetch errors — lifecycle still simulated
-                    })(reg.scope, reg.scriptURL, reg.type, scriptText, sw._wid);
-                }
-                // Fire controllerchange
-                var ce = new Event('controllerchange');
-                _sw_container.dispatchEvent(ce);
-                // Resolve ready
-                if (_sw_ready_resolve) {
-                    _sw_ready_resolve(reg);
-                    _sw_ready_resolve = null;
-                }
-            }, 0);
-        }
+        // SW §9.2: the worker stays `installing` until the isolate's install
+        // event (with its `waitUntil` promises) settles — a rejection means
+        // `redundant`, never `installed`/`activated` (BUG-1742).
+        _sw_finish_install(reg, sw, scriptText);
     }, 0);
+}
+
+// BUG-1742: advance the worker past `installing` once the isolate's install
+// outcome is known. A rejected install `waitUntil` makes the worker redundant
+// and rolls it out of the registration (SW §9.2 step 7.4); success moves it to
+// installed → activating → activated.
+function _sw_finish_install(reg, sw, scriptText) {
+    // The isolate's install result may not have reached the page yet — park a
+    // callback `_lumen_deliver_sw_install_results` invokes when it arrives.
+    if (reg._isolateStarted && reg._installOk === undefined) {
+        reg._awaitInstall = function() { _sw_finish_install(reg, sw, scriptText); };
+        return;
+    }
+    if (reg._installOk === false && sw.state !== 'redundant') {
+        _sw_fail_eval(reg.scope, new TypeError('ServiceWorker installation failed.'));
+        return;
+    }
+    if (sw.state === 'installing') {
+        sw._setState('installed');
+        // SW-MODULE s6: only touch the registration's pointers if they
+        // still hold THIS worker — a register() racing this lifecycle may
+        // have installed a newer one (SW §9.2: the old worker's
+        // installation was discarded).
+        if (reg.installing === sw) {
+            reg.waiting = sw;
+            reg.installing = null;
+        }
+        _lumen_sw_register(reg.scope, reg.scriptURL);
+        setTimeout(function() {
+            if (reg.waiting === sw) reg.waiting = null;
+            sw._setState('activating');
+            reg.active = sw;
+            _sw_container.controller = sw;
+            var activateEvt = new Event('activate');
+            activateEvt.waitUntil = function() {};
+            sw._setState('activated');
+            // SW-MODULE s6: messages queued for this worker while it was
+            // installing are delivered at its activation (SW §3.1.3) —
+            // the isolate spawned before the lifecycle (s4), so the
+            // spawn-time drain already ran.
+            if (typeof _lumen_sw_flush_pending === 'function') {
+                _lumen_sw_flush_pending(reg.scope);
+            }
+            _sw_persist();
+            // PH3-20/SW-MODULE: hand the SW script to the Rust execution
+            // thread. A registration created by update() carries the text
+            // already; otherwise fetch it here — a module script with a
+            // non-JS MIME type never activates (SW §2.2.2).
+            // SW-MODULE s4: register()/update() already started the
+            // isolate before the lifecycle — don't spawn a second one.
+            if (typeof _lumen_sw_activate_script === 'function' && !reg._isolateStarted) {
+                (function(scope, scriptURL, type, text, wid) {
+                    if (text) {
+                        _lumen_sw_activate_script(scope, text, scriptURL, type, wid);
+                        return;
+                    }
+                    if (typeof fetch !== 'function') return;
+                    // Update()'s byte-check waits on this promise before it
+                    // compares bytes: otherwise an update() racing the
+                    // activation fetch sees `_scriptText === undefined`
+                    // and wrongly installs a new worker.
+                    reg._scriptPromise = fetch(scriptURL)
+                        .then(function(res) {
+                            return res.text().then(function(t) {
+                                var mimeOk = type !== 'module' || _sw_is_js_mime(
+                                    res.headers && typeof res.headers.get === 'function'
+                                        ? res.headers.get('Content-Type') : null);
+                                if (!mimeOk) {
+                                    // Bad MIME: the script never runs; the
+                                    // worker is redundant (SW §9.2 step 7.4).
+                                    return undefined;
+                                }
+                                return _sw_script_bytes(scriptURL, t).then(function(bytes) {
+                                    return [t, bytes];
+                                });
+                            });
+                        })
+                        .then(function(pair) {
+                            if (pair) {
+                                var reg = _sw_registrations[scope];
+                                if (reg) reg._scriptText = pair[1];
+                                _lumen_sw_activate_script(scope, pair[0], scriptURL, type, wid);
+                            }
+                        })
+                        .catch(function() {}); // ignore fetch errors — lifecycle still simulated
+                })(reg.scope, reg.scriptURL, reg.type, scriptText, sw._wid);
+            }
+            // Fire controllerchange
+            var ce = new Event('controllerchange');
+            _sw_container.dispatchEvent(ce);
+            // Resolve ready
+            if (_sw_ready_resolve) {
+                _sw_ready_resolve(reg);
+                _sw_ready_resolve = null;
+            }
+        }, 0);
+    }
 }
 
 // Restore registrations saved from a previous page load.
@@ -1322,6 +1353,22 @@ function _lumen_deliver_sw_eval_results(msgs) {
         if (reg._awaitLifecycle) {
             reg._awaitLifecycle = false;
             _sw_run_lifecycle(reg, undefined);
+        }
+    }
+}
+
+// BUG-1742: install outcomes of SW isolates (Rust pump → hub → here). `ok`
+// lets the parked lifecycle advance past `installing`; a failure rolls the
+// worker to `redundant` instead (SW §9.2 — a rejected install `waitUntil`).
+function _lumen_deliver_sw_install_results(msgs) {
+    for (var i = 0; i < msgs.length; i++) {
+        var reg = _sw_registrations[msgs[i].scope];
+        if (!reg) continue;
+        reg._installOk = !!msgs[i].ok;
+        if (reg._awaitInstall) {
+            var cb = reg._awaitInstall;
+            reg._awaitInstall = null;
+            cb();
         }
     }
 }

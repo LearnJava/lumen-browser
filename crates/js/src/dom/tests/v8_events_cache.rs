@@ -605,6 +605,53 @@ fn sw_register_concurrent_same_scope_serializes() {
     );
 }
 
+/// BUG-1742: a rejected `install` `waitUntil` must transition the worker to
+/// `redundant` and roll the (active-less) registration out — not advance it to
+/// `activated` as the old simulated lifecycle did.
+#[test]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+fn sw_install_waituntil_reject_makes_worker_redundant() {
+    let (rt, _store) = v8_sw_runtime_at(
+        "https://reject.test/",
+        "self.addEventListener('install', function(e) { e.waitUntil(Promise.reject(new Error('boom'))); });",
+    );
+    rt.eval(
+        "navigator.serviceWorker.register('/sw.js', { scope: '/app/' });
+         var reg = _sw_registrations['https://reject.test/app/'];
+         globalThis._w = reg ? reg.installing : null;",
+    )
+    .unwrap();
+    assert!(
+        sw_wait_flag(&rt, "globalThis._w && globalThis._w.state === 'redundant'"),
+        "install waitUntil rejection did not make the worker redundant"
+    );
+    assert_eq!(
+        rt.eval("_sw_registrations['https://reject.test/app/'] === undefined").unwrap(),
+        lumen_core::JsValue::Bool(true)
+    );
+}
+
+/// BUG-1742 guard: a fulfilled `install` `waitUntil` still reaches `activated`
+/// (the lifecycle now waits for the isolate's install outcome before advancing).
+#[test]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+fn sw_install_waituntil_fulfill_reaches_activated() {
+    let (rt, _store) = v8_sw_runtime_at(
+        "https://fulfill.test/",
+        "self.addEventListener('install', function(e) { e.waitUntil(Promise.resolve()); });",
+    );
+    rt.eval(
+        "navigator.serviceWorker.register('/sw.js', { scope: '/app/' });
+         var reg = _sw_registrations['https://fulfill.test/app/'];
+         globalThis._w = reg ? reg.installing : null;",
+    )
+    .unwrap();
+    assert!(
+        sw_wait_flag(&rt, "globalThis._w && globalThis._w.state === 'activated'"),
+        "install waitUntil fulfill did not activate the worker"
+    );
+}
+
 /// BUG-675: evaluates `register(args)` and returns the rejection's `name`,
 /// or `"resolved:<scriptURL>"`, plus whether a registration was recorded.
 fn sw_register_outcome(page: &str, args: &str) -> (String, bool) {
