@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-11-17T06:44:45",
+  "timestamp": "2026-11-17T22:24:39",
   "git": {
-    "commit": "31036114e",
-    "branch": "p6-ux-focus-ring",
-    "subject": "Влить ветку p6-ux-cursor-auto: рука над ссылкой и I-beam над текстом"
+    "commit": "2fc885b42",
+    "branch": "p6-load-5",
+    "subject": "Влить ветку cfg-worktree-settings: use_worktree для S1-S6, runtime opencode"
   },
   "crop_offset": [
     8,
@@ -26,7 +26,7 @@
       "html": "00-calibration.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0007,
+      "diff_pct": 0.0008,
       "diff_region": {
         "top": 717,
         "left": 0,
