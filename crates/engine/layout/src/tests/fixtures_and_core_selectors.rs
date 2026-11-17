@@ -1329,6 +1329,90 @@ use super::*;
     }
 
     #[test]
+    fn focus_visible_matches_only_keyboard_focus() {
+        // UX-FOCUS-RING (CSS UI L4 §3.3): клик мышью по ссылке кольца не даёт,
+        // Tab — даёт; UA-таблица рисует кольцо тем же предикатом.
+        let html = "<button>b</button>";
+        let css = "button:focus-visible { color: red; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let vp = Size::new(800.0, 600.0);
+        let a_nid = node_named(
+            &body_layout_box(layout_measured(&doc, &sheet, vp, &Fixed8)),
+            &doc,
+            "button",
+        )
+        .expect("<button> not found");
+
+        set_interactive_state(None, Some(a_nid), None);
+        let by_mouse = body_layout_box(layout_measured(&doc, &sheet, vp, &Fixed8));
+        clear_interactive_state();
+        let a_mouse = lb_named(&by_mouse, &doc, "button").expect("<button> not found");
+        assert_eq!(a_mouse.style.color.r, 0, "клик мышью не матчит :focus-visible");
+        assert_eq!(a_mouse.style.outline_style, OutlineStyle::None, "и кольца не рисует");
+
+        set_interactive_state(None, Some(a_nid), None);
+        set_keyboard_focus(true);
+        let by_tab = body_layout_box(layout_measured(&doc, &sheet, vp, &Fixed8));
+        clear_interactive_state();
+        let a_tab = lb_named(&by_tab, &doc, "button").expect("<button> not found");
+        assert_eq!(a_tab.style.color.r, 255, "Tab матчит :focus-visible");
+        assert_eq!(a_tab.style.outline_style, OutlineStyle::Auto, "UA-кольцо фокуса");
+        assert!(a_tab.style.outline_used_width() > 0.0, "кольцо видимо");
+    }
+
+    #[test]
+    fn focus_visible_always_matches_text_inputs() {
+        // Правило Chrome: текстовое поле в фокусе показывает кольцо и после клика,
+        // checkbox — нет.
+        for (html, matches) in [("<input type='text'>", true), ("<input type='checkbox'>", false)] {
+            let css = "input:focus-visible { color: red; }";
+            let doc = lumen_html_parser::parse(html);
+            let sheet = lumen_css_parser::parse(css);
+            let vp = Size::new(800.0, 600.0);
+            let nid = node_named(
+                &body_layout_box(layout_measured(&doc, &sheet, vp, &Fixed8)),
+                &doc,
+                "input",
+            )
+            .expect("<input> not found");
+            set_interactive_state(None, Some(nid), None);
+            let focused = body_layout_box(layout_measured(&doc, &sheet, vp, &Fixed8));
+            clear_interactive_state();
+            let input = find_node_box(&focused, nid).expect("<input> box not found");
+            assert_eq!(input.style.color.r == 255, matches, "{html}: :focus-visible без клавиатуры");
+        }
+    }
+
+    #[test]
+    fn author_outline_overrides_ua_focus_ring() {
+        // UA-хинт идёт до каскада — авторский outline перекрывает кольцо целиком.
+        let html = "<button>b</button>";
+        let css = "button:focus-visible { outline: 3px solid green; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let vp = Size::new(800.0, 600.0);
+        let a_nid = node_named(
+            &body_layout_box(layout_measured(&doc, &sheet, vp, &Fixed8)),
+            &doc,
+            "button",
+        )
+        .expect("<button> not found");
+        set_interactive_state(None, Some(a_nid), None);
+        set_keyboard_focus(true);
+        let focused = body_layout_box(layout_measured(&doc, &sheet, vp, &Fixed8));
+        clear_interactive_state();
+        let a = lb_named(&focused, &doc, "button").expect("<button> not found");
+        assert!((a.style.outline_width - 3.0).abs() < 0.01, "авторская ширина");
+        assert_eq!(a.style.outline_style, OutlineStyle::Solid);
+    }
+
+    fn find_node_box(b: &LayoutBox, nid: lumen_dom::NodeId) -> Option<&LayoutBox> {
+        if b.node == nid { return Some(b); }
+        b.children.iter().find_map(|c| find_node_box(c, nid))
+    }
+
+    #[test]
     fn active_matches_element_and_ancestor() {
         let html = "<div><button>click</button></div>";
         let css = "div:active { background-color: red; }";

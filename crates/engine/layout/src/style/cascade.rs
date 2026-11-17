@@ -44,6 +44,7 @@ use crate::style::{
     ua_font_family,
     ua_font_size_factor, ua_font_style, ua_font_weight, ua_link_color, ua_text_align, ua_vertical_align,
     ua_cursor,
+    apply_ua_focus_ring,
     initial_value_equivalent, parse_css_wide_keyword, ua_white_space, validate_against_syntax,
     with_front_cascade_index,
     AlignValue, ComputedStyle, CssContinue, CssWideKeyword, Display, FlexDirection, FlexWrap,
@@ -481,6 +482,8 @@ pub(crate) fn compute_style_shareable(
     if let Some(c) = ua_cursor(doc, node) {
         style.cursor = c;
     }
+    // UA stylesheet: :focus-visible → outline: 2px auto (CSS UI L4 §3.3, §5.3).
+    apply_ua_focus_ring(doc, node, &mut style);
     // UA stylesheet: <small>/<sub>/<sup> → font-size: 0.83× parent.
     // HTML5 §15.3.3. Author font-size перекроет через pre-pass.
     if let Some(factor) = ua_font_size_factor(doc, node) {

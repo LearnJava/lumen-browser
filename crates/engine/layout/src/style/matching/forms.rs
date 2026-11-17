@@ -19,7 +19,7 @@ use std::cell::Cell;
 use lumen_css_parser::{Combinator, ComplexSelector, DirArg, PseudoClass};
 use lumen_dom::{Document, NodeData, NodeId};
 
-use crate::style::env::{ACTIVE_NID, FOCUS_NID, HOVER_NID};
+use crate::style::env::{ACTIVE_NID, FOCUS_NID, HOVER_NID, KEYBOARD_FOCUS};
 use crate::style::presentational::{first_strong_direction, first_strong_in_text, slot_assigned_directionality};
 use crate::style::{Direction, SHADOW_HOST_SCOPE};
 
@@ -195,10 +195,8 @@ pub(in crate::style) fn matches_pseudo_class(p: &PseudoClass, doc: &Document, no
             if fid == u32::MAX { return false; }
             is_self_or_ancestor(doc, node, NodeId::from_index(fid as usize))
         }
-        // `:focus-visible` — Phase 0: identical to `:focus` (no keyboard-vs-mouse distinction yet).
-        PseudoClass::FocusVisible => {
-            FOCUS_NID.with(Cell::get) == node.index() as u32
-        }
+        // `:focus-visible` — CSS UI L4 §3.3: клавиатурный фокус либо текстовое поле.
+        PseudoClass::FocusVisible => matches_focus_visible(doc, node),
         PseudoClass::Unsupported(_) => false,
         // CSS Scoping L1 §6.1: `:host` matches the shadow host element, but ONLY
         // from within that host's own shadow-tree stylesheet. We model scope with
@@ -247,6 +245,30 @@ fn input_type_lower(doc: &Document, node: NodeId) -> String {
         .map(|t| t.trim().to_ascii_lowercase())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "text".to_string())
+}
+
+/// CSS UI L4 §3.3 `:focus-visible` — focused element, когда фокус пришёл
+/// с клавиатуры ([`crate::style::env::set_keyboard_focus`]); текстовые поля
+/// матчатся всегда, как в Chrome (клик по полю даёт кольцо, клик по кнопке нет).
+/// Тот же предикат читает UA-хинт кольца (`ua::apply_ua_focus_ring`), поэтому
+/// селектор и кольцо не могут разойтись.
+pub(in crate::style) fn matches_focus_visible(doc: &Document, node: NodeId) -> bool {
+    if FOCUS_NID.with(Cell::get) != node.index() as u32 {
+        return false;
+    }
+    KEYBOARD_FOCUS.with(Cell::get) || is_text_field(doc, node)
+}
+
+/// Текстовое поле — `<textarea>` или text-like `<input>` (HTML LS §4.10.5).
+fn is_text_field(doc: &Document, node: NodeId) -> bool {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return false;
+    };
+    match name.local.as_str() {
+        "textarea" => true,
+        "input" => input_is_text_like(&input_type_lower(doc, node)),
+        _ => false,
+    }
 }
 
 /// `<input>`-типы, к которым применимы `:read-only` / `:read-write` per HTML5
