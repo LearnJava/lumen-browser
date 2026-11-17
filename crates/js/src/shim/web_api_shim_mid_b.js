@@ -839,17 +839,19 @@ function _sw_script_bytes(scriptUrl, mainText) {
     return Promise.all(urls.map(function(u) {
         var abs = new URL(u, base).href;
         return fetch(abs).then(function(r) {
-            return r.text().then(function(t) { return { url: abs, text: t }; });
-        }).catch(function() { return { url: abs, text: '<import fetch error>' }; });
+            return r.text().then(function(t) { return { url: abs, text: t, ok: true }; });
+        }).catch(function() { return { url: abs, text: '<import fetch error>', ok: false }; });
     })).then(function(items) {
         // BUG-1742: the imports map (absolute URL → text) rides along with the
         // byte-check string — the isolate reuses these bytes in `importScripts`
-        // instead of fetching them a second time.
+        // instead of fetching them a second time. A failed page fetch is left
+        // OUT of the map (the sentinel stays in the byte-check string), so the
+        // isolate falls back to its own network fetch rather than evaluating it.
         var imports = {};
         var texts = [];
         for (var i = 0; i < items.length; i++) {
-            imports[items[i].url] = items[i].text;
             texts.push(items[i].text);
+            if (items[i].ok) imports[items[i].url] = items[i].text;
         }
         return { bytes: mainText + '\n' + texts.join('\n'), imports: imports };
     });
