@@ -838,7 +838,7 @@ fn run_sw_thread_v8(
     if is_module {
         // Static imports need the ESM loader's base+fetcher; dynamic `import()`
         // in a SW is forbidden by spec and must reject.
-        rt.set_module_context(&script_url, fetch_provider.clone());
+        rt.set_module_context_bypassing_sw(&script_url, fetch_provider.clone());
         rt.set_dynamic_import_denied(true);
         // SW-MODULE s4: the evaluation result routes back to the page
         // (SW §9.2 "Expect evaluation failed"): a pending `register()` /
@@ -2197,6 +2197,87 @@ self.addEventListener('fetch', function(event) {
     }
 
     // SW-MODULE tests ========================================================
+
+    /// SW-MODULE s5: fetch статического импорта в SW-изоляте идёт в обход
+    /// SW-перехватчика (`fetch_bypassing_sw`). Перехватный путь (`fetch_sync`)
+    /// у настоящей сети ушёл бы в собственный fetch-обработчик воркера, и
+    /// изолят заблокировался бы сам на себе — здесь он обязан остаться
+    /// нетронутым.
+    #[test]
+    fn v8_sw_module_static_import_fetch_bypasses_interceptor() {
+        let cache = MockCache::new();
+        struct InterceptorNet;
+        impl lumen_core::ext::JsFetchProvider for InterceptorNet {
+            fn fetch_sync(
+                &self,
+                url: &str,
+                _method: &str,
+            ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+                // Перехватный путь должен остаться нетронутым: вернём
+                // «пойманный» ответ, тест поймает его в respondWith.
+                Ok(lumen_core::ext::JsFetchResult {
+                    status: 200,
+                    status_text: "OK".into(),
+                    headers: vec![],
+                    body: b"intercepted".to_vec(),
+                    url: url.to_string(),
+                })
+            }
+            fn fetch_bypassing_sw(
+                &self,
+                url: &str,
+                _method: &str,
+            ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+                let body = if url.ends_with("/dep.js") {
+                    b"export const dep = 'bypassed';".to_vec()
+                } else {
+                    Vec::new()
+                };
+                Ok(lumen_core::ext::JsFetchResult {
+                    status: 200,
+                    status_text: "OK".into(),
+                    headers: vec![],
+                    body,
+                    url: url.to_string(),
+                })
+            }
+        }
+        let handle = spawn_sw_worker_v8(
+            "https://example.com".to_string(),
+            "/".to_string(),
+            r#"
+import { dep } from './dep.js';
+globalThis.__dep = dep;
+self.addEventListener('fetch', function(event) {
+    event.respondWith(Promise.resolve(new Response(globalThis.__dep)));
+});
+"#
+            .to_string(),
+            "https://example.com/sw.js".to_string(),
+            true,
+            Arc::clone(&cache) as Arc<dyn CacheBackend>,
+            Some(Arc::new(InterceptorNet) as Arc<dyn lumen_core::ext::JsFetchProvider>),
+            None,
+            None,
+            0,
+        );
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        handle
+            .tx
+            .send(lumen_core::ext::SwWorkerMessage::Fetch(lumen_core::ext::SwFetchRequest {
+                url: "https://example.com/page".to_string(),
+                method: "GET".to_string(),
+                response_tx: tx,
+            }))
+            .unwrap();
+
+        let result = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&result.unwrap_or_default()),
+            "bypassed"
+        );
+    }
 
     /// Модульный SW исполняется как ES-модуль: статический `import` графа
     /// грузится загрузчиком по своим URL и переменная попадает в изолят.

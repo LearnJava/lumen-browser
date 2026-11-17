@@ -77,6 +77,11 @@ struct EsmState {
     /// обязателен отклонять его (SW §Run Service Worker). Ставится только
     /// в SW-потоке перед исполнением модульного скрипта.
     deny_dynamic_import: bool,
+    /// SW-MODULE s5: fetch модуля в SW-изолятe идёт в обход SW-перехватчика,
+    /// иначе статический `import` из самого изолята уходит в его собственный
+    /// fetch-обработчик и изолят блокируется сам на себе (тред занят
+    /// `eval_module_at`, сообщения не читает).
+    bypass_intercept: bool,
 }
 
 thread_local! {
@@ -118,6 +123,11 @@ pub(crate) fn set_fetch_provider(provider: Option<Arc<dyn JsFetchProvider>>) {
 /// SW-MODULE: включить/выключить отказ динамического `import()` (SW-изолят).
 pub(crate) fn set_dynamic_import_denied(denied: bool) {
     with_state(|s| s.deny_dynamic_import = denied);
+}
+
+/// SW-MODULE s5: fetch модулей этого рантайма идёт в обход SW-перехватчика.
+pub(crate) fn set_fetch_bypasses_sw(bypass: bool) {
+    with_state(|s| s.bypass_intercept = bypass);
 }
 
 /// Прочитать модуль с диска по `file://`-спецификатору.
@@ -191,6 +201,11 @@ fn fetch_over_network(
     // sees the tag) — take those bytes instead of a second GET.
     let fetched = match provider.fetch_preloaded(specifier) {
         Some(res) => Ok(res),
+        // SW-изолят: в обход перехватчика — импорт не должен доставаться
+        // собственному fetch-обработчику воркера (взаимная блокировка).
+        None if with_state(|s| s.bypass_intercept) => {
+            provider.fetch_bypassing_sw(specifier, "GET")
+        }
         None => provider.fetch_sync(specifier, "GET"),
     };
     let outcome = match fetched {
