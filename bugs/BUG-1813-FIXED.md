@@ -36,7 +36,7 @@ detached:              contentWindow === null (верно)
 `about:blank`) фасад проксирует в `_lumen_f_global_get`, а у биндинга нет
 `peer` (`FrameDocBinding::peer`) — `resolve_peer` отвечал `kind: 'undefined'`
 (тег `absent`) на любой запрос. Осознанное ограничение среза 3
-[BUG-1790](BUG-1790-OPEN.md) для `eval` («код, исполненный здесь, не увидит
+[BUG-1790](BUG-1790-FIXED.md) для `eval` («код, исполненный здесь, не увидит
 собственных глобалов кадра»), но оно было распространено на все глобалы,
 включая встроенные объекты, которые подделкой не являются: `JSON`, `Object`,
 `Array`, `Math`, `TextEncoder`, …

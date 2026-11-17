@@ -297,6 +297,26 @@ pub(crate) fn spawn_frame(
         },
     };
 
+    // FRAME-остаток (contentWindow.eval): iframe без src/srcdoc не
+    // навигируется никогда — HTML LS §7.3.1 держит ЕДИНЫЙ начальный
+    // about:blank, поэтому shell ПОДХВАТЫВАЕТ документ начального кадра
+    // вместе с его рантаймом, а не заменяет свежим пустым: иначе состояние,
+    // записанное в кадр из родителя (`eval`/мутации `contentDocument`),
+    // потеряно в момент «загрузки». Рантайм заводится лениво — первым
+    // чтением `contentWindow.eval` (`ensure_initial_frame_runtime`); без
+    // него подхватывать нечего, идёт обычная загрузка (свежий документ и
+    // рантайм, биндинг замещается — как до среза). С src/srcdoc — навигация:
+    // начальный документ замещается, как у Chrome.
+    let initial_frame = if dest.is_none()
+        && info.src.is_none()
+        && info.srcdoc.is_none()
+        && !info.embedded
+        && js_url_result.is_none()
+    {
+        parent_js.and_then(|js| js.take_initial_frame_document(info.node.index() as u32))
+    } else {
+        None
+    };
     let mut child_doc = {
         let _s = lumen_core::trace::span("parse-html-frame", "parse");
         if child_is_svg {
@@ -457,26 +477,44 @@ pub(crate) fn spawn_frame(
         ResourceBaseKind::File(_) => (None, None, None),
     };
     let _runtime_span = lumen_core::trace::span("frame-runtime", "js");
-    let (child_doc_arc, child_nav, child_js) = run_scripts_with_dom(
-        child_doc,
-        info.sandbox,
-        &child_url,
-        child_fetch,
-        child_ws,
-        child_sse,
-        env.ls_store.clone().filter(|_| !opaque),
-        env.ss_store.clone().filter(|_| !opaque),
-        env.idb_backend.clone().filter(|_| !opaque),
-        env.sw_backend.clone().filter(|_| !opaque),
-        env.sw_worker_store.clone().filter(|_| !opaque),
-        env.cache_backend.clone().filter(|_| !opaque),
-        env.push_backend.clone().filter(|_| !opaque),
-        env.cookie_banner_dismiss,
-        env.deterministic,
-        env.cross_origin_isolated,
-        &[],
-        classic_scripts,
-        deferred_scripts,
+    let (child_doc_arc, child_nav, child_js) = match initial_frame {
+        // FRAME-остаток: подхвачен живой изолят начального кадра — второй
+        // рантайм на тот же документ не строится (конструкция моста: один
+        // рантайм = один документ), разобранная пустышка `child_doc`
+        // выбрасывается. DCL/window load доставляются ниже, как свежему
+        // кадру; parserных скриптов у начального кадра нет — код попадает
+        // туда только через `contentWindow.eval`.
+        #[cfg(feature = "v8")]
+        Some((doc, rt)) => (
+            doc,
+            None,
+            Some(
+                Arc::new(crate::persistent_js::V8PersistentJs { rt })
+                    as Arc<dyn PersistentJs>,
+            ),
+        ),
+        #[cfg(not(feature = "v8"))]
+        Some(_) => (Arc::new(std::sync::Mutex::new(lumen_dom::Document::new())), None, None),
+        None => run_scripts_with_dom(
+            child_doc,
+            info.sandbox,
+            &child_url,
+            child_fetch,
+            child_ws,
+            child_sse,
+            env.ls_store.clone().filter(|_| !opaque),
+            env.ss_store.clone().filter(|_| !opaque),
+            env.idb_backend.clone().filter(|_| !opaque),
+            env.sw_backend.clone().filter(|_| !opaque),
+            env.sw_worker_store.clone().filter(|_| !opaque),
+            env.cache_backend.clone().filter(|_| !opaque),
+            env.push_backend.clone().filter(|_| !opaque),
+            env.cookie_banner_dismiss,
+            env.deterministic,
+            env.cross_origin_isolated,
+            &[],
+            classic_scripts,
+            deferred_scripts,
         // BUG-480 срез 8: фрейму рантайм нужен даже без единого парсерного
         // скрипта — иначе ему нечем принимать кросс-фреймовые postMessage/
         // события/RunScript (срезы 4–8), а статические iframe — самый
@@ -508,7 +546,8 @@ pub(crate) fn spawn_frame(
         // согласован с `fetch_iframe_source` выше (тот же хост `child_url`).
         crate::lumen::compat::compat_identity_for_url(&child_url),
         Some(&ancestry),
-    );
+        ),
+    };
     drop(_runtime_span);
     // PERF-14: same headless settle the page gets after its own scripts.
     crate::page_pipeline::settle_headless_fetches(child_js.as_ref());

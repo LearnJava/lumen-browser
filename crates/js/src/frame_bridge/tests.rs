@@ -17,7 +17,7 @@
         // бриджа); тестовый изолят объявляет его ДО установки, чтобы блок
         // переопределения window.parent/top/… в шиме отработал так же.
         rt.eval("var window = globalThis;").unwrap();
-        install_frame_bridge_v8(&rt, Arc::clone(&registry)).unwrap();
+        install_frame_bridge_v8(&rt, Arc::clone(&registry), None, false).unwrap();
         let doc = lumen_html_parser::parse(html);
         registry.lock().unwrap().frames.push(FrameDocBinding {
             host_nid: 7,
@@ -37,7 +37,7 @@
         let rt = V8JsRuntime::new().unwrap();
         let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
         rt.eval("var window = globalThis;").unwrap();
-        install_frame_bridge_v8(&rt, registry).unwrap();
+        install_frame_bridge_v8(&rt, registry, None, false).unwrap();
         f(&rt);
     }
 
@@ -62,7 +62,7 @@
         let rt = V8JsRuntime::new().unwrap();
         let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
         rt.eval("var window = globalThis;").unwrap();
-        install_frame_bridge_v8(&rt, Arc::clone(&registry)).unwrap();
+        install_frame_bridge_v8(&rt, Arc::clone(&registry), None, false).unwrap();
         {
             let mut reg = registry.lock().unwrap();
             reg.parent = Some(FrameDocBinding {
@@ -105,7 +105,7 @@
         let rt = V8JsRuntime::new().unwrap();
         let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
         rt.eval("var window = globalThis;").unwrap();
-        install_frame_bridge_v8(&rt, Arc::clone(&registry)).unwrap();
+        install_frame_bridge_v8(&rt, Arc::clone(&registry), None, false).unwrap();
         registry.lock().unwrap().frames.push(FrameDocBinding {
             host_nid: 7,
             doc: Arc::new(Mutex::new(lumen_html_parser::parse("<html><body></body></html>"))),
@@ -442,7 +442,7 @@
         let rt = V8JsRuntime::new().unwrap();
         let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
         rt.eval("var window = globalThis;").unwrap();
-        install_frame_bridge_v8(&rt, Arc::clone(&registry)).unwrap();
+        install_frame_bridge_v8(&rt, Arc::clone(&registry), None, false).unwrap();
         let parent_doc = Arc::new(Mutex::new(lumen_html_parser::parse(
             "<html><body><iframe id='host' name='hostframe'></iframe></body></html>",
         )));
@@ -501,7 +501,7 @@
         let rt = V8JsRuntime::new().unwrap();
         let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
         rt.eval("var window = globalThis;").unwrap();
-        install_frame_bridge_v8(&rt, Arc::clone(&registry)).unwrap();
+        install_frame_bridge_v8(&rt, Arc::clone(&registry), None, false).unwrap();
         let parent_doc = Arc::new(Mutex::new(lumen_html_parser::parse(
             "<html><body><iframe id='host' name='hostframe'></iframe></body></html>",
         )));
@@ -544,7 +544,7 @@
         let rt = V8JsRuntime::new().unwrap();
         let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
         rt.eval("var window = globalThis;").unwrap();
-        install_frame_bridge_v8(&rt, Arc::clone(&registry)).unwrap();
+        install_frame_bridge_v8(&rt, Arc::clone(&registry), None, false).unwrap();
         for (i, (nid, name)) in [(0u32, (11u32, None)), (1u32, (12u32, Some("second".to_owned())))] {
             registry.lock().unwrap().frames.push(FrameDocBinding {
                 host_nid: nid,
@@ -612,7 +612,7 @@
         let rt_parent = V8JsRuntime::new().unwrap();
         let reg_p: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
         rt_parent.eval("var window = globalThis;").unwrap();
-        install_frame_bridge_v8(&rt_parent, Arc::clone(&reg_p)).unwrap();
+        install_frame_bridge_v8(&rt_parent, Arc::clone(&reg_p), None, false).unwrap();
         {
             let mut p = reg_p.lock().unwrap();
             p.self_key = Some(Arc::as_ptr(&parent_doc) as usize);
@@ -634,7 +634,7 @@
         let rt_child = V8JsRuntime::new().unwrap();
         let reg_c: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
         rt_child.eval("var window = globalThis;").unwrap();
-        install_frame_bridge_v8(&rt_child, Arc::clone(&reg_c)).unwrap();
+        install_frame_bridge_v8(&rt_child, Arc::clone(&reg_c), None, false).unwrap();
         {
             let mut c = reg_c.lock().unwrap();
             c.self_key = Some(Arc::as_ptr(&child_doc) as usize);
@@ -831,7 +831,7 @@
         let rt = V8JsRuntime::new().unwrap();
         let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
         rt.eval("var window = globalThis;").unwrap();
-        install_frame_bridge_v8(&rt, Arc::clone(&registry)).unwrap();
+        install_frame_bridge_v8(&rt, Arc::clone(&registry), None, false).unwrap();
         let doc = Arc::new(Mutex::new(lumen_html_parser::parse(html)));
         registry.lock().unwrap().frames.push(FrameDocBinding {
             host_nid: 7,
@@ -852,7 +852,7 @@
         let rt = V8JsRuntime::new().unwrap();
         let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
         rt.eval("var window = globalThis;").unwrap();
-        install_frame_bridge_v8(&rt, Arc::clone(&registry)).unwrap();
+        install_frame_bridge_v8(&rt, Arc::clone(&registry), None, false).unwrap();
         registry.lock().unwrap().frames.push(FrameDocBinding {
             host_nid: 7,
             doc: Arc::clone(doc),
@@ -991,7 +991,7 @@
         let rt = V8JsRuntime::new().unwrap();
         let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
         rt.eval("var window = globalThis;").unwrap();
-        install_frame_bridge_v8(&rt, Arc::clone(&registry)).unwrap();
+        install_frame_bridge_v8(&rt, Arc::clone(&registry), None, false).unwrap();
         let make = |html: &str, url: &str| FrameDocBinding {
             host_nid: 7,
             doc: Arc::new(Mutex::new(lumen_html_parser::parse(html))),
@@ -1030,7 +1030,7 @@
         let rt = V8JsRuntime::new().unwrap();
         let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
         rt.eval("var window = globalThis;").unwrap();
-        install_frame_bridge_v8(&rt, Arc::clone(&registry)).unwrap();
+        install_frame_bridge_v8(&rt, Arc::clone(&registry), None, false).unwrap();
         for (host, html) in [
             (7u32, "<html><body><p id='first'>a</p></body></html>"),
             (8u32, "<html><body><p id='second'>b</p></body></html>"),
@@ -1761,7 +1761,7 @@
             let rt = V8JsRuntime::new().unwrap();
             let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
             rt.eval("var window = globalThis;").unwrap();
-            install_frame_bridge_v8(&rt, Arc::clone(&registry)).unwrap();
+            install_frame_bridge_v8(&rt, Arc::clone(&registry), None, false).unwrap();
             {
                 let mut reg = registry.lock().unwrap();
                 reg.self_key = Some(Arc::as_ptr(own) as usize);
@@ -1851,4 +1851,143 @@
                 &format!("_lumen_f_post_message({bid}, '\"back\"', '*', '[]')"),
             ));
         });
+    }
+
+    /// FRAME-остаток: харнес страницы с одним `<iframe>`-хостом — как прода
+    /// (`install_dom` ставит self_doc/self_url/self_origin и реестр под
+    /// ключом документа). Возвращает nid хоста.
+    fn with_initial_frame_page(
+        host_html: &str,
+        f: impl FnOnce(&V8JsRuntime, &FrameDocRegistry, u32),
+    ) {
+        let page_doc = Arc::new(Mutex::new(lumen_html_parser::parse(host_html)));
+        let host_nid = lumen_dom::collect_iframes(&page_doc.lock().unwrap())[0].node.index() as u32;
+        let rt = V8JsRuntime::new().unwrap();
+        // Реестр — собственный слот рантайма (как в проде): take_initial_frame
+        // читает его же, а не сторонний Arc.
+        let registry: FrameDocRegistry = rt.own_doc_slots();
+        rt.eval("var window = globalThis;").unwrap();
+        install_frame_bridge_v8(&rt, Arc::clone(&registry), None, false).unwrap();
+        // Пир-чтение глобалов кадра — отдельная установка (BUG-979), в проде
+        // стоит рядом с бриджем в install_dom.
+        crate::frame_bridge_globals::install_frame_bridge_globals_v8(
+            &rt,
+            Arc::clone(&registry),
+        )
+        .unwrap();
+        {
+            let mut reg = registry.lock().unwrap();
+            reg.self_key = Some(Arc::as_ptr(&page_doc) as usize);
+            reg.self_doc = Some(Arc::clone(&page_doc));
+            reg.self_origin = "https://page.test".to_owned();
+            reg.self_url = "https://page.test/".to_owned();
+        }
+        register_frame_registry(Arc::as_ptr(&page_doc) as usize, &registry);
+        f(&rt, &registry, host_nid);
+    }
+
+    /// FRAME-остаток: первое чтение `contentWindow.eval` заводит начальному
+    /// about:blank-кадру собственный изолят — `eval` исполняет код В КАДРЕ
+    /// (состояние переживает вызовы, глобалы читаются через пир), а
+    /// `take_initial_frame` отдаёт рантайм shell'у один раз.
+    #[test]
+    fn initial_frame_eval_creates_a_runtime_whose_state_persists() {
+        with_initial_frame_page("<body><iframe id=f></iframe></body>", |rt, _reg, host_nid| {
+            let host = host_nid.to_string();
+            // Чтение contentWindow — начальный кадр без рантайма (срез 3).
+            assert!(eval_bool(
+                rt,
+                &format!("var w = _lumen_frame_content_window({host}); \
+                 w !== null && w.document !== null")
+            ));
+            assert!(eval_bool(
+                rt,
+                &format!("var bid = _lumen_frame_binding({host}); \
+                 bid !== null && _lumen_f_global_get(bid, 'eval').kind === 'nopeer'")
+            ));
+            // Без рантайма подхватывать нечего — и метка кадра сохраняется.
+            assert!(rt.take_initial_frame(host_nid).is_none());
+            // Первое чтение eval — изолят заведён, код исполняется в кадре.
+            assert!(eval_bool(
+                rt,
+                &format!("var w = _lumen_frame_content_window({host}); \
+                 typeof w.eval === 'function' && w.eval('1+1') === 2")
+            ));
+            // Состояние realm'а кадра живёт между вызовами и видится
+            // синхронно через peer (BUG-979).
+            assert!(eval_bool(
+                rt,
+                // undefined по границе изолятов сериализуется как null
+                // (v8_compat::v8_to_jsvalue) — значимо только само исполнение.
+                &format!("var w = _lumen_frame_content_window({host}); \
+                 w.eval('var insideFrame = 41') === null")
+            ));
+            assert!(eval_bool(
+                rt,
+                &format!("_lumen_frame_content_window({host}).eval('insideFrame') === 41")
+            ));
+            assert!(eval_bool(
+                rt,
+                &format!("_lumen_frame_content_window({host}).insideFrame === 41")
+            ));
+            // Shell забирает рантайм один раз; биндинг живёт дальше.
+            let taken = rt.take_initial_frame(host_nid);
+            assert!(taken.is_some() && rt.take_initial_frame(host_nid).is_none());
+            assert!(eval_bool(
+                rt,
+                &format!("_lumen_frame_content_window({host}).eval('2+2') === 4")
+            ));
+        });
+    }
+
+    /// FRAME-остаток: настоящая регистрация (src-кадр) снимает начальную
+    /// запись — изолят начального кадра умирает, `take_initial_frame` пуст.
+    #[test]
+    fn frame_registration_supersedes_the_initial_frame_runtime() {
+        with_initial_frame_page("<body><iframe id=f></iframe></body>", |rt, _reg, host_nid| {
+            let host = host_nid.to_string();
+            assert!(eval_bool(
+                rt,
+                &format!("typeof _lumen_frame_content_window({host}).eval === 'function'")
+            ));
+            let loaded = Arc::new(Mutex::new(lumen_html_parser::parse("<p>loaded")));
+            rt.register_frame_document(
+                host_nid,
+                loaded,
+                "https://page.test/child".to_owned(),
+                None,
+                true,
+                false,
+                None,
+            );
+            assert!(rt.take_initial_frame(host_nid).is_none());
+            // Новый документ кадра — состояние начального realm'а не пережило
+            // навигацию (как у Chrome); peer новой регистрации тест не ставил.
+            assert!(eval_bool(
+                rt,
+                &format!("var w = _lumen_frame_content_window({host}); \
+                 w.document !== null && w.insideFrame === undefined")
+            ));
+        });
+    }
+
+    /// FRAME-остаток: opaque-sandbox хост (`sandbox` без `allow-same-origin`)
+    /// рантайма не получает — `eval` остаётся `undefined`, как у Chrome,
+    /// где непрозрачное окно не отдаёт доступ к своим глобалам.
+    #[test]
+    fn opaque_sandbox_initial_frame_gets_no_runtime() {
+        with_initial_frame_page(
+            "<body><iframe id=s sandbox=\"allow-scripts\"></iframe></body>",
+            |rt, _reg, host_nid| {
+                let host = host_nid.to_string();
+                assert!(eval_bool(
+                    rt,
+                    &format!("_lumen_frame_content_window({host}) !== null")
+                ));
+                assert!(eval_bool(
+                    rt,
+                    &format!("_lumen_frame_content_window({host}).eval === undefined")
+                ));
+            },
+        );
     }

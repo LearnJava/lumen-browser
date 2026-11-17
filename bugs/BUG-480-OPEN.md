@@ -1811,8 +1811,20 @@ shell 1610+2 ok (без изменений — новый путь не имее
 null` для элементов без `src`/`srcdoc` из перечисленных выше выборок (проверено тестом, не
 прогоном WPT).
 
-Не закрыто: у начального кадра **нет своего изолята** — `contentWindow.eval(...)` в нём
-`undefined` (в Chrome работает, about:blank same-origin). Живой Cloudflare Turnstile
-проверяет наличие `eval` и ждёт сообщений от этого realm. Следующий срез — документ
-начального кадра принадлежит движку (загрузка shell'а его подхватывает, а не заменяет) и
-имеет собственный V8-контекст.
+## Начальная рама — собственный V8-изолят (2026-11-17, P3, закрыт в BUG-1790 срезе 6)
+
+Не закрытое в предыдущем пункте («`contentWindow.eval` — `undefined`», живой Turnstile
+проверял наличие `eval`) закрыто. Начальный about:blank получает собственный изолят —
+лениво, первым чтением `eval` (`ensure_initial_frame_runtime`, `_lumen_f_initial_frame_runtime`);
+загрузка shell'а ПОДХВАТЫВАЕТ документ и рантайм начального кадра вместо замены
+(`V8JsRuntime::take_initial_frame` в `spawn_frame`, только iframe без `src`/`srcdoc`), поэтому
+состояние из `eval`/мутаций `contentDocument` переживает «загрузку». Opaque-sandbox —
+рантайма нет (у Chrome непрозрачное окно тоже не отдаёт глобалы). Попутно, из живого
+прогона, два зависания инфраструктуры моста: регистрация биндинга пишет реестр напрямую
+(не в очередь JS-потока страницы — рендер синхронно ждал готовности кадра, взаимное
+ожидание 60+ с), занятый пир деградирует до `nopeer` (`FramePeerBridge::peer_busy`).
+Живая проверка peet.ws — токен; подробности и осознанные недоделки (непумпимый до
+подхвата изолят, очередь `take_initial_frame`) — срез 6 `bugs/BUG-1790-FIXED.md`.
+Тесты: `initial_frame_eval_creates_a_runtime_whose_state_persists`,
+`frame_registration_supersedes_the_initial_frame_runtime`,
+`opaque_sandbox_initial_frame_gets_no_runtime`.

@@ -238,6 +238,9 @@ impl V8JsRuntime {
             reg.self_doc = Some(Arc::clone(&doc));
             crate::frame_bridge::register_frame_registry(Arc::as_ptr(&doc) as usize, &self.frame_docs);
             reg.self_origin = page_origin.clone();
+            // FRAME-остаток: полный адрес — слот предка начального кадра и
+            // наследование origin его рантайма читают URL, а не только origin.
+            reg.self_url = page_url.clone();
             self.self_doc_key
                 .store(Arc::as_ptr(&doc) as usize, Ordering::Relaxed);
         }
@@ -1156,9 +1159,14 @@ impl V8JsRuntime {
         // а не через install_v8! — нативы `_lumen_f_*` читают тот же Arc,
         // куда пишет register_frame_document. Ставится до iframe_element:
         // его геттеры вызывают функции шима бриджа.
-        if let Err(e) =
-            crate::frame_bridge::install_frame_bridge_v8(self, Arc::clone(&self.frame_docs))
-        {
+        // FRAME-остаток: профиль идентичности и COI родителя — рантайм
+        // начального кадра наследует их у читающего контекста.
+        if let Err(e) = crate::frame_bridge::install_frame_bridge_v8(
+            self,
+            Arc::clone(&self.frame_docs),
+            self.identity_profile,
+            cross_origin_isolated,
+        ) {
             eprintln!("v8: frame_bridge::install_frame_bridge_v8 failed: {e}");
         }
         // BUG-979: `_lumen_f_global_get`/`_lumen_f_global_call` — winFacade's
