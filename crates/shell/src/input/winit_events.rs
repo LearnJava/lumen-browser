@@ -39,8 +39,10 @@ pub(crate) fn cursor_icon_for_hover(hover: scrollbar::TrackClick, drag_active: b
 }
 
 /// Конвертирует CSS `cursor` keyword в winit `CursorIcon`.
-/// `Auto` → `Default` (UA-решение для Phase 0); `None` → `Default` (winit не
-/// поддерживает «скрытый курсор» через CursorIcon — нужен отдельный API).
+/// `Auto` → `Default` — только страховка: hit-test отдаёт уже разрешённое
+/// значение (`text`/`default`), и сюда `Auto` доходит лишь без hit-теста.
+/// `None` → `Default` (winit не поддерживает «скрытый курсор» через
+/// CursorIcon — нужен отдельный API).
 pub(crate) fn css_cursor_to_winit(c: CssCursor) -> CursorIcon {
     match c {
         CssCursor::Auto | CssCursor::Default => CursorIcon::Default,

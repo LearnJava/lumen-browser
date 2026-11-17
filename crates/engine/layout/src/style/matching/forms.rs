@@ -772,7 +772,7 @@ fn lang_range_matches(range_lc: &str, tag_lc: &str) -> bool {
 /// все mainstream браузеры считают такой элемент hyperlink-ом — мы тоже).
 /// Spec различает hyperlink (`href` присутствует) от non-hyperlink (no href),
 /// последний не матчит ни `:link`, ни `:visited`, ни `:any-link`.
-fn matches_any_link(doc: &Document, node: NodeId) -> bool {
+pub(in crate::style) fn matches_any_link(doc: &Document, node: NodeId) -> bool {
     let node_ref = doc.get(node);
     let NodeData::Element { name, .. } = &node_ref.data else {
         return false;
