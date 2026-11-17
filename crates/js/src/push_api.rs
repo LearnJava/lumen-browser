@@ -767,10 +767,13 @@ mod tests {
             origin.to_string(),
             scope.to_string(),
             script.to_string(),
+            String::new(),
+            false,
             cache as Arc<dyn lumen_core::ext::CacheBackend>,
             None,
             None,
             None,
+            0,
         );
         let mut map = std::collections::HashMap::new();
         map.insert((origin.to_string(), scope.to_string()), handle);

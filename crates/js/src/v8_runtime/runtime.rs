@@ -2001,6 +2001,29 @@ impl V8JsRuntime {
         });
     }
 
+    /// SW-MODULE s5: то же, но fetch модулей идёт в обход SW-перехватчика —
+    /// статический `import` внутри сервис-воркера не может уходить в его
+    /// собственный fetch-обработчик (изолят ждёт сам себя).
+    pub(crate) fn set_module_context_bypassing_sw(
+        &self,
+        base_url: &str,
+        provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
+    ) {
+        let base_url = base_url.to_owned();
+        self.run(move |_inner| {
+            crate::v8_esm::set_page_url(&base_url);
+            crate::v8_esm::set_fetch_provider(provider);
+            crate::v8_esm::set_fetch_bypasses_sw(true);
+        });
+    }
+
+    /// Forbid dynamic `import()` in this runtime (SW-MODULE: a module service
+    /// worker must reject it per SW §Run Service Worker). Static imports and
+    /// the module graph keep working; thread-local, like the loader context.
+    pub(crate) fn set_dynamic_import_denied(&self, denied: bool) {
+        self.run(move |_inner| crate::v8_esm::set_dynamic_import_denied(denied));
+    }
+
     /// Dispatch `f` to the JS thread, blocking until it completes.
     ///
     /// # Safety

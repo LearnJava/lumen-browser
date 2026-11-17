@@ -315,7 +315,7 @@
 | theguardian-com | 3 | OK | 17.56 | 15447 / 18593 | медленная загрузка | сейчас OK, 15447 знаков за 17,6 с; в базовом прогоне 0 |
 | tumblr-com | 3 | OK | 30.06 | 8425 / 9713 | медленная загрузка | OK, 8425 знаков за 30 с; в первом прогоне серии — TIMEOUT (окно, не перезапущенное после зависшего сайта) |
 | tutu-ru | 3 | DEGRADED | 28.89 | 0 / 9955 | таймаут загрузки | запросы идут (200), `ready` не наступает за 29–40 с, текст 0, исключений нет → список SITES-TRIAGE-3 |
-| afisha-ru | 2 | BROKEN_RENDER | 1.25 | 11 / 8482 | зацикливание SSO | автологин Сбер ID: `id.sber.ru/CSAFront/api/initlow` → 400 → `/auth/cb/?error=sso_error` перезагружается по кругу, виден только лого и две точки; [BUG-1780](../../../bugs/BUG-1780-OPEN.md) |
+| afisha-ru | 2 | BROKEN_RENDER | 1.25 | 11 / 8482 | зацикливание SSO | автологин Сбер ID: `id.sber.ru/CSAFront/api/initlow` → 400 → `/auth/cb/?error=sso_error` перезагружается по кругу, виден только лого и две точки; [BUG-1780](../../../bugs/BUG-1780-FIXED.md) |
 | aviasales-ru | 2 | DEGRADED | 7.7 | 1 / 9026 | JS-исключение | тот же `[object Object] is not a valid selector` (BUG-1779) после предупреждений effector `undefined is used to skip updates` |
 | b2b-center-ru | 2 | OK | 4.74 | 1 / 8808 | нет API | `fetch(blob:…)` внутри Worker → `unsupported scheme: blob`; [BUG-1781](../../../bugs/BUG-1781-FIXED.md) |
 | bild-de | 2 | DEGRADED | 23.14 | 0 / 20742 | скрипт отказал / таймаут | `Integrity check failed: getComputedStyle` и `Cannot init rosetta` (загрузчик consent сверяет «нативность» API); текст 0 за 23 с → SITES-TRIAGE-3, гипотеза не подтверждена |
@@ -334,7 +334,7 @@
 | film-ru | 2 | DEGRADED | 29.56 | 0 / 8576 | таймаут загрузки | текст 0 за 30 с; журнал забит `video аудио: открыт вывод`, грузится recaptcha → SITES-TRIAGE-3 |
 | fiverr-com | 2 | DEGRADED | 20.3 | 0 / 3291 | антибот: PerimeterX | скрипт PX шлёт `collector/clientError`, текст 0 за 20 с при Chrome 3291; страница-заглушка не распознана `walls` |
 | free-fr | 2 | OK | 20.58 | 22531 / 22995 | медленная загрузка | OK, 22531 знак (Chrome 22995) за 20 с; в базовом 0 |
-| gazeta-ru | 2 | BROKEN_RENDER | 1.17 | 1703 / 5154 | зацикливание SSO | тот же автологин Сбер ID → `auth?error=sso_error`, сейчас 1703 знака против 5154; [BUG-1780](../../../bugs/BUG-1780-OPEN.md) |
+| gazeta-ru | 2 | BROKEN_RENDER | 1.17 | 1703 / 5154 | зацикливание SSO | тот же автологин Сбер ID → `auth?error=sso_error`, сейчас 1703 знака против 5154; [BUG-1780](../../../bugs/BUG-1780-FIXED.md) |
 
 ### Сводка по причинам
 
@@ -362,7 +362,7 @@
 | баг | вес | сайты | суть |
 |---|---|---|---|
 | [BUG-1779](../../../bugs/BUG-1779-FIXED.md) | 5 | mirtesen-ru, aviasales-ru | `Object.prototype.toString.call(<HTML-элемент>)` → `[object Object]` |
-| [BUG-1780](../../../bugs/BUG-1780-OPEN.md) | 4 | afisha-ru, gazeta-ru | зацикливание автологина Сбер ID (`sso_error`) |
+| [BUG-1780](../../../bugs/BUG-1780-FIXED.md) | 4 | afisha-ru, gazeta-ru | зацикливание автологина Сбер ID (`sso_error`) |
 | [BUG-1781](../../../bugs/BUG-1781-FIXED.md) | 4 | b2b-center-ru (+ uchi-ru) | `fetch(blob:)` в Worker |
 | [BUG-1782](../../../bugs/BUG-1782-FIXED.md) | 4 | claude-ai (+ kaspersky-ru) | нет `console.assert/time/…` |
 | [BUG-1783](../../../bugs/BUG-1783-FIXED.md) | 2 | ea-com | падение V8 `bad_optional_access` |

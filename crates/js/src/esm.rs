@@ -236,28 +236,39 @@ fn resolve_from_origin(base: &str, name: &str) -> Option<String> {
 /// Strips the last path component from `base`, appends `name`, then normalises
 /// `./` and `../` segments. Preserves scheme + authority prefix from `base`.
 fn resolve_relative(base: &str, name: &str) -> String {
+    // WHATWG URL §relative state: a relative reference without its own query
+    // replaces the base's query entirely — the base's `?query`/`#fragment`
+    // must not leak into the resolved URL (a `?a=./` query made the
+    // specifier append to the query string, SW-MODULE s6).
+    let base_path = base.split(['?', '#']).next().unwrap_or(base);
     // Extract scheme+authority prefix from base (e.g. "https://example.com")
-    let prefix_end = base.find("://")
+    let prefix_end = base_path.find("://")
         .map(|i| {
             let after_scheme = i + 3;
-            base[after_scheme..].find('/').map(|j| after_scheme + j).unwrap_or(base.len())
+            base_path[after_scheme..].find('/').map(|j| after_scheme + j).unwrap_or(base_path.len())
         })
         .unwrap_or(0);
 
     // Base directory: strip everything after the last `/`
-    let base_dir = if let Some(slash) = base.rfind('/') {
+    let base_dir = if let Some(slash) = base_path.rfind('/') {
         if slash >= prefix_end {
-            &base[..slash + 1]
+            &base_path[..slash + 1]
         } else {
-            base
+            base_path
         }
     } else {
-        base
+        base_path
+    };
+
+    // The reference's own `?query`/`#fragment` rides along unchanged.
+    let (name_path, name_suffix) = match name.find(['?', '#']) {
+        Some(i) => (&name[..i], &name[i..]),
+        None => (name, ""),
     };
 
     // Join base_dir + name and normalise segments
-    let joined = format!("{base_dir}{name}");
-    normalize_path(&joined)
+    let joined = format!("{base_dir}{name_path}");
+    normalize_path(&joined) + name_suffix
 }
 
 /// Collapse `./` and `../` path segments in `url`.
@@ -295,6 +306,32 @@ mod tests {
         let page = "https://page.example/a/b.html";
         assert_eq!(resolve_specifier_with(page, &map, page, "m"), "https://page.example/a/x.js");
         assert_eq!(resolve_specifier_with(page, &map, page, "r"), "https://page.example/y.js");
+    }
+
+    #[test]
+    fn relative_specifier_replaces_base_query() {
+        // SW-MODULE s6: база с query (`worker.py?path=./&type=module`) —
+        // относительный импорт не должен приклеиваться к query базе.
+        let map = ImportMap::default();
+        assert_eq!(
+            resolve_specifier_with(
+                "https://page.example/x.html",
+                &map,
+                "https://h.test/r/worker.py?main=a&path=./&type=module",
+                "./dep.py"
+            ),
+            "https://h.test/r/dep.py"
+        );
+        // Собственный query спецификатора сохраняется.
+        assert_eq!(
+            resolve_specifier_with(
+                "https://page.example/x.html",
+                &map,
+                "https://h.test/r/worker.py?main=a&path=./&type=module",
+                "./dep.py?v=2"
+            ),
+            "https://h.test/r/dep.py?v=2"
+        );
     }
 
     #[test]

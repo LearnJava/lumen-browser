@@ -37,6 +37,15 @@ pub(crate) fn install_service_worker(
         type SwMap = std::collections::HashMap<(String, String), String>;
         let sw_regs: Arc<Mutex<SwMap>> = Arc::new(Mutex::new(std::collections::HashMap::new()));
 
+        // SW §3.1.3: a message posted to an installing/waiting worker queues
+        // until the worker starts running. Buffer (data_json, source_json)
+        // per (origin, scope); `_lumen_sw_activate_script` drains it into the
+        // worker's channel once the isolate exists.
+        type SwPendingMap = std::collections::HashMap<(String, String), Vec<(String, String)>>;
+        let sw_pending: Arc<Mutex<SwPendingMap>> =
+            Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let sw_pending_post = Arc::clone(&sw_pending);
+
         // Cache storage: origin → cache_name → url → (method, meta_json, body)
         // meta_json: {"method":"GET","status":200,"statusText":"OK","headers":{…}}
         // method is stored separately for O(1) `keys()` without re-parsing meta_json.
@@ -137,16 +146,52 @@ pub(crate) fn install_service_worker(
             let o = page_origin.clone();
             reg!(scope, ctx, store,
                 "_lumen_sw_post_message",
-                move |scope: String, data_json: String, source_json: String| {
+                move |scope: String, wid: f64, data_json: String, source_json: String| {
+                    let wid = wid as u64;
                     let origin = o.clone();
                     let Some(store) = sws.as_ref() else { return };
-                    if let Some(handle) = store.lock().unwrap().get(&(origin, scope)) {
-                        // `send` never blocks on an unbounded channel — safe
-                        // to do under the store lock.
-                        let _ = handle.tx.send(lumen_core::ext::SwWorkerMessage::Message(
-                            lumen_core::ext::SwClientMessage { data_json, source_json },
-                        ));
+                    if let Some(handle) = store.lock().unwrap().get(&(origin.clone(), scope.clone())) {
+                        // The store's worker must be the one the page addressed:
+                        // a `wid` mismatch means the page has replaced it (the
+                        // new worker is still installing) — queue instead.
+                        if handle.wid == wid {
+                            let _ = handle.tx.send(lumen_core::ext::SwWorkerMessage::Message(
+                                lumen_core::ext::SwClientMessage { data_json, source_json },
+                            ));
+                            return;
+                        }
                     }
+                    // No live worker (installing/waiting) or a replaced one:
+                    // queue per SW §3.1.3, delivered on the new activation.
+                    sw_pending_post
+                        .lock()
+                        .unwrap()
+                        .entry((origin, scope))
+                        .or_default()
+                        .push((data_json, source_json));
+                }
+            );
+        }
+        // SW §3.1.3: the explicit queueing half of `_lumen_sw_post_message` —
+        // the shim routes a message addressed to an installing/waiting worker
+        // here, so it reaches the NEW worker on its activation instead of the
+        // still-live one it replaces.
+        {
+            let sw_pending_queue = Arc::clone(&sw_pending);
+            let o = page_origin.clone();
+            reg!(scope, ctx, store,
+                "_lumen_sw_queue_message",
+                move |scope: String, data_json: String, source_json: String| {
+                    let origin = o.clone();
+                    // Queue unconditionally: the key may still hold the
+                    // worker being replaced — the queue is drained when the
+                    // NEW worker's `_lumen_sw_activate_script` spawns it.
+                    sw_pending_queue
+                        .lock()
+                        .unwrap()
+                        .entry((origin, scope))
+                        .or_default()
+                        .push((data_json, source_json));
                 }
             );
         }
@@ -229,23 +274,71 @@ pub(crate) fn install_service_worker(
             let idb_sw = idb_sw.clone();
             let det_sw = determinism.clone();
             let o = page_origin.clone();
-            reg!(scope, ctx, store, "_lumen_sw_activate_script", move |scope: String, text: String| {
+            let sw_pending_act = Arc::clone(&sw_pending);
+            reg!(scope, ctx, store, "_lumen_sw_activate_script", move |scope: String, text: String, script_url: String, sw_type: String, wid: f64| {
                 let origin = o.clone();
                 if let (Some(store), Some(cache)) = (sws.as_ref(), cbe_sw.as_ref()) {
                     let handle = crate::sw_worker::spawn_sw_worker_v8(
                         origin.clone(),
                         scope.clone(),
                         text,
+                        script_url,
+                        sw_type == "module",
                         Arc::clone(cache),
                         fp_sw.clone(),
                         idb_sw.clone(),
                         det_sw.clone(),
+                        wid as u64,
                     );
+                    // Deliver messages queued while the worker was
+                    // installing/waiting (SW §3.1.3), in order.
+                    let queued = sw_pending_act
+                        .lock()
+                        .unwrap()
+                        .remove(&(origin.clone(), scope.clone()))
+                        .unwrap_or_default();
+                    for (data_json, source_json) in queued {
+                        let _ = handle.tx.send(lumen_core::ext::SwWorkerMessage::Message(
+                            lumen_core::ext::SwClientMessage { data_json, source_json },
+                        ));
+                    }
                     store.lock().unwrap().insert((origin, scope), handle);
                 }
             });
         }
 
+        // SW-MODULE s6: pending page→SW messages queued for an installing
+        // worker are flushed when THAT worker activates — since s4 the isolate
+        // spawns before the lifecycle, so the spawn-time drain in
+        // `_lumen_sw_activate_script` no longer sees them (SW §3.1.3).
+        {
+            let sws = sw_worker_store.clone();
+            let o = page_origin.clone();
+            let sw_pending_flush = Arc::clone(&sw_pending);
+            reg!(scope, ctx, store, "_lumen_sw_flush_pending", move |scope: String| {
+                let origin = o.clone();
+                let queued = sw_pending_flush
+                    .lock()
+                    .unwrap()
+                    .remove(&(origin.clone(), scope.clone()))
+                    .unwrap_or_default();
+                if queued.is_empty() {
+                    return;
+                }
+                // No live worker (the queued-for one went redundant): the
+                // messages die with it — nothing will activate to receive.
+                if let Some(store) = sws.as_ref() {
+                    let handle_tx = store.lock().unwrap().get(&(origin.clone(), scope)).map(|h| h.tx.clone());
+                    if let Some(tx) = handle_tx {
+                        for (data_json, source_json) in queued {
+                            let _ = tx.send(lumen_core::ext::SwWorkerMessage::Message(
+                                lumen_core::ext::SwClientMessage { data_json, source_json },
+                            ));
+                        }
+                    }
+                }
+            });
+        }
         // Dispatch helpers: use SQLite backend when provided, fall back to in-memory map.
         let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);

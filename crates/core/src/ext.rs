@@ -4857,6 +4857,11 @@ pub struct SwWorkerHandle {
     pub tx: std::sync::mpsc::Sender<SwWorkerMessage>,
     /// Thread join handle — kept alive so the thread doesn't detach.
     pub _thread: std::thread::JoinHandle<()>,
+    /// Page-side worker identity (SW-MODULE s3): the page stamps each
+    /// `ServiceWorker` object with a number and addresses messages to it; a
+    /// store entry whose `wid` differs is a worker the page has replaced —
+    /// messages for the new one must queue instead of reaching this one.
+    pub wid: u64,
 }
 
 /// Map from `(origin, scope)` to live SW worker handles.
