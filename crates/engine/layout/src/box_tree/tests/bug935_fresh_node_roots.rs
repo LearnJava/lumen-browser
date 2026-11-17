@@ -102,7 +102,7 @@ fn run_incremental(
     let node_index = restyle_node_index(doc, sheet);
     let styles = prev_counters.styles().clone();
     let roots = if with_basis {
-        restyle_roots_for_node_changes_with_basis(doc, changes, &node_index, &|n| styles.contains_key(&n))
+        restyle_roots_for_node_changes_with_basis(doc, changes, &node_index, &|n| styles.contains_key(&n), None)
     } else {
         restyle_roots_for_node_changes(doc, changes, &node_index)
     };

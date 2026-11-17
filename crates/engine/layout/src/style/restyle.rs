@@ -17,6 +17,7 @@ use lumen_css_parser::{
 };
 use lumen_dom::{Document, NodeData, NodeId};
 
+use crate::style::has_cache;
 use crate::style::matches_simple;
 use crate::style::matching::attr_value_matches;
 
@@ -1317,6 +1318,57 @@ pub struct NodeRestyleIndex<'a> {
     invalidation: std::cell::OnceCell<super::invalidation::InvalidationIndex>,
 }
 
+/// BUG-1800 срез 17 — контекст дифа `:has()` на одну root-set-сборку: мост
+/// «клон → лист», мутационные эпохи `(basis, текущая)` и мемо вердиктов.
+struct HasDiffCtx<'a> {
+    args: &'a SheetHasArgs<'a>,
+    basis_epoch: u64,
+    stamp_epoch: u64,
+    memo: &'a mut HashMap<(u32, usize), bool>,
+}
+
+/// BUG-1800 срез 17 — листовые `:has()`-аргументы: мост «клон → лист».
+///
+/// Индекс флаша (`restyle_node_index_shared`) держит КОПИИ компаундов
+/// (`CompoundRef::owned`), а каскад пишет кэш дифа по адресам ЛИСТОВЫХ
+/// `RelativeSelector`. Мост: раз на флаш собираются листовые аргументы
+/// в корзины по хэшу Debug-представления; точный выбор — `PartialEq`
+/// внутри корзины (хэш только фильтр, звук по сравнению содержимого).
+pub(crate) struct SheetHasArgs<'s> {
+    by_hash: HashMap<u64, Vec<&'s lumen_css_parser::RelativeSelector>>,
+}
+
+impl<'s> SheetHasArgs<'s> {
+    fn build(sheet: &Stylesheet) -> SheetHasArgs<'_> {
+        let mut by_hash: HashMap<u64, Vec<&lumen_css_parser::RelativeSelector>> = HashMap::new();
+        for rules in stylesheet_rule_groups(sheet) {
+            for rule in rules {
+                for selector in &rule.selectors {
+                    for_each_has_arg_in_complex(selector, true, &mut |rels, _| {
+                        for r in rels {
+                            by_hash.entry(has_arg_hash(r)).or_default().push(r);
+                        }
+                    });
+                }
+            }
+        }
+        SheetHasArgs { by_hash }
+    }
+
+    /// Листовой аргумент, равный `probe` по содержимому; `None` — мост не
+    /// сошёлся (широкая дорога).
+    fn sheet_rel(&self, probe: &lumen_css_parser::RelativeSelector) -> Option<&lumen_css_parser::RelativeSelector> {
+        self.by_hash.get(&has_arg_hash(probe))?.iter().copied().find(|r| **r == *probe)
+    }
+}
+
+fn has_arg_hash(r: &lumen_css_parser::RelativeSelector) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::hash::DefaultHasher::new();
+    format!("{r:?}").hash(&mut h);
+    h.finish()
+}
+
 /// BUG-1211 — [`add_readers`] for the `name` attribute selectors that a write of `old` -> `new` can flip.
 fn add_flipped_attr_readers<'t>(
     subjects: &mut SubjectIndex<'t>,
@@ -1432,7 +1484,77 @@ impl<'a> NodeRestyleIndex<'a> {
     /// point roots; see `HasSubject::subject`). Local subjects keep the shallow root;
     /// `conservative`/unmodelled sheets and a hit set as wide as the subtree (the cap)
     /// keep the deep roots.
-    fn has_reach_roots(&self, doc: &Document, node: NodeId, roots: &mut RestyleRoots, shallow_ok: bool) {
+    /// BUG-1800 срез 17 — ни один `:has()`-аргумент компаунда не перевернулся
+    /// для `a` с прошлого прохода: каждый аргумент (прямой и вложенный в
+    /// `:not()`/`:is()`/`:where()`/`:nth-child(… of …)`) сошёлся мостом с
+    /// листовым и его кэш равен свежей оценке на текущем DOM. Промах кэша или
+    /// моста — не стабильно (широкая дорога, как до среза). `:has()` внутри
+    /// самих аргументов отдельно не диффится: его флип проявляется в значении
+    /// внешнего аргумента, а лишняя проверка в худшем случае даёт лишний корень.
+    /// BUG-1800 срез 17 — ни один `:has()`-аргумент компаунда не перевернулся
+    /// для `a` с прошлого флаша: каждый аргумент (прямой и вложенный в
+    /// `:not()`/`:is()`/`:where()`/`:nth-child(… of …)`) сошёлся мостом с
+    /// листовым и его запись в кэше — с мутационной эпохи `basis_epoch`
+    /// (= `basis.touch_epoch`, конец прошлого флаша). Промах кэша или моста —
+    /// не стабильно (широкая дорога, как до среза). `:has()` внутри самих
+    /// аргументов отдельно не диффится: его флип проявляется в значении
+    /// внешнего аргумента. `ctx.memo` — вердикты этой же root-set-сборки:
+    /// повторный вопрос о той же паре (узел, rel) от другого изменения дельты
+    /// получает тот же ответ, а не широкую дорогу поверх собственной записи дифа.
+    fn has_args_stable(
+        &self,
+        doc: &Document,
+        a: NodeId,
+        compound: &CompoundRef<'_>,
+        ctx: &mut HasDiffCtx<'_>,
+    ) -> bool {
+        let rev = self.sheet.stylesheet_ref().revision();
+        let mut stable = true;
+        for_each_has_arg(compound, false, &mut |rels, _| {
+            if !stable {
+                return;
+            }
+            for r in rels {
+                let Some(sheet_r) = ctx.args.sheet_rel(r) else { stable = false; return };
+                let mkey = (a.raw(), std::ptr::from_ref(sheet_r) as usize);
+                if let Some(&unchanged) = ctx.memo.get(&mkey) {
+                    if !unchanged {
+                        stable = false;
+                        return;
+                    }
+                    continue;
+                }
+                let fresh = crate::style::matching::forms::matches_relative(sheet_r, doc, a);
+                let unchanged = has_cache::cached_prior(a, sheet_r, rev, ctx.basis_epoch) == Some(fresh);
+                // Свежая оценка под текущей эпохой — «до»-значение следующего
+                // флаша (см. has_cache::record_fresh): кэш прогревается с
+                // первого флаша даже там, где каскад аргумент не оценивает.
+                has_cache::record_fresh(a, sheet_r, fresh, rev, ctx.stamp_epoch);
+                ctx.memo.insert(mkey, unchanged);
+                if !unchanged {
+                    stable = false;
+                    return;
+                }
+            }
+        });
+        stable
+    }
+
+    fn has_reach_roots(
+        &self,
+        doc: &Document,
+        node: NodeId,
+        roots: &mut RestyleRoots,
+        shallow_ok: bool,
+        diff: Option<&mut HasDiffCtx<'_>>,
+    ) {
+        // BUG-1800 срез 17 — диф: корень ставится, только если значение
+        // какого-то `:has()`-аргумента компаунда перевернулось с прошлого
+        // флаша; без флипа поддерево кандидата не рестайлится вовсе. Контекст
+        // (аргументы моста + эпохи + мемо) приходит только от flush-пути
+        // (`touched.epoch`); анализаторы без трекера мутаций (контрактные
+        // тесты, UI-путь) — широкая дорога.
+        let mut diff = diff;
         let narrow = shallow_ok && self.attr_narrowing && !self.has_deps.unmodelled && !Self::has_reach_narrow_disabled();
         // Candidates the flip-question narrowing took over: (candidate, rule subject,
         // fanout). Their deep roots are inserted only if the enumeration gives back no
@@ -1441,12 +1563,18 @@ impl<'a> NodeRestyleIndex<'a> {
         let mut consider = |a: NodeId, sibling: bool| {
             for subject in &self.has_subjects {
                 if (!sibling || subject.sibling_reach) && compound_could_match_after_attr_change(&subject.compound, doc, a, "") {
+                    if let Some(ctx) = diff.as_mut()
+                        && self.has_args_stable(doc, a, &subject.compound, ctx)
+                    {
+                        continue;
+                    }
                     if subject.local && shallow_ok && self.attr_narrowing {
                         roots.shallow.insert(a);
                     } else if narrow {
                         narrowed.push((a, subject));
                     } else {
-                        roots.deep.insert(if subject.fanout { doc.get(a).parent.unwrap_or(a) } else { a });
+                        let r = if subject.fanout { doc.get(a).parent.unwrap_or(a) } else { a };
+                        roots.deep.insert(r);
                     }
                 }
             }
@@ -1907,6 +2035,16 @@ pub fn restyle_node_index_shared(doc: &Document, sheet: &Arc<Stylesheet>) -> Nod
 enum SheetRef<'a> {
     Borrowed(&'a Stylesheet),
     Shared(Arc<Stylesheet>),
+}
+
+impl SheetRef<'_> {
+    /// The sheet this reference holds (для моста и ключа кэша дифа `:has()`).
+    fn stylesheet_ref(&self) -> &Stylesheet {
+        match self {
+            SheetRef::Borrowed(sheet) => sheet,
+            SheetRef::Shared(sheet) => sheet,
+        }
+    }
 }
 
 /// A compound of the sheet an index was built for: borrowed from it, or — for an index that has

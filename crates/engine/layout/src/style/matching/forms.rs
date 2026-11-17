@@ -1101,7 +1101,7 @@ fn has_non_whitespace_text(doc: &Document, node: NodeId) -> bool {
 /// Проверяет, что относительный селектор `:has()` выполним от субъекта `scope`:
 /// цепочка `rs.selector` начинается в `scope` (как `:scope <comb> .a > .b`), а не
 /// просто правый compound совпал где-то рядом (BUG-1444).
-fn matches_relative(rs: &lumen_css_parser::RelativeSelector, doc: &Document, scope: NodeId) -> bool {
+pub(in crate::style) fn matches_relative(rs: &lumen_css_parser::RelativeSelector, doc: &Document, scope: NodeId) -> bool {
     let sibling_lead = matches!(rs.combinator, Some(Combinator::NextSibling | Combinator::LaterSibling));
     // Односоставной селектор: кандидат — сам левый compound, якорь проверяется
     // выбором кандидатов (быстрый путь, как до BUG-1444).

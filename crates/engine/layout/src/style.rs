@@ -52,6 +52,7 @@ mod env;
 pub(crate) mod invalidation;
 mod logical;
 mod math_value;
+pub(crate) mod has_cache;
 mod matching;
 mod parse;
 mod presentational;
