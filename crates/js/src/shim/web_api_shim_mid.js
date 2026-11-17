@@ -10558,38 +10558,51 @@ var _LUMEN_WRAPPER_MEMBERS = {
             var smLeft = parseFloat(_lumen_get_computed_style(nid, 'scroll-margin-left')) || 0;
             var mw = r[2] + smLeft + smRight;
             var mh = r[3] + smTop + smBottom;
+            // SMOOTH-SCROLL-2 (CSSOM View §"scroll an element into view"):
+            // EVERY ancestor scrolling box scrolls, not just the nearest one.
+            // `ax`/`ay` is the margin box's top-left corner in document
+            // coordinates — the anchor each container aligns. After a
+            // container computed its own scroll, the anchor moves to where
+            // that corner will physically sit once the request is applied
+            // (container origin + border + the corner's position inside the
+            // scrollport), so the next container up aligns the composed
+            // result, not the raw target offset. Document coordinates carry
+            // no ancestor scroll offset (BUG-1166), so the walk needs no
+            // waiting between levels.
+            var ax = r[0] - smLeft, ay = r[1] - smTop;
             var rootNid = _lumen_root_scroller_nid();
             var parent = _lumen_u2n(_lumen_get_parent(nid));
+            // The settle promise keeps the slice-1 contract: it watches the
+            // innermost scrolled container (the tests that await it measure a
+            // single-container scroll).
+            var settled = null;
             while (parent !== null && parent !== undefined && parent !== rootNid) {
                 var ps = _lumen_get_scroll_state(parent);
                 if (ps && !_lumen_is_scroll_container(parent)) ps = null;
                 if (ps) {
                     var pr = _lumen_get_bounding_rect(parent);
                     if (pr) {
-                        // `_lumen_get_bounding_rect` answers in document coordinates, with
-                        // NO ancestor scroll offset applied (BUG-1166) — so the difference
-                        // of two rects is already the target's offset inside the container's
-                        // unscrolled content, wherever the container is scrolled to now.
-                        // (Adding `ps` here, as this once did, moved the target further on
-                        // every call from an already-scrolled container.)
                         // The scrollport is the PADDING box: its origin and size drop the border.
+                        // CSS Scroll Snap L1 §3's scroll-padding shrinks the scrollport into the
+                        // "optimal viewing region" — the alignment measures against the padded
+                        // origin and the padded size (`scrollIntoView-scrollPadding`).
                         var bl = parseFloat(_lumen_get_computed_style(parent, 'border-left-width')) || 0;
                         var bt = parseFloat(_lumen_get_computed_style(parent, 'border-top-width')) || 0;
                         var br = parseFloat(_lumen_get_computed_style(parent, 'border-right-width')) || 0;
                         var bb = parseFloat(_lumen_get_computed_style(parent, 'border-bottom-width')) || 0;
-                        var contentX = (r[0] - smLeft) - (pr[0] + bl);
-                        var contentY = (r[1] - smTop) - (pr[1] + bt);
-                        var newX = _lumen_align_scroll(contentX, mw, pr[2] - bl - br, ps[0], opts.inline);
-                        var newY = _lumen_align_scroll(contentY, mh, pr[3] - bt - bb, ps[1], opts.block);
+                        var pl = parseFloat(_lumen_get_computed_style(parent, 'scroll-padding-left')) || 0;
+                        var pt = parseFloat(_lumen_get_computed_style(parent, 'scroll-padding-top')) || 0;
+                        var prr = parseFloat(_lumen_get_computed_style(parent, 'scroll-padding-right')) || 0;
+                        var pb = parseFloat(_lumen_get_computed_style(parent, 'scroll-padding-bottom')) || 0;
+                        var contentX = ax - (pr[0] + bl);
+                        var contentY = ay - (pr[1] + bt);
+                        var newX = _lumen_align_scroll(contentX - pl, mw, pr[2] - bl - br - pl - prr, ps[0], opts.inline);
+                        var newY = _lumen_align_scroll(contentY - pt, mh, pr[3] - bt - bb - pt - pb, ps[1], opts.block);
                         _lumen_scroll_to_pos(parent, newX, newY, opts.behavior);
-                        var parentEl = _lumen_make_element(parent);
-                        if (parentEl) {
-                            return _lumen_scroll_settle_promise(parentEl, function() {
-                                return _lumen_scroller_get(parent);
-                            }, parent);
-                        }
+                        if (settled === null) settled = parent;
+                        ax = pr[0] + bl + (contentX - newX);
+                        ay = pr[1] + bt + (contentY - newY);
                     }
-                    return Promise.resolve();
                 }
                 parent = _lumen_u2n(_lumen_get_parent(parent));
             }
@@ -10598,13 +10611,25 @@ var _LUMEN_WRAPPER_MEMBERS = {
             // (BUG-821, second facet — this used to fall off the loop and do
             // nothing at all, which is most elements on most pages).
             // SMOOTH-SCROLL: both axes now — `window.scrollX` is real.
+            // SMOOTH-SCROLL-2: the viewport request rides the snap flag — the
+            // only JS scroll whose final position snaps, like Blink's
+            // scrollIntoView (plain scrollTo stays exact).
             var vp = _lumen_get_viewport_size();
             var curX = _lumen_get_page_scroll_x();
             var curY = _lumen_get_page_scroll_y();
             // Document coordinates already (BUG-1166): no `+ cur`.
-            var pageX = _lumen_align_scroll(r[0] - smLeft, mw, vp[0], curX, opts.inline);
-            var pageY = _lumen_align_scroll(r[1] - smTop, mh, vp[1], curY, opts.block);
-            _lumen_scroll_to_pos('p', pageX, pageY, opts.behavior);
+            var pageX = _lumen_align_scroll(ax, mw, vp[0], curX, opts.inline);
+            var pageY = _lumen_align_scroll(ay, mh, vp[1], curY, opts.block);
+            _lumen_scroll_to_pos('p', pageX, pageY, opts.behavior, true);
+            if (settled !== null) {
+                var parentEl = _lumen_make_element(settled);
+                if (parentEl) {
+                    return _lumen_scroll_settle_promise(parentEl, function() {
+                        return _lumen_scroller_get(settled);
+                    }, settled);
+                }
+                return Promise.resolve();
+            }
             return _lumen_scroll_settle_promise(window, function() {
                 return [_lumen_get_committed_page_scroll_x(), _lumen_get_committed_page_scroll_y()];
             }, 'p');

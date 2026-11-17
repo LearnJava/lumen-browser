@@ -342,7 +342,10 @@ impl Lumen {
         // algorithm just made take effect before the rect lookup below.
         self.relayout();
         if fragment.is_empty() {
+            // SMOOTH-SCROLL-2: empty `#frag` resets BOTH axes to the origin —
+            // the y-only reset left the page scrolled sideways forever.
             self.scroll_to(0.0);
+            self.scroll_x_to(0.0);
             return;
         }
         let target_rect = node_id.and_then(|nid| {
@@ -451,6 +454,16 @@ impl Lumen {
             } else {
                 self.scroll_to(y);
             }
+        }
+        // SMOOTH-SCROLL-2: the anchor moves the page horizontally too. `r.x`
+        // is the unscrolled document coordinate the target was laid out at
+        // (`find_box_rect`), which is exactly what `scroll_x_to` clamps
+        // against `max_scroll_x` — with the smooth y-glide left to
+        // `start_smooth_scroll` above, x lands instantly beside it. Id
+        // fragments only: a text directive match has no horizontal anchor of
+        // its own (its y-only treatment is STTF-1's deliberate scope).
+        if let Some(rect) = target_rect {
+            self.scroll_x_to(rect.x);
         }
     }
 

@@ -12,12 +12,17 @@ use lumen_core::JsValue;
 use lumen_dom::{Document, NodeData, QualName};
 use std::collections::HashMap;
 
-/// `html > body > #main > .content`; `#main` is a 20x20 scroll container over
-/// 200x200 content. Returns `(doc, main_nid)`.
+/// `html > body > #outer > #main > .content`; `#outer` carries no overflow of
+/// its own (so the existing tests see the old two-scroller shape) and `#main`
+/// is a 20x20 scroll container over 200x200 content. Returns `(doc, main_nid)`.
 fn make_doc() -> (Arc<Mutex<Document>>, u32) {
     let mut doc = Document::new();
     let html = doc.create_element(QualName::html("html"));
     let body = doc.create_element(QualName::html("body"));
+    let outer = doc.create_element(QualName::html("div"));
+    if let NodeData::Element { attrs, .. } = &mut doc.get_mut(outer).data {
+        attrs.push(lumen_dom::Attribute { name: QualName::html("id"), value: "outer".into() });
+    }
     let main = doc.create_element(QualName::html("div"));
     if let NodeData::Element { attrs, .. } = &mut doc.get_mut(main).data {
         attrs.push(lumen_dom::Attribute { name: QualName::html("id"), value: "main".into() });
@@ -36,7 +41,8 @@ fn make_doc() -> (Arc<Mutex<Document>>, u32) {
     }
     doc.append_child(doc.root(), html);
     doc.append_child(html, body);
-    doc.append_child(body, main);
+    doc.append_child(body, outer);
+    doc.append_child(outer, main);
     doc.append_child(main, content);
     doc.append_child(main, target);
     doc.append_child(body, free);
@@ -48,7 +54,9 @@ fn nid_of(rt: &V8JsRuntime, id: &str) -> u32 {
     num(rt, &format!("document.getElementById('{id}').__nid__")) as u32
 }
 
-fn runtime(main_style: &str) -> (V8JsRuntime, u32) {
+/// [`runtime`] with extra stylesheet RULES appended after the `#main`/`.content`
+/// block — for tests that need a second container in the cascade.
+fn runtime_sheet(main_style: &str, extra_rules: &str) -> (V8JsRuntime, u32) {
     let (doc, main_nid) = make_doc();
     let rt = V8JsRuntime::new().unwrap();
     rt.eval("__lumen_C._LUMEN_EXTENSION_ACTIVE = true").unwrap();
@@ -56,7 +64,7 @@ fn runtime(main_style: &str) -> (V8JsRuntime, u32) {
         .unwrap();
     rt.update_stylesheet(Arc::new(lumen_css_parser::parse(&format!(
         "#main {{ width: 20px; height: 20px; overflow: auto; {main_style} }} \
-         .content {{ width: 200px; height: 200px; }}"
+         .content {{ width: 200px; height: 200px; }} {extra_rules}"
     ))));
     rt.update_viewport_size(800.0, 600.0);
     // Settle the pending style/layout flush now: the first geometry read would otherwise
@@ -66,6 +74,10 @@ fn runtime(main_style: &str) -> (V8JsRuntime, u32) {
     states.insert(main_nid, [0.0, 0.0, 200.0, 200.0]);
     rt.update_scroll_states(states);
     (rt, main_nid)
+}
+
+fn runtime(main_style: &str) -> (V8JsRuntime, u32) {
+    runtime_sheet(main_style, "")
 }
 
 fn num(rt: &V8JsRuntime, script: &str) -> f64 {
@@ -280,6 +292,82 @@ fn scroll_into_view_in_a_scrolled_container_does_not_drift() {
     rt.eval("document.getElementById('target').scrollIntoView({block: 'start', behavior: 'instant'})").unwrap();
     assert_eq!(num(&rt, "document.getElementById('main').scrollTop"), 100.0);
     assert_eq!(rt.take_scroll_requests(), vec![(main_nid, 0.0, 100.0)]);
+}
+
+/// SMOOTH-SCROLL-2: the walk does not stop at the nearest container. The
+/// anchor composes: once `#main` has computed its scroll, the outer container
+/// aligns the point the target will physically occupy inside `#main`, and the
+/// viewport gets the final request with the same block/inline options.
+#[test]
+fn scroll_into_view_walks_the_whole_container_chain() {
+    let (rt, main_nid) = runtime_sheet(
+        "",
+        "#outer { width: 100px; height: 100px; overflow: auto; }",
+    );
+    let outer = nid_of(&rt, "outer");
+    let target = nid_of(&rt, "target");
+    rt.update_layout_rects(
+        [
+            (outer, [10.0, 50.0, 100.0, 100.0]),
+            (main_nid, [10.0, 150.0, 20.0, 20.0]),
+            (target, [10.0, 250.0, 10.0, 10.0]),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let mut states = HashMap::new();
+    states.insert(outer, [0.0, 0.0, 300.0, 300.0]);
+    states.insert(main_nid, [0.0, 0.0, 200.0, 200.0]);
+    rt.update_scroll_states(states);
+    rt.eval("document.getElementById('target').scrollIntoView({block: 'start', behavior: 'instant'})").unwrap();
+    // Innermost first; both containers move, then the page.
+    assert_eq!(rt.take_scroll_requests(), vec![(main_nid, 0.0, 100.0), (outer, 0.0, 100.0)]);
+    // The anchor landed at #outer's document y (50) after both containers
+    // scrolled their targets to their start edges, and the viewport aligns it.
+    assert_eq!(rt.take_page_scroll_x_request(), Some(0.0));
+    assert_eq!(rt.take_page_scroll_requests(), vec![(50.0, false)]);
+}
+
+/// SMOOTH-SCROLL-2: the container's `scroll-padding` shrinks the scrollport
+/// into the "optimal viewing region" — `start` pins the target's start edge to
+/// the padded origin (CSS Scroll Snap L1 §3, `scrollIntoView-scrollPadding`).
+#[test]
+fn scroll_into_view_honours_scroll_padding() {
+    let (rt, main_nid) = runtime("scroll-padding-top: 8px;");
+    let target = nid_of(&rt, "target");
+    rt.update_layout_rects(
+        [(main_nid, [0.0, 0.0, 20.0, 20.0]), (target, [0.0, 100.0, 10.0, 10.0])].into_iter().collect(),
+    );
+    let mut states = HashMap::new();
+    states.insert(main_nid, [0.0, 0.0, 200.0, 200.0]);
+    rt.update_scroll_states(states);
+    rt.eval("document.getElementById('target').scrollIntoView({block: 'start', behavior: 'instant'})").unwrap();
+    assert_eq!(rt.take_scroll_requests(), vec![(main_nid, 0.0, 92.0)]);
+}
+
+/// SMOOTH-SCROLL-2: the final step of a page animation rides the request's
+/// `smooth` flag, which the shell routes through the snap-aware page scroll —
+/// scrollIntoView's viewport step is the only caller that sets it (Blink
+/// snaps scrollIntoView, not scrollTo). Instant requests keep it `false`.
+#[test]
+fn page_animation_flags_its_last_step_for_snap() {
+    let (rt, _) = runtime("");
+    let html = num(&rt, "_lumen_get_html_element()") as u32;
+    let free = nid_of(&rt, "free");
+    // A scroll range for the viewport (the root's box gives the page height —
+    // 1200 tall over the 600 viewport lets `top: 500` survive the clamp), and
+    // a target below the fold so the viewport step has something to do.
+    rt.update_layout_rects(
+        [(html, [0.0, 0.0, 800.0, 1200.0]), (free, [30.0, 500.0, 10.0, 10.0])]
+            .into_iter()
+            .collect(),
+    );
+    rt.eval("document.getElementById('free').scrollIntoView({block: 'start', behavior: 'smooth'})").unwrap();
+    assert!(rt.take_page_scroll_requests().is_empty(), "the call itself queues nothing");
+    rt.eval(&format!("{TICK_AT}(10000, 1)")).unwrap();
+    assert_eq!(rt.take_page_scroll_requests(), vec![(500.0, true)]);
+    rt.eval("window.scrollTo({top: 30, behavior: 'instant'})").unwrap();
+    assert_eq!(rt.take_page_scroll_requests(), vec![(30.0, false)], "an instant request is exact");
 }
 
 #[test]

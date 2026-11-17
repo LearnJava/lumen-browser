@@ -1519,11 +1519,16 @@ fn clamp_frame_scroll(frames: &mut [FrameHandle]) {
                 js.fire_window_scroll();
             }
         }
-        // Горизонталь (FRAME-3 срез 1): нет JS-моста (`scroll_x` doc-comment),
-        // так что только зажим числа — событие слать некому и нечего.
+        // Горизонталь (FRAME-3 срез 1): события по оси не шлются (см.
+        // `scroll_x` doc-comment), но зажатую позицию ребёнок должен увидеть —
+        // SMOOTH-SCROLL-2 пушит её так же, как применяет `apply_frame_scroll_x`.
         let max_x = frame_max_scroll_x(h);
         if h.scroll_x > max_x {
             h.scroll_x = max_x;
+            #[cfg(feature = "v8")]
+            if let Some(js) = h.js.as_ref() {
+                js.set_page_scroll_x(max_x);
+            }
         }
     }
 }
@@ -2524,11 +2529,11 @@ pub(crate) struct FrameHandle {
     ///
     /// Сестра [`Self::scroll_y`] и её же три ПЕРВЫХ читателя (сплайс,
     /// hit-тест, [`frame_page_origin`]) — тот же инвариант «одно поле».
-    /// Четвёртого читателя, JS-контекста, у неё НЕТ: `window.scrollX`
-    /// ребёнка, как и у страницы (`scrolling.rs`), остаётся захардкожен в
-    /// 0 — колесо вбок двигает содержимое визуально, но `scroll`/`scrollend`
-    /// по этой оси ребёнку не шлётся, симметрично тому, что `scroll_x_by`
-    /// самой странице тоже их не шлёт.
+    /// Четвёртый читатель, JS-контекст, появился в SMOOTH-SCROLL-2:
+    /// [`Lumen::apply_frame_scroll_x`] пушит применённую позицию через
+    /// `set_page_scroll_x`, и `window.scrollX` ребёнка читает её. Событий
+    /// (`scroll`/`scrollend`) по оси по-прежнему нет — симметрично тому,
+    /// что `scroll_x_by` самой странице тоже их не шлёт.
     pub(crate) scroll_x: f32,
     /// Overflow-контейнеры (`overflow: scroll|auto`) СОБСТВЕННОГО дерева
     /// под-документа (FRAME-3 срез 3) — зеркало [`Lumen::scroll_containers`]
