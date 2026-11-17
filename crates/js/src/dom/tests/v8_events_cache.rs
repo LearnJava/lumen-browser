@@ -812,6 +812,60 @@ fn sw_register_default_scope_and_unregister_twice() {
     assert_eq!(rt.eval("u2").unwrap(), lumen_core::JsValue::Bool(false));
 }
 
+/// BUG-1742: a client's `controller` is a stable reference captured when the
+/// client became controlled — `unregister()` + re-register with a different
+/// script must leave the old worker as the controller, not resurrect the new
+/// one (`unregister-then-register` «does not resurrect»).
+#[test]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+fn sw_controller_survives_unregister_reregister() {
+    let (rt, _store) = v8_sw_runtime_at("https://example.com/", "self.onmessage = function() {};");
+    rt.eval(
+        "window._a = null; window._b = null;
+         navigator.serviceWorker.register('/a.js', { scope: '/' })
+             .then(function(r) { window._a = r; });",
+    )
+    .unwrap();
+    assert!(
+        sw_wait_flag(&rt, "window._a != null && window._a.active != null"),
+        "first worker never activated"
+    );
+    rt.eval("window._ctrlA = navigator.serviceWorker.controller.scriptURL;")
+        .unwrap();
+    rt.eval(
+        "window._a.unregister().then(function() {
+             return navigator.serviceWorker.register('/b.js', { scope: '/' });
+         }).then(function(r) { window._b = r; });",
+    )
+    .unwrap();
+    assert!(
+        sw_wait_flag(&rt, "window._b != null && window._b.active != null"),
+        "second worker never activated"
+    );
+    rt.eval("window._ctrlB = navigator.serviceWorker.controller.scriptURL;")
+        .unwrap();
+    assert_eq!(
+        rt.eval("window._ctrlA").unwrap(),
+        lumen_core::JsValue::String("https://example.com/a.js".into())
+    );
+    // The re-registered worker activated, but the controller is unchanged.
+    assert_eq!(
+        rt.eval("window._b.active.scriptURL").unwrap(),
+        lumen_core::JsValue::String("https://example.com/b.js".into())
+    );
+    assert_eq!(
+        rt.eval("window._ctrlB").unwrap(),
+        lumen_core::JsValue::String("https://example.com/a.js".into())
+    );
+    assert!(
+        matches!(
+            rt.eval("navigator.serviceWorker.controller === window._b.active").unwrap(),
+            lumen_core::JsValue::Bool(false)
+        ),
+        "re-registered worker must not become the controller"
+    );
+}
+
 // BUG-1742: a classic script with a non-JS MIME type rejects with
 // SecurityError (SW §Update fetch hook — classic scripts included) and leaves
 // no registration behind.

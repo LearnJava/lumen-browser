@@ -462,6 +462,14 @@ var caches = {
 
 var _sw_registrations = {};
 
+// BUG-1742: the client's `controller` is a stable ServiceWorker reference set
+// once when the client becomes controlled (activation, `clients.claim()`, or a
+// restored active registration) and NOT recomputed from the live registry —
+// `unregister()` + re-register must not resurrect a new worker as the
+// controller of an already-controlled client (`unregister-then-register`
+// «does not resurrect»). Per-isolate: each browsing context has its own.
+var _sw_controller = null;
+
 // SW §Register job queue: per-scope FIFO. Concurrent register() calls on one
 // scope must not interleave — the second job's `installing` may only replace
 // the first's once the first register() promise has settled
@@ -1047,7 +1055,10 @@ function _sw_finish_install(reg, sw, scriptText) {
             if (reg.waiting === sw) reg.waiting = null;
             sw._setState('activating');
             reg.active = sw;
-            _sw_container.controller = sw;
+            // BUG-1742: control is established once and only once — a later
+            // worker activating on this scope (update, re-register) must not
+            // steal the controller of an already-controlled client.
+            if (_sw_controller === null) _sw_controller = sw;
             var activateEvt = new Event('activate');
             activateEvt.waitUntil = function() {};
             sw._setState('activated');
@@ -1135,6 +1146,10 @@ function _sw_finish_install(reg, sw, scriptText) {
                     reg.active = sw;
                     _sw_registrations[item.scope] = reg;
                     _lumen_sw_register(item.scope, item.scriptURL);
+                    // BUG-1742: a page loading over an already-active worker is
+                    // controlled by it from the first tick (the same value the
+                    // old computed getter returned).
+                    if (_sw_controller === null) _sw_controller = sw;
                 }
             }
         }
@@ -1217,10 +1232,7 @@ function _sw_check_register_urls(scriptUrl, scopeOpt) {
 var _sw_container_et = _sw_make_event_target();
 var _sw_container = Object.assign({
     get controller() {
-        for (var sc in _sw_registrations) {
-            if (_sw_registrations[sc].active) return _sw_registrations[sc].active;
-        }
-        return null;
+        return _sw_controller;
     },
     get ready() { return _sw_ready_promise; },
     oncontrollerchange: null,
@@ -1476,13 +1488,16 @@ function _lumen_deliver_sw_messages(msgs) {
     }
     _sw_drain_msg_queue();
 }
-// SW-MSG-S6: `clients.claim()` control messages — fire `controllerchange`
-// for scopes this page has an active registration for (the getter picks the
-// controller up from `_sw_registrations`, so nothing to assign).
+// SW-MSG-S6: `clients.claim()` control messages — assign the claiming worker
+// as the controller and fire `controllerchange` for scopes this page has an
+// active registration for.
 function _lumen_deliver_sw_control(msgs) {
     for (var i = 0; i < msgs.length; i++) {
         var reg = _sw_registrations[msgs[i].scope];
         if (reg && reg.active) {
+            // BUG-1742: `clients.claim()` is an explicit takeover — it may
+            // overwrite an existing controller (activation alone never does).
+            _sw_controller = reg.active;
             var ce = new Event('controllerchange');
             _sw_container_et.dispatchEvent.call(_sw_container, ce);
         }
