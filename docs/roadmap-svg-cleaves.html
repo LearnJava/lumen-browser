@@ -57,12 +57,12 @@
 {
  "generated": "2026-11-17",
  "counts": {
-  "open": 314,
-  "fixed": 1438,
+  "open": 311,
+  "fixed": 1442,
   "inprogress": 0,
   "wontfix": 4
  },
- "total_bugs": 1756,
+ "total_bugs": 1757,
  "phases": [
   {
    "id": "P0",
@@ -11849,26 +11849,12 @@
    "title": "cnn.com в живом окне держит поток движка задачей 25 с: `script.evaluate` отдаёт `engine thread busy: eval not run within 5.0 s (running task from about_to_wait.…",
    "component": "shell / js / layout (задача из `about_to_wait.rs:290` — `tick_timers` и пампы; что именно крутится — не локализовано)",
    "date": null,
-   "debtor": false
-  },
-  "BUG-1780": {
-   "status": "open",
-   "title": "SITES-TRIAGE-2: автологин Сбер ID — `initlow` отвечает 400, `/auth/cb/?error=sso_error` перезагружается по кругу, видны лого и две точки; Chrome в цепочку не за…",
-   "component": "js / network (`id.sber.ru` SSO) — не локализовано",
-   "date": null,
-   "debtor": false
+   "debtor": true
   },
   "BUG-1788": {
    "status": "open",
    "title": "Флака `bounded_document_lock_waits_out_another_thread`: при coarse-тике цикл просыпается за 15,6–31,2 мс и иногда выходит за бюджет 20 мс. Замер 2026-11-05: тот…",
    "component": "js (`named_access.rs` — `lock_document_bounded`: `sleep(100 мкс)` поллинг против системного тика 15,6 мс)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1790": {
-   "status": "open",
-   "title": "Cloudflare Turnstile после фикса BUG-1595: challenge iframe грузится и исполняется, postMessage доходит, но токен не выдаётся — error-callback `300030` (watchdo…",
-   "component": "js/shell — антибот-фингерпринт (`window.chrome`, `navigator.plugins`/`mimeTypes`), `MessageEvent.isTrusted`, `Node.parentElement`, начальный `contentWindow`",
    "date": null,
    "debtor": false
   },
@@ -11891,14 +11877,7 @@
    "title": "ebay.com: задачи JS по 30–40 с (стек `getAttribute`), `maybe_flush` p50 ~1 с на 647 узлах, сумма flush 93–124 с за прогон; `ready_s` 19.8/150.5/84.1 с против Ch…",
    "component": "js/layout (same-tick flush, `style_flush.rs`; DOM-читалки шима)",
    "date": null,
-   "debtor": false
-  },
-  "BUG-1808": {
-   "status": "open",
-   "title": "`createHTMLDocument('t')` отдаёт документ с интерфейсом `Document` (`[object Document]`, не проходит `instanceof HTMLDocument`), у Chrome — `HTMLDocument`. Един…",
-   "component": "js (`DOMImplementation.createHTMLDocument`, `web_api_shim_mid.js:6550` — прототип захардкожен `Document.prototype`)",
-   "date": null,
-   "debtor": false
+   "debtor": true
   },
   "BUG-1809": {
    "status": "open",
@@ -11942,13 +11921,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1805": {
-   "status": "open",
-   "title": "SITES-TRIAGE-3: нет `navigator.serviceWorker.startMessages()` (нестандартный Chrome-API контейнера) → `TypeError` убивает инициализацию rutube-ru, TIMEOUT 2/2 п…",
-   "component": "js (`web_api_shim_mid_b.js` — `_sw_container`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1820": {
    "status": "open",
    "title": "`clippy -p lumen-js --all-targets` красный на чистом main `14a917d79`: `mod v8_bug935_s101_stand` (cd454631c, BUG-935 с101) и `mod v8_bug1408_font_cssom` (da0f0…",
@@ -11960,6 +11932,13 @@
    "status": "open",
    "title": "`lumen --dump-layout <url> --trace-nav <out.json>` молча читает out.json как источник `--trace-nav` («os error 2» в предупреждении) — режимы с позиционными аргу…",
    "component": "shell (`crates/shell/src/cli_args.rs` — позиционные аргументы двух режимов)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1822": {
+   "status": "open",
+   "title": "rutube-ru: тихий флап «полный рендер ↔ text=0» — 3 из 4 попыток `wait timeout: DocumentReady` за 40–45 с без JS-ошибок; в удачной попытке OK text 17112/17999 у…",
+   "component": "не локализовано (живое окно — стадия готовности; SW-шим исключён — BUG-1805 закрыт)",
    "date": null,
    "debtor": false
   },
@@ -22022,6 +22001,13 @@
    "date": "2026-11-15",
    "debtor": false
   },
+  "BUG-1808": {
+   "status": "fixed",
+   "title": "`cargo test -p lumen-js --features v8-backend --lib -- v8_bug1138` 4 passed (новый `create_html_document_is_an_html_document`: toStringTag, instanceof-цепочка,…",
+   "component": "js (`shim/web_api_shim_mid.js` — `createHTMLDocument`, комментарии `_lumen_build_detached_document`)",
+   "date": "2026-11-17",
+   "debtor": false
+  },
   "BUG-1174": {
    "status": "fixed",
    "title": "`install_worker_scope_globals_v8` (общая точка всех трёх видов воркеров) ставит шим сразу после `install_worker_exposed_v8`; так как в воркере нет прохода `fina…",
@@ -22055,6 +22041,27 @@
    "title": "`el.style.fontKerning = \"bogus\"`, `fontSizeAdjust = \"bogus\"`, `fontWeight = \"bogus\"`, `fontFamily = \"cursive serif\"`, `maskType = \"bogus\"`, `clipPath = \"bogus\"`…",
    "component": "js/layout (`crates/js/src/shim/web_api_shim_mid.js::_lumen_canonicalize_longhand`)",
    "date": "2026-11-16",
+   "debtor": false
+  },
+  "BUG-1790": {
+   "status": "fixed",
+   "title": "Cloudflare Turnstile после фикса BUG-1595: challenge iframe грузится и исполняется, postMessage доходит, но токен не выдаётся — error-callback `300030` (watchdo…",
+   "component": "js/shell — антибот-фингерпринт (`window.chrome`, `navigator.plugins`/`mimeTypes`), `MessageEvent.isTrusted`, `Node.parentElement`, начальный `contentWindow`",
+   "date": "2026-11-17",
+   "debtor": false
+  },
+  "BUG-1805": {
+   "status": "fixed",
+   "title": "SITES-TRIAGE-3: `TypeError: navigator.serviceWorker.startMessages is not a function` фатально убивал инициализацию rutube-ru (TIMEOUT 2/2, текст 0). Живая прове…",
+   "component": "js (шим `web_api_shim_mid_b.js` — `_sw_container`)",
+   "date": "2026-11-17",
+   "debtor": false
+  },
+  "BUG-1780": {
+   "status": "fixed",
+   "title": "Автологин Сбер ID зацикливался: `/auth/cb/?error=sso_error` перезагружалась 3+ раза (afisha text 11 при 8482 у Chrome, «JS 30–40 с»). Стенд (копия страницы-пруж…",
+   "component": "js/shell (`crates/shell/src/app/about_to_wait.rs`, `crates/shell/src/page_source.rs`)",
+   "date": "2026-11-17",
    "debtor": false
   }
  },
@@ -22529,9 +22536,6 @@
   ],
   "js (`CSSStyleDeclaration`, `js/src/shim/web_api_shim_mid.js`)": [
    "BUG-1631"
-  ],
-  "js (`DOMImplementation.createHTMLDocument`, `web_api_shim_mid.js:6550` — прототип захардкожен `Document.prototype`)": [
-   "BUG-1808"
   ],
   "js (`DOMMatrix`/`DOMMatrixReadOnly`/`DOMQuad`; воркерный глобал)": [
    "BUG-1604"
@@ -23423,6 +23427,9 @@
   "js (`named_access.rs` — `lock_document_bounded`: `sleep(100 мкс)` поллинг против системного тика 15,6 мс)": [
    "BUG-1788"
   ],
+  "js (`shim/web_api_shim_mid.js` — `createHTMLDocument`, комментарии `_lumen_build_detached_document`)": [
+   "BUG-1808"
+  ],
   "js (`shim/web_api_shim_tail_b.js`)": [
    "BUG-1801"
   ],
@@ -23449,9 +23456,6 @@
   ],
   "js (`web_api_shim_mid_b.js` `_sw_make_event_target`)": [
    "BUG-1638"
-  ],
-  "js (`web_api_shim_mid_b.js` — `_sw_container`)": [
-   "BUG-1805"
   ],
   "js (`web_api_shim_tail_b.js::_wa_motion_read` — чтение-время оверлей CSS-переходов и анимаций BUG-1293)": [
    "BUG-1648"
@@ -23501,6 +23505,9 @@
   "js (шим `web_api_shim_mid.js`, `web_api_shim_tail_b.js`, `video_element.js`, `mathml.rs`)": [
    "BUG-1779"
   ],
+  "js (шим `web_api_shim_mid_b.js` — `_sw_container`)": [
+   "BUG-1805"
+  ],
   "js (шим), layout (`zoom`)": [
    "BUG-943"
   ],
@@ -23509,9 +23516,6 @@
   ],
   "js + layout (`crates/js/src/shim/web_api_shim_mid.js::_lumen_canonicalize_longhand`, `crates/engine/layout/src/selector_query.rs::computed_style_to_map`)": [
    "BUG-1297"
-  ],
-  "js / network (`id.sber.ru` SSO) — не локализовано": [
-   "BUG-1780"
   ],
   "js shim (`crates/js/src/shim/web_api_shim_mid.js` — `_LUMEN_WRAPPER_MEMBERS`)": [
    "BUG-494"
@@ -23653,6 +23657,9 @@
   ],
   "js/shell (`crates/js/src/v8_runtime/style_flush.rs`, `crates/js/src/v8_runtime/install/dom_core.rs`, `crates/js/src/v8_runtime/install/platform.rs`, `crates/shell/src/persistent_js.rs`)": [
    "BUG-560"
+  ],
+  "js/shell (`crates/shell/src/app/about_to_wait.rs`, `crates/shell/src/page_source.rs`)": [
+   "BUG-1780"
   ],
   "js/shell (`navigation_api.rs`, `frame_bridge.rs` — `window.navigation` под-документа)": [
    "BUG-1701"
@@ -25541,6 +25548,9 @@
   ],
   "не локализовано (`common.sub.js::requestViaNavigable` — iframe с `name`, `<a target>.click()`, ожидание `message` с `event.source === iframe.contentWindow`; `subresource/document.py`)": [
    "BUG-1818"
+  ],
+  "не локализовано (живое окно — стадия готовности; SW-шим исключён — BUG-1805 закрыт)": [
+   "BUG-1822"
   ],
   "не локализовано (путь вставки классического скрипта: `_lumen_resource_after_insert` → `_lumen_script_prepare` → `_lumen_script_execute_classic`, `crates/js/src/shim/web_api_shim_mid.js`)": [
    "BUG-1158"
