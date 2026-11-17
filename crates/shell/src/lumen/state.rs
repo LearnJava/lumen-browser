@@ -796,6 +796,21 @@ pub(crate) struct Lumen {
     /// `user_event` drops events whose generation is stale (a superseded
     /// navigation), so a slow earlier load can't paint over a newer page.
     pub(crate) load_generation: u64,
+    /// LOAD-4: поколение страницы, чей финальный каскад уже стоит в
+    /// `layout_source` (`RenderDone` применил). Поздний `<link>`-лист
+    /// применяется только к ней; до этого он ждёт в
+    /// [`Self::pending_late_stylesheets`] — у `layout_source` ещё каскад
+    /// предыдущей страницы.
+    pub(crate) applied_page_generation: Option<u64>,
+    /// LOAD-4: `<link>`-листы, пришедшие после каскада своей навигации, но
+    /// раньше её `RenderDone`; `drain_pending_late_stylesheets` разбирает
+    /// записи своего поколения сразу после применения страницы.
+    pub(crate) pending_late_stylesheets: Vec<(u64, crate::page_load::LateStylesheet)>,
+    /// LOAD-4: сколько `<link>`-листов этой навигации ещё в пути — `load` окна
+    /// ждёт их так же, как картинки и фреймы (HTML LS §4.6.7). Счётчик
+    /// заводится на `LoadDone` вместе с `LateCssFeed`: `+1` даёт подписка,
+    /// `−1` — обработчик `LateStylesheet` (лист уже применён).
+    pub(crate) pending_late_css: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
     /// BUG-757: реальная база текущего документа и generation навигации, в
     /// которой она получена. Заполняется, когда сервер увёл запрос редиректом:
     /// `self.source` хранит ЗАПРОШЕННЫЙ адрес, и подресурсы частичного DOM

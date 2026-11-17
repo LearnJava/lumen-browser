@@ -1780,6 +1780,7 @@ fn load1_parse_html(live: bool, det: deterministic::DetConfig, html: &str) -> cr
             dedup: Arc::default(),
             proxy,
             stream_builder: None,
+            late_css: None,
         }
     });
     parse_and_layout(
@@ -1857,20 +1858,22 @@ fn load1_window_load_waits_for_last_image_and_the_events_pass() {
     let mut errors: std::collections::HashSet<String> = std::collections::HashSet::new();
     // RenderDone уже был, картинки ещё в пути: `load` не приходит.
     assert_eq!(unsettled_images(&requested, &sizes, &errors), 3);
-    assert!(!window_load_due(true, false, 3, false, false));
+    assert!(!window_load_due(true, false, 3, false, false, false));
     sizes.insert("a.png".into(), (1, 1));
     errors.insert("b.png".into());
     assert_eq!(unsettled_images(&requested, &sizes, &errors), 1);
-    assert!(!window_load_due(true, true, 1, false, false));
+    assert!(!window_load_due(true, true, 1, false, false, false));
     // Последняя осела, но проход, раздающий `load`/`error` картинкам, ещё не прошёл.
     sizes.insert("c.png".into(), (2, 2));
     assert_eq!(unsettled_images(&requested, &sizes, &errors), 0);
-    assert!(!window_load_due(true, true, 0, false, false));
+    assert!(!window_load_due(true, true, 0, false, false, false));
     // Проход прошёл: теперь окно получает `load`, и только раз.
-    assert!(window_load_due(true, false, 0, false, false));
-    assert!(!window_load_due(false, false, 0, false, false));
+    assert!(window_load_due(true, false, 0, false, false, false));
+    assert!(!window_load_due(false, false, 0, false, false, false));
     // LOAD-1B: все картинки осели, но `<iframe>` ещё грузится — `load` ждёт и его.
-    assert!(!window_load_due(true, false, 0, true, false));
+    assert!(!window_load_due(true, false, 0, true, false, false));
+    // LOAD-4: `<link>`-лист ещё в пути — `load` ждёт его (HTML LS §4.6.7).
+    assert!(!window_load_due(true, false, 0, false, false, true));
 }
 
 /// LOAD-1B: живое окно отдаёт страницу без `<iframe>` (их грузит `Lumen::drive_deferred_frames`
@@ -2011,8 +2014,8 @@ fn load3a_headless_async_script_keeps_document_order() {
 #[test]
 fn load3a_window_load_waits_for_async_scripts() {
     use crate::page_load::window_load_due;
-    assert!(!window_load_due(true, false, 0, false, true));
-    assert!(window_load_due(true, false, 0, false, false));
+    assert!(!window_load_due(true, false, 0, false, true, false));
+    assert!(window_load_due(true, false, 0, false, false, false));
 }
 
 // -- LOAD-3B: финальный проход не разбирает HTML второй раз -------------------

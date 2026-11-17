@@ -127,6 +127,7 @@ pub(crate) fn restore_js_context(
                 dedup: c.dedup,
                 proxy: c.proxy,
                 stream_builder: None,
+                late_css: None,
             },
         )
     });

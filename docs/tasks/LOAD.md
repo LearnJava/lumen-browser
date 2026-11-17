@@ -267,6 +267,33 @@ CSS-pending); первый кадр 1,1–1,9 с (прежде 1,2 — кадр�
 полного); unit-тест порядка; graphic_tests и `dump_golden.py` без изменений;
 `final_applied_s` на корпусе пользователя не хуже базы LOAD-0.
 
+**Сделано (2026-11-17).** Живой режим (`LateCssFeed` из `DynamicImageHookCtx`;
+headless, `--deterministic` и dump-режимы получают `None` и прежний путь)
+строит каскад только из **заполненных** слотов `PREFETCH_CACHE`
+(`PrefetchCache::try_fetch_current` — без ожидания незавершённой загрузки).
+Лист в пути даёт `FetchedSheet::Pending`: `subscribe_late_stylesheet` берёт его
+через `warm_with` (ждёт прогрев стримингового сканера или заводит свой; байты
+разбирает тот же `fetch_stylesheet_for_cascade` → `inline_css_imports`, то есть
+кодировка BUG-509, ребейз BUG-1127 и `@import` — как у синхронной ветки), а узел
+не попадает ни в `link_outcomes`, ни в CSSOM-реестр
+(`build_stylesheet_node_registry(late = true)`). По приходу
+`LoadEvent::LateStylesheet` → `Lumen::apply_late_stylesheet`: текст встаёт в
+`DynamicCssBase::linked`, `linked_dirty` заставляет `refresh_dynamic_css`
+пересобрать лист из частей — без сети и без повторного разбора HTML/скриптов
+(не полная пересборка); порядок документа даёт `merge_sheet_chunks`, экран
+обновляет обычный `relayout` (смена ревизии листа — «широкая дорога»
+[ADR-036](../decisions/ADR-036-incremental-restyle-invalidation.md) §3), CSSOM
+получает запись на её место в дереве (`update_stylesheet_nodes`), и уже после
+раскладки уходит `load`/`error` элемента (`_lumen_deliver_parser_link_events`,
+BUG-804). `load` окна лист держит (HTML LS §4.6.7, счётчик
+`Lumen::pending_late_css`), кадр — нет. Пока `RenderDone` в пути, лист ждёт в
+`Lumen::pending_late_stylesheets` и разбирается сразу после применения страницы
+(у `layout_source` ещё каскад предыдущей). Попутно: прогрев стримингового
+сканера теперь применяет `upgrade-insecure-requests` до гейта и запроса
+(`page_load.rs::feed_preload_and_emit`), как финальный проход, — иначе UIR-страница
+качала лист дважды, а LOAD-4 считал уже пришедший лист непришедшим. Стенд и
+цифры — [journal](../perf/journal.md) §2026-11-17 LOAD-4.
+
 ## LOAD-7 — мёртвый подресурс не держит `load` окна (P6, M)
 
 **Depends on:** —. **Files:** `crates/shell/src/page_load.rs` (`pending_window_load`,

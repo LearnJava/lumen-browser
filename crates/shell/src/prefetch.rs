@@ -277,6 +277,25 @@ impl PrefetchCache {
         Some(Self::wait(&slot))
     }
 
+    /// LOAD-4: the bytes of `url` if this navigation's slot is already filled —
+    /// without waiting for an in-flight fetch (`lookup_current` blocks on it).
+    ///
+    /// `None` covers both "nobody is fetching this URL" and "the fetch is still
+    /// running": the live final pass calls this to build the cascade from the
+    /// sheets that have arrived, instead of blocking on the slowest `<link>`
+    /// until `FETCH_READ_TIMEOUT`, and subscribes to the rest via
+    /// [`Self::warm_with`] (the caller turns that into `LoadEvent::LateStylesheet`).
+    /// A filled slot counts as used: those bytes went into the page.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    pub(crate) fn try_fetch_current(&self, url: &str) -> Option<FetchResult> {
+        let slot = Arc::clone(self.inner.lock().unwrap().slots.get(url)?);
+        let result = slot.state.lock().unwrap().clone();
+        if result.is_some() {
+            slot.used.store(true, Ordering::Relaxed);
+        }
+        result
+    }
+
     /// Reserve `url`'s slot for `generation`: the first caller becomes the
     /// filler, later ones wait on it, a superseded generation bypasses the
     /// cache entirely.
@@ -710,6 +729,30 @@ mod tests {
         POOL.submit(|| panic!("job failure"));
         POOL.submit(move || tx.send(()).unwrap());
         rx.recv_timeout(std::time::Duration::from_secs(5)).expect("next job still runs");
+    }
+
+    #[test]
+    fn try_fetch_current_does_not_wait_for_an_in_flight_slot() {
+        // LOAD-4: финальный проход читает только заполненные слоты —
+        // незавершённая загрузка не блокирует его и не считается
+        // использованием, а заполненный слот отдаёт байты сразу.
+        let cache: &'static PrefetchCache = Box::leak(Box::new(PrefetchCache::new()));
+        cache.reset(1);
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        cache.warm(1, "http://x/slow.css", move || {
+            let _ = release_rx.recv();
+            Ok(resource(b"slow"))
+        });
+        assert!(cache.try_fetch_current("http://x/none.css").is_none(), "слота нет");
+        assert!(
+            cache.try_fetch_current("http://x/slow.css").is_none(),
+            "загрузка в полёте — финальный проход не ждёт её"
+        );
+        assert!(!cache.was_used(1, "http://x/slow.css"), "недочитанный слот — не использование");
+        release_tx.send(()).unwrap();
+        // `lookup_current` дожидается заполнителя (штатный потребитель позднего листа).
+        assert_eq!(&cache.lookup_current("http://x/slow.css").unwrap().unwrap().body, b"slow");
+        assert!(cache.try_fetch_current("http://x/slow.css").is_some(), "заполненный слот — сразу");
     }
 
     #[test]

@@ -212,7 +212,11 @@ impl Lumen {
             return false;
         };
         let fp = inline_style_fingerprint(&doc);
-        let text_changed = fp != base.inline_fp || adopted_fp != base.adopted_fp;
+        // LOAD-4: `linked_dirty` — лист `<link>` доехал уже после первой сборки;
+        // пересборка идёт тем же путём, что у позднего `<style>`, и порядок
+        // листов восстанавливает `merge_sheet_chunks` по дереву документа.
+        let linked_dirty = std::mem::take(&mut base.linked_dirty);
+        let text_changed = fp != base.inline_fp || adopted_fp != base.adopted_fp || linked_dirty;
         if !text_changed && cssom_epoch == base.cssom_epoch {
             return false;
         }
@@ -296,6 +300,154 @@ impl Lumen {
             self.spawn_dynamic_web_fonts();
         }
         true
+    }
+
+    /// LOAD-4: применить `<link>`-лист, пришедший после того, как финальный
+    /// проход живого окна собрал каскад (`LoadEvent::LateStylesheet`).
+    ///
+    /// Текст встаёт в `DynamicCssBase::linked` — на «своё место» его ставит
+    /// `merge_sheet_chunks` при пересборке (порядок по дереву документа, CSS
+    /// Cascade L4 §6.4.3). Пересборка — тот же `refresh_dynamic_css`, что у
+    /// поздно вставленного `<style>` (BUG-743): без сети и без повторного
+    /// разбора HTML/скриптов, то есть не полная пересборка страницы; экран
+    /// обновляет обычный relayout (смена ревизии листа — документированный
+    /// «широкий» путь инкрементального рестайла, ADR-036 §3). `load`/`error`
+    /// элемента уходит после раскладки, чтобы обработчик видел новые стили.
+    ///
+    /// Если страница этой навигации ещё не применена (`RenderDone` в пути) —
+    /// лист ждёт в [`Self::pending_late_stylesheets`]: у `layout_source` сейчас
+    /// каскад ПРЕДЫДУЩЕЙ страницы.
+    pub(crate) fn apply_late_stylesheet(&mut self, generation: u64, sheet: LateStylesheet) {
+        if self.applied_page_generation != Some(generation) {
+            self.pending_late_stylesheets.push((generation, sheet));
+            return;
+        }
+        self.apply_late_stylesheet_now(sheet);
+    }
+
+    /// LOAD-4: разобрать очередь [`Self::apply_late_stylesheet`], когда
+    /// `RenderDone` применил страницу навигации `generation`; записи чужих
+    /// навигаций отбрасываются.
+    pub(crate) fn drain_pending_late_stylesheets(&mut self, generation: u64) {
+        let queued = std::mem::take(&mut self.pending_late_stylesheets);
+        for (queued_gen, sheet) in queued {
+            if queued_gen == generation {
+                self.apply_late_stylesheet_now(sheet);
+            }
+        }
+    }
+
+    fn apply_late_stylesheet_now(&mut self, sheet: LateStylesheet) {
+        let node = NodeId::from_raw(sheet.node);
+        let needs_relayout = {
+            let Some(src) = self.layout_source.as_mut() else {
+                self.deliver_parser_link_event(node, sheet.ok);
+                return;
+            };
+            let Some(dyn_css) = src.dynamic_css.as_mut() else {
+                // Восстановленная страница (`bfcache`-thaw/разморозка) частей
+                // каскада не хранит — применить лист некуда; событие элемента
+                // всё равно уходит (байты пришли).
+                self.deliver_parser_link_event(node, sheet.ok);
+                self.fire_late_import_violations(&sheet.blocked_imports);
+                return;
+            };
+            // Лист уже в каскаде — его принёс повторный `build_page_cascade`
+            // (скрипты успели сменить листы) или повторная подписка; `load`/
+            // `error` элемент уже получил оттуда.
+            if dyn_css.linked.iter().any(|(n, _)| *n == node) {
+                return;
+            }
+            if !sheet.ok {
+                self.deliver_parser_link_event(node, false);
+                return;
+            }
+            // Элемент убрали/отключили, пока лист шёл, — каскад его уже не
+            // собирает (`collect_link_hrefs` идёт по дереву), и события элемент
+            // не получает (HTML LS §4.6.7: фетч отменяется вместе с элементом).
+            let insert_at = {
+                let Ok(doc) = src.document.lock() else { return };
+                if !doc.contains_id(node) || !doc.is_connected(node) || doc.link_has_no_sheet(node) {
+                    return;
+                }
+                crate::stylesheets::stylesheet_owner_index(&doc, node)
+            };
+            dyn_css.linked.push((node, format!("{}\n", sheet.text)));
+            dyn_css.linked_dirty = true;
+            // CSSOM-1: `element.sheet`/`document.styleSheets` — запись на её
+            // место в порядке дерева; сам реестр в JS заменяется целиком.
+            let entry = StylesheetNodeEntry {
+                node: sheet.node,
+                sheet: std::sync::Arc::new(lumen_css_parser::parse(&sheet.text)),
+                disabled: false,
+            };
+            let mut entries = (*src.stylesheet_nodes).clone();
+            entries.insert(insert_at.min(entries.len()), entry);
+            src.stylesheet_nodes = std::sync::Arc::new(entries.clone());
+            #[cfg(feature = "v8")]
+            crate::engine_bridge::route_task_js(
+                self.engine_thread.as_ref(),
+                self.js_ctx.as_ref(),
+                move |js| js.update_stylesheet_nodes(entries),
+            );
+            true
+        };
+        if needs_relayout {
+            // Поздний лист идёт путём «parse+layout без сети» — против полного
+            // прохода (`fetch-css`/`parse-css`/`fetch-images`) это и есть
+            // «инкрементально» из брифа LOAD-4. Живого трейсера нет — та же
+            // одна строка, что у позднего `<style>` (`CSS пересобран…`).
+            let _s = lumen_core::trace::span("late-css", "parse");
+            let t0 = std::time::Instant::now();
+            self.relayout();
+            eprintln!(
+                "CSS: поздний лист применён (LOAD-4, узел {}, пересборка {:.0} мс)",
+                sheet.node,
+                t0.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+        self.deliver_parser_link_event(node, true);
+        self.fire_late_import_violations(&sheet.blocked_imports);
+    }
+
+    /// LOAD-4: `securitypolicyviolation` для `@import`, заблокированных в
+    /// поздно пришедшем листе (политики посчитаны на потоке разбора, как в
+    /// `page_pipeline`'s `blocked_by_style_src`).
+    fn fire_late_import_violations(&self, blocked: &[(String, Vec<String>)]) {
+        if blocked.is_empty() {
+            return;
+        }
+        #[cfg(feature = "v8")]
+        {
+            let blocked = blocked.to_vec();
+            crate::engine_bridge::route_task_js(
+                self.engine_thread.as_ref(),
+                self.js_ctx.as_ref(),
+                move |js| {
+                    for (url, texts) in &blocked {
+                        for text in texts {
+                            js.fire_csp_violation("style-src-elem", url, text);
+                        }
+                    }
+                },
+            );
+        }
+        #[cfg(not(feature = "v8"))]
+        let _ = blocked;
+    }
+
+    /// LOAD-4: `load`/`error` позднего `<link>` — тем же JS-путём, что отчёт
+    /// `parse_and_layout` (BUG-804, `_lumen_deliver_parser_link_events`);
+    /// повтор отсекает пер-узловой флаг на JS-стороне.
+    fn deliver_parser_link_event(&self, node: NodeId, ok: bool) {
+        #[cfg(feature = "v8")]
+        crate::engine_bridge::route_eval_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            format!("_lumen_deliver_parser_link_events([{},{}]);", node.index(), u8::from(ok)),
+        );
+        #[cfg(not(feature = "v8"))]
+        let _ = (node, ok);
     }
 
     /// BUG-1154: запускает загрузку `@font-face url()`-источников текущего листа,

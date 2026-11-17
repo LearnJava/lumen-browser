@@ -88,7 +88,7 @@ use event_sink::StdoutEventSink;
 use frame_pacing::{RAF_MIN_INTERVAL_MS, fast_scroll_degrade_disabled, page_offset_fast_disabled};
 use lumen::Lumen;
 use window_mode::run_window_mode;
-use page_load::{LoadEvent, STREAM_PAINT_INTERVAL_MS};
+use page_load::{LateStylesheet, LoadEvent, STREAM_PAINT_INTERVAL_MS};
 use view_transition::{ViewTransitionEvent, ViewTransitionState};
 use cli_args::*;
 use dump_tls::run_dump_tls;
@@ -292,6 +292,7 @@ use crate::subresources::{decode_image, fetch_and_decode_images, fetch_font_byte
 use crate::stylesheets::{
     StylesheetNodeEntry, build_stylesheet_node_registry, link_media_matches,
     load_linked_stylesheets, print_media_context, resolve_inline_style_imports, screen_media_context,
+    LateCssFeed,
 };
 #[cfg(test)]
 use crate::stylesheets::{collect_link_hrefs, contains_ignore_ascii_case, inline_css_imports};
