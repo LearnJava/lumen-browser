@@ -37,6 +37,15 @@ pub(crate) fn install_service_worker(
         type SwMap = std::collections::HashMap<(String, String), String>;
         let sw_regs: Arc<Mutex<SwMap>> = Arc::new(Mutex::new(std::collections::HashMap::new()));
 
+        // SW §3.1.3: a message posted to an installing/waiting worker queues
+        // until the worker starts running. Buffer (data_json, source_json)
+        // per (origin, scope); `_lumen_sw_activate_script` drains it into the
+        // worker's channel once the isolate exists.
+        type SwPendingMap = std::collections::HashMap<(String, String), Vec<(String, String)>>;
+        let sw_pending: Arc<Mutex<SwPendingMap>> =
+            Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let sw_pending_post = Arc::clone(&sw_pending);
+
         // Cache storage: origin → cache_name → url → (method, meta_json, body)
         // meta_json: {"method":"GET","status":200,"statusText":"OK","headers":{…}}
         // method is stored separately for O(1) `keys()` without re-parsing meta_json.
@@ -140,12 +149,21 @@ pub(crate) fn install_service_worker(
                 move |scope: String, data_json: String, source_json: String| {
                     let origin = o.clone();
                     let Some(store) = sws.as_ref() else { return };
-                    if let Some(handle) = store.lock().unwrap().get(&(origin, scope)) {
+                    if let Some(handle) = store.lock().unwrap().get(&(origin.clone(), scope.clone())) {
                         // `send` never blocks on an unbounded channel — safe
                         // to do under the store lock.
                         let _ = handle.tx.send(lumen_core::ext::SwWorkerMessage::Message(
                             lumen_core::ext::SwClientMessage { data_json, source_json },
                         ));
+                    } else {
+                        // No live worker yet (installing/waiting): queue per
+                        // SW §3.1.3, delivered on activation.
+                        sw_pending_post
+                            .lock()
+                            .unwrap()
+                            .entry((origin, scope))
+                            .or_default()
+                            .push((data_json, source_json));
                     }
                 }
             );
@@ -229,6 +247,7 @@ pub(crate) fn install_service_worker(
             let idb_sw = idb_sw.clone();
             let det_sw = determinism.clone();
             let o = page_origin.clone();
+            let sw_pending_act = Arc::clone(&sw_pending);
             reg!(scope, ctx, store, "_lumen_sw_activate_script", move |scope: String, text: String, script_url: String, sw_type: String| {
                 let origin = o.clone();
                 if let (Some(store), Some(cache)) = (sws.as_ref(), cbe_sw.as_ref()) {
@@ -243,6 +262,18 @@ pub(crate) fn install_service_worker(
                         idb_sw.clone(),
                         det_sw.clone(),
                     );
+                    // Deliver messages queued while the worker was
+                    // installing/waiting (SW §3.1.3), in order.
+                    let queued = sw_pending_act
+                        .lock()
+                        .unwrap()
+                        .remove(&(origin.clone(), scope.clone()))
+                        .unwrap_or_default();
+                    for (data_json, source_json) in queued {
+                        let _ = handle.tx.send(lumen_core::ext::SwWorkerMessage::Message(
+                            lumen_core::ext::SwClientMessage { data_json, source_json },
+                        ));
+                    }
                     store.lock().unwrap().insert((origin, scope), handle);
                 }
             });

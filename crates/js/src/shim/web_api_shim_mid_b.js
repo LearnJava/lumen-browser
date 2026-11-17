@@ -690,11 +690,13 @@ function _sw_persist() {
 
 function _sw_run_lifecycle(reg, scriptText) {
     var sw = reg.installing;
-    // Notify updatefound
-    var uf = new Event('updatefound');
-    reg.dispatchEvent(uf);
     // installing → install event → installed → activating → activate → activated
     setTimeout(function() {
+        // SW §9.2 step 8: `updatefound` fires after the script fetch, i.e.
+        // asynchronously — a listener attached right after register() must
+        // still catch it, so it can't fire synchronously inside register().
+        var uf = new Event('updatefound');
+        reg.dispatchEvent(uf);
         // Fire install event (SW spec §8.2.4)
         var installEvt = new Event('install');
         installEvt.waitUntil = function() {};

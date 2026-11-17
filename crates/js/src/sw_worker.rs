@@ -150,6 +150,15 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     }}
   }};
 
+  // SW-MODULE: module scripts are strict, so a bare `onmessage = ...` at the
+  // top level throws unless the handler attrs already exist on the scope
+  // (in engines they are IDL attributes, null by default). Predefine the
+  // ServiceWorkerGlobalScope/WorkerGlobalScope event-handler set.
+  var _sw_handler_attrs = 'oninstall onactivate onfetch onmessage onmessageerror onpush onpushsubscriptionchange onnotificationclick'.split(' ');
+  for (var _ha = 0; _ha < _sw_handler_attrs.length; _ha++) {{
+    if (!(_sw_handler_attrs[_ha] in globalThis)) globalThis[_sw_handler_attrs[_ha]] = null;
+  }}
+
   // base64 РІвЂ вЂ™ Р’В«Р В±Р В°Р в„–РЎвЂљР С•Р Р†Р В°РЎРЏР’В» РЎРѓРЎвЂљРЎР‚Р С•Р С”Р В° (Р С—Р С• РЎРѓР С‘Р СР Р†Р С•Р В»РЎС“ Р Р…Р В° Р В±Р В°Р в„–РЎвЂљ) Р С‘ Р С•Р Р…Р В° Р В¶Р Вµ РІвЂ вЂ™ РЎвЂљР ВµР С”РЎРѓРЎвЂљ UTF-8.
   //
   // Р СњР В°РЎвЂљР С‘Р Р†Р Р…РЎвЂ№Р в„– `atob` Р В·Р Т‘Р ВµРЎРѓРЎРЉ Р С•РЎвЂљР Т‘Р В°РЎвЂРЎвЂљ `undefined` Р Р…Р В° Р В»РЎР‹Р В±Р С•Р С РЎвЂљР ВµР В»Р Вµ, Р С”Р С•РЎвЂљР С•РЎР‚Р С•Р Вµ Р Р…Р Вµ
@@ -2210,6 +2219,49 @@ self.addEventListener('fetch', function(event) {
         assert!(
             verdict.contains("dyn:TypeError"),
             "dynamic import() must reject with TypeError in a module SW, got: {verdict}"
+        );
+    }
+
+    /// Модульный SW строг: присваивание в несуществующую глобальную переменную
+    /// (`onmessage = ...` без `self.`) бросает ReferenceError, если атрибут-обработчик
+    /// не предопределён на scope. В движках это IDL-атрибуты (null по умолчанию) —
+    /// шим должен так же предопределить их до eval скрипта.
+    #[test]
+    fn v8_sw_module_scope_predefines_event_handlers() {
+        let cache = MockCache::new();
+        let handle = spawn_sw_worker_v8(
+            "https://example.com".to_string(),
+            "/".to_string(),
+            r#"
+onmessage = function(event) { globalThis.__last_message = event.data; };
+self.addEventListener('fetch', function(event) {
+    event.respondWith(Promise.resolve(new Response(typeof onmessage)));
+});
+"#
+            .to_string(),
+            "https://example.com/sw.js".to_string(),
+            true,
+            Arc::clone(&cache) as Arc<dyn CacheBackend>,
+            None,
+            None,
+            None,
+        );
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        handle
+            .tx
+            .send(lumen_core::ext::SwWorkerMessage::Fetch(lumen_core::ext::SwFetchRequest {
+                url: "https://example.com/page".to_string(),
+                method: "GET".to_string(),
+                response_tx: tx,
+            }))
+            .unwrap();
+
+        let result = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&result.unwrap_or_default()),
+            "function",
+            "bare `onmessage = ...` must define the handler in a strict module SW"
         );
     }
 
