@@ -106,7 +106,7 @@ P5's mandate is **audit + cheap safe cleanup + filing tasks** — never solo ref
   - duplication / needed refactor → `ROADMAP.md` row + a pointer line (`ROADMAP.md:NN` or code `file:line`) in `STATUS-P1.md`/`STATUS-P2.md`
   - dangling `// CSS:` handoff → `crates/...:line` pointer line in `STATUS-P4.md`
 - **Workspace-clippy.** P5 is the only role that runs `cargo clippy --workspace` *as its own task* — the full sweep is its whole point; it catches cross-crate breakage that per-crate checks hide after multi-session merges. Every role also meets it once per task inside `/lumen-task-finish`'s gate ([`commands.md`](commands.md) §Cargo output rules); what is P5-specific is running it standalone and on demand.
-- **Branch prefix:** `p5-health-<date>` or `p5-<topic>`. Worktree mandatory, same as P1–P4.
+- **Branch prefix:** `p5-health-<date>` or `p5-<topic>`. The work folder is the pool slot `p5-work` — the manager starts the session there.
 
 The mandate is **this** section. `STATUS-P5.md` holds the operational half — alias→action table,
 the recurring-sweep queue and the per-sweep workflow — in the sectioned format the orchestrator
@@ -133,7 +133,7 @@ role the user drives directly; every other role picks its own next task off its 
   not for anything adjacent to it. Found a second defect while working? File it the normal way
   (`OPEN` row in `BUGS.md`) and keep going, exactly like P1/P2/P4.
 - **Branch prefix:** `p6-<topic>`, or `p6-bug-<id>` when the item is a `BUGS.md` row.
-  Pool slot: `p6-work`. Worktree mandatory, same as P1–P5.
+  Pool slot: `p6-work` — the manager starts the session there.
 - **Not in `scripts/orchestrator.py`'s rotation, by design** — that script schedules the five
   self-directed roles (its `["P1"…"P5"]` lists are hardcoded in ~14 places). P6 is launched from
   `.claude-manager` (session `S6`) or by hand, because a lane fed by user decisions has nothing to
@@ -221,8 +221,9 @@ ROADMAP.md (one line per task, status ≠ done)   ← master task list for P1/P2
 
 ## Reserving a task
 
-Create the feature branch and worktree (`p<N>-<id>`) and **push it before the first code edit** —
-`bash scripts/task-claim.sh <N> <id>` does the check, the slot and the push in one step. **The
+Create the feature branch (`p<N>-<id>`) and **push it before the first code edit** —
+`bash scripts/task-claim.sh <N> <id>` does the check, the branch and the push in one step (the
+session already runs in its slot, so the script only switches the slot to the branch). **The
 branch's existence on `origin` is the reservation signal**: a parallel session (possibly on another
 machine) sees it only after `git fetch`, and matches it by task id, not by exact branch name
 ([`git-workflow.md`](git-workflow.md) §Parallel session coordination). A local-only branch reserves
