@@ -697,6 +697,84 @@ fn sw_register_rejects_bad_scope() {
     assert_eq!(out, "TypeError");
 }
 
+// BUG-1742: the default scope is "./" against the script URL (not "/"), the
+// registry key is the absolute scope URL, and unregister() reports false the
+// second time.
+#[test]
+fn sw_register_default_scope_and_unregister_twice() {
+    let (rt, _store) = v8_sw_runtime_at("https://example.com/app/page.html", "self.onmessage = function() {};");
+    rt.eval(
+        "var sc = null, u1 = null, u2 = null, reg = null;
+         navigator.serviceWorker.register('sw.js').then(function(r) {
+             reg = r; sc = r.scope;
+             return r.unregister();
+         }).then(function(b) { u1 = b; return reg.unregister(); })
+           .then(function(b) { u2 = b; });",
+    )
+    .unwrap();
+    assert!(sw_wait_flag(&rt, "u2 !== null"), "unregister chain never settled");
+    assert_eq!(
+        rt.eval("sc").unwrap(),
+        lumen_core::JsValue::String("https://example.com/app/".into())
+    );
+    assert_eq!(rt.eval("u1").unwrap(), lumen_core::JsValue::Bool(true));
+    assert_eq!(rt.eval("u2").unwrap(), lumen_core::JsValue::Bool(false));
+}
+
+// BUG-1742: a classic script with a non-JS MIME type rejects with
+// SecurityError (SW §Update fetch hook — classic scripts included) and leaves
+// no registration behind.
+#[test]
+fn sw_register_classic_script_bad_mime_rejects_security_error() {
+    struct MimeFetch(&'static str, &'static str);
+    impl lumen_core::ext::JsFetchProvider for MimeFetch {
+        fn fetch_sync(
+            &self,
+            url: &str,
+            _method: &str,
+        ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            Ok(lumen_core::ext::JsFetchResult {
+                status: 200,
+                status_text: "OK".into(),
+                headers: vec![("content-type".to_string(), self.1.to_string())],
+                body: self.0.as_bytes().to_vec(),
+                url: url.to_string(),
+            })
+        }
+    }
+    let rt = V8JsRuntime::new().unwrap();
+    let provider: Arc<dyn lumen_core::ext::JsFetchProvider> =
+        Arc::new(MimeFetch("self.onmessage = function() {};", "text/plain"));
+    rt.install_dom(
+        make_doc(),
+        "https://example.com/app/page.html",
+        Some(provider),
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(Arc::new(MockCacheBackend::new())),
+        None,
+        None,
+        false,
+        None,
+    )
+    .unwrap();
+    rt.eval(
+        "var out = null; navigator.serviceWorker.register('sw.js')
+             .then(function() { out = 'ok'; })
+             .catch(function(e) { out = e.name; });",
+    )
+    .unwrap();
+    assert!(sw_wait_flag(&rt, "out !== null"), "register never settled");
+    assert_eq!(rt.eval("out").unwrap(), lumen_core::JsValue::String("SecurityError".into()));
+    assert_eq!(
+        rt.eval("_lumen_sw_has_registration()").unwrap(),
+        lumen_core::JsValue::Bool(false)
+    );
+}
+
 #[test]
 fn sw_registration_has_installing_worker() {
     let rt = v8_runtime_with_url("https://example.com/");
@@ -706,7 +784,7 @@ fn sw_registration_has_installing_worker() {
     rt.eval(
         r#"
                 navigator.serviceWorker.register('/sw.js', { scope: '/' });
-                var reg = _sw_registrations['/'];
+                var reg = _sw_registrations['https://example.com/'];
                 var ok = reg !== null && reg.installing !== null;
                 "#,
     )
@@ -721,7 +799,7 @@ fn sw_worker_has_state_installing() {
     rt.eval(
         r#"
                 navigator.serviceWorker.register('/sw.js');
-                var reg = _sw_registrations['/'];
+                var reg = _sw_registrations['https://example.com/'];
                 var st = reg.installing.state;
                 "#,
     )
@@ -740,7 +818,7 @@ fn sw_statechange_event_has_target() {
         r#"
                 var reg = null, seen = null, seenCur = null, last = null;
                 navigator.serviceWorker.register('/sw.js');
-                reg = _sw_registrations['/'];
+                reg = _sw_registrations['https://example.com/'];
                 var w = reg.installing;
                 globalThis.w = w;
                 "#,
@@ -772,7 +850,7 @@ fn sw_onstatechange_and_updatefound_have_target() {
         r#"
                 var reg = null, out = [];
                 navigator.serviceWorker.register('/sw.js');
-                reg = _sw_registrations['/'];
+                reg = _sw_registrations['https://example.com/'];
                 globalThis.w = reg.installing;
                 "#,
     )
@@ -804,7 +882,7 @@ fn sw_registration_inherits_per_api_members() {
         r#"
                 var reg = null;
                 navigator.serviceWorker.register('/sw.js', { scope: '/' });
-                reg = _sw_registrations['/'];
+                reg = _sw_registrations['https://example.com/'];
                 "#,
     )
     .unwrap();
@@ -915,7 +993,7 @@ fn sw_registration_has_event_target() {
     rt.eval(
         r#"
                 navigator.serviceWorker.register('/sw.js');
-                var reg = _sw_registrations['/'];
+                var reg = _sw_registrations['https://example.com/'];
                 var ok = typeof reg.addEventListener === 'function' &&
                          typeof reg.dispatchEvent === 'function';
                 "#,
@@ -968,7 +1046,7 @@ fn sw_worker_post_message_does_not_throw() {
     rt.eval(
         r#"
                 navigator.serviceWorker.register('/sw.js');
-                var reg = _sw_registrations['/'];
+                var reg = _sw_registrations['https://example.com/'];
                 globalThis.iw = reg.installing;
                 "#,
     )
@@ -1073,7 +1151,7 @@ fn sw_register_allowed_when_no_worker_src_policy() {
     rt.eval(
         r#"
                 navigator.serviceWorker.register('/sw.js');
-                var reg = _sw_registrations['/'];
+                var reg = _sw_registrations['https://example.com/'];
                 var ok = reg !== null && reg.installing !== null;
                 "#,
     )
@@ -1631,7 +1709,10 @@ impl lumen_core::ext::JsFetchProvider for SwScriptFetch {
         Ok(lumen_core::ext::JsFetchResult {
             status: 200,
             status_text: "OK".into(),
-            headers: vec![],
+            // BUG-1742: register() enforces the JavaScript MIME type for
+            // classic scripts too (SW §Update fetch hook), so the rig's
+            // script response must carry one.
+            headers: vec![("content-type".to_string(), "text/javascript".to_string())],
             body: self.0.as_bytes().to_vec(),
             url: url.to_string(),
         })
@@ -1710,7 +1791,7 @@ self.addEventListener('fetch', function(e) {
         rt.pump_workers();
         std::thread::sleep(std::time::Duration::from_millis(20));
         if matches!(
-            rt.eval("reg !== null && reg.active !== null && reg.active._scope === '/'").unwrap(),
+            rt.eval("reg !== null && reg.active !== null && reg.active._scope === 'https://example.com/'").unwrap(),
             lumen_core::JsValue::Bool(true)
         ) {
             activated = true;
@@ -1723,7 +1804,7 @@ self.addEventListener('fetch', function(e) {
     );
     // The SW execution thread spawns from a settled fetch callback — wait for
     // its handle to appear in the store.
-    let key = ("https://example.com".to_string(), "/".to_string());
+    let key = ("https://example.com".to_string(), "https://example.com/".to_string());
     let mut tx = None;
     for _ in 0..100 {
         let _ = rt.eval("_lumen_fetch_pump(); _lumen_tick_timers();");
@@ -1776,7 +1857,7 @@ fn v8_sw_page_post_message_without_worker_is_silent_noop() {
     rt.eval(
         r#"
          navigator.serviceWorker.register('/sw.js', { scope: '/' });
-         var reg = _sw_registrations['/'];
+         var reg = _sw_registrations['https://example.com/'];
          globalThis.iw = reg.installing;
          "#,
     )
@@ -1834,7 +1915,7 @@ self.addEventListener('message', function(e) {
     // The SW isolate spawns asynchronously after the lifecycle sets `active`
     // (script fetch + thread handle insertion), so `postMessage` must wait
     // for the store handle — earlier it is a quiet no-op (S3 semantics).
-    let key = ("https://example.com".to_string(), "/".to_string());
+    let key = ("https://example.com".to_string(), "https://example.com/".to_string());
     let mut activated = false;
     for _ in 0..100 {
         sw_pump_round(&rt);
@@ -1900,7 +1981,7 @@ self.addEventListener('message', function(e) {
     // Wait for the isolate, then send 'go'; the SW answers with m1/m2. The
     // listener was attached without `startMessages()`, so nothing may be
     // delivered even after the replies have landed in the queue.
-    let key = ("https://example.com".to_string(), "/".to_string());
+    let key = ("https://example.com".to_string(), "https://example.com/".to_string());
     let mut activated = false;
     for _ in 0..100 {
         sw_pump_round(&rt);
@@ -1988,7 +2069,7 @@ self.addEventListener('message', function(e) {
              .then(function(r) { window._reg = r; });",
     )
     .unwrap();
-    let key = ("https://example.com".to_string(), "/".to_string());
+    let key = ("https://example.com".to_string(), "https://example.com/".to_string());
     let mut activated = false;
     for _ in 0..100 {
         sw_pump_round(&rt);
@@ -2059,7 +2140,7 @@ self.addEventListener('message', function(e) {
              .then(function(r) { window._reg = r; });",
     )
     .unwrap();
-    let key = ("https://example.com".to_string(), "/".to_string());
+    let key = ("https://example.com".to_string(), "https://example.com/".to_string());
     let mut activated = false;
     for _ in 0..100 {
         sw_pump_round(&rt);
@@ -2134,7 +2215,7 @@ self.addEventListener('message', function(e) {
              .then(function(r) { window._reg = r; });",
     )
     .unwrap();
-    let key = ("https://example.com".to_string(), "/".to_string());
+    let key = ("https://example.com".to_string(), "https://example.com/".to_string());
     let mut activated = false;
     for _ in 0..100 {
         sw_pump_round(&rt);
@@ -2203,7 +2284,7 @@ self.addEventListener('message', function(e) {
              .then(function(r) { window._reg = r; });",
     )
     .unwrap();
-    let key = ("https://example.com".to_string(), "/".to_string());
+    let key = ("https://example.com".to_string(), "https://example.com/".to_string());
     let mut activated = false;
     for _ in 0..100 {
         sw_pump_round(&rt);
@@ -2273,7 +2354,7 @@ self.addEventListener('message', function(e) {
              .then(function(r) { window._reg = r; });",
     )
     .unwrap();
-    let key = ("https://example.com".to_string(), "/".to_string());
+    let key = ("https://example.com".to_string(), "https://example.com/".to_string());
     let mut activated = false;
     for _ in 0..100 {
         sw_pump_round(&rt);

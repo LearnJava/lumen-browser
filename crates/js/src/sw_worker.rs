@@ -903,13 +903,15 @@ fn run_sw_thread_v8(
     }
 
     // importScripts resolves its (relative) arguments against the SW *script*
-    // URL, not the scope (HTML LS §8.1.5.1) — the shim reads this bare name
-    // (resolvable through the eval `with`-container). Plain quoted literal:
-    // helper functions are not reliably visible in a later eval.
-    let _ = rt.eval(&format!(
-        "_lumen_sw_script_url__ = {};",
-        crate::navigator_bindings::json_string(&script_url)
-    ));
+    // URL, not the scope (HTML LS §8.1.5.1) — the shim reads this global.
+    // `set_global`, not a bare-name eval assignment: the assignment must land
+    // on the real global object (the dedicated worker sets its
+    // `_lumen_worker_base_url` the same way), and a failed eval here is silent.
+    if let Err(e) =
+        rt.set_global("_lumen_sw_script_url__", lumen_core::JsValue::String(script_url.clone()))
+    {
+        eprintln!("[sw {origin}{scope}] set script url failed: {e:?}");
+    }
 
     // SW-MODULE: the script of a `{type:'module'}` registration evaluates as
     // an ES module under its own URL (static imports fetch at install time

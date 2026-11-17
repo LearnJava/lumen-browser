@@ -41,3 +41,24 @@ WPT-SW-SCOUT, кластер C (`docs/wpt-vendor-notes/service-workers.md`): 33 
 ## Как проверить
 
 `run_corpus.py --prefixes service-workers/service-worker --processes 6`: `registration-*`, `register-*`, `update*`, `unregister*`, `skip-waiting*`, `synced-state` без TIMEOUT. Кластер C в заметке пересчитать.
+
+## Прогресс (P3, срез 2026-11-17)
+
+Сделано в `web_api_shim_mid_b.js` / `sw_worker.rs` / `sw_clients.rs` / `sw_interceptor.rs`:
+
+- **Scope резолвится и становится абсолютным ключом** (§9.2 Start Register): явный scope — от API base URL документа, по умолчанию — `URL("./", scriptURL)`; фрагмент снят; ключ реестра = сериализованный URL. Чинит `register-default-scope`, `registration-scope`, `getRegistration`-cleanup всех хелперов, scope-ключ изолята/интерцептора/claim.
+- **Path restriction + `Service-Worker-Allowed`** (§Update fetch hook): scope-путь должен лежать под max scope (скриптовая директория или хедер), иначе SecurityError. `registration-security-error` 8/8, `Service-Worker-Allowed-header` 7/8.
+- **MIME-проверка для classic и module** → SecurityError; полный HTML-список JS MIME (`text/javascript1.x`, `text/jscript`, `text/livescript`, `text/x-*`…). `registration-mime-types` 32/39 → 37/39.
+- **Отклонение редиректа скрипта** → SecurityError.
+- **`unregister()` дважды → `false`**; `updateViaCache` (enum-валидация + хранение); `getRegistration` — абсолютный longest-prefix + SecurityError на кросс-ориджин; fast-path повторного `register()` по §Register 4.1.
+- **`importScripts` изолята резолвится от URL скрипта** через `set_global` (не eval-присваивание), интерцептор и `claim()` матчат абсолютный scope по его пути.
+
+Результат на кластере C (53 файла): **15.65% → 42.88%** (8/51 → 22/51 id), TIMEOUT 23 → 9.
+
+Осталось (глубже, отдельные срезы):
+
+- **Job queue на scope** — конкурентные `register()` на одном scope перезаписывают `installing` (`register-same-scope-different-script-url` «concurrently»), нужен FIFO по scope.
+- **Провал install → `redundant`** — провал `waitUntil`/parse в изоляте не возвращает worker в `redundant` и не снимает `installing` (тест «does not install» висит на `wait_for_state(redundant)`).
+- **Script resource map** — byte-check страницы (`_sw_script_bytes`) и `importScripts` изолята дважды ходят в сеть за импортами; stash-гварды ломаются (`update-missing-import-scripts` «Initialize global state»). Нужно передавать уже скачанные импорты в изолят.
+- **`Service-Worker: script` хедер** — не шлётся (`service-worker-header` 1/1 → 0/1, честный FAIL вместо ложного PASS).
+- **Модель controller** — `controller` существующих клиентов должен переживать `unregister`+повторную регистрацию (`unregister-then-register` «does not resurrect»).

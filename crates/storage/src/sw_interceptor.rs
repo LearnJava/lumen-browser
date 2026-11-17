@@ -75,7 +75,24 @@ impl FetchInterceptor for ServiceWorkerInterceptor {
                 let workers = store.lock().unwrap();
                 workers
                     .iter()
-                    .filter(|((o, scope), _)| o == origin && path.starts_with(scope.as_str()))
+                    .filter(|((o, scope), _)| {
+                        if o != origin {
+                            return false;
+                        }
+                        // BUG-1742: page-side registration keys are absolute
+                        // scope URLs now; the prefix match runs on the scope's
+                        // own path (path-form keys keep working as-is).
+                        let scope_path = if scope.starts_with("http://")
+                            || scope.starts_with("https://")
+                        {
+                            Url::parse(scope)
+                                .map(|u| u.path().to_owned())
+                                .unwrap_or_else(|_| scope.clone())
+                        } else {
+                            scope.clone()
+                        };
+                        path.starts_with(scope_path.as_str())
+                    })
                     .max_by_key(|((_, scope), _)| scope.len())
                     .map(|(_, h)| (h.tx.clone(), h.routes_json.clone()))
                     .map(|(tx, routes)| (Some(tx), Some(routes)))
