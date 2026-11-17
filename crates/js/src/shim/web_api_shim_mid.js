@@ -6186,7 +6186,8 @@ function _lumen_make_detached_doctype(name, publicId, systemId, ownerDoc) {
 // BUG-324: shared builder for a detached document (no browsing context) — used
 // by `new Document()` and by `DOMImplementation.createDocument`/
 // `createHTMLDocument`. `proto` fixes which interface's prototype chain the
-// result exposes (`Document.prototype` vs `XMLDocument.prototype`);
+// result exposes (`Document.prototype` vs `XMLDocument.prototype` vs
+// `HTMLDocument.prototype`, BUG-1808);
 // `contentType` is fixed at construction (DOM §4.5 / §7 — a document with no
 // browsing context always resolves to UTF-8 / about:blank / CSS1Compat).
 // `createElement`/`createElementNS`/`createTextNode` build real arena nodes
@@ -6206,8 +6207,8 @@ function _lumen_build_detached_document(proto, contentType) {
     Object.defineProperty(doc, 'ownerDocument', { get: function() { return null; },         enumerable: true });
     // HTML §3.1.5: no browsing context, so `defaultView` is null — the other
     // half of the live document's getter (BUG-1017). Spelled out here rather
-    // than inherited, because `proto` is `Document.prototype`, shared with the
-    // live document's interface chain.
+    // than inherited, because `proto` is one of the document interface
+    // prototypes shared with the live document's interface chain.
     Object.defineProperty(doc, 'defaultView',   { get: function() { return null; },         enumerable: true });
     Object.defineProperty(doc, 'childNodes',    { get: function() { return _children.slice(); }, enumerable: true });
     Object.defineProperty(doc, 'doctype', {
@@ -6765,7 +6766,11 @@ function _lumen_make_dom_implementation(ownerDoc) {
         // explicit `undefined` is treated the same as omitted (no <title>
         // element at all), only other values (including `null`) create one.
         createHTMLDocument: function(title) {
-            var doc = _lumen_build_detached_document(Document.prototype, 'text/html');
+            // BUG-1808: DOM LS — createHTMLDocument returns an HTMLDocument,
+            // not a plain Document (`document.constructor === HTMLDocument`,
+            // WPT's `assert_class_string` on the result); `new Document()`
+            // stays `Document`, `createDocument` stays `XMLDocument`.
+            var doc = _lumen_build_detached_document(HTMLDocument.prototype, 'text/html');
             doc.appendChild(_lumen_make_detached_doctype('html', '', '', doc));
             var htmlNid = _lumen_create_element('html');
             var headNid = _lumen_create_element('head');
