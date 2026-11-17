@@ -85,6 +85,33 @@ impl JsFetchProvider for HttpClient {
         )
     }
 
+    /// SW-PRELOAD-ROUTER: the same bypass with author headers — the
+    /// `Service-Worker-Navigation-Preload` value must reach the server.
+    fn fetch_bypassing_sw_with_headers(
+        &self,
+        url: &str,
+        method: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<JsFetchResult> {
+        let owned: Vec<(String, String)> = headers
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        self.fetch_request_impl(
+            &JsFetchRequest {
+                url,
+                method,
+                headers: &owned,
+                body: None,
+                mode: "",
+                destination: "",
+                cache: "",
+                token: None,
+            },
+            false,
+        )
+    }
+
     fn fetch_sync(&self, url: &str, method: &str) -> Result<JsFetchResult> {
         self.fetch_request(&JsFetchRequest {
             url,

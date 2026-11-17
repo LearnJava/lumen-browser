@@ -1957,6 +1957,20 @@ pub trait JsFetchProvider: Send + Sync {
         self.fetch_sync(url, method)
     }
 
+    /// Navigation-preload twin of [`fetch_bypassing_sw`](Self::fetch_bypassing_sw)
+    /// (SW-PRELOAD-ROUTER): the same bypass, plus author headers on the wire —
+    /// `Service-Worker-Navigation-Preload` is what the spec puts there. Default
+    /// drops the headers, like `fetch_request`'s test-double shape.
+    fn fetch_bypassing_sw_with_headers(
+        &self,
+        url: &str,
+        method: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<JsFetchResult> {
+        let _ = headers;
+        self.fetch_bypassing_sw(url, method)
+    }
+
     /// Perform a blocking HTTP request with a request body (POST/PUT/PATCH/DELETE).
     ///
     /// `content_type` is the `Content-Type` header value (e.g. `"application/x-www-form-urlencoded"`).
@@ -4839,6 +4853,16 @@ pub enum SwWorkerMessage {
     /// the transfer id from `_lumen_port_prepare_transfer` instead of by the
     /// event channel.
     PortPost(u32, String),
+    /// Update the isolate's navigation-preload state (SW-PRELOAD-ROUTER):
+    /// the page-side `registration.navigationPreload.enable()/disable()/
+    /// setHeaderValue()` forwards here; the worker thread writes the values
+    /// into `_sw_preload__` so `FetchEvent.preloadResponse` sees them.
+    Preload {
+        /// Whether navigation preload is enabled.
+        enabled: bool,
+        /// Value of the `Service-Worker-Navigation-Preload` header.
+        header: String,
+    },
     /// Dispatch a `push` event.
     Push(SwPushMessage),
     /// Dispatch a `pushsubscriptionchange` event.
@@ -4862,6 +4886,11 @@ pub struct SwWorkerHandle {
     /// store entry whose `wid` differs is a worker the page has replaced —
     /// messages for the new one must queue instead of reaching this one.
     pub wid: u64,
+    /// SW-PRELOAD-ROUTER: static-router rules (`InstallEvent.addRoutes`),
+    /// JSON-encoded, written by the SW thread right after the `install` drain
+    /// and read by `ServiceWorkerInterceptor` at dispatch time. `None` — the
+    /// worker added no routes.
+    pub routes_json: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
 /// Map from `(origin, scope)` to live SW worker handles.
