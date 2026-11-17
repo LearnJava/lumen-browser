@@ -42,8 +42,8 @@ use lumen_core::geom::{Point, Rect};
 use lumen_dom::NodeId;
 use lumen_layout::style::WritingMode;
 use lumen_layout::{
-    forward_box_transform, owns_paint_layer, paint_child_order, BoxKind, Cursor, Display, LayoutBox,
-    Mat4, PointerEvents, UserSelect,
+    forward_box_transform, owns_paint_layer, paint_child_order, BoxKind, Cursor, Display,
+    FormControlKind, InlineFrag, LayoutBox, Mat4, PointerEvents, UserSelect,
 };
 
 /// Результат hit-теста.
@@ -72,7 +72,9 @@ pub struct HitTestResult {
     /// layout-дерева (документа). Используется event dispatch-ом для bubble
     /// stage без повторного walk-а.
     pub path: Vec<NodeId>,
-    /// CSS `cursor` значение hit-узла — для wire-up к OS cursor.
+    /// CSS `cursor` hit-узла — уже разрешённое used-value: `auto` доводится
+    /// до `text`/`default` по контексту (UA-хинт `:any-link` + фрагмент
+    /// текста), см. [`resolve_auto_cursor`]. Для wire-up к OS cursor.
     pub cursor: Cursor,
     /// CSS `user-select` hit-узла — для запрета выделения текста (`None`)
     /// или принудительного выделения всего элемента (`All`).
@@ -201,17 +203,18 @@ fn hit_test_box(point: Point, b: &LayoutBox) -> Option<HitTestResult> {
     if !rect_contains(b.rect, child_point) {
         return None;
     }
-    let (source_node, frag_pe, inline_source) = find_inline_source(b, child_point);
+    let (source_node, frag_pe, text_frag) = find_inline_source(b, child_point);
     if matches!(frag_pe.unwrap_or_else(|| b.style.effective_pointer_events()), PointerEvents::None) {
         return None;
     }
+    let css_cursor = text_frag.map_or(b.style.cursor, |f| f.style.cursor);
     Some(HitTestResult {
         node: b.node,
         source_node,
-        inline_source,
+        inline_source: text_frag.map(|f| f.source_node),
         local_point: child_point,
         path: vec![b.node],
-        cursor: b.style.cursor,
+        cursor: resolve_auto_cursor(css_cursor, b, text_frag),
         user_select: b.style.user_select,
     })
 }
@@ -285,17 +288,18 @@ fn hit_test_all_box(point: Point, b: &LayoutBox, out: &mut Vec<HitTestResult>) {
     if !rect_contains(b.rect, child_point) {
         return;
     }
-    let (source_node, frag_pe, inline_source) = find_inline_source(b, child_point);
+    let (source_node, frag_pe, text_frag) = find_inline_source(b, child_point);
     if matches!(frag_pe.unwrap_or_else(|| b.style.effective_pointer_events()), PointerEvents::None) {
         return;
     }
+    let css_cursor = text_frag.map_or(b.style.cursor, |f| f.style.cursor);
     out.push(HitTestResult {
         node: b.node,
         source_node,
-        inline_source,
+        inline_source: text_frag.map(|f| f.source_node),
         local_point: child_point,
         path: vec![b.node],
-        cursor: b.style.cursor,
+        cursor: resolve_auto_cursor(css_cursor, b, text_frag),
         user_select: b.style.user_select,
     });
 }
@@ -305,8 +309,11 @@ fn hit_test_all_box(point: Point, b: &LayoutBox, out: &mut Vec<HitTestResult>) {
 /// обход DOM с текстового узла (child of `<a>`), а не с блочного контейнера
 /// (`<p>`), и правильно найти ссылку.
 ///
-/// Третьим элементом — `source_node` фрагмента только при строгом попадании
-/// (см. [`HitTestResult::inline_source`]).
+/// Третьим элементом — `InlineFrag`, в чей горизонтальный интервал точка
+/// попала **строго** (без fallback «последний фрагмент строки») и у которого
+/// есть реальный DOM-источник: по нему [`HitTestResult::inline_source`],
+/// `cursor` и «попали ли в текст» ([`resolve_auto_cursor`]) решаются без
+/// повторного обхода строк.
 ///
 /// Возвращает `b.node` если бокс не `InlineRun`, строки пустые, или ни один
 /// фрагмент не попал под точку. `source_node == NodeId(0)` используется в
@@ -316,7 +323,10 @@ fn hit_test_all_box(point: Point, b: &LayoutBox, out: &mut Vec<HitTestResult>) {
 /// Вторым элементом — `pointer-events` фрагмента под точкой (`None`, если
 /// бокс не `InlineRun` или фрагмента нет): стиль самого инлайнового элемента,
 /// а не блок-контейнера.
-fn find_inline_source(b: &LayoutBox, point: Point) -> (NodeId, Option<PointerEvents>, Option<NodeId>) {
+fn find_inline_source(
+    b: &LayoutBox,
+    point: Point,
+) -> (NodeId, Option<PointerEvents>, Option<&InlineFrag>) {
     let BoxKind::InlineRun { lines, .. } = &b.kind else {
         return (b.node, None, None);
     };
@@ -344,11 +354,13 @@ fn find_inline_source(b: &LayoutBox, point: Point) -> (NodeId, Option<PointerEve
         let start = frag.x - frag.padding_left;
         let end = frag.x + frag.width + frag.padding_right;
         if rel_x >= start && rel_x < end {
+            let pe = Some(frag.style.effective_pointer_events());
             let src = frag.source_node;
+            let exact = exact_line.then_some(frag).filter(|f| f.source_node.index() != 0);
             if src.index() != 0 {
-                return (src, Some(frag.style.effective_pointer_events()), exact_line.then_some(src));
+                return (src, pe, exact);
             }
-            return (b.node, Some(frag.style.effective_pointer_events()), None);
+            return (b.node, pe, exact);
         }
     }
     // Fallback: return source_node of the last frag on the line (closest to right edge).
@@ -357,6 +369,26 @@ fn find_inline_source(b: &LayoutBox, point: Point) -> (NodeId, Option<PointerEve
         return (src, Some(last.style.effective_pointer_events()), None);
     }
     (b.node, None, None)
+}
+
+/// CSS UI L4 §10.7 `auto`: курсор выбирает UA по контексту — I-beam над
+/// выделяемым текстом и текстовыми полями ввода, стрелка везде остальное.
+/// Любое другое значение — уже resolved cascade-значение (включая
+/// `:any-link { cursor: pointer }` из UA-таблицы), его не трогаем.
+fn resolve_auto_cursor(css: Cursor, b: &LayoutBox, text_frag: Option<&InlineFrag>) -> Cursor {
+    if css != Cursor::Auto {
+        return css;
+    }
+    let text_control = match &b.kind {
+        BoxKind::FormControl { kind: FormControlKind::Textarea { .. } } => true,
+        BoxKind::FormControl { kind: FormControlKind::Input { input_type, .. } } => {
+            input_type.is_textual()
+        }
+        _ => false,
+    };
+    // Inline-replaced `<img>` — тоже фрагмент строки, но не текст.
+    let over_text = text_frag.is_some_and(|f| f.img_src.is_none());
+    if over_text || text_control { Cursor::Text } else { Cursor::Default }
 }
 
 /// `Rect::contains(Point)`. Включаем левую/верхнюю границы, исключаем
@@ -829,5 +861,76 @@ mod tests {
         let i = by_class(&doc, "i");
         assert!(hit_test(Point::new(150.0, 50.0), &root).is_none_or(|r| r.node != i));
         assert_eq!(hit_test(Point::new(50.0, 50.0), &root).map(|r| r.node), Some(i));
+    }
+
+    // ──────────── UX-CURSOR-AUTO: `cursor: auto` по контексту ────────────
+
+    /// Текстовые метрики для cursor-тестов: без measurer-а фрагменты текста
+    /// получают нулевую ширину, и строгое попадание «в текст» не проверить.
+    struct HalfEmMeasurer;
+
+    impl lumen_layout::TextMeasurer for HalfEmMeasurer {
+        fn char_width(&self, _: char, size: f32) -> f32 {
+            size * 0.5
+        }
+        fn line_gap_px(&self, size: f32) -> f32 {
+            size * 0.2
+        }
+    }
+
+    fn build_measured(html: &str, css: &str) -> (Document, LayoutBox) {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(&format!("body,p{{margin:0}}{css}"));
+        let root = lumen_layout::layout_measured(
+            &doc,
+            &sheet,
+            Size::new(800.0, 600.0),
+            &HalfEmMeasurer,
+        );
+        (doc, root)
+    }
+
+    #[test]
+    fn auto_cursor_over_link_text_is_pointer() {
+        // UA `:any-link { cursor: pointer }`: ссылка без авторских стилей.
+        let (_, root) = build_measured(r#"<p><a href="/x">link</a></p>"#, "");
+        let r = hit_test(Point::new(5.0, 5.0), &root).expect("hit на текст ссылки");
+        assert_eq!(r.cursor, Cursor::Pointer);
+    }
+
+    #[test]
+    fn auto_cursor_over_paragraph_text_is_text() {
+        let (_, root) = build_measured("<p>hello</p>", "");
+        let r = hit_test(Point::new(5.0, 5.0), &root).expect("hit на текст абзаца");
+        assert_eq!(r.cursor, Cursor::Text);
+    }
+
+    #[test]
+    fn auto_cursor_over_empty_background_is_default() {
+        let (_, root) = build_measured("<p>x</p>", "p { height: 50px; }");
+        let r = hit_test(Point::new(5.0, 40.0), &root).expect("hit на пустой фон");
+        assert_eq!(r.cursor, Cursor::Default);
+    }
+
+    #[test]
+    fn author_cursor_default_beats_ua_link_hint() {
+        let (_, root) =
+            build_measured(r#"<p><a href="/x">link</a></p>"#, "a { cursor: default; }");
+        let r = hit_test(Point::new(5.0, 5.0), &root).expect("hit");
+        assert_eq!(r.cursor, Cursor::Default);
+    }
+
+    #[test]
+    fn auto_cursor_over_text_input_is_text() {
+        let (_, root) = build_measured(r#"<input type="text">"#, "");
+        let r = hit_test(Point::new(5.0, 5.0), &root).expect("hit на input");
+        assert_eq!(r.cursor, Cursor::Text);
+    }
+
+    #[test]
+    fn auto_cursor_over_checkbox_is_default() {
+        let (_, root) = build_measured(r#"<input type="checkbox">"#, "");
+        let r = hit_test(Point::new(3.0, 3.0), &root).expect("hit на checkbox");
+        assert_eq!(r.cursor, Cursor::Default);
     }
 }

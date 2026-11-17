@@ -43,6 +43,7 @@ use crate::style::{
     is_appearance_disabling_property, is_disableable_widget, strip_ua_appearance_box_styling,
     ua_font_family,
     ua_font_size_factor, ua_font_style, ua_font_weight, ua_link_color, ua_text_align, ua_vertical_align,
+    ua_cursor,
     initial_value_equivalent, parse_css_wide_keyword, ua_white_space, validate_against_syntax,
     with_front_cascade_index,
     AlignValue, ComputedStyle, CssContinue, CssWideKeyword, Display, FlexDirection, FlexWrap,
@@ -475,6 +476,10 @@ pub(crate) fn compute_style_shareable(
     if let Some(c) = ua_link_color(doc, node) {
         style.color = c;
         style.color_css = None;
+    }
+    // UA stylesheet: :any-link → cursor: pointer (CSS UI L4 §10.7).
+    if let Some(c) = ua_cursor(doc, node) {
+        style.cursor = c;
     }
     // UA stylesheet: <small>/<sub>/<sup> → font-size: 0.83× parent.
     // HTML5 §15.3.3. Author font-size перекроет через pre-pass.
