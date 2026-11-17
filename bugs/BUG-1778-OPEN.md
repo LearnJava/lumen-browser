@@ -1,8 +1,8 @@
 # BUG-1778 — cnn.com: поток движка занят задачей `about_to_wait.rs:290` на 25 с, `geom_diff` не снимает страницу
 
-**Статус:** OPEN
+**Статус:** OPEN (DEBTOR) — закрыт для P3 2026-11-17; остаток — PERF-INVALIDATION/[ADR-036](../docs/decisions/ADR-036-incremental-restyle-invalidation.md) (P6), граница долга в конце карточки
 **Заведён:** 2026-10-28 (P3, остаток [BUG-1676](BUG-1676-FIXED.md))
-**Область:** shell / js / layout — не локализовано
+**Область:** shell / js / layout — локализовано: same-tick флаши внутри `run-scripts` (см. §Перепись)
 
 ## Симптом
 
@@ -64,3 +64,13 @@ crates\shell\src\app\about_to_wait.rs:290:13 for 25.2 s)`. Строка 290 — 
 **Гейт:** `cargo clippy -p lumen-layout -p lumen-js --features v8-backend -p lumen-shell --all-targets -D warnings` чистый (код не менялся, дерево бит-в-байт HEAD); `scripts/scoped-test.sh` + `python graphic_tests/dump_golden.py` без расхождений. Коммит — только документация.
 
 Попутно: ловушка вызова `--trace-nav` — форма `--dump-layout <url> --trace-nav <out.json>` молча читает out.json как источник страницы («os error 2» в предупреждении), см. [BUG-1821](BUG-1821-OPEN.md); ловушка дописана в `docs/probe-method.md` §2.
+
+## Закрытие для P3 (2026-11-17) — граница долга
+
+**Статус `OPEN (DEBTOR)`:** отдельного дефекта в тике `about_to_wait.rs:290` нет — P3 задачу не берёт.
+
+- Симптом объяснён переписью §Перепись: 25 с занятости потока = 15 полных same-tick флашей внутри `run-scripts` (49,4 с из 79), не таймеры и не пампы.
+- Оба рычага карточки закрыты: клонирование `ComplexSelector` в `matches_complex_for_pseudo` — срезом 8 BUG-1800; dependency-checked reuse — срезом 16 BUG-1800 (пуст по построению).
+- Остаток — тот же gated-класс, что у BUG-1800: lift консерватизма shadow-стража и doc-wide корни лист-дельт (`forced_same` 99,7 %); архитектурный контур закрыт [ADR-036](../docs/decisions/ADR-036-incremental-restyle-invalidation.md), владелец — P6, не P3.
+- Возобновление P3: только если `geom_diff --only cnn` останется красным после закрытия gated-класса или появится новый факт вне него.
+- Сайты-свидетели той же семьи (discord-com, magnit-ru, tutu-ru, elpais-com, ebay-com) отдельных P3-рычагов не добавляют; vc-ru — не каскад (TIMEOUT одинаков на ON/OFF).
