@@ -1,6 +1,6 @@
 # BUG-1808 — `document.implementation.createHTMLDocument()` возвращает `Document`, у Chrome — `HTMLDocument`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-11-17 (P3)
 **Открыт:** 2026-11-14 (P3, попутный дефект при закрытии BUG-1779)
 **Область:** js (DOMImplementation.createHTMLDocument, `web_api_shim_mid.js` — `_lumen_build_detached_document(Document.prototype, 'text/html')`)
 
@@ -29,13 +29,18 @@
 
 `--dump-layout` печатает `[object Document]`; ожидание — `[object HTMLDocument]`.
 
-## Что сделать
+## Фикс (2026-11-17)
 
-Строить документ на `HTMLDocument.prototype` (как страницу `document` в BUG-1138),
-не сломав `new Document()` (остаётся `Document` — сверить с Chrome) и
-`createDocument()` (остаётся `XMLDocument`). Проверить WPT-семью
-`DOMImplementation-createHTMLDocument.html` и наших тестов BUG-324/BUG-1138
-(`v8_bug1138_html_document.rs` фиксирует поведение детачед-документов косвенно).
+`createHTMLDocument` строит документ на `HTMLDocument.prototype`
+(`web_api_shim_mid.js`) — единственный из трёх фабричных путей: `new Document()`
+остаётся `Document`, `createDocument()` — `XMLDocument`. Интерфейс переживает
+`cloneNode`: билдер `_lumen_build_detached_document` захватывает `proto` для
+клона. Поведение не изменилось — `HTMLDocument.prototype` (BUG-1138) пустой
+слой над `Document.prototype`, поэтому node-семантика, XPath-миксин на
+`Document.prototype` и `defaultView: null` достигаются по той же цепочке.
+Регресс-тест `create_html_document_is_an_html_document` в
+`v8_bug1138_html_document.rs` (toStringTag, instanceof-цепочка, `constructor`,
+клон).
 
 ## Замечание
 
