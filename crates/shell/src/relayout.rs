@@ -363,6 +363,8 @@ impl Lumen {
         // Set interactive hover/focus/active state for this layout pass so that
         // :hover / :focus / :active / :focus-within CSS rules evaluate correctly.
         lumen_layout::set_interactive_state(self.hovered_nid, self.focused_node, self.active_nid);
+        // `:focus-visible` (UX-FOCUS-RING): кольцо только после клавиатурного фокуса.
+        lumen_layout::set_keyboard_focus(self.focus_from_keyboard);
         // Forced Colors Mode (CSS Color Adjust L1 §3) — a11y preference drives
         // the forced system palette and the `(forced-colors: active)` media
         // feature for this layout pass.
@@ -574,6 +576,7 @@ impl Lumen {
         self.engine_job_generation = self.engine_job_generation.wrapping_add(1);
         self.engine_applied_generation = self.engine_job_generation;
         lumen_layout::set_interactive_state(self.hovered_nid, self.focused_node, self.active_nid);
+        lumen_layout::set_keyboard_focus(self.focus_from_keyboard);
         lumen_layout::set_forced_colors(self.a11y_store.forced_colors());
         lumen_layout::set_device_pixel_ratio(self.zoom_factor);
         lumen_layout::set_cv_scroll(self.scroll_x, self.scroll_y);

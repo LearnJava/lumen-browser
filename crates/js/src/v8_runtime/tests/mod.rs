@@ -758,7 +758,7 @@ JSON.stringify({
   body: d && d.body ? d.body.tagName : null,
   docEl: d && d.documentElement ? d.documentElement.tagName : null,
   same: f.contentWindow === w,
-  evalMissing: typeof w.eval === 'undefined',
+  evalWorks: typeof w.eval === 'function' && w.eval('21+21') === 42,
   len: window.length,
   idx: window[0] === w,
   url: d && d.URL,
@@ -771,7 +771,7 @@ JSON.stringify({
     };
     assert_eq!(
         out,
-        r#"{"before":true,"win":"object","body":"BODY","docEl":"HTML","same":true,"evalMissing":true,"len":1,"idx":true,"url":"about:blank"}"#
+        r#"{"before":true,"win":"object","body":"BODY","docEl":"HTML","same":true,"evalWorks":true,"len":1,"idx":true,"url":"about:blank"}"#
     );
     // Отсоединённый iframe вложенного контекста не имеет (HTML LS §4.8.5).
     assert!(matches!(
@@ -790,7 +790,8 @@ g.contentWindow === null && g.contentDocument === null
 /// кадра нет, но ВСТРОЕННЫЕ объекты Chrome отдаёт те же, что у читающего окна
 /// (`contentWindow.JSON === window.JSON`) — так обфусцированный бандл reCAPTCHA
 /// добывает «неиспорченный» `JSON`. Переменные страницы-читателя при этом не
-/// протекают, а `eval` остаётся скрытым (BUG-1790 срез 3).
+/// протекают; `eval` заводит кадру собственный изолят (FRAME-остаток) и
+/// исполняет код в нём.
 #[test]
 fn initial_about_blank_frame_answers_builtin_globals() {
     let doc = make_doc();
@@ -817,7 +818,7 @@ JSON.stringify({
   object: w.Object === window.Object,
   parse: typeof w.JSON.parse,
   page: typeof w.__leak,
-  evalMissing: typeof w.eval === 'undefined',
+  evalWorks: typeof w.eval === 'function' && w.eval('1+1') === 2,
   crossOrigin: typeof _lumen_frame_content_window(2).JSON,
 })
 "#,
@@ -826,7 +827,7 @@ JSON.stringify({
     assert_eq!(
         out,
         JsValue::String(
-            r#"{"json":true,"math":true,"object":true,"parse":"function","page":"undefined","evalMissing":true,"crossOrigin":"undefined"}"#
+            r#"{"json":true,"math":true,"object":true,"parse":"function","page":"undefined","evalWorks":true,"crossOrigin":"undefined"}"#
                 .to_owned()
         )
     );
@@ -1299,7 +1300,7 @@ fn mirror_gates_top_level_non_element_and_missing_native() {
     // Минимальный изолят без натива: зеркало молча отсутствует.
     let bare = V8JsRuntime::new().unwrap();
     bare.eval("var window = globalThis;").unwrap();
-    crate::frame_bridge::install_frame_bridge_v8(&bare, Default::default()).unwrap();
+    crate::frame_bridge::install_frame_bridge_v8(&bare, Default::default(), None, false).unwrap();
     assert_eq!(
         bare.eval("typeof _lumen_frame_mirror_resource").unwrap(),
         JsValue::String("function".into()),

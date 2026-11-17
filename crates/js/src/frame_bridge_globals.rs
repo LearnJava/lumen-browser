@@ -42,6 +42,13 @@ fn resolve_peer(
     let Some(peer) = binding.peer.as_ref().and_then(std::sync::Weak::upgrade) else {
         return Err(envelope_tag("nopeer"));
     };
+    // FRAME-остаток: пир занят (исполняет свою задачу) — блокирующее чтение
+    // встало бы в очередь на неопределённое время, а собственные обращения
+    // пира к читателю отказались бы стражем ревхода и завели ретраящий бандл.
+    // Деградация до `nopeer` — то же поведение, что до появления пира у кадра.
+    if peer.peer_busy() {
+        return Err(envelope_tag("nopeer"));
+    }
     let from = reg.self_key.unwrap_or(0);
     let to = Arc::as_ptr(&binding.doc) as usize;
     Ok((peer, from, to))
@@ -125,6 +132,8 @@ mod tests {
         install_frame_bridge_v8(
             &child_rt,
             Arc::new(Mutex::new(FrameDocSlots::default())),
+            None,
+            false,
         )
         .unwrap();
         child_rt.eval(child_script).unwrap();
@@ -132,7 +141,7 @@ mod tests {
         let parent_rt = V8JsRuntime::new().unwrap();
         parent_rt.eval("var window = globalThis;").unwrap();
         let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
-        install_frame_bridge_v8(&parent_rt, Arc::clone(&registry)).unwrap();
+        install_frame_bridge_v8(&parent_rt, Arc::clone(&registry), None, false).unwrap();
         install_frame_bridge_globals_v8(&parent_rt, Arc::clone(&registry)).unwrap();
         let child_doc = Arc::new(Mutex::new(lumen_html_parser::parse("<html></html>")));
         registry.lock().unwrap().frames.push(FrameDocBinding {
@@ -360,7 +369,7 @@ mod tests {
         let parent_rt = V8JsRuntime::new().unwrap();
         parent_rt.eval("var window = globalThis;").unwrap();
         let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
-        install_frame_bridge_v8(&parent_rt, Arc::clone(&registry)).unwrap();
+        install_frame_bridge_v8(&parent_rt, Arc::clone(&registry), None, false).unwrap();
         install_frame_bridge_globals_v8(&parent_rt, Arc::clone(&registry)).unwrap();
         let child_rt = Arc::new(V8JsRuntime::new().unwrap());
         registry.lock().unwrap().frames.push(FrameDocBinding {

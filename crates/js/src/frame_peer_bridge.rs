@@ -53,6 +53,15 @@ pub trait FramePeerBridge: Send + Sync {
     fn peer_global_get(&self, name: &str) -> JsValue;
     /// `globalThis[name](...args)` in the peer context.
     fn peer_global_call(&self, name: &str, args: &[JsValue]) -> JsValue;
+    /// Рантайм пира исполняет задачу прямо сейчас. Синхронное кросс-изолятное
+    /// чтение становится блокирующим вызовом в очередь чужого потока; пир,
+    /// крутящий длинный скрипт, отвечал бы неопределённо долго, а его
+    /// собственные синхронные обращения к ЧИТАТЕЮ в это время отказывались бы
+    /// стражем ревхода ([`crate::frame_bridge`] `enter_call`) — живой бандл,
+    /// ретраящий на отказе, зависал вместе с читателем. Поэтому занятый пир
+    /// деградирует до «нет пира» (`resolve_peer` отдаёт `nopeer`), и читатель
+    /// видит прежнее поведение. FRAME-остаток (initial about:blank eval).
+    fn peer_busy(&self) -> bool;
 }
 
 /// `{"kind": tag}` with no other fields.

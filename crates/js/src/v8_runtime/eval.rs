@@ -643,6 +643,10 @@ fn names_pristine_intrinsic<'s>(
 }
 
 impl FramePeerBridge for V8JsRuntime {
+    fn peer_busy(&self) -> bool {
+        self.stall.is_busy()
+    }
+
     fn peer_global_get(&self, name: &str) -> JsValue {
         let name = name.to_owned();
         self.run(move |inner| {

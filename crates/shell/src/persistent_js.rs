@@ -388,6 +388,23 @@ pub(crate) trait PersistentJs: Send + Sync {
     fn frame_peer_bridge(&self) -> Option<Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>> {
         None
     }
+    /// FRAME-остаток (contentWindow.eval): забрать начальный about:blank-кадр
+    /// хоста — документ и рантайм, заведённый первым чтением
+    /// `contentWindow.eval`. `spawn_frame` зовёт для iframe без `src`/`srcdoc`:
+    /// такой кадр не навигируется никогда, и загрузка обязана ПОДХВАТИТЬ
+    /// документ начального кадра (состояние из `eval` и мутаций через
+    /// `contentDocument` переживает «загрузку»), а не заменять свежим пустым.
+    /// `None` — рантайма у кадра ещё нет (обычная загрузка идёт старым путём).
+    /// Default `None` — у движка без моста начальных кадров нет.
+    fn take_initial_frame_document(
+        &self,
+        _host_nid: u32,
+    ) -> Option<(
+        std::sync::Arc<std::sync::Mutex<Document>>,
+        std::sync::Arc<lumen_js::v8_runtime::V8JsRuntime>,
+    )> {
+        None
+    }
     /// Deliver a PerformancePaintTiming entry to JS PerformanceObservers.
     ///
     /// `name` is `"first-paint"` or `"first-contentful-paint"`;
@@ -1294,6 +1311,15 @@ impl PersistentJs for V8PersistentJs {
     }
     fn frame_peer_bridge(&self) -> Option<Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>> {
         Some(Arc::clone(&self.rt) as Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>)
+    }
+    fn take_initial_frame_document(
+        &self,
+        host_nid: u32,
+    ) -> Option<(
+        std::sync::Arc<std::sync::Mutex<Document>>,
+        std::sync::Arc<lumen_js::v8_runtime::V8JsRuntime>,
+    )> {
+        self.rt.take_initial_frame(host_nid)
     }
     fn deliver_paint_timing(&self, name: &str, start_ms: f64) {
         self.eval_js(&format!(

@@ -199,6 +199,7 @@ pub use stacking::{
 pub use style::{
     apply_container_rules, evaluate_container_condition, evaluate_container_query,
     set_interactive_state, clear_interactive_state,
+    set_keyboard_focus,
     set_animated_heights, clear_animated_heights,
     set_forced_colors, forced_colors_active,
     set_print_media, print_media_active,

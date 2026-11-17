@@ -161,6 +161,10 @@ thread_local! {
     /// Raw NodeId.0 of the mouse-pressed element, or `u32::MAX` if none.
     /// `:active` matches the active element and all its ancestors (CSS Selectors L4 §4.5).
     pub(in crate::style) static ACTIVE_NID: Cell<u32> = const { Cell::new(u32::MAX) };
+    /// `true` when the current focus arrived from the keyboard (Tab, accesskey) —
+    /// CSS UI L4 §3.3: `:focus-visible` matches for such focus, and for a
+    /// text-like `<input>`/`<textarea>` regardless of how it got focused.
+    pub(in crate::style) static KEYBOARD_FOCUS: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Sets the interactive hover/focus/active state for the next layout pass.
@@ -180,9 +184,20 @@ pub fn set_interactive_state(
     ACTIVE_NID.with(|a| a.set(active.map(|n| n.index() as u32).unwrap_or(u32::MAX)));
 }
 
+/// Records whether the current focus came from the keyboard (CSS UI L4 §3.3).
+///
+/// Call after [`set_interactive_state`] and before layout; the flag is read by
+/// `:focus-visible` matching and by the UA focus-ring hint. Cleared together with
+/// the rest of the interactive state by [`clear_interactive_state`], so a caller
+/// that forgets it falls back to "mouse focus" (ring only on text fields).
+pub fn set_keyboard_focus(keyboard: bool) {
+    KEYBOARD_FOCUS.with(|k| k.set(keyboard));
+}
+
 /// Clears hover/focus/active state after layout.
 pub fn clear_interactive_state() {
     set_interactive_state(None, None, None);
+    set_keyboard_focus(false);
 }
 
 thread_local! {
