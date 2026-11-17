@@ -462,6 +462,28 @@ var caches = {
 
 var _sw_registrations = {};
 
+// SW §Register job queue: per-scope FIFO. Concurrent register() calls on one
+// scope must not interleave — the second job's `installing` may only replace
+// the first's once the first register() promise has settled
+// (register-same-scope-different-script-url «concurrently»). The first job on
+// a scope runs inline so a lone register() still populates `_sw_registrations`
+// before it returns (tests and the WPT harness read it synchronously); only a
+// concurrent second register() queues behind it. The stored tail is a
+// swallowed copy so a rejected job never poisons the next one.
+var _sw_scope_jobs = {};
+function _sw_enqueue_scope(scope, fn) {
+    var prev = _sw_scope_jobs[scope];
+    if (prev === undefined) {
+        var run;
+        try { run = fn(); } catch (e) { run = Promise.reject(e); }
+        _sw_scope_jobs[scope] = run.then(function() {}, function() {});
+        return run;
+    }
+    var queued = prev.then(fn, fn);
+    _sw_scope_jobs[scope] = queued.then(function() {}, function() {});
+    return queued;
+}
+
 function _sw_make_event_target() {
     var _listeners = {};
     return {
@@ -1177,41 +1199,46 @@ var _sw_container = Object.assign({
                 return Promise.resolve(existing);
             }
         }
-        var reg = _sw_install_script_text(scope, scriptUrl, type, uvc, undefined);
-        reg._awaitLifecycle = true;
-        var pending = _sw_eval_promise(reg).then(function() {
-            return _sw_registrations[scope];
-        });
-        if (typeof fetch !== 'function') {
-            // shortcut: no page fetch (bare harness) — no fetch/MIME checks
-            // and no isolate; the old flow, the promise stays pending;
-            // upgrade when a harness needs it.
-            _sw_run_lifecycle(reg, undefined);
-            return pending;
-        }
-        fetch(scriptUrl).then(function(res) {
-            // SW §Update fetch hook: redirect rejection, MIME type (classic
-            // scripts included) and the path restriction with
-            // `Service-Worker-Allowed` — a failure here rejects and rolls the
-            // just-created registration back (SW §Update steps 5–14).
-            _sw_check_script_resource(scriptUrl, res, scope);
-            return res.text().then(function(text) {
-                var r = _sw_registrations[scope];
-                if (!r) return;
-                // The isolate evaluates the script while the page lifecycle
-                // (updatefound → install → activate) is parked on the eval
-                // result — spec order: register() resolves before updatefound.
-                return _sw_script_bytes(scriptUrl, text).then(function(bytes) {
-                    var r2 = _sw_registrations[scope];
-                    if (!r2) return;
-                    r2._scriptText = bytes;
-                    _sw_start_isolate(r2, text);
-                });
+        // The install + fetch + eval work runs on the per-scope FIFO so a
+        // second register() (different script) cannot overwrite `installing`
+        // before this one's promise settles (SW §Register job queue).
+        return _sw_enqueue_scope(scope, function() {
+            var reg = _sw_install_script_text(scope, scriptUrl, type, uvc, undefined);
+            reg._awaitLifecycle = true;
+            var pending = _sw_eval_promise(reg).then(function() {
+                return _sw_registrations[scope];
             });
-        }).catch(function(e) {
-            _sw_fail_eval(scope, e);
+            if (typeof fetch !== 'function') {
+                // shortcut: no page fetch (bare harness) — no fetch/MIME checks
+                // and no isolate; the old flow, the promise stays pending;
+                // upgrade when a harness needs it.
+                _sw_run_lifecycle(reg, undefined);
+                return pending;
+            }
+            fetch(scriptUrl).then(function(res) {
+                // SW §Update fetch hook: redirect rejection, MIME type (classic
+                // scripts included) and the path restriction with
+                // `Service-Worker-Allowed` — a failure here rejects and rolls the
+                // just-created registration back (SW §Update steps 5–14).
+                _sw_check_script_resource(scriptUrl, res, scope);
+                return res.text().then(function(text) {
+                    var r = _sw_registrations[scope];
+                    if (!r) return;
+                    // The isolate evaluates the script while the page lifecycle
+                    // (updatefound → install → activate) is parked on the eval
+                    // result — spec order: register() resolves before updatefound.
+                    return _sw_script_bytes(scriptUrl, text).then(function(bytes) {
+                        var r2 = _sw_registrations[scope];
+                        if (!r2) return;
+                        r2._scriptText = bytes;
+                        _sw_start_isolate(r2, text);
+                    });
+                });
+            }).catch(function(e) {
+                _sw_fail_eval(scope, e);
+            });
+            return pending;
         });
-        return pending;
     },
     getRegistration: function(url) {
         // SW §3.4.4: the argument (default "") parses against the API base
