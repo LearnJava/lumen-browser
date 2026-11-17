@@ -111,7 +111,7 @@ fn dispatch_preload_hints_cross_call_dedup() {
     // Второй вызов — финальный pipeline: те же хинты + новый
     let full = vec![
         PreloadHint::Stylesheet { url: "reset.css".into(), media: None, fetch_priority: None, nonce: None },
-        PreloadHint::Image { url: Some("hero.png".into()), srcset: None, sizes: None, fetch_priority: None },
+        PreloadHint::Image { url: Some("hero.png".into()), srcset: None, sizes: None, fetch_priority: None, lazy: false },
     ];
     dispatch_preload_hints(&full, &base, &sink, &mut seen);
 
@@ -146,7 +146,7 @@ fn dispatch_preload_hints_sorts_by_priority() {
     let base = ResourceBase::url_base("https://example.com/".to_owned());
     // Source-order: img (Low) → script (Medium) → css (High)
     let hints = vec![
-        PreloadHint::Image { url: Some("hero.png".into()), srcset: None, sizes: None, fetch_priority: None },
+        PreloadHint::Image { url: Some("hero.png".into()), srcset: None, sizes: None, fetch_priority: None, lazy: false },
         PreloadHint::Script { url: "app.js".into(), fetch_priority: None, nonce: None, integrity: None },
         PreloadHint::Stylesheet { url: "main.css".into(), media: None, fetch_priority: None, nonce: None },
     ];
@@ -193,6 +193,7 @@ fn dispatch_preload_hints_fetchpriority_overrides_heuristic() {
             srcset: None,
             sizes: None,
             fetch_priority: Some("high".into()),
+            lazy: false,
         },
         PreloadHint::Script { url: "app.js".into(), fetch_priority: Some("low".into()), nonce: None, integrity: None },
     ];

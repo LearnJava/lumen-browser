@@ -805,9 +805,10 @@ pub(crate) fn violating_script_element_policy<'a>(
 /// `<link rel=preload|modulepreload|prefetch>` (BUG-1491) is judged by the
 /// directive of its destination ([`CspPolicy::preload_fetch_allows`]) — the
 /// very predicate the element's own fetch asks in
-/// `HttpClient::fetch_preload_cached`. Any other hint is not this gate's
-/// business, and a `url` that fails to parse is never fetched anyway, so both
-/// are `false`.
+/// `HttpClient::fetch_preload_cached`. An `<img>` hint is judged by
+/// [`img_src_blocked`] (LOAD-5). Any other hint is not this gate's business,
+/// and a `url` that fails to parse is never fetched anyway, so both are
+/// `false`.
 pub(crate) fn speculative_fetch_blocked(
     policies: &[CspPolicy],
     hint: &lumen_html_parser::PreloadHint,
@@ -840,6 +841,11 @@ pub(crate) fn speculative_fetch_blocked(
         PreloadHint::Prefetch { .. } => {
             policies.iter().any(|policy| !policy.preload_fetch_allows("", &parsed, self_origin, None))
         }
+        // LOAD-5: байтовый прогрев `<img src>` сканера гейтится той же
+        // директивой (`img-src`/`default-src`), что и настоящий фетч
+        // картинки (`img_src_blocked`) — заблокированный URL не идёт в
+        // сеть вовсе.
+        PreloadHint::Image { .. } => img_src_blocked(policies, url, self_origin),
         _ => false,
     }
 }
@@ -1745,9 +1751,12 @@ mod tests {
         assert!(!speculative_fetch_blocked(&self_only, &script_hint(None), own, origin.as_ref()));
         assert!(speculative_fetch_blocked(&self_only, &script_hint(None), "http://b.test/s.js", origin.as_ref()));
         assert!(!speculative_fetch_blocked(&[], &script_hint(None), own, origin.as_ref()));
-        // Картинки и прочие hint-ы — не дело этого гейта.
-        let img = lumen_html_parser::PreloadHint::Image { url: Some("/i.png".into()), srcset: None, sizes: None, fetch_priority: None };
+        // LOAD-5: `<img>`-хинт гейтится `img-src`/`default-src` — под
+        // `default-src 'self'` чужая картинка не греется, своя греется.
+        let img = lumen_html_parser::PreloadHint::Image { url: Some("/i.png".into()), srcset: None, sizes: None, fetch_priority: None, lazy: false };
         assert!(!speculative_fetch_blocked(&none, &img, own, origin.as_ref()));
+        assert!(!speculative_fetch_blocked(&self_only, &img, own, origin.as_ref()));
+        assert!(speculative_fetch_blocked(&self_only, &img, "http://b.test/i.png", origin.as_ref()));
     }
 
     /// BUG-1185: nonce из hint-а пропускает прогрев под nonce-политикой —

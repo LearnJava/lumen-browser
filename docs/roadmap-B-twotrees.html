@@ -75,12 +75,12 @@
 {
  "generated": "2026-11-17",
  "counts": {
-  "open": 311,
+  "open": 312,
   "fixed": 1442,
   "inprogress": 0,
   "wontfix": 4
  },
- "total_bugs": 1757,
+ "total_bugs": 1758,
  "phases": [
   {
    "id": "P0",
@@ -1262,9 +1262,9 @@
     {
      "id": "SW-MODULE",
      "title": "SW-MODULE: type:'module' для сервис-воркеров",
-     "status": "planned",
+     "status": "done",
      "size": "M",
-     "note": "Модульные сервис-воркеры `register(url, {type: 'module'})` (кластер I разведки WPT-SW-SCOUT, `docs/wpt-vendor-notes/service-workers.md`: 12 id, TIMEOUT 9; потолок ≈11.7 балла = 3.5 п.п. `service-workers`). Сейчас скрипт SW всегда исполняется как classic: в логе прогона 26 «Cannot use import statement outside a module». **Сделать** в `crates/js/src/sw_worker.rs` + `web_api_shim_mid_b.js` (`_sw_container.register`): (1) опция `type` в регистрации и в `update()`, хранится в реестре; (2) модульный граф в изоляте SW (V8 `Module` API, как у модульных Dedicated Worker), статические `import` грузятся при Update и входят в byte-check; (3) `importScripts` в модульном SW бросает `TypeError`, динамический `import()` в SW отклоняется (SW §Run Service Worker); (4) MIME-проверка модулей. **Готово, когда:** `run_corpus.py --prefixes service-workers/service-worker --processes 6` — `registration-script-module`, `registration-scope-module-static-import`, `update-registration-with-type`, `update-bytecheck*`, `no-dynamic-import-in-module.any.serviceworker-module` без TIMEOUT; `scoped-test.sh` по `lumen-js` (`--features v8-backend`) зелёный; `CAPABILITIES.md` обновлён.",
+     "note": "Модульные сервис-воркеры `register(url, {type: 'module'})` (кластер I разведки WPT-SW-SCOUT, `docs/wpt-vendor-notes/service-workers.md`: 12 id, TIMEOUT 9; потолок ≈11.7 балла = 3.5 п.п. `service-workers`). Сейчас скрипт SW всегда исполняется как classic: в логе прогона 26 «Cannot use import statement outside a module». **Сделать** в `crates/js/src/sw_worker.rs` + `web_api_shim_mid_b.js` (`_sw_container.register`): (1) опция `type` в регистрации и в `update()`, хранится в реестре; (2) модульный граф в изоляте SW (V8 `Module` API, как у модульных Dedicated Worker), статические `import` грузятся при Update и входят в byte-check; (3) `importScripts` в модульном SW бросает `TypeError`, динамический `import()` в SW отклоняется (SW §Run Service Worker); (4) MIME-проверка модулей. **Готово, когда:** `run_corpus.py --prefixes service-workers/service-worker --processes 6` — `registration-script-module`, `registration-scope-module-static-import`, `update-registration-with-type`, `update-bytecheck*`, `no-dynamic-import-in-module.any.serviceworker-module` без TIMEOUT; `scoped-test.sh` по `lumen-js` (`--features v8-backend`) зелёный; `CAPABILITIES.md` обновлён. **Итог (2026-11-17, срезы s3–s6):** `register(url, {type: 'module'})` по спецификации — модульный граф в изоляте SW, byte-check по импортам, `importScripts`/`import()`-запреты, MIME-проверки; зависшие `register()`/`update()` закрыты — дренаж очереди сообщений при активации воркера, фиксация воркера в lifecycle (`_evalWorker` + охрана мутаций), guard `update()` против смены типа; корень третьего TIMEOUT — `resolve_relative` клеил импорт к query базы (`?path=./` → `path=./x.py`, классическое тело исполнялось как модуль), фикс по WHATWG. Корпус `service-workers/service-worker`: 244/1564 → 316/1627 сабтестов, 15.38% → 20.12% id (`docs/wpt/runs/2026-11-17-sw-module-s6.json`).",
      "bugs": [
       "BUG-1742"
      ]
@@ -1272,9 +1272,9 @@
     {
      "id": "SW-PRELOAD-ROUTER",
      "title": "SW-PRELOAD-ROUTER: navigationPreload, addRoutes",
-     "status": "planned",
+     "status": "done",
      "size": "M",
-     "note": "Navigation preload и static routing API (кластеры H и H2 разведки WPT-SW-SCOUT, `docs/wpt-vendor-notes/service-workers.md`: 7 + 13 id, потолок ≈19.2 балла = 5.8 п.п. `service-workers`). Сейчас нет ни `registration.navigationPreload`, ни `InstallEvent.addRoutes` (в шиме и в `sw_worker.rs` их нет вовсе). **Сделать:** (1) `NavigationPreloadManager` (`enable`, `disable`, `setHeaderValue`, `getState`) на регистрации, состояние в реестре SW; при включённом preload навигационный запрос параллельно уходит в сеть с заголовком `Service-Worker-Navigation-Preload`, ответ доступен как `FetchEvent.preloadResponse`; (2) `InstallEvent.addRoutes(rules)` — условия `urlPattern`, `requestMethod`, `requestMode`, `requestDestination`, `runningStatus`, `or`/`not`; источники `network`, `cache` (с `cacheName`), `fetch-event`, `race-network-and-fetch-handler`; правила применяются в перехватчике до диспатча `FetchEvent` (`crates/storage/src/sw_interceptor.rs`). **Готово, когда:** `run_corpus.py --prefixes service-workers/service-worker/navigation-preload,service-workers/service-worker/tentative/static-router --processes 6` — без TIMEOUT, прирост ≥ +4 п.п. категории; `scoped-test.sh` по `lumen-js` и `lumen-storage` зелёный; `CAPABILITIES.md` обновлён.",
+     "note": "Navigation preload и static routing API (кластеры H и H2 разведки WPT-SW-SCOUT, `docs/wpt-vendor-notes/service-workers.md`: 7 + 13 id, потолок ≈19.2 балла = 5.8 п.п. `service-workers`). Сейчас нет ни `registration.navigationPreload`, ни `InstallEvent.addRoutes` (в шиме и в `sw_worker.rs` их нет вовсе). **Сделать:** (1) `NavigationPreloadManager` (`enable`, `disable`, `setHeaderValue`, `getState`) на регистрации, состояние в реестре SW; при включённом preload навигационный запрос параллельно уходит в сеть с заголовком `Service-Worker-Navigation-Preload`, ответ доступен как `FetchEvent.preloadResponse`; (2) `InstallEvent.addRoutes(rules)` — условия `urlPattern`, `requestMethod`, `requestMode`, `requestDestination`, `runningStatus`, `or`/`not`; источники `network`, `cache` (с `cacheName`), `fetch-event`, `race-network-and-fetch-handler`; правила применяются в перехватчике до диспатча `FetchEvent` (`crates/storage/src/sw_interceptor.rs`). **Готово, когда:** `run_corpus.py --prefixes service-workers/service-worker/navigation-preload,service-workers/service-worker/tentative/static-router --processes 6` — без TIMEOUT, прирост ≥ +4 п.п. категории; `scoped-test.sh` по `lumen-js` и `lumen-storage` зелёный; `CAPABILITIES.md` обновлён. **Итог (2026-11-17, с минимальными кусками BUG-1744/1747 — обе остаются OPEN):** `registration.navigationPreload` (`NavigationPreloadManager` на странице и в изоляте SW: `enable`/`disable`/`setHeaderValue`/`getState`) — состояние страницы доезжает до воркера новым `SwWorkerMessage::Preload`; `FetchEvent.preloadResponse` резолвится сетевым ответом, добытым в обход перехватчика с заголовком `Service-Worker-Navigation-Preload` (новый `JsFetchProvider::fetch_bypassing_sw_with_headers`); `InstallEvent.addRoutes` валидирует source и правила, после install-дренажа серилиализация в слот `SwWorkerHandle.routes_json`, `ServiceWorkerInterceptor` применяет правила до диспатча: `network` — прямо в сеть, `cache` — только CacheStorage, `fetch-event`/`race-network-and-fetch-handler` — диспатч в SW. Префиксный прогон `navigation-preload` + `tentative/static-router`: 12/12 id OK, без TIMEOUT; категория `service-workers`: 11.52 % → **18.18 %** (60/331 id), сабтесты 299/2367 → 479/2484 (`docs/wpt/runs/2026-11-17-sw-preload-router.json`). Хвосты: условия `requestMethod`/`requestMode`/`requestDestination`/`runningStatus` принимаются, но не вычисляются (перехватчику нужен контекст запроса — BUG-1744), `enable()` до активации воркера — тихий no-op; 2 TIMEOUT вне префиксов (`static-router-mutiple-conditions`, `static-router-cross-origin-navigation`).",
      "bugs": [
       "BUG-1744",
       "BUG-1747"
@@ -11950,6 +11950,13 @@
    "status": "open",
    "title": "`lumen --dump-layout <url> --trace-nav <out.json>` молча читает out.json как источник `--trace-nav` («os error 2» в предупреждении) — режимы с позиционными аргу…",
    "component": "shell (`crates/shell/src/cli_args.rs` — позиционные аргументы двух режимов)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1823": {
+   "status": "open",
+   "title": "WPT-тесты SW с инъекцией `%HEADERS%` (`test-request-mode-worker.py` и одноклассники: `update-module-request-mode`, `update-no-cache-request-headers`, `worker-cl…",
+   "component": "js (`web_api_shim_mid_b.js` — `_sw_run_lifecycle`, SW-изолят)",
    "date": null,
    "debtor": false
   },
@@ -23474,6 +23481,9 @@
   ],
   "js (`web_api_shim_mid_b.js` `_sw_make_event_target`)": [
    "BUG-1638"
+  ],
+  "js (`web_api_shim_mid_b.js` — `_sw_run_lifecycle`, SW-изолят)": [
+   "BUG-1823"
   ],
   "js (`web_api_shim_tail_b.js::_wa_motion_read` — чтение-время оверлей CSS-переходов и анимаций BUG-1293)": [
    "BUG-1648"
