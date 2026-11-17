@@ -578,6 +578,11 @@ impl Lumen {
             // LOAD-3A: без JS-хэндла блок выше не сработал — очередь всё равно надо опустошить,
             // иначе `load` ждал бы скрипты, которым негде исполниться.
             self.drive_async_scripts();
+            // LOAD-7: картинка без ответа держит `load` только до дедлайна; его момент — в
+            // WaitUntil. Просроченные URL до ошибки `apply_stream_intrinsic_sizes` ниже.
+            if let Some(at) = self.expire_dead_images() {
+                next_wakeup = Some(next_wakeup.map_or(at, |t| t.min(at)));
+            }
             self.apply_stream_intrinsic_sizes();
             self.maybe_fire_window_load();
         }

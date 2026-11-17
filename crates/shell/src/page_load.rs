@@ -1711,7 +1711,14 @@ impl Lumen {
             let cookie_jar = self.active_cookie_jar();
             let proxy = self.load_proxy.clone();
             let target = self.target_color_space();
+            // LOAD-7: отметку старта ставит сама задача пула — очередь воркеров
+            // дедлайном не считается (см. `ImageRequestLedger::started`).
+            let ledger = std::sync::Arc::clone(&self.stream_images_requested);
             let job = move || {
+                {
+                    let mut requested = ledger.lock().unwrap_or_else(|e| e.into_inner());
+                    requested.started.entry(req.url.clone()).or_insert_with(std::time::Instant::now);
+                }
                 // Fill the shared cache so the final `fetch_and_decode_images` pass
                 // reuses these pixels instead of re-fetching+re-decoding (BUG-172).
                 // Ключ кэша — сырой `req.url` (его знают layout/рендерер);
@@ -2418,6 +2425,8 @@ mod css_pending;
 pub(crate) use css_pending::{stream_css_outstanding, stream_css_pending, stream_css_pending_add, stream_css_pending_done};
 #[cfg(test)]
 pub(crate) use css_pending::TEST_LOCK as STREAM_CSS_TEST_LOCK;
+mod dead_subresource;
+pub(crate) use dead_subresource::{frame_deadline_passed, load_deadline_disabled, DEAD_SUBRESOURCE_DEADLINE};
 
 /// Прогнать порцию HTML через preload-сканер, эмитнуть `EarlyPreloadHints` и
 /// параллельно загрузить найденные стили (PH1-2 / PH1-8). Общая логика для обоих

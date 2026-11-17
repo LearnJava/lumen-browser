@@ -144,11 +144,11 @@ impl Lumen {
             if self
                 .pending_new_frames
                 .iter()
-                .any(|(d, h)| *h == key.1 && Arc::ptr_eq(d, &key.0))
+                .any(|(d, h, _)| *h == key.1 && Arc::ptr_eq(d, &key.0))
             {
                 continue;
             }
-            self.pending_new_frames.push((Arc::clone(&key.0), key.1));
+            self.pending_new_frames.push((Arc::clone(&key.0), key.1, std::time::Instant::now()));
             // FRAME-8: спавн потока НЕ здесь — см. doc-comment
             // `Self::dispatch_pending_frame_loads`.
             self.pending_frame_load_dispatch.push(PendingFrameLoad { prep, is_top });
@@ -202,7 +202,8 @@ impl Lumen {
     /// скриптом. Зовётся из `about_to_wait`, пока `load` окна ждёт фреймы; возвращает момент,
     /// когда нужен следующий проход (скан отложен занятым документом или поток фрейма ещё
     /// не запущен — спавн отделён от скана на проход event loop, см.
-    /// [`Self::dispatch_pending_frame_loads`]).
+    /// [`Self::dispatch_pending_frame_loads`]) или когда истекает дедлайн загрузки
+    /// фрейма (LOAD-7).
     pub(crate) fn drive_deferred_frames(&mut self) -> Option<std::time::Instant> {
         let scan_due = self.pending_window_load.as_ref().is_some_and(|p| p.frames_scan_pending);
         if scan_due {
@@ -214,18 +215,43 @@ impl Lumen {
             }
         }
         let rescan = scan_due && self.frame_scan_retry;
-        if rescan || !self.pending_frame_load_dispatch.is_empty() {
+        let mut next = if rescan || !self.pending_frame_load_dispatch.is_empty() {
             let after = if rescan { 8 } else { 1 };
-            return Some(std::time::Instant::now() + std::time::Duration::from_millis(after));
+            Some(std::time::Instant::now() + std::time::Duration::from_millis(after))
+        } else {
+            None
+        };
+        // LOAD-7: окно ждёт фрейм только до дедлайна — разбудить цикл на нём.
+        if let Some(at) = self.next_pending_frame_deadline() {
+            next = Some(next.map_or(at, |t| t.min(at)));
         }
-        None
+        next
+    }
+
+    /// LOAD-7: ближайший живой дедлайн загрузки фрейма; у просроченных его нет —
+    /// они больше не держат `load` (бронь остаётся до ответа потока).
+    fn next_pending_frame_deadline(&self) -> Option<std::time::Instant> {
+        if crate::page_load::load_deadline_disabled() {
+            return None;
+        }
+        let now = std::time::Instant::now();
+        self.pending_new_frames
+            .iter()
+            .map(|(_, _, started)| *started + crate::page_load::DEAD_SUBRESOURCE_DEADLINE)
+            .filter(|at| *at > now)
+            .min()
     }
 
     /// LOAD-1B: `load` окна ещё нельзя доставлять — первый скан не прошёл либо есть фрейм,
-    /// чья загрузка запущена или стоит в очереди на запуск.
+    /// чья загрузка запущена или стоит в очереди на запуск. LOAD-7: фрейм, висящий дольше
+    /// дедлайна, `load` не держит (бронь нужна только от повторной загрузки).
     pub(crate) fn deferred_frames_busy(&self) -> bool {
+        let now = std::time::Instant::now();
+        let deadline_on = !crate::page_load::load_deadline_disabled();
         self.pending_window_load.as_ref().is_some_and(|p| p.frames_scan_pending)
-            || !self.pending_new_frames.is_empty()
+            || self.pending_new_frames.iter().any(|(_, _, started)| {
+                !(deadline_on && crate::page_load::frame_deadline_passed(*started, now))
+            })
             || !self.pending_frame_load_dispatch.is_empty()
     }
 
@@ -239,7 +265,7 @@ impl Lumen {
         handles: Vec<frames::FrameHandle>,
     ) {
         self.pending_new_frames
-            .retain(|(d, h)| !(*h == host && Arc::ptr_eq(d, host_doc)));
+            .retain(|(d, h, _)| !(*h == host && Arc::ptr_eq(d, host_doc)));
         // Ответ мог пережить свою страницу (навигация, смена вкладки): хозяин, которого
         // больше нет среди документов текущей страницы, фреймов не получает.
         let host_alive = if is_top {
