@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-11-17T22:24:39",
+  "timestamp": "2026-11-17T23:29:20",
   "git": {
-    "commit": "2fc885b42",
-    "branch": "p6-load-5",
-    "subject": "Влить ветку cfg-worktree-settings: use_worktree для S1-S6, runtime opencode"
+    "commit": "ed105a7e2",
+    "branch": "p6-load-4",
+    "subject": "Влить ветку p6-load-5: LOAD-5 — картинки со стримингового сканера, пул 8"
   },
   "crop_offset": [
     8,
@@ -26,9 +26,9 @@
       "html": "00-calibration.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0008,
+      "diff_pct": 0.0113,
       "diff_region": {
-        "top": 717,
+        "top": 449,
         "left": 0,
         "bottom": 719,
         "right": 1023
@@ -217,9 +217,9 @@
       "html": "16-outline.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0008,
+      "diff_pct": 0.0202,
       "diff_region": {
-        "top": 717,
+        "top": 447,
         "left": 0,
         "bottom": 719,
         "right": 1023
@@ -265,7 +265,7 @@
       "html": "19-object-fit.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 9.763,
+      "diff_pct": 9.78,
       "diff_region": {
         "top": 26,
         "left": 0,
@@ -421,7 +421,7 @@
       "html": "30-css-filter.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3271,
+      "diff_pct": 0.3441,
       "diff_region": {
         "top": 31,
         "left": 0,
@@ -636,7 +636,7 @@
       "html": "45-multiple-backgrounds.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.3531,
+      "diff_pct": 1.37,
       "diff_region": {
         "top": 22,
         "left": 0,
@@ -727,7 +727,7 @@
       "html": "51-scrollbar-rendering.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.5252,
+      "diff_pct": 0.5421,
       "diff_region": {
         "top": 23,
         "left": 0,
@@ -748,7 +748,7 @@
       "html": "52-text-shadow-blur.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.2935,
+      "diff_pct": 1.3036,
       "diff_region": {
         "top": 67,
         "left": 0,
@@ -769,12 +769,12 @@
       "html": "53-background-origin.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.0396,
+      "diff_pct": 1.0566,
       "diff_region": {
         "top": 36,
         "left": 0,
         "bottom": 719,
-        "right": 761
+        "right": 1018
       },
       "capture": "gdigrab",
       "debtor": {
@@ -806,7 +806,7 @@
       "html": "55-video-placeholder.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3545,
+      "diff_pct": 0.3715,
       "diff_region": {
         "top": 125,
         "left": 0,
@@ -822,7 +822,7 @@
       "html": "56-mix-blend-mode.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 14.1203,
+      "diff_pct": 14.1303,
       "diff_region": {
         "top": 50,
         "left": 0,
@@ -838,7 +838,7 @@
       "html": "57-canvas-2d.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2833,
+      "diff_pct": 0.3002,
       "diff_region": {
         "top": 185,
         "left": 0,
@@ -875,7 +875,7 @@
       "html": "59-image-set-cross-fade.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 10.0232,
+      "diff_pct": 10.0401,
       "diff_region": {
         "top": 28,
         "left": 0,
@@ -933,7 +933,7 @@
       "html": "62-scroll-snap.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 0.3379,
+      "diff_pct": 0.3563,
       "diff_region": {
         "top": 9,
         "left": 0,
@@ -1214,7 +1214,7 @@
       "html": "78-scroll-driven-animations.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.3777,
+      "diff_pct": 2.3946,
       "diff_region": {
         "top": 28,
         "left": 0,
@@ -1235,7 +1235,7 @@
       "html": "79-text-underline-offset.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 5.6166,
+      "diff_pct": 5.6335,
       "diff_region": {
         "top": 45,
         "left": 0,
@@ -1256,7 +1256,7 @@
       "html": "80-border-collapse.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.256,
+      "diff_pct": 2.2664,
       "diff_region": {
         "top": 22,
         "left": 0,
@@ -1356,9 +1356,9 @@
       "html": "100-transform-overflow.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0098,
+      "diff_pct": 0.0267,
       "diff_region": {
-        "top": 448,
+        "top": 447,
         "left": 0,
         "bottom": 719,
         "right": 1023
@@ -1528,7 +1528,7 @@
       "html": "109-clippath-transform.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.1858,
+      "diff_pct": 0.2028,
       "diff_region": {
         "top": 85,
         "left": 0,
@@ -1716,7 +1716,7 @@
       "html": "97-counter-set.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.3973,
+      "diff_pct": 1.4092,
       "diff_region": {
         "top": 55,
         "left": 0,
@@ -1876,7 +1876,7 @@
       "html": "117-quotes.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.0688,
+      "diff_pct": 1.0788,
       "diff_region": {
         "top": 58,
         "left": 0,
@@ -2053,7 +2053,7 @@
       "html": "130-svg-dynamic-nested-transforms.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3019,
+      "diff_pct": 0.3124,
       "diff_region": {
         "top": 112,
         "left": 0,
@@ -2143,7 +2143,7 @@
       "html": "135-svg-dynamic-paint-order.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.1796,
+      "diff_pct": 1.19,
       "diff_region": {
         "top": 101,
         "left": 0,
@@ -2164,7 +2164,7 @@
       "html": "136-svg-dynamic-ellipse-radial.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.5024,
+      "diff_pct": 0.5128,
       "diff_region": {
         "top": 91,
         "left": 0,
@@ -2340,7 +2340,7 @@
       "html": "147-background-repeat-space.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.9096,
+      "diff_pct": 2.9233,
       "diff_region": {
         "top": 41,
         "left": 0,
@@ -2619,7 +2619,7 @@
       "html": "166-text-quality.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 9.1135,
+      "diff_pct": 9.1305,
       "diff_region": {
         "top": 9,
         "left": 0,
@@ -2726,7 +2726,7 @@
       "html": "173-synthetic-bold-italic.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 4.1401,
+      "diff_pct": 4.1538,
       "diff_region": {
         "top": 35,
         "left": 0,
