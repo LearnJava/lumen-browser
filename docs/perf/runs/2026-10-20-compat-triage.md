@@ -389,7 +389,7 @@
 | ebay-com | 3 | HUNG | DEGRADED | ушёл из зависаний; разовый engine-busy | run0 OK за 26,8 с (3836 знаков); run1 `about_to_wait.rs:295 for 1,4 с` — дописан в BUG-1778 |
 | github-com | 3 | HUNG | NET_FAIL | не наш: сеть | `TLS handshake: unexpected end of file` у обоих (Chrome тоже ok=False) |
 | nytimes-com | 3 | TIMEOUT | NET_FAIL | сеть: TLS-флап | run0 hang 42 с (дописан к BUG-1778-семье ниже не идёт — статус ушёл), run1 TLS EOF у Lumen при рабочем Chrome; нестабильно |
-| medium-com | 3 | HUNG | SITE_REFUSED | антибот Turnstile: [BUG-1790](../../../bugs/BUG-1790-OPEN.md) | run1 403 + `Turnstile … null (reading 'eval')`; Chrome челлендж решает |
+| medium-com | 3 | HUNG | SITE_REFUSED | антибот Turnstile: [BUG-1790](../../../bugs/BUG-1790-FIXED.md) | run1 403 + `Turnstile … null (reading 'eval')`; Chrome челлендж решает |
 | vimeo-com | 3 | TIMEOUT | SITE_REFUSED | не наш: Turnstile 403 | Chrome получает тот же 403 (114 знаков) |
 | magnit-ru | 3 | HUNG | DEGRADED | движок занят: [BUG-1778](../../../bugs/BUG-1778-OPEN.md) | `about_to_wait.rs:295 for 13,4–13,6 с` 2/2, текст 0 при 10 тыс. у Chrome |
 | smi2-ru | 3 | HUNG | DEGRADED | JS-исключение: [BUG-1779](../../../bugs/BUG-1779-FIXED.md) | `[object Object] is not a valid selector` + adfox, текст 102 при 9443 у Chrome |
@@ -425,7 +425,7 @@
 | [BUG-1805](../../../bugs/BUG-1805-OPEN.md) | заведён (P2) | rutube-ru | нет `navigator.serviceWorker.startMessages` |
 | [BUG-1778](../../../bugs/BUG-1778-OPEN.md) | дополнен | cnn-com (подтверждён headless), discord-com, magnit-ru, ebay-com (разовый) | поток движка занят тиком `about_to_wait.rs` |
 | [BUG-1779](../../../bugs/BUG-1779-FIXED.md) | дополнен | smi2-ru | `[object Object] is not a valid selector` |
-| [BUG-1790](../../../bugs/BUG-1790-OPEN.md) | дополнен | medium-com | Turnstile не выдаёт токен → 403 |
+| [BUG-1790](../../../bugs/BUG-1790-FIXED.md) | дополнен | medium-com | Turnstile не выдаёт токен → 403 |
 
 Без бага остались: intuit-com (медленная загрузка 45 с на границе порога; IDB-ошибки — см. BUG-914), soundcloud-com (текст 0, busy-улика из `smil.rs`, не изолировано), bbc/t-online/nytimes (TLS-флап сети без прокси — перепроверить при повторном прогоне с прокси), qq/imgsrc/github/vimeo (не наши: Chrome падает так же или получает тот же отказ), adobe (частичная загрузка: не резолвится `aem.live`), microsoft/godaddy/ivi (полнота контента — SITES-TRIAGE-4).
 

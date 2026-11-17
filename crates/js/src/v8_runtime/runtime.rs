@@ -1741,7 +1741,15 @@ impl V8JsRuntime {
         peer: Option<Arc<dyn crate::frame_peer_bridge::FramePeerBridge>>,
     ) {
         let registry = Arc::clone(&self.frame_docs);
-        let idx = self.run(move |_inner| {
+        // FRAME-остаток: мутация реестра — НЕ на JS-потоке страницы. Рендер
+        // страницы может СИНХРОННО ждать готовности кадра (живой Cloudflare
+        // Turnstile: render() крутит цикл опроса contentWindow/contentDocument),
+        // и постановка регистрации в очередь к занятому JS-потоку навсегда
+        // задержала бы и её, и сам ожидаемый ответ — взаимное ожидание.
+        // Реестр — общий `Arc<Mutex>` (`frame_bridge`), upsert
+        // потокобезопасен с любого потока; на JS-поток едет только установка
+        // индексных/именованных доступников окна, и то не вместо ожидания.
+        let idx = {
             let mut reg = registry.lock().unwrap_or_else(|e| e.into_inner());
             let binding = crate::frame_bridge::FrameDocBinding {
                 host_nid,
@@ -1753,17 +1761,49 @@ impl V8JsRuntime {
                 peer: peer.as_ref().map(Arc::downgrade),
             };
             crate::frame_bridge::upsert_binding(&mut reg, binding)
-        });
+        };
         // Срез 3: индексный (`window[idx]`) + именованный (`window[имя]`)
         // доступники окна фрейма. Порядок регистрации = порядок документа,
         // поэтому idx совпадает со спечным tree order. Ошибки не фатальны:
         // контекст без window (минимальный тестовый изолят) просто пропустит
-        // установку внутри шима.
+        // установку внутри шима. FRAME-остаток: поток страницы занят своей
+        // задачей — доступники поставит следующая регистрация или
+        // `ensureInitialFrame`; блокировать поток загрузки в очереди к
+        // занятому JS-потоку нельзя по той же причине, что выше.
+        if self.stall.is_busy() {
+            return;
+        }
         if let Err(e) =
             self.eval(&format!("typeof _lumen_frame_install_index === 'function' && _lumen_frame_install_index({idx})"))
         {
             eprintln!("v8: _lumen_frame_install_index({idx}) failed: {e}");
         }
+    }
+
+    /// FRAME-остаток: shell забирает начальный about:blank-кадр хоста —
+    /// документ и рантайм, заведённый первым `contentWindow.eval`
+    /// (`frame_bridge::ensure_initial_frame_runtime`). Вызывается
+    /// `spawn_frame` для iframe без `src`/`srcdoc`: такой кадр не
+    /// навигируется никогда (HTML LS §7.3.1 — единственный начальный
+    /// about:blank), и shell обязан ПОДХВАТИТЬ документ, а не заменять
+    /// свежим пустым — иначе состояние из `eval` и мутаций через
+    /// `contentDocument` потеряно. `None` — рантайма у кадра ещё нет
+    /// (`eval` не читали: подхватывать нечего, обычная загрузка строит
+    /// свежий документ+рантайм и замещает биндинг, как раньше).
+    pub fn take_initial_frame(
+        &self,
+        host_nid: u32,
+    ) -> Option<(Arc<Mutex<lumen_dom::Document>>, Arc<V8JsRuntime>)> {
+        let registry = Arc::clone(&self.frame_docs);
+        // FRAME-остаток: мутация реестра напрямую, как в
+        // [`Self::register_frame_document`] — поток страницы может быть занят
+        // синхронным ожиданием готовности кадра, постановка в его очередь
+        // сделала бы подхват взаимным ожиданием.
+        let mut slots = registry.lock().unwrap_or_else(|e| e.into_inner());
+        let rt = slots.initial_frames.get(&host_nid).cloned().flatten()?;
+        slots.initial_frames.remove(&host_nid);
+        let idx = slots.frames.iter().position(|b| b.host_nid == host_nid)?;
+        Some((Arc::clone(&slots.frames[idx].doc), rt))
     }
 
     /// BUG-480 срез 3: зарегистрировать документ **родителя** в JS-контексте

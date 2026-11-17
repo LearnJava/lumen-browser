@@ -310,6 +310,21 @@ pub(crate) struct FrameDocSlots {
     /// origin `about:`-биндинга при вычислении `event.origin` (наследование
     /// origin у srcdoc/about:blank детей).
     pub(crate) self_origin: String,
+    /// FRAME-остаток: полный адрес собственной страницы контекста (в отличие
+    /// от [`FrameDocSlots::self_origin`] — только origin): слот предка у
+    /// начального кадра (`location.href` фасада предка) и наследование origin
+    /// его рантайма читают полный URL. Заполняется тем же блоком `install_dom`.
+    pub(crate) self_url: String,
+    /// FRAME-остаток: начальные about:blank-кадры, ещё не подхваченные
+    /// shell'ом: host_nid → рантайм кадра (`None` — первое чтение
+    /// `contentWindow` его ещё не заводило; заводит его первое чтение
+    /// (`contentWindow.eval` — `ensure_initial_frame_runtime`, ~полный
+    /// шим на новый поток, поэтому лениво). Сильная ссылка обязательна:
+    /// между созданием и подхватом ([`crate::v8_runtime::V8JsRuntime::take_initial_frame`],
+    /// `spawn_frame`) держать рантайм больше некому, поток умер бы до первого
+    /// `eval`. Снимается настоящей регистрацией ([`upsert_binding`] через
+    /// `register_frame_document`) и уборкой отростков ([`bury_detached_bindings`]).
+    pub(crate) initial_frames: HashMap<u32, Option<Arc<crate::v8_runtime::V8JsRuntime>>>,
 }
 
 /// Копия биндинга соседнего фрейма в реестре ребёнка (BUG-1643).
@@ -431,6 +446,12 @@ fn resolve_owner_child(
 /// предела.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn upsert_binding(slots: &mut FrameDocSlots, mut binding: FrameDocBinding) -> usize {
+    // FRAME-остаток: настоящая регистрация замещает начальный кадр — сильная
+    // ссылка на его рантайм снимается (не подхваченный shell'ом рантайм
+    // завершается в Drop; подхваченный shell уже забрал через
+    // `take_initial_frame`). Для создания самого начального биндинга removal
+    // безвреден: `_lumen_f_initial_frame` ставит запись ПОСЛЕ upsert.
+    slots.initial_frames.remove(&binding.host_nid);
     if !slots.frames.iter().any(|b| b.host_nid == binding.host_nid) {
         bury_detached_bindings(slots);
     }
@@ -478,6 +499,10 @@ fn bury_detached_bindings(slots: &mut FrameDocSlots) {
         // `node.index()`): слот живого хоста не переиспользуется, так что
         // ошибиться можно лишь в сторону лишней жизни переиспользованного.
         if !doc.is_connected(lumen_dom::NodeId::from_index(b.host_nid as usize)) {
+            // FRAME-остаток: рантайм начального кадра отростка никому не
+            // нужен — снимаем сильную ссылку вместе с биндингом (поток
+            // рантайма завершается в Drop).
+            slots.initial_frames.remove(&b.host_nid);
             *b = FrameDocBinding {
                 host_nid: DETACHED_HOST,
                 doc: Arc::new(Mutex::new(lumen_dom::Document::new())),
@@ -515,6 +540,136 @@ fn about_blank_document() -> Arc<Mutex<lumen_dom::Document>> {
     doc.append_child(html, head);
     doc.append_child(html, body);
     Arc::new(Mutex::new(doc))
+}
+
+/// FRAME-остаток: завести собственный изолят начальному about:blank-кадру.
+///
+/// У начального кадра (срез 3 BUG-1790) документ и фасады есть, а рантайма
+/// нет — `contentWindow.eval` отдавал `undefined`, и живой Cloudflare
+/// Turnstile падал на проверке `eval`. Полный шим на новый поток стоит
+/// десятки миллисекунд (BUG-1011), поэтому изолят заводится ЛЕНИВО — первым
+/// чтением `eval` на фасаде (`wrapWinFacadeGlobals`), а не первым чтением
+/// `contentWindow`. `false` — кадр не начальный (настоящая загрузка уже
+/// зарегистрирована), opaque-sandbox (у Chrome непрозрачное окно тоже не
+/// отдаёт `eval`) или изолят уже есть/не удался.
+///
+/// Порядок замков как у `_lumen_f_initial_frame`: реестр снимком, документ
+/// между снимками, обратная запись — под повторным замком реестра с
+/// повторной валидацией (настоящую загрузку мог успеть зарегистрировать
+/// shell на своём потоке). Блокирующий вызов `install_dom` ребёнка
+/// безопасен на V8-потоке родителя: инициализация изолята идёт на
+/// собственном потоке ребёнка (прецедент — `worker.rs::spawn_worker_v8`).
+#[cfg(feature = "v8-backend")]
+fn ensure_initial_frame_runtime(
+    registry: &FrameDocRegistry,
+    bid: u32,
+    identity_profile: Option<lumen_core::IdentityProfile>,
+    cross_origin_isolated: bool,
+) -> bool {
+    let (doc, host_nid, name, self_doc, self_url, self_origin, top) = {
+        let slots = registry.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(b) = slots.frames.get(bid as usize) else {
+            return false;
+        };
+        if b.host_nid == DETACHED_HOST || !b.accessible || b.url != "about:blank" {
+            return false;
+        }
+        if b.peer.is_some() {
+            return true;
+        }
+        // Рантайм заводится только кадру, ещё не подхваченному shell'ом
+        // (`initial_frames` держит запись до take/настоящей регистрации).
+        if !matches!(slots.initial_frames.get(&b.host_nid), Some(None)) {
+            return false;
+        }
+        let top = slots
+            .top
+            .as_ref()
+            .map(|t| (Arc::clone(&t.doc), t.url.clone(), t.accessible));
+        (
+            Arc::clone(&b.doc),
+            b.host_nid,
+            b.name.clone(),
+            slots.self_doc.as_ref().map(Arc::clone),
+            slots.self_url.clone(),
+            slots.self_origin.clone(),
+            top,
+        )
+    };
+    let Some(self_doc) = self_doc else {
+        return false;
+    };
+    let sandbox_opaque = {
+        let d = self_doc.lock().unwrap_or_else(|e| e.into_inner());
+        let host = lumen_dom::NodeId::from_index(host_nid as usize);
+        // Хост лежит в документе ЧИТАТЕЛЯ (self_doc), не в документе кадра;
+        // `contains_id` — как в `_lumen_f_initial_frame` (BUG-986-страж).
+        d.contains_id(host)
+            && d.get(host)
+                .get_attr("sandbox")
+                .map(|v| !v.split_whitespace().any(|t| t == "allow-same-origin"))
+                .unwrap_or(false)
+    };
+    if sandbox_opaque {
+        return false;
+    }
+    let mut child = match crate::v8_runtime::V8JsRuntime::new() {
+        Ok(rt) => rt,
+        Err(_) => return false,
+    };
+    if let Some(profile) = identity_profile {
+        child = child.with_identity_profile(profile);
+    }
+    // about:blank наследует origin родителя (HTML LS §7.4.1) — как и кадр
+    // со свежим рантаймом (`spawn_frame` → `origin_inherit_from`).
+    if let Err(e) = child.install_dom(
+        Arc::clone(&doc),
+        "about:blank",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        cross_origin_isolated,
+        Some(self_origin.as_str()),
+    ) {
+        eprintln!("v8: initial frame runtime install failed: {e}");
+        return false;
+    }
+    // Слоты предков — до записи биндинга: код, исполненный `eval` в кадре,
+    // вправе читать `parent.document`/`window.top` в первом же выражении.
+    child.register_parent_document(
+        host_nid,
+        Arc::clone(&self_doc),
+        self_url,
+        name.clone(),
+        true,
+        None,
+    );
+    if let Some((top_doc, top_url, accessible_top)) = top {
+        child.register_top_document(top_doc, top_url, accessible_top, None);
+    }
+    let child_arc = Arc::new(child);
+    let peer: Arc<dyn crate::frame_peer_bridge::FramePeerBridge> =
+        Arc::clone(&child_arc) as Arc<dyn crate::frame_peer_bridge::FramePeerBridge>;
+    let mut slots = registry.lock().unwrap_or_else(|e| e.into_inner());
+    // Кадр всё ещё тот же начальный (shell мог успеть зарегистрировать
+    // настоящую загрузку — тогда созданный изолят умирает вместе с `child_arc`).
+    let still_initial = matches!(slots.initial_frames.get(&host_nid), Some(None));
+    if let Some(b) = slots.frames.get_mut(bid as usize)
+        && b.host_nid == host_nid
+        && b.peer.is_none()
+        && still_initial
+    {
+        b.peer = Some(Arc::downgrade(&peer));
+        slots.initial_frames.insert(host_nid, Some(child_arc));
+        return true;
+    }
+    false
 }
 
 // ── Срез 4: исходящий ящик кросс-фреймовых postMessage ───────────────────────
@@ -1128,6 +1283,10 @@ fn collect_text_content(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> Str
 pub(crate) fn install_frame_bridge_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
     registry: FrameDocRegistry,
+    // FRAME-остаток: рантайм начального кадра наследует у родителя профиль
+    // идентичности (UA/клиентские подсказки) и флаг crossOriginIsolated.
+    identity_profile: Option<lumen_core::IdentityProfile>,
+    cross_origin_isolated: bool,
 ) -> lumen_core::JsResult<()> {
     use crate::v8_compat::{into_v8_fn0, into_v8_fn1, into_v8_fn2, into_v8_fn3, into_v8_fn4};
     use lumen_core::ext::JsRuntime as _;
@@ -1202,7 +1361,27 @@ pub(crate) fn install_frame_bridge_v8(
                     opaque_id: None,
                     peer: None,
                 };
-                Some(upsert_binding(&mut slots, binding) as u32)
+                let idx = upsert_binding(&mut slots, binding);
+                // FRAME-остаток: хост помечен начальным кадром — spawn_frame
+                // подхватит документ вместо замены, а первое чтение
+                // `contentWindow.eval` заведёт кадру собственный изолят.
+                slots.initial_frames.insert(host_nid, None);
+                Some(idx as u32)
+            }),
+        )?;
+    }
+    // FRAME-остаток: ленивый изолят начального кадра. Зовётся из шима
+    // (`wrapWinFacadeGlobals`) на ветке `nopeer` при чтении `eval`: до
+    // первого `eval` кадр living на «чужих» встроенных (BUG-1813), полный
+    // шим на новый поток ради одного чтения `contentWindow` был бы чистой
+    // тратой (BUG-1011). `true` — после вызова у биндинга есть peer и
+    // повторный `_lumen_f_global_get` видит реальные глобалы кадра.
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_f_initial_frame_runtime",
+            into_v8_fn1(move |bid: u32| -> bool {
+                ensure_initial_frame_runtime(&reg, bid, identity_profile, cross_origin_isolated)
             }),
         )?;
     }
@@ -2938,6 +3117,30 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
           var bname = String(prop);
           return pristineGlobals[bname] === 1 ? globalThis[bname] : undefined;
         }
+        // BUG-1790 срез 3: у initial about:blank нет собственного изолята
+        // (peer отсутствует). Chrome разрешает `.eval` в таком кадре (он
+        // same-origin, около-пустой realm); подделать realm в изоляте
+        // читателя нельзя — код не увидел бы собственных глобалов кадра.
+        // FRAME-остаток: первое чтение `eval` заводит кадру собственный
+        // изолят (`ensure_initial_frame_runtime` — полный шим на новый поток,
+        // поэтому лениво и только на `eval`; до него встроенные отдаются из
+        // изолята читателя, как решено в BUG-1813). После создания кадр
+        // живёт как обычный same-origin кадр с рантаймом.
+        if (r.kind === 'nopeer') {
+          var name = String(prop);
+          if (name === 'eval'
+              && typeof _lumen_f_initial_frame_runtime === 'function'
+              && _lumen_f_initial_frame_runtime(bid)) {
+            r = _lumen_f_global_get(bid, name);
+          } else {
+            // `eval` — всегда из изолята кадра или `undefined`: подставить
+            // `eval` читателя значило бы исполнить код кадра в чужом realm
+            // (это и было причиной среза 3), а у opaque-sandbox кадра
+            // Chrome доступа к глобалам не даёт вовсе.
+            if (name !== 'eval' && pristineGlobals[name] === 1) return globalThis[prop];
+            return undefined;
+          }
+        }
         if (r.kind === 'value') { return r.value; }
         if (r.kind === 'function') {
           return function() {
@@ -2956,21 +3159,6 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
             if (cr.kind === 'error') { throw new Error(cr.message); }
             return cr.value;
           };
-        }
-        // BUG-1790 срез 3: у initial about:blank нет собственного изолята
-        // (peer отсутствует). Chrome разрешает `.eval` в таком кадре (он
-        // same-origin, около-пустой realm), но подделать realm в изоляте
-        // читателя нельзя: код, исполненный здесь, не увидит собственных
-        // глобалов кадра, и обрыв вылезет позже — измерено на живой странице
-        // Cloudflare Turnstile (срез 3 карточки BUG-1790), поэтому `eval`
-        // остаётся `undefined`. Изолят начального кадра — FRAME-задача.
-        //
-        // BUG-1813: всё остальное встроенное — отдаём из своего изолята: у
-        // такого кадра нет ни собственных скриптов, ни page-переменных, а
-        // встроенные объекты в Chrome у него те же самые.
-        if (r.kind === 'nopeer') {
-          var name = String(prop);
-          if (name !== 'eval' && pristineGlobals[name] === 1) return globalThis[prop];
         }
         return undefined;
       },
