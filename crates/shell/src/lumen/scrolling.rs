@@ -366,13 +366,19 @@ impl Lumen {
     }
 
     /// Поставить под-документ фрейма `idx` в абсолютную ГОРИЗОНТАЛЬНУЮ
-    /// позицию `x` (FRAME-3 срез 1) — колёсный аналог [`Self::apply_frame_scroll`],
-    /// без JS-моста: `window.scrollX` ребёнка захардкожен в 0 (см. doc-comment
-    /// на `FrameHandle::scroll_x`), так что `scroll`/`scrollend` здесь не
-    /// шлётся — симметрично тому, что `scroll_x_by` странице их тоже не шлёт.
+    /// позицию `x` (FRAME-3 срез 1) — колёсный аналог [`Self::apply_frame_scroll`]
+    /// и (SMOOTH-SCROLL-2) применитель `window.scrollTo`/`scrollBy` самого
+    /// ребёнка. Событий не шлёт — симметрично тому, что `scroll_x_by`
+    /// странице их тоже не шлёт, — но применённую позицию пушит в рантайм
+    /// ребёнка: `window.scrollX` дочернего окна теперь настоящий, и без пуша
+    /// шим читал бы ноль после каждого шага своей анимации.
     pub(crate) fn apply_frame_scroll_x(&mut self, idx: usize, x: f32) -> bool {
-        if frames::scroll_frame_to_x(&mut self.frames, idx, x).is_none() {
+        let Some(new_x) = frames::scroll_frame_to_x(&mut self.frames, idx, x) else {
             return false;
+        };
+        #[cfg(feature = "v8")]
+        if let Some(js) = self.frames[idx].js.clone() {
+            js.set_page_scroll_x(new_x);
         }
         let rebuilt = self
             .layout_box
@@ -510,16 +516,19 @@ impl Lumen {
     }
 
     /// BUG-338: bring `target_rect` (a target element's absolute border-box
-    /// rect) into view within every scrolling overflow ancestor of `node`,
-    /// vertical axis only — the ancestor-walk part of `Element.scrollIntoView()`
-    /// that fragment navigation is supposed to invoke but never did (only the
-    /// page-level scroll below ran). Walks the DOM parent chain from `node`,
-    /// scrolls each `ScrollContainer` match whose current viewport doesn't
-    /// already contain `target_rect` just enough to bring it in (align the
-    /// nearer edge), and leaves already-visible containers untouched. Content
-    /// boxes carry absolute (unscrolled) coordinates — see `PushScrollLayer`'s
-    /// paint-time `translate(-scroll_x, -scroll_y)` — so each container's
-    /// adjustment is independent of its ancestors' own scroll offset.
+    /// rect) into view within every scrolling overflow ancestor of `node` —
+    /// the ancestor-walk part of `Element.scrollIntoView()` that fragment
+    /// navigation is supposed to invoke but never did (only the page-level
+    /// scroll below ran). Walks the DOM parent chain from `node`, scrolls each
+    /// `ScrollContainer` match whose current viewport doesn't already contain
+    /// `target_rect` just enough to bring it in (align the nearer edge), and
+    /// leaves already-visible containers untouched. Both axes (SMOOTH-SCROLL-2
+    /// added the horizontal one; before it the walk scrolled y only and the
+    /// `#frag` target could stay off-screen to the left/right forever).
+    /// Content boxes carry absolute (unscrolled) coordinates — see
+    /// `PushScrollLayer`'s paint-time `translate(-scroll_x, -scroll_y)` — so
+    /// each container's adjustment is independent of its ancestors' own scroll
+    /// offset.
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn scroll_nested_ancestors_into_view(&mut self, node: NodeId, target_rect: lumen_core::geom::Rect) {
         let Some(src) = self.layout_source.as_ref() else { return };
@@ -531,7 +540,7 @@ impl Lumen {
                 continue;
             };
             let visible_top = target_rect.y - c.scroll_y;
-            let visible_bottom = target_rect.y + target_rect.height - c.scroll_y;
+            let visible_bottom = visible_top + target_rect.height;
             let new_scroll_y = if visible_top < c.clip_rect.y {
                 c.scroll_y - (c.clip_rect.y - visible_top)
             } else if visible_bottom > c.clip_rect.y + c.clip_rect.height {
@@ -539,10 +548,20 @@ impl Lumen {
             } else {
                 c.scroll_y
             };
-            if (new_scroll_y - c.scroll_y).abs() > f32::EPSILON
+            let visible_left = target_rect.x - c.scroll_x;
+            let visible_right = visible_left + target_rect.width;
+            let new_scroll_x = if visible_left < c.clip_rect.x {
+                c.scroll_x - (c.clip_rect.x - visible_left)
+            } else if visible_right > c.clip_rect.x + c.clip_rect.width {
+                c.scroll_x + (visible_right - (c.clip_rect.x + c.clip_rect.width))
+            } else {
+                c.scroll_x
+            };
+            if ((new_scroll_y - c.scroll_y).abs() > f32::EPSILON
+                || (new_scroll_x - c.scroll_x).abs() > f32::EPSILON)
                 && let Some(lb) = self.layout_box.as_mut()
             {
-                set_scroll_position(lb, n, c.scroll_x, new_scroll_y);
+                set_scroll_position(lb, n, new_scroll_x, new_scroll_y);
                 moved.push(n.index() as u32);
             }
             ancestor = src.document.lock().unwrap().get(n).parent;
@@ -559,7 +578,9 @@ impl Lumen {
     /// element), overrides its rect with the viewport dimensions (the snap port
     /// for page scroll is the viewport, not the full document), then calls
     /// `find_snap_target`. Returns `target_y` unchanged if no snap applies.
-    fn apply_page_y_snap(&self, target_y: f32) -> f32 {
+    /// `pub(crate)` since SMOOTH-SCROLL-2: the JS page-scroll drain lands the
+    /// shim's final animation step on the snapped position.
+    pub(crate) fn apply_page_y_snap(&self, target_y: f32) -> f32 {
         let root_node = match &self.layout_box {
             Some(lb) => lb.node,
             None => return target_y,
@@ -625,6 +646,19 @@ impl Lumen {
         let snapped = self.apply_page_x_snap(clamped);
         if (snapped - self.scroll_x).abs() > f32::EPSILON {
             self.scroll_x = snapped;
+            self.request_redraw();
+        }
+        self.issue_scroll_command();
+    }
+
+    /// Установить scroll_x в абсолютное значение (после clamping-а) —
+    /// SMOOTH-SCROLL-2: якорный переход `#frag` двигает страницу и по x.
+    /// Зеркало [`Self::scroll_to`] по горизонтали: инстантный путь, без snap —
+    /// якорь адресует конкретный элемент, а не точку прилипания.
+    pub(crate) fn scroll_x_to(&mut self, target: f32) {
+        let clamped = clamp_scroll(target, self.max_scroll_x());
+        if (clamped - self.scroll_x).abs() > f32::EPSILON {
+            self.scroll_x = clamped;
             self.request_redraw();
         }
         self.issue_scroll_command();

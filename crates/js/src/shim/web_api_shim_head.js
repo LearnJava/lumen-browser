@@ -64,17 +64,14 @@ var _lumen_scrollend_bypass = false;
 var _LUMEN_SMOOTH_MS = 200;      // = `scroll_anim::DURATION_MS` of the shell's wheel/key scroll
 var _LUMEN_SMOOTH_SETTLE = 2;    // frames between the last step and `scrollend`: the shell has applied it
 
-function _lumen_scroll_in_frame() {
-    try { return window.parent !== window; } catch (e) { return true; }
-}
-
 // `behavior` of `ScrollOptions` → does this call animate? `auto` defers to the
 // scrolling box's own `scroll-behavior` (`cssNid`: the element, or the root
-// element for the viewport). A sub-document has no frame loop of its own
-// (`rAF` of frames does not run), so it always scrolls instantly.
+// element for the viewport). SMOOTH-SCROLL-2: a sub-document animates too —
+// its rAF runs since FRAME-1 (`about_to_wait.rs` pumps frame runtimes), so the
+// old "frames always scroll instantly" gate is gone.
 function _lumen_use_smooth(behavior, cssNid) {
     if (behavior === 'instant') return false;
-    if (typeof requestAnimationFrame !== 'function' || _lumen_scroll_in_frame()) return false;
+    if (typeof requestAnimationFrame !== 'function') return false;
     if (behavior === 'smooth') return true;
     if (cssNid === null || cssNid === undefined) return false;
     return _lumen_get_computed_style(cssNid, 'scroll-behavior') === 'smooth';
@@ -86,10 +83,15 @@ function _lumen_scroller_get(key) {
     return s ? [s[0], s[1]] : [0, 0];
 }
 
-function _lumen_scroller_set(key, x, y) {
+// `snap` (SMOOTH-SCROLL-2): the last step of a page animation rides the
+// `smooth` flag the shell already carries on the request — the page drain
+// lands it on the CSS Scroll Snap L1 target (`apply_page_y_snap`, the shim has
+// no snap data). Instant requests stay exact: an explicit scrollTo position is
+// not a snap operation.
+function _lumen_scroller_set(key, x, y, snap) {
     if (key === 'p') {
         _lumen_request_page_scroll_x(x);
-        _lumen_request_page_scroll(y, 0);
+        _lumen_request_page_scroll(y, snap ? 1 : 0);
     } else {
         _lumen_request_scroll(key, x, y);
     }
@@ -119,7 +121,7 @@ function _lumen_smooth_kick() {
 }
 
 // Start (or retarget) the smooth scroll of `key` towards (tx, ty).
-function _lumen_smooth_scroll(key, tx, ty) {
+function _lumen_smooth_scroll(key, tx, ty, snap) {
     var cur = _lumen_scroller_get(key);
     if (key === 'p') {
         var max = _lumen_page_scroll_max();
@@ -134,7 +136,7 @@ function _lumen_smooth_scroll(key, tx, ty) {
     if (a === undefined && Math.abs(cur[0] - tx) < 0.01 && Math.abs(cur[1] - ty) < 0.01) return;
     _lumen_smooth_anims[key] = {
         sx: cur[0], sy: cur[1], tx: tx, ty: ty, t0: performance.now(),
-        hist: [cur[0], cur[1]], fin: 0, landed: false
+        hist: [cur[0], cur[1]], fin: 0, landed: false, snap: !!snap && key === 'p'
     };
     _lumen_smooth_kick();
 }
@@ -146,12 +148,14 @@ function _lumen_scroll_instant(key, x, y) {
 }
 
 // Scroll `key` to (x, y) honouring `behavior` (`auto` | `instant` | `smooth`).
-function _lumen_scroll_to_pos(key, x, y, behavior) {
+// `snap` rides only the smooth path's last step (`_lumen_smooth_scroll`) — an
+// instant request is an exact position, never a snap operation.
+function _lumen_scroll_to_pos(key, x, y, behavior, snap) {
     // An element without a scrolling box (no layout box, `overflow: visible`) scrolls nowhere
     // (CSSOM View §Extensions to the Element interface: «return»).
     if (key !== 'p' && !(_lumen_get_scroll_state(key) && _lumen_is_scroll_container(key))) return;
     var cssNid = key === 'p' ? _lumen_u2n(_lumen_get_html_element()) : key;
-    if (_lumen_use_smooth(behavior, cssNid)) _lumen_smooth_scroll(key, x, y);
+    if (_lumen_use_smooth(behavior, cssNid)) _lumen_smooth_scroll(key, x, y, snap);
     else _lumen_scroll_instant(key, x, y);
 }
 
@@ -200,7 +204,9 @@ function _lumen_smooth_tick() {
         if (t < 1) { var u = 1 - Math.max(t, 0); e = 1 - u * u * u; }
         var x = a.sx + (a.tx - a.sx) * e;
         var y = a.sy + (a.ty - a.sy) * e;
-        _lumen_scroller_set(key, x, y);
+        // The final step carries the snap flag (SMOOTH-SCROLL-2): the shell
+        // routes it through the snap-aware page scroll.
+        _lumen_scroller_set(key, x, y, a.snap && t >= 1);
         a.hist.push(x, y);
         if (a.hist.length > 6) a.hist.splice(0, 2);
         if (t >= 1) { a.fin = _LUMEN_SMOOTH_SETTLE; a.landed = true; }

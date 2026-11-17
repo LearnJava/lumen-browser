@@ -165,10 +165,10 @@ impl Lumen {
         // только на UI-стороне (в EngineJsState их нет), поэтому прямые вызовы
         // без route_*: V8PersistentJs сам туннелирует на JS-поток (ADR-014).
         // Вне гейта `js_present`: у фрейма может быть скрипт при странице без
-        // единого скрипта. rAF фреймов не тикается (срез 1 — см. баг-файл).
-        // Индекс хэндла едет рядом с рантаймом (срез 17): фрейм без скриптов
-        // в этот список не попадает, поэтому позиция в нём не равна позиции в
-        // `self.frames`, а прокрутка адресуется именно второй.
+        // единого скрипта. (rAF под-документов тикается ниже по функции —
+        // FRAME-1.) Индекс хэндла едет рядом с рантаймом (срез 17): фрейм без
+        // скриптов в этот список не попадает, поэтому позиция в нём не равна
+        // позиции в `self.frames`, а прокрутка адресуется именно второй.
         let frame_js_handles: Vec<(usize, Arc<dyn PersistentJs>)> = self
             .frames
             .iter()
@@ -180,6 +180,9 @@ impl Lumen {
         // их не дренировал никто — страничный дренаж ниже знает только
         // `self.js_ctx`. Применяются после цикла: там нужен `&mut self`.
         let mut frame_scrolls: Vec<(usize, f32)> = Vec::new();
+        // SMOOTH-SCROLL-2: горизонтальная половина тех же запросов — свой
+        // однослотовый канал, как у страницы (`take_page_scroll_x_request`).
+        let mut frame_scroll_xs: Vec<(usize, f32)> = Vec::new();
         // BUG-480 срез 20: `form.submit()`/`requestSubmit()` из скрипта самого
         // ребёнка — второй вход в отправку его формы.
         let mut frame_submits: Vec<(usize, u32, i32)> = Vec::new();
@@ -217,12 +220,16 @@ impl Lumen {
             if fjs.take_nav_updates().iter().any(|(code, ..)| *code == 5) {
                 frame_reloads.push(*idx);
             }
-            // Гладкий (`behavior: 'smooth'`) применяется мгновенно: своей
-            // анимации у прокрутки фрейма нет, а тикать её было бы негде —
-            // rAF под-документов не идёт (срез 1). Отклонение записано в
-            // bugs/BUG-480-OPEN.md.
+            // SMOOTH-SCROLL-2: гладкая прокрутка фрейма ведётся из его шима
+            // (rAF под-документов идёт с FRAME-1, мгновенного применения больше
+            // нет): каждый шаг анимации приезжает обычным запросом ниже, а
+            // комментарий «rAF под-документов не идёт» устарел вместе с
+            // отклонением в BUG-480.
             for (target_y, _smooth) in fjs.take_page_scroll_requests() {
                 frame_scrolls.push((*idx, target_y));
+            }
+            if let Some(target_x) = fjs.take_page_scroll_x_request() {
+                frame_scroll_xs.push((*idx, target_x));
             }
             // BUG-480 срез 25: оба источника дренируются безусловно (не
             // `else if`) — своя мутация и мутация от родителя могли прийти
@@ -236,6 +243,9 @@ impl Lumen {
         }
         for (idx, target_y) in frame_scrolls {
             self.apply_frame_scroll(idx, target_y);
+        }
+        for (idx, target_x) in frame_scroll_xs {
+            self.apply_frame_scroll_x(idx, target_x);
         }
         // BUG-480 срез 25: `refresh_frames(Some(idx))` пересчитывает layout
         // ЭТОГО фрейма без гейта «размер/интерактив не менялись» (он для
@@ -1729,10 +1739,17 @@ impl Lumen {
             self.scroll_x_by(target_x - self.scroll_x);
         }
         #[cfg(feature = "v8")]
-        for (target_y, smooth) in self.drain_query_js(|j| j.take_page_scroll_requests()).unwrap_or_default()
+        for (target_y, snap) in self.drain_query_js(|j| j.take_page_scroll_requests()).unwrap_or_default()
         {
-            if smooth {
-                self.start_smooth_scroll(target_y);
+            // SMOOTH-SCROLL-2: `snap` rides the shim's FINAL animation step
+            // (scrollIntoView's viewport scroll — the one JS scroll Blink
+            // snaps). It must LAND here, not start a shell animation: the
+            // shim pays its own `scrollend` a couple of frames after the last
+            // step, and a glide still running past that point makes the
+            // listener observe a position short of the target.
+            if snap {
+                let snapped = self.apply_page_y_snap(target_y);
+                self.scroll_to(snapped);
             } else {
                 self.scroll_to(target_y);
             }
