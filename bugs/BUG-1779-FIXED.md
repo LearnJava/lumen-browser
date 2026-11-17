@@ -56,7 +56,7 @@ BUG-912, `document`/`XMLDocument`/`Document` — BUG-1138.
 `ProcessingInstruction`; верны были только SVG, `document`/`XMLDocument` и `NodeList`.
 Проба нашла соседа НЕ этой формы: `document.implementation.createHTMLDocument()` возвращает
 `[object Document]`, у Chrome `[object HTMLDocument]` — неверный интерфейс у фабрики, теги
-не при чём; заведено [BUG-1808](BUG-1808-OPEN.md).
+не при чём; заведено [BUG-1808](BUG-1808-FIXED.md).
 
 **Тесты:** `v8_bug1779_element_class_string.rs` (4) — репро карточки + сниф tippy
 (`/Element]/`), по-инстансовые имена всей семьи (включая `MathMLElement`,
@@ -81,6 +81,6 @@ Status API; smi2-ru: 102 → 1594–1602 (у Chrome 8861–9488), статус D
 остаток — a11y-дифф; aviasales-ru: 1 → 1762 (у Chrome 1925), PARITY, второй прогон
 дал blank (флап загрузки, вне бага). Критерий карточки выполнен — баг закрыт.
 
-**Осталось:** [BUG-1808](BUG-1808-OPEN.md) (createHTMLDocument → неверный интерфейс);
+**Осталось:** [BUG-1808](BUG-1808-FIXED.md) (createHTMLDocument → неверный интерфейс);
 остаток smi2-ru (текст 1.6k против 8.9–9.5k у Chrome при 0 исключений) — отдельный
 разбор, не toStringTag.

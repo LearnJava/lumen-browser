@@ -46,3 +46,14 @@ fn document_interfaces_have_their_own_tags() {
     assert!(is_true(&rt, "Object.prototype.toString.call(document.implementation.createDocument(null, null)) === '[object XMLDocument]'"));
     assert!(is_true(&rt, "Object.prototype.toString.call(HTMLDocument.prototype) === '[object HTMLDocument]'"));
 }
+
+/// BUG-1808 — `createHTMLDocument` returns an HTMLDocument (DOM LS), unlike
+/// `new Document()`/`createDocument()`; the interface survives `cloneNode`.
+#[test]
+fn create_html_document_is_an_html_document() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(is_true(&rt, "Object.prototype.toString.call(document.implementation.createHTMLDocument('t')) === '[object HTMLDocument]'"));
+    assert!(is_true(&rt, "document.implementation.createHTMLDocument('t') instanceof HTMLDocument && document.implementation.createHTMLDocument('t') instanceof Document && document.implementation.createHTMLDocument('t') instanceof Node"));
+    assert!(is_true(&rt, "document.implementation.createHTMLDocument('t').constructor === HTMLDocument"));
+    assert!(is_true(&rt, "document.implementation.createHTMLDocument('t').cloneNode(true) instanceof HTMLDocument"));
+}
