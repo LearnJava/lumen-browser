@@ -12,8 +12,9 @@ use lumen_dom::{Document, NodeData, NodeId};
 
 use crate::box_tree::canvas_has_layout_subtree;
 use crate::style::{
-    BorderStyle, BoxSizing, Color, ComputedStyle, ContentVisibility, CssColor, Display, FontStyle,
-    FontWeight, Length, LengthOrAuto, ListStyleType, TextAlign, VerticalAlign, WhiteSpace, WritingMode,
+    BorderStyle, BoxSizing, Color, ComputedStyle, ContentVisibility, CssColor, Cursor, Display,
+    FontStyle, FontWeight, Length, LengthOrAuto, ListStyleType, TextAlign, VerticalAlign,
+    WhiteSpace, WritingMode,
 };
 use crate::style::AlignValue;
 use crate::style::Interactivity;
@@ -230,6 +231,14 @@ pub(in crate::style) fn ua_link_color(doc: &Document, node: NodeId) -> Option<Co
     } else {
         None
     }
+}
+/// UA stylesheet: `:any-link { cursor: pointer }` (CSS UI L4 §10.7).
+///
+/// Без этого правила `cursor: auto` над ссылкой без авторских стилей даёт
+/// стрелку: `auto` разрешается по контексту, а контекст «гиперссылка» задаёт
+/// именно UA-таблица. Авторский `cursor` перекрывает хинт, как и остальные.
+pub(in crate::style) fn ua_cursor(doc: &Document, node: NodeId) -> Option<Cursor> {
+    crate::style::matching::forms::matches_any_link(doc, node).then_some(Cursor::Pointer)
 }
 /// UA stylesheet: масштаб font-size для `<small>`, `<sub>`, `<sup>`.
 /// HTML5 §15.3.3: font-size: smaller (≈ 0.83× родительского).

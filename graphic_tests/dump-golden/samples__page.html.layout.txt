@@ -14,7 +14,7 @@ Block rect=(0.00, 0.00, 1024.00, 451.19)
       Block rect=(28.00, 124.88, 968.00, 33.72) bg=#e0e0e0ff m=(1.00em, 0.00, 8.00, 0.00) p=(8.00, 8.00, 8.00, 8.00)
         InlineRun rect=(36.00, 132.88, 952.00, 17.72)
           seg[0] "Это "
-          seg[1] "ссылка" color=#0000ffff decoration=underline
+          seg[1] "ссылка" color=#0000ffff decoration=underline cursor=Pointer
           seg[2] " внутри абзаца."
           line[0]:
             frag[0] x=0.00 "Это"
