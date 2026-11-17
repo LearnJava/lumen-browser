@@ -738,6 +738,7 @@ impl FlushHandles {
                 && !self.style_skip_off.load(Ordering::Relaxed);
             let prune_on = !scope_prune_disabled() && !self.scope_prune_off.load(Ordering::Relaxed);
             let changed = if styles_on || prune_on {
+                let _changed_scope = lumen_core::profile::scope("flush.changed_nodes");
                 content_nodes
                     .as_ref()
                     .and_then(|content| lumen_layout::ChangedNodes::new(&doc_guard, &counters, content))
@@ -748,6 +749,7 @@ impl FlushHandles {
                 &layout_root,
                 dirty_roots,
                 counters.clean_subtrees(),
+                counters.custom_only_subtrees(),
                 &lr,
                 viewport,
                 changed.as_ref(),
