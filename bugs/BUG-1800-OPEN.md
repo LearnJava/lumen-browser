@@ -1,6 +1,6 @@
 # BUG-1800 — ebay.com: JS-задачи по 30–40 с — same-tick flush исполняется внутри DOM-чтений (`getAttribute`/`getBoundingClientRect`) из колбэков RO/IO; `document_ready` задержан на +9.5…+140 с
 
-**Статус:** OPEN
+**Статус:** OPEN (DEBTOR) — закрыт для P3 2026-11-17; остаток — PERF-INVALIDATION/[ADR-036](../docs/decisions/ADR-036-incremental-restyle-invalidation.md) (P6), граница долга в конце карточки
 **Открыт:** 2026-11-12 (P3, перф-аудит ebay, перф-скилл)
 **Компонент:** js/layout (`crates/js/src/v8_runtime/style_flush.rs`, `crates/engine/layout/src/scoped_collect.rs` — same-tick flush; DOM-читалки шима, вызывающие его)
 
@@ -1019,3 +1019,13 @@ lumen-driver/paint/media-native — красные вне среза (крейт
 консерватизма — третий раз не предпринимать без новых фактов (срезы 12/13);
 `forced_same`-хвост (36–38 тыс. на сессию) держат doc-wide корни sheet-дельт
 и стража — класс PERF-INVALIDATION/BUG-341.
+
+## Закрытие для P3 (2026-11-17) — граница долга
+
+**Статус `OPEN (DEBTOR)`:** негейтованных рычагов не осталось, P3 задачу не берёт. Остаток и его владельцы:
+
+1. **Каноничный живой ebay-замер** — сайт отдаёт 403 с 2026-11-12 на всех маршрутах; приёмочный сайт переехал на github ещё срезом 11 (§Приёмка), паритет с Chrome — цель [PERF-INVALIDATION](../docs/tasks/PERF-INVALIDATION.md), не отдельного среза бага.
+2. **Lift консерватизма shadow-стража** (срезы 12/13, два отката) — третьей попытки без нового факта не предпринимать; механизм того же класса, что [ADR-036](../docs/decisions/ADR-036-incremental-restyle-invalidation.md).
+3. **`forced_same`-хвост** (36–38 тыс. на сессию, github/cnn) — doc-wide корни sheet-дельт и стража, класс PERF-INVALIDATION/BUG-341, архитектурный контур P6.
+
+Сделано за 17 срезов: same-tick флаш вскрыт и сужен — пер-атрибутный fan-out, ancestor-bloom, `:has()`-reach по подлежащим правил, has-reach-диф (срез 17: живой github walk_sum −33…−46 %, verify 17/17 «equal to a full cascade»). Возобновление P3 — только по новому факту (доступ к ebay, новый негейтованный рычаг) и решению пользователя.
