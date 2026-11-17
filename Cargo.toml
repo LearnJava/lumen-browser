@@ -39,7 +39,7 @@ members = [
 version = "0.5.0"
 edition = "2024"
 authors = ["Lumen contributors"]
-license = "MPL-2.0"
+license = "GPL-3.0-only"
 rust-version = "1.95"
 
 # Политики проекта, переведённые в машинные проверки — docs/lint-policy.md.
