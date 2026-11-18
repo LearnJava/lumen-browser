@@ -254,6 +254,56 @@ fn a_transition_is_cancelled_when_the_style_no_longer_asks_for_it() {
     assert_eq!(eval_str(&rt, &script), "running idle 0");
 }
 
+/// CSSANIM-MODEL-2-S1: a seek over a phase boundary fires the CSS event the scheduler would have
+/// fired, and the scheduler's own event for that animation is dropped (it never saw the seek).
+#[test]
+fn a_scripted_seek_dispatches_the_animation_events_it_crosses() {
+    let rt = rt();
+    let script = format!(
+        "{PRELUDE}
+        __css('k');
+        var a = __sync()[0], got = [];
+        _lumen_dispatch = function(nid, ev) {{ got.push(ev.type + ' ' + ev.animationName + ' ' + ev.elapsedTime); }};
+        a.currentTime = 5000;
+        __tick(16); _lumen_run_raf_callbacks(16);
+        a.currentTime = 10000;
+        __tick(32); _lumen_run_raf_callbacks(32);
+        _lumen_deliver_animation_events([[1, 'start', 'k', 0], [1, 'end', 'k', 10], [1, 'start', 'j', 0]]);
+        got.join('|')"
+    );
+    // One start into the active interval, one end out of it; the scheduler's `k` events are gone,
+    // its `j` (an animation no script drives) is not.
+    assert_eq!(
+        eval_str(&rt, &script),
+        "animationstart k 0|animationend k 10|animationstart j 0"
+    );
+}
+
+/// The same for a transition: the shell's `TransitionScheduler` drives none of its properties, so
+/// before this slice a seek of a transition fired nothing at all.
+#[test]
+fn a_scripted_seek_dispatches_the_transition_events_it_crosses() {
+    let rt = rt();
+    let script = format!(
+        "{PRELUDE}
+        __vals['transition-property'] = 'all'; __vals['transition-duration'] = '10s';
+        __vals['transition-delay'] = '0s'; __vals['transition-timing-function'] = 'linear';
+        __vals['margin-left'] = '10px'; _wa_gap_tr_clock_ms = null; _wa_gap_tr_value(1, 'margin-left', '10px');
+        __vals['margin-left'] = '30px'; _wa_gap_tr_clock_ms = null; _wa_gap_tr_value(1, 'margin-left', '30px');
+        var t = __sync()[0], got = [];
+        _lumen_dispatch = function(nid, ev) {{ got.push(ev.type + ' ' + ev.propertyName + ' ' + ev.elapsedTime + ' ' + ev.cancelable); }};
+        t.currentTime = 5000;
+        __tick(16); _lumen_run_raf_callbacks(16);
+        t.currentTime = 10000;
+        __tick(32); _lumen_run_raf_callbacks(32);
+        got.join('|')"
+    );
+    assert_eq!(
+        eval_str(&rt, &script),
+        "transitionstart margin-left 0 false|transitionend margin-left 10 true"
+    );
+}
+
 /// CSSANIM-MODEL-2: a property the page never read transitions too — the element's first
 /// observation snapshots the whole computed style, and the next style recalc compares against
 /// that baseline (`_wa_motion_seed`). Real cascade here: only the stubbed harness above keeps its
