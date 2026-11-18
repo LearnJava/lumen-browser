@@ -66,7 +66,7 @@ r2.onsuccess = () => console.log('success');                // срабатыв�
 
 `IDBDatabase` получил `addEventListener`/`removeEventListener` (типы
 `versionchange`/`abort`/`error`/`close`; диспетчер сегодня есть только у
-`versionchange` — остальные три ждут [BUG-914](BUG-914-OPEN.md)), а
+`versionchange` — остальные три ждут [BUG-914](BUG-914-FIXED.md)), а
 `IDBOpenDBRequest` — реестр `blocked` и собственный `removeEventListener`.
 Заодно `success` у `deleteDatabase` несёт `oldVersion`/`newVersion: null`.
 
@@ -122,7 +122,7 @@ O(все базы × все хранилища). Это отдельный, уж
 
 Прочее, намеренно не сделанное: `dispatchEvent` у `IDBDatabase`/`IDBRequest`/
 `IDBTransaction` по-прежнему нет (у шима своя диспетчеризация, общая заявка —
-[BUG-914](BUG-914-OPEN.md)); принудительное закрытие соединения и событие
+[BUG-914](BUG-914-FIXED.md)); принудительное закрытие соединения и событие
 `close` не реализованы — `onclose` остаётся объявленным полем без источника.
 
 ## Как проверить

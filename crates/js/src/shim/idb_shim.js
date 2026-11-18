@@ -3,8 +3,12 @@
 // In-memory implementation: databases live in this runtime's JS heap and do not
 // persist across reloads (Rust-backed persistence is a separate follow-up task).
 // Request 'success'/'error' events and transaction 'complete'/'abort' fire
-// asynchronously via a pending queue drained by _lumen_idb_flush(), scheduled as
-// a microtask (and called directly by tests and by the service-worker scope).
+// asynchronously. The production scheduler queues the stepwise _idb_flush_step
+// as a microtask: one unit per step (an open turn, a request dispatch, a
+// settlement), so a handler's promise reactions run before the next dispatch
+// and the transaction stays active across them (§3.1.7). The full synchronous
+// drain _lumen_idb_flush() remains for the unit tests and the service-worker
+// scope.
 // This mirrors the raf / MutationObserver delivery pattern already used in this
 // shim.
 
@@ -271,7 +275,12 @@ function _idb_to_range(q) {
 
 // --- IDBRequest / IDBOpenDBRequest (Indexed DB §3.5) -------------------------
 
+// Request, transaction and connection are EventTargets (BUG-1706/BUG-914
+// rewrite): one listener store per object, the DOM add/remove semantics
+// (capture flag, once, handleEvent) come from the shared EventTarget shim,
+// which loads ahead of this one in every scope that runs it.
 function IDBRequest(source, txn) {
+    EventTarget.call(this);
     this.result = undefined;
     this.error = null;
     this.source = source || null;
@@ -279,65 +288,107 @@ function IDBRequest(source, txn) {
     this.readyState = 'pending';
     this.onsuccess = null;
     this.onerror = null;
-    this._successListeners = [];
-    this._errorListeners = [];
     this._action = null;
 }
-IDBRequest.prototype.addEventListener = function(type, fn) {
-    if (typeof fn !== 'function') return;
-    if (type === 'success') this._successListeners.push(fn);
-    else if (type === 'error') this._errorListeners.push(fn);
-};
-IDBRequest.prototype.removeEventListener = function(type, fn) {
-    var arr = type === 'success' ? this._successListeners : (type === 'error' ? this._errorListeners : null);
-    if (!arr) return;
-    var i = arr.indexOf(fn);
-    if (i >= 0) arr.splice(i, 1);
-};
+IDBRequest.prototype = Object.create(EventTarget.prototype);
+IDBRequest.prototype.constructor = IDBRequest;
 
 function IDBOpenDBRequest() {
     IDBRequest.call(this, null, null);
     this.onupgradeneeded = null;
     this.onblocked = null;
-    this._upgradeListeners = [];
-    this._blockedListeners = [];
 }
 IDBOpenDBRequest.prototype = Object.create(IDBRequest.prototype);
 IDBOpenDBRequest.prototype.constructor = IDBOpenDBRequest;
-IDBOpenDBRequest.prototype.addEventListener = function(type, fn) {
-    if (typeof fn !== 'function') return;
-    if (type === 'upgradeneeded') this._upgradeListeners.push(fn);
-    else if (type === 'blocked') this._blockedListeners.push(fn);
-    else IDBRequest.prototype.addEventListener.call(this, type, fn);
-};
-IDBOpenDBRequest.prototype.removeEventListener = function(type, fn) {
-    var arr = type === 'upgradeneeded' ? this._upgradeListeners
-            : (type === 'blocked' ? this._blockedListeners : null);
-    if (!arr) { IDBRequest.prototype.removeEventListener.call(this, type, fn); return; }
-    var i = arr.indexOf(fn);
-    if (i >= 0) arr.splice(i, 1);
-};
 
 // Fires `blocked` at an open/delete request whose database still has another
 // connection open (Indexed DB §3.3.1 step «fire blocked»). Delete carries
 // newVersion = null.
 function _idb_fire_blocked(req, oldVersion, newVersion) {
-    var ev = _idb_make_event('blocked', req, { oldVersion: oldVersion, newVersion: newVersion });
-    if (typeof req.onblocked === 'function') {
-        try { req.onblocked(ev); } catch(e) { _lumen_console_error('IDB onblocked: ' + e); }
+    _idb_dispatch(req,
+        _idb_make_event('blocked', req, { oldVersion: oldVersion, newVersion: newVersion }),
+        [req]);
+}
+
+// Real `Event`s: only `error` bubbles and is cancelable (§3.5.6); `abort`
+// bubbles without being cancelable; every other type here neither bubbles nor
+// cancels. `isTrusted` is forced — this shim is the trusted source of its own
+// events. Extra fields (`oldVersion`, `newVersion`) stay plain properties
+// until IDB-EVENTS-S4 mints IDBVersionChangeEvent.
+function _idb_make_event(type, target, extra) {
+    var ev = new Event(type, {
+        bubbles: type === 'error' || type === 'abort',
+        cancelable: type === 'error'
+    });
+    ev.isTrusted = true;
+    if (extra) for (var k in extra) ev[k] = extra[k];
+    return ev;
+}
+
+// Propagation path of a request event, nearest target first: the request, its
+// transaction, that transaction's connection (Indexed DB §3.5.6). An open
+// request carries no transaction, so its path is just itself.
+function _idb_request_path(req) {
+    return req.transaction ? [req, req.transaction, req.transaction.db] : [req];
+}
+
+// Runs one node's listeners for `event` at `phase`. Capturing runs capture
+// listeners only, bubbling non-capture ones only, and at the target both run
+// in registration order. The `on<type>` property stays ahead of the listeners
+// at its own node (bubble/target phases only, never capture) — the order this
+// shim has always used. The live list is snapshotted before the on<type>
+// handler and the walk (BUG-1706): a listener added during the dispatch — by
+// the onX handler included — never sees this event, and one removed before
+// its turn is skipped.
+function _idb_invoke(node, event, phase) {
+    event.currentTarget = node;
+    event.eventPhase = phase;
+    var type = event.type;
+    var store = node._listeners;
+    var list = store ? store[type] : null;
+    var snapshot = list ? list.slice() : null;
+    if (phase !== 1) {
+        var handler = node['on' + type];
+        if (typeof handler === 'function') {
+            try { handler.call(node, event); } catch (e) { _lumen_console_error('IDB on' + type + ': ' + e); }
+        }
     }
-    for (var i = 0; i < req._blockedListeners.length; i++) {
-        try { req._blockedListeners[i](ev); } catch(e) { _lumen_console_error('IDB blocked listener: ' + e); }
+    if (!snapshot) return;
+    for (var i = 0; i < snapshot.length; i++) {
+        var entry = snapshot[i];
+        if (list.indexOf(entry) < 0) continue;
+        if (phase === 1 ? !entry.capture : (phase === 3 && entry.capture)) continue;
+        try {
+            if (typeof entry.callback === 'function') entry.callback.call(node, event);
+            else if (entry.callback && typeof entry.callback.handleEvent === 'function') entry.callback.handleEvent(event);
+        } catch (e) { _lumen_console_error('IDB ' + type + ' listener: ' + e); }
+        if (entry.once) node.removeEventListener(type, entry.callback, entry.capture);
+        if (event._stopImmediate) break;
     }
 }
 
-function _idb_make_event(type, target, extra) {
-    var ev = { type: type, target: target, currentTarget: target, bubbles: false, _prevented: false };
-    ev.preventDefault = function() { this._prevented = true; };
-    ev.stopPropagation = function() {};
-    ev.stopImmediatePropagation = function() {};
-    if (extra) for (var k in extra) ev[k] = extra[k];
-    return ev;
+// Dispatches `event` along `path` (targets nearest-first, Indexed DB §3.5.6):
+// capture far-to-near over the ancestors, the target, then bubble near-to-far
+// while the event bubbles (BUG-914). `stopPropagation`/`stopImmediatePropagation`
+// (`cancelBubble`/`_stopImmediate`) cut the rest of the path; currentTarget and
+// eventPhase reset once the dispatch is over. A default action a caller derives
+// from `defaultPrevented` runs only after this whole traversal.
+function _idb_dispatch(target, event, path) {
+    event.target = target;
+    var i;
+    for (i = path.length - 1; i > 0; i--) {
+        if (event.cancelBubble) return;
+        _idb_invoke(path[i], event, 1);
+    }
+    if (!event.cancelBubble) _idb_invoke(target, event, 2);
+    if (event.bubbles) {
+        for (i = 1; i < path.length; i++) {
+            if (event.cancelBubble) return;
+            _idb_invoke(path[i], event, 3);
+        }
+    }
+    event.currentTarget = null;
+    event.eventPhase = 0;
 }
 
 // Runs a request's deferred action (data read/write), then fires its
@@ -353,31 +404,28 @@ function _idb_dispatch_request(req) {
     }
     req.readyState = 'done';
     if (req.error) {
-        var ev = _idb_make_event('error', req, { bubbles: true });
-        if (typeof req.onerror === 'function') {
-            try { req.onerror(ev); } catch(e) { _lumen_console_error('IDB onerror: ' + e); }
-        }
-        for (var i = 0; i < req._errorListeners.length; i++) {
-            try { req._errorListeners[i](ev); } catch(e) { _lumen_console_error('IDB error listener: ' + e); }
-        }
-        if (req.transaction && !ev._prevented) {
+        var ev = _idb_make_event('error', req);
+        _idb_dispatch_active(req.transaction, function() {
+            _idb_dispatch(req, ev, _idb_request_path(req));
+        });
+        // The error's default action — abort the owning transaction — is
+        // decided only after the whole path has run, so a preventDefault at
+        // any of its nodes suppresses the abort (§3.5.6).
+        if (req.transaction && !ev.defaultPrevented) {
             req.transaction.error = req.error;
             req.transaction._aborted = true;
         }
     } else {
-        var ev2 = _idb_make_event('success', req);
-        if (typeof req.onsuccess === 'function') {
-            try { req.onsuccess(ev2); } catch(e) { _lumen_console_error('IDB onsuccess: ' + e); }
-        }
-        for (var j = 0; j < req._successListeners.length; j++) {
-            try { req._successListeners[j](ev2); } catch(e) { _lumen_console_error('IDB success listener: ' + e); }
-        }
+        _idb_dispatch_active(req.transaction, function() {
+            _idb_dispatch(req, _idb_make_event('success', req), _idb_request_path(req));
+        });
     }
 }
 
 // --- IDBTransaction (Indexed DB §3.4) ----------------------------------------
 
 function IDBTransaction(db, storeNames, mode, durability) {
+    EventTarget.call(this);
     this.db = db;
     this.mode = mode || 'readonly';
     this.durability = durability || 'default';
@@ -386,11 +434,17 @@ function IDBTransaction(db, storeNames, mode, durability) {
     this.oncomplete = null;
     this.onabort = null;
     this.onerror = null;
-    this._completeListeners = [];
-    this._abortListeners = [];
     this._queue = [];
     this._stores = {};
     this._aborted = false;
+    // Indexed DB §3.1.7 state 'active': true from creation and during the
+    // dispatch of the transaction's events plus the microtasks its handlers
+    // queued; the task following a dispatch finds it inactive
+    // (_idb_deactivate_later). Requests created while inactive are refused
+    // with TransactionInactiveError.
+    this._active = true;
+    // Guards the single pending deactivation task (see _idb_deactivate_later).
+    this._deactPending = false;
     // Indexed DB §3.4 state 'finished': set SYNCHRONOUSLY by abort() and by the
     // commit inside the flush, long before the terminal event is delivered — a
     // finished transaction accepts no objectStore(), no request and no second
@@ -405,6 +459,8 @@ function IDBTransaction(db, storeNames, mode, durability) {
     this._isUpgrade = false;
     this._snapshot = null;
 }
+IDBTransaction.prototype = Object.create(EventTarget.prototype);
+IDBTransaction.prototype.constructor = IDBTransaction;
 Object.defineProperty(IDBTransaction.prototype, 'objectStoreNames', {
     get: function() { return _idb_string_list(this._storeNames); }
 });
@@ -429,28 +485,14 @@ IDBTransaction.prototype.commit = function() {
     this._committing = true;
     _idb_schedule_txn(this);
 };
-IDBTransaction.prototype.addEventListener = function(type, fn) {
-    if (typeof fn !== 'function') return;
-    if (type === 'complete') this._completeListeners.push(fn);
-    else if (type === 'abort') this._abortListeners.push(fn);
-};
-IDBTransaction.prototype.removeEventListener = function(type, fn) {
-    var arr = type === 'complete' ? this._completeListeners : (type === 'abort' ? this._abortListeners : null);
-    if (!arr) return;
-    var i = arr.indexOf(fn);
-    if (i >= 0) arr.splice(i, 1);
-};
 
+// `abort` bubbles to the connection (BUG-914); `complete` stops at the
+// transaction (Indexed DB §3.4).
 function _idb_fire_txn(txn, type) {
-    var ev = _idb_make_event(type, txn);
-    var handler = type === 'complete' ? txn.oncomplete : txn.onabort;
-    if (typeof handler === 'function') {
-        try { handler(ev); } catch(e) { _lumen_console_error('IDB txn ' + type + ': ' + e); }
-    }
-    var arr = type === 'complete' ? txn._completeListeners : txn._abortListeners;
-    for (var i = 0; i < arr.length; i++) {
-        try { arr[i](ev); } catch(e) { _lumen_console_error('IDB txn listener: ' + e); }
-    }
+    _idb_dispatch_active(txn, function() {
+        _idb_dispatch(txn, _idb_make_event(type, txn),
+            type === 'abort' ? [txn, txn.db] : [txn]);
+    });
 }
 
 function _idb_schedule_txn(txn) {
@@ -465,7 +507,7 @@ function _idb_schedule_flush() {
     // _lumen_idb_flush() hands whatever is left to a task itself.
     if (_idb_flush_scheduled || _idb_flushing) return;
     _idb_flush_scheduled = true;
-    queueMicrotask(_lumen_idb_flush);
+    queueMicrotask(_idb_flush_step);
 }
 
 // True when this runtime owns the page's event-loop timer queue, i.e. when a
@@ -477,6 +519,42 @@ function _idb_has_task_queue() {
     return typeof _lumen_timers !== 'undefined'
         && typeof _lumen_request_wakeup === 'function'
         && typeof _lumen_now_ms === 'function';
+}
+
+// False in the production step chain (_idb_flush_step), true while the full
+// synchronous drain _lumen_idb_flush() runs — there the open/delete
+// settlement stays inline, the way every unit test reads its results.
+var _idb_sync_flush = false;
+
+// Takes the transaction's «active» flag away once control returns to the event
+// loop (§3.1.7): the deactivation is its own TASK, unshifted to the HEAD of
+// _lumen_timers so it runs in front of timers the handler created — a
+// setTimeout(fn, 0) from a success handler lands on an inactive transaction,
+// while the handler's promise reactions (microtasks, which run before any
+// task) still see it active. One pending deactivation per transaction: the
+// next dispatch re-arms the flag and the still-pending task turns it off.
+// Scopes without a task queue (service worker) fall back to a microtask.
+function _idb_deactivate_later(txn) {
+    if (txn._deactPending) return;
+    txn._deactPending = true;
+    var off = function() { txn._deactPending = false; txn._active = false; };
+    if (!_idb_has_task_queue()) { queueMicrotask(off); return; }
+    var deadline = _lumen_now_ms();
+    _lumen_timers.unshift({ id: _lumen_timer_seq++, fn: off, deadline: deadline, interval: null, nesting: 0 });
+    _lumen_request_wakeup(deadline);
+}
+
+// Wraps one event dispatch with the transaction's active flag: handlers see it
+// active and may enqueue requests. After the dispatch the flag survives the
+// handler's promise reactions — microtasks run before any task, and the
+// deactivation is a task (_idb_deactivate_later) — in the step chain and in
+// the synchronous drain alike: a drain that continues in a later task must not
+// find the reactions of a handler it ran there facing a dead transaction.
+function _idb_dispatch_active(txn, dispatch) {
+    if (!txn) return dispatch();
+    txn._active = true;
+    try { return dispatch(); }
+    finally { _idb_deactivate_later(txn); }
 }
 
 // Schedules the next IndexedDB turn as an event-loop TASK. The entry goes
@@ -509,6 +587,14 @@ function _idb_flush_txn(txn, budget) {
         _idb_schedule_txn(txn);
         return 0;
     }
+    _idb_settle_txn(txn);
+    return budget;
+}
+
+// Common tail of both flush modes: the transaction accepts no more requests.
+// Revert on abort (the abort event bubbles to the connection, BUG-914) or
+// commit (complete stops at the transaction, §3.4).
+function _idb_settle_txn(txn) {
     txn._finished = true;
     txn._settled = true;
     if (txn._aborted) {
@@ -520,7 +606,23 @@ function _idb_flush_txn(txn, budget) {
         if (txn.mode !== 'readonly') { _idb_dirty = true; _idb_mark_db_dirty(txn.db.name); }
         _idb_fire_txn(txn, 'complete');
     }
-    return budget;
+}
+
+// The stepwise twin of _idb_flush_txn: ONE request dispatch, or the settlement
+// when the queue is empty. After the dispatch the transaction goes back to the
+// FRONT of _idb_active_txns — ahead of transactions its handler created, so
+// transaction-lifetime-empty still commits tx1 before tx2 — and a transaction
+// whose handler queued nothing settles only on the NEXT step: the step runs as
+// a microtask, so the promise reactions the handler queued (§3.1.7 keeps the
+// transaction active across them) get their requests in first.
+function _idb_flush_txn_step(txn) {
+    if (txn._settled) return;
+    if (txn._queue.length > 0 && !txn._aborted) {
+        _idb_dispatch_request(txn._queue.shift());
+        _idb_active_txns.unshift(txn);
+        return;
+    }
+    _idb_settle_txn(txn);
 }
 
 // Copies the mutable half of an object store so an abort can put it back
@@ -622,13 +724,9 @@ function _idb_abort_txn_requests(txn) {
         req.result = undefined;
         req.error = _idb_error('AbortError', 'transaction was aborted');
         req.readyState = 'done';
-        var ev = _idb_make_event('error', req, { bubbles: true });
-        if (typeof req.onerror === 'function') {
-            try { req.onerror(ev); } catch(e) { _lumen_console_error('IDB onerror: ' + e); }
-        }
-        for (var j = 0; j < req._errorListeners.length; j++) {
-            try { req._errorListeners[j](ev); } catch(e) { _lumen_console_error('IDB error listener: ' + e); }
-        }
+        // At the request only: the transaction is already aborting, and this
+        // event must not ride up the path to re-abort or re-report it.
+        _idb_dispatch(req, _idb_make_event('error', req), [req]);
     }
 }
 
@@ -636,7 +734,7 @@ function _idb_abort_txn_requests(txn) {
 // transaction's request order. Synchronous validation (key range, mode) must be
 // done by the caller before calling this, so it can throw to the caller.
 function _idb_make_request(source, txn, fn) {
-    if (txn._finished || txn._committing) throw _idb_error('TransactionInactiveError', 'transaction is not active');
+    if (txn._finished || txn._committing || !txn._active) throw _idb_error('TransactionInactiveError', 'transaction is not active');
     // Cheapest correct place for the undo snapshot: every data mutation
     // (add/put/delete/clear, cursor update/delete) is a request, and it is
     // taken once per transaction. A readonly one is skipped inside.
@@ -651,6 +749,7 @@ function _idb_make_request(source, txn, fn) {
 // --- IDBDatabase (Indexed DB §3.3) -------------------------------------------
 
 function IDBDatabase(data) {
+    EventTarget.call(this);
     this._data = data;
     this.name = data.name;
     this.version = data.version;
@@ -665,34 +764,12 @@ function IDBDatabase(data) {
     this.onabort = null;
     this.onerror = null;
     this.onclose = null;
-    // Only `versionchange` has a dispatch site today; the other three types are
-    // accepted so a page can register for them without a TypeError.
-    this._dbListeners = { versionchange: [], abort: [], error: [], close: [] };
 }
-IDBDatabase.prototype.addEventListener = function(type, fn) {
-    if (typeof fn !== 'function') return;
-    var arr = this._dbListeners[type];
-    if (arr) arr.push(fn);
-};
-IDBDatabase.prototype.removeEventListener = function(type, fn) {
-    var arr = this._dbListeners[type];
-    if (!arr) return;
-    var i = arr.indexOf(fn);
-    if (i >= 0) arr.splice(i, 1);
-};
+IDBDatabase.prototype = Object.create(EventTarget.prototype);
+IDBDatabase.prototype.constructor = IDBDatabase;
 
-// Fires an event at a connection, on<type> first and then the listener list —
-// the same order every other dispatch in this shim uses.
 function _idb_fire_db_event(db, type, extra) {
-    var ev = _idb_make_event(type, db, extra);
-    var handler = db['on' + type];
-    if (typeof handler === 'function') {
-        try { handler(ev); } catch(e) { _lumen_console_error('IDB db on' + type + ': ' + e); }
-    }
-    var arr = db._dbListeners[type] || [];
-    for (var i = 0; i < arr.length; i++) {
-        try { arr[i](ev); } catch(e) { _lumen_console_error('IDB db ' + type + ' listener: ' + e); }
-    }
+    _idb_dispatch(db, _idb_make_event(type, db, extra), [db]);
 }
 
 // A connection blocks an upgrade until close() has been called AND every
@@ -1302,7 +1379,7 @@ IDBCursor.prototype.delete = function() {
 };
 
 function _idb_open_cursor(source, txn, store, buildList, withValue, direction) {
-    if (txn._finished || txn._committing) throw _idb_error('TransactionInactiveError', 'transaction is not active');
+    if (txn._finished || txn._committing || !txn._active) throw _idb_error('TransactionInactiveError', 'transaction is not active');
     var req = new IDBRequest(source, txn);
     var cursor = new IDBCursor(req, source, txn, store, withValue, direction);
     req._action = function() {
@@ -1362,6 +1439,15 @@ function _idb_process_open(entry, budget) {
             // Re-read: a versionchange handler is allowed to close() inline, and
             // then this request is not blocked at all.
             if (_idb_live_connections(name, null).length > 0) {
+                if (!_idb_sync_flush && !entry._blockedTurn) {
+                    // `blocked` waits one step: the reactions a versionchange
+                    // handler queued (a test's `await wait_for('versionchange')`
+                    // continuation, which arms its own watcher for `blocked`)
+                    // run in microtasks before the event fires (§3.3.1).
+                    entry._blockedTurn = true;
+                    _idb_pending_opens.unshift(entry);
+                    return budget;
+                }
                 if (!entry._blockedFired) {
                     entry._blockedFired = true;
                     _idb_fire_blocked(req, entry.oldVersion, entry.newVersion);
@@ -1406,19 +1492,32 @@ function _idb_process_open(entry, budget) {
             db.version = entry.newVersion;
             req.transaction = txn;
             req.readyState = 'done';
-            var ev = _idb_make_event('upgradeneeded', req, { oldVersion: entry.oldVersion, newVersion: entry.newVersion });
-            if (typeof req.onupgradeneeded === 'function') {
-                try { req.onupgradeneeded(ev); } catch(e) { _lumen_console_error('IDB onupgradeneeded: ' + e); }
+            // The upgrade transaction is the request's parent for this event
+            // (Indexed DB §3.5.6), so capture listeners on it and on the
+            // connection see `upgradeneeded` before onupgradeneeded runs.
+            _idb_dispatch_active(txn, function() {
+                _idb_dispatch(req,
+                    _idb_make_event('upgradeneeded', req, { oldVersion: entry.oldVersion, newVersion: entry.newVersion }),
+                    [req, txn, db]);
+            });
+        }
+        if (!entry._settle) {
+            while (txn._queue.length > 0 && !txn._aborted && budget > 0) {
+                budget--;
+                _idb_dispatch_request(txn._queue.shift());
             }
-            for (var i = 0; i < req._upgradeListeners.length; i++) {
-                try { req._upgradeListeners[i](ev); } catch(e) { _lumen_console_error('IDB upgrade listener: ' + e); }
+            if (!txn._aborted && txn._queue.length > 0) { _idb_pending_opens.unshift(entry); return 0; }
+            if (!_idb_sync_flush) {
+                // The commit waits for the NEXT step (§3.1.7: the transaction
+                // commits when control returns to the event loop): the reactions
+                // the upgradeneeded handler queued — a test's
+                // `await wait_for('upgradeneeded')` continuation, which may still
+                // create stores — run in microtasks before that step.
+                entry._settle = true;
+                _idb_pending_opens.unshift(entry);
+                return budget;
             }
         }
-        while (txn._queue.length > 0 && !txn._aborted && budget > 0) {
-            budget--;
-            _idb_dispatch_request(txn._queue.shift());
-        }
-        if (!txn._aborted && txn._queue.length > 0) { _idb_pending_opens.unshift(entry); return 0; }
         txn._finished = true;
         // The version change transaction settles here instead of in
         // _idb_flush_txn; abort() has put it into _idb_active_txns too, so
@@ -1450,12 +1549,7 @@ function _idb_process_open(entry, budget) {
     var ev2 = entry._delete
         ? _idb_make_event('success', req, { oldVersion: entry.oldVersion, newVersion: null })
         : _idb_make_event('success', req);
-    if (typeof req.onsuccess === 'function') {
-        try { req.onsuccess(ev2); } catch(e) { _lumen_console_error('IDB open onsuccess: ' + e); }
-    }
-    for (var j = 0; j < req._successListeners.length; j++) {
-        try { req._successListeners[j](ev2); } catch(e) { _lumen_console_error('IDB open success listener: ' + e); }
-    }
+    _idb_dispatch(req, ev2, _idb_request_path(req));
     return budget;
 }
 
@@ -1463,10 +1557,16 @@ function _idb_process_open(entry, budget) {
 // per call; whatever is left over continues in the next event-loop turn.
 // Idempotent: handlers may enqueue further requests (cursor.continue) or
 // transactions, and a nested call while a flush is running is a no-op.
+//
+// This is the FULL SYNCHRONOUS drain: the production scheduler queues the
+// stepwise _idb_flush_step instead. The unit tests read their results straight
+// out of this call, so here the transaction's active flag drops right after
+// each dispatch instead of surviving the handler's microtasks.
 function _lumen_idb_flush() {
     _idb_flush_scheduled = false;
     if (_idb_flushing) return;
     _idb_flushing = true;
+    _idb_sync_flush = true;
     // With no task queue to yield to there is nothing to gain from stopping
     // early, so the drain keeps its original backstop instead of a budget.
     var budget = _idb_has_task_queue() ? _IDB_FLUSH_BUDGET : 1000000;
@@ -1497,8 +1597,59 @@ function _lumen_idb_flush() {
         _idb_persist_if_dirty();
     } finally {
         _idb_flushing = false;
+        _idb_sync_flush = false;
     }
     if (_idb_pending_opens.length > 0 || _idb_active_txns.length > 0) _idb_defer_flush();
+}
+
+// Units left in the current production chain; refilled when a chain starts,
+// spent one per step. When they run out, the chain parks on a task
+// (_idb_defer_flush) — the starvation guard of the old single-microtask flush.
+var _idb_step_budget = 0;
+
+// One unit of the production flush: an open/delete turn, one request dispatch,
+// or one transaction settlement. The next unit continues as a MICROTASK, so
+// the promise reactions a handler queued run before the next dispatch — the
+// transaction stays active across them (§3.1.7) — and a transaction with no
+// further requests settles only on the step after its last dispatch. When the
+// budget runs out the rest moves to a task, as _lumen_idb_flush always did.
+function _idb_flush_step() {
+    _idb_flush_scheduled = false;
+    if (_idb_flushing) return;
+    _idb_flushing = true;
+    try {
+        if (_idb_step_budget <= 0) {
+            _idb_step_budget = _idb_has_task_queue() ? _IDB_FLUSH_BUDGET : 1000000;
+        }
+        // A transaction settled by the previous step may release a parked open.
+        var parked = Object.keys(_idb_parked_names);
+        for (var p = 0; p < parked.length; p++) _idb_unpark(parked[p]);
+        if (_idb_pending_opens.length > 0) {
+            var entry = _idb_pending_opens.shift();
+            // A request whose name is already blocked may not overtake the
+            // one that is waiting there, whatever it needs (§3.3.1).
+            if (_idb_parked_names[entry.name]) { _idb_parked_opens.push(entry); }
+            else _idb_process_open(entry, 1);
+            _idb_step_budget--;
+        } else if (_idb_active_txns.length > 0) {
+            _idb_flush_txn_step(_idb_active_txns.shift());
+            _idb_step_budget--;
+        }
+    } finally {
+        _idb_flushing = false;
+    }
+    if (_idb_pending_opens.length > 0 || _idb_active_txns.length > 0) {
+        if (_idb_step_budget > 0) {
+            _idb_flush_scheduled = true;
+            queueMicrotask(_idb_flush_step);
+        } else {
+            // The chain parks on a task: persist what has settled so far.
+            _idb_persist_if_dirty();
+            _idb_defer_flush();
+        }
+    } else {
+        _idb_persist_if_dirty();
+    }
 }
 
 var indexedDB = {

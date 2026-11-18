@@ -138,7 +138,7 @@ in the expected order»).
 **Остаток, вынесен отдельно:** `abort()` не откатывает уже применённые записи
 ([BUG-913](BUG-913-FIXED.md)), а события
 `error`/`abort` не всплывают с запроса на транзакцию и на соединение
-(`db.onabort`/`db.onerror` не вызываются — [BUG-914](BUG-914-OPEN.md)).
+(`db.onabort`/`db.onerror` не вызываются — [BUG-914](BUG-914-FIXED.md)).
 
 ## Проверка на WPT (2026-08-25, dev-release, `run_smoke.py`, три id из «Масштаба»)
 
@@ -146,7 +146,7 @@ in the expected order»).
 |---|---|---|
 | `transaction-lifetime-empty.any.html` | TIMEOUT | **Test OK, 2/2 подтеста, 0 unexpected** |
 | `idbtransaction-objectStore-exception-order.any.html` | TIMEOUT | Test OK (харнесс доходит до конца), 0/1 — порядок `InvalidStateError` перед `NotFoundError` уже правильный, подтест валится только на форме исключения ([BUG-915](BUG-915-FIXED.md)) |
-| `idbobjectstore_createIndex.any.html` | TIMEOUT | TIMEOUT, 8/21 подтестов; остаток — [BUG-914](BUG-914-OPEN.md) (`t.done()` висит на `db.onabort`) и BUG-915 |
+| `idbobjectstore_createIndex.any.html` | TIMEOUT | TIMEOUT, 8/21 подтестов; остаток — [BUG-914](BUG-914-FIXED.md) (`t.done()` висит на `db.onabort`) и BUG-915 |
 
 Прогон нашёл ещё два дефекта, к этому багу не относящихся и заведённых
 отдельно: BUG-915 (весь шим бросает `Error`, а не `DOMException`, так что
