@@ -399,6 +399,7 @@ impl V8JsRuntime {
                 custom_properties: Arc::clone(&custom_properties),
                 viewport_size: Arc::clone(&viewport_size),
                 stylesheet: Arc::clone(&self.flush_stylesheet),
+                web_fonts: Arc::clone(&self.web_fonts),
                 flush_stale: Arc::clone(&flush_stale),
                 never_flushed: Arc::clone(&self.style_never_flushed),
                 scroll_states: Arc::clone(&scroll_states),

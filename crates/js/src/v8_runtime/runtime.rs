@@ -239,6 +239,10 @@ pub struct V8JsRuntime {
     /// until the first push — natives then behave exactly as before this
     /// field existed.
     pub(super) flush_stylesheet: Arc<Mutex<Option<Arc<lumen_css_parser::Stylesheet>>>>,
+    /// BUG-1306: page's loaded `@font-face` web fonts, pushed by the shell so
+    /// the same-tick flush measures with the real faces. Mirrors
+    /// [`Self::flush_stylesheet`]'s shape; empty until the shell pushes a font.
+    pub(super) web_fonts: Arc<Mutex<Vec<lumen_paint::WebFontFace>>>,
     /// CSSOM-4/BUG-493: `true` until the first synchronous flush succeeds.
     /// Lets the very first style/geometry read of a page force one even
     /// though [`Self::dom_dirty`] — set only by a JS mutation — is still
@@ -564,6 +568,7 @@ impl V8JsRuntime {
             pseudo_rects_collected: Arc::new(AtomicBool::new(false)),
             hit_tree_stale: Arc::new(AtomicBool::new(false)),
             flush_stylesheet: Arc::new(Mutex::new(None)),
+            web_fonts: Arc::new(Mutex::new(Vec::new())),
             style_never_flushed: Arc::new(AtomicBool::new(true)),
             cssom_deltas: Arc::new(Mutex::new(Vec::new())),
             cssom_dirty: Arc::new(AtomicBool::new(false)),
@@ -1222,6 +1227,15 @@ impl V8JsRuntime {
             .flush_stylesheet
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = Some(sheet);
+    }
+
+    /// BUG-1306: push the page's loaded `@font-face` web fonts so the same-tick
+    /// flush measures with them. Called when a font finishes loading — the
+    /// replacement is a cheap `Vec` write, and it marks the flush stale so the
+    /// next geometry/computed-style read recomputes with the fresh faces.
+    pub fn update_web_fonts(&self, fonts: Vec<lumen_paint::WebFontFace>) {
+        *self.web_fonts.lock().unwrap_or_else(|e| e.into_inner()) = fonts;
+        self.flush_stale.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Drain lazy image load requests queued by JS.
