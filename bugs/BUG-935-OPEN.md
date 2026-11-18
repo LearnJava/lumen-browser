@@ -1,6 +1,6 @@
 # BUG-935 — M4 incremental restyle for the rAF-dirty pump is dead code under the default (engine-thread-on) build; a page with an active rAF+DOM-mutation loop pays a full off-thread cascade recompute on every tick
 
-**Статус:** OPEN (DEBTOR) — остаток — [PERF-WIDE-ROAD](../docs/tasks/PERF-WIDE-ROAD.md) (P6)
+**Статус:** WONTFIX (Phase 3+) — закрыт 2026-11-18 задачей [PERF-WIDE-ROAD](../docs/tasks/PERF-WIDE-ROAD.md) S1 (P6): живая перепись github/cnn не нашла доминанты ≥ 40 % в границах двух кандидатов ADR-036, см. §PERF-WIDE-ROAD S1 в конце
 **Компонент:** shell (`crates/shell/src/relayout.rs` — `relayout_raf_dirty`, `relayout_raf_dirty_readback`, `submit_relayout_job`, `try_relayout_raf_incremental`)
 **Найден:** 2026-09-01 (P3), при ревизии BUG-286 (DEBTOR, `content-visibility:auto` scroll stopor) — свежий живой замер на ria.ru показал не одну паузу ~580мс, а 33 полных off-thread relayout'а (по 850–2600мс каждый) за ~15–20с сессии, все при неизменном `dl=1690 styled=1744` (без роста DOM)
 **Выделено 2026-10-06 (решение пользователя):** остаток по потокам — `apply_relayout_result` на UI, рестайл M4 на UI-потоке (S85), блокирующие `route_query_js`, `build: chrome`, копия display list на кадр, прокрутка колесом вне рендер-потока, тайловый растр — заведён задачами [THREAD-5…THREAD-12](../ROADMAP.md) в очереди P6 (`STATUS-P6.md`). Срезы BUG-935 их не берут; здесь остаётся каскад и флаши.
@@ -5360,3 +5360,29 @@ ok; `dump_golden.py` (dev-release): 12/12; clippy `-p lumen-layout --all-targets
 **Почему баг не закрыт.** Узкая рука S1 на github инертна: `invalidated_rules` отдаёт `None` при авторском shadow root (`crates/engine/layout/src/style/restyle.rs:1846`), а github — Primer с теневыми компонентами. Готовность держат каскад (`CustomFlow` клонирует `ComputedStyle` на каждого потомка) и глубокие корни `:has()`-reach/стража тени — gated-классы, откатанные дважды (BUG-1800 срезы 12/13/16).
 
 **Граница.** Дальше — только новым решением пользователя и новым классом: сканирование листов теневых деревьев в индекс инвалидации (тогда лицензия выдаётся и на github/cnn) либо отдельный класс на клонирование стиля в каскаде. Новые срезы здесь не начинать.
+
+## PERF-WIDE-ROAD S1 (P6, 2026-11-18) — закрытие: перепись названных кандидатов числом, доминанты ≥ 40 % нет — WONTFIX (Phase 3+)
+
+Задача-владелец остатка [PERF-WIDE-ROAD](../docs/tasks/PERF-WIDE-ROAD.md) выполнила свой S1
+(перепись на текущем `main` `b7bb6eabf`: github ×4 живых прогона compat_crawl,
+cnn trace-nav/dump-layout с сэмплером; метод и таблицы — [journal](../docs/perf/journal.md)
+§2026-11-18, [BUG-1800](BUG-1800-OPEN.md) §Срез 18):
+
+- **кандидат «класс для клона `ComputedStyle`» мёртв числом**: `cs_init`
+  (`ComputedStyle::inheriting`) — 0,5–1,2 % флаша на обоих сайтах; сам `CustomFlow` на
+  shadow-страницах не запускается вовсе (`inherited = 0` за все прогоны, стража
+  `custom_flow.rs:171`) — атрибуция «CustomFlow клонирует на каждого потомка» из
+  §PERF-INVALIDATION S3 существовала только на стенде s101, без shadow-листов;
+- **кандидат «shadow-листы в индексацию» адресует 15,6 % (cnn) / 25–31 % (github)**
+  стоимости флаша — даже обнуление оставляет ≥ 60 %;
+- крупнейшие статьи вне кандидатов: cnn — проба `::before`/`::after` каждого элемента
+  (`quote_pseudos`) 37,8 % (DETAIL-завышение), github — коллектор `flush.custom_props`
+  20–31 % (scoped-лицензия требует пустого `cq_boxless`, а github использует `@container`);
+- общий усилитель — объём форсированных пересчётов (`forced_same` 95,6–99,4 %, корни
+  документа) — класс с двумя откатами и границей [ADR-036](../docs/decisions/ADR-036-incremental-restyle-invalidation.md)
+  §Alternatives.
+
+Ворота S1 «доминанта ≥ 40 %» не взяты → по брифу S2/S3 не начинаются, статус бага
+переведён в `WONTFIX (Phase 3+)` этим же коммитом. Срезы 1–107 + PERF-INVALIDATION S1–S3
+сняли стоимость списка правил, коллекторов и переноса поддеревьев; шторм shadow-DOM и
+глубоких корней остаётся границей контракта до решения Phase 3+.

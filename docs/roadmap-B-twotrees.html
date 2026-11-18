@@ -75,12 +75,12 @@
 {
  "generated": "2026-11-18",
  "counts": {
-  "open": 310,
-  "fixed": 1444,
+  "open": 301,
+  "fixed": 1453,
   "inprogress": 0,
-  "wontfix": 4
+  "wontfix": 7
  },
- "total_bugs": 1758,
+ "total_bugs": 1761,
  "phases": [
   {
    "id": "P0",
@@ -1173,9 +1173,9 @@
     {
      "id": "CSSANIM-MODEL-2",
      "title": "CSSANIM-MODEL-2: остаток модели CSS-анимаций",
-     "status": "planned",
+     "status": "done",
      "size": "L",
-     "note": "Остаток CSSANIM-MODEL (срез 1 — объекты, часы, порядок, pending/ready, см. строку CSSANIM-MODEL). (1) **Стиль «до изменения» для непрочитанных свойств:** переход заводится только для свойства, которое страница читала до изменения (`_wa_motion_by_nid`); `left`/`top`/`opacity`/`border-*-width`, выставленные inline и затем изменённые, перехода не дают — нужен снимок всего вычисленного стиля элемента при первом наблюдении (`_lumen_get_computed_style_entries`) и сравнение при следующем (около 15 подтестов: `css-transitions/Element-getAnimations`, `Document-getAnimations`, `CSSTransition-startTime` «based on when they are generated», reversing-тесты `CSSTransition-currentTime`/`-effect`, «free animation vs CSS Transitions»). (2) **Замена эффекта:** `animation.effect = new KeyframeEffect(...)` / `= null` (`CSSAnimation-effect`, `CSSTransition-effect`) — пока лишь отключает наложение; нужно рисовать чужой эффект по часам CSS-анимации (`_applyAtP` базового класса), событие `animationend` при `effect = null`, `animation-composition` → `effect.composite` (`lists['composition']` пуст — вычисленного свойства нет в снимке). (3) **События от скриптовой перемотки:** `animationstart`/`animationend`/`transitionstart`/`transitionend` после `startTime`/`currentTime = …` (`CSSAnimation-startTime`, `CSSTransition-currentTime`, `-startTime` — TIMEOUT) — планировщик Rust о перемотке не знает; JS должен сам рассылать события по своим часам и гасить события планировщика. (4) **Нарисованный кадр:** `cancel()`/перемотка двигают только вычисленное значение; нативные `opacity`/`transform`/цвета/`height` ведёт кадровый цикл (`AnimationScheduler`/`TransitionScheduler`), `getComputedStyle().transform` после `cancel()` остаётся анимированным (`CSSAnimation-canceling`, `CSSTransition-canceling`) — нужна команда JS → планировщик (отмена, смещение часов). (5) `display: none` у предка: `getComputedStyle(child).marginLeft` отдаёт `''` вместо `0px` (`CSSAnimation-canceling` «ancestor»); `::marker` и `::before`/`::after` у переходов (`Element-getAnimations` transitions, pseudo-тесты); анимации на `::before`/`::after` без `content` не получают вычисленного стиля от слоя. Критерий готовности: `CSSAnimation-effect.tentative.html`, `CSSTransition-startTime.tentative.html`, `css-transitions/Element-getAnimations.tentative.html` зелёные.",
+     "note": "**Сделано (2026-11-18, ветка `p1-cssanim-model-2-s6`), срез S6 — переход гаснет вместе с боксом:** остаток п. 5 оказался не тем, что обещал бриф: подтест «ancestor» в `CSSAnimation-canceling.tentative.html` уже был зелёным (9/9 с S4), а красными были два подтеста `display: none` в `css-transitions/CSSTransition-canceling.tentative.html` — `transition.playState` оставался `running` (не `getComputedStyle`, а сам объект). Причина: при исчезновении бокса установившееся значение не меняется, поэтому ветка «значение изменилось» в `_wa_gap_tr_value` не срабатывала и живая запись перехода оставалась. Теперь живая запись сверяется с `_css_boxless(nid)` (эта функция уже стояла рядом — запрет перехода через границу бокса): элемент без бокса не гонит анимацию (CSS Animations L1 §3), запись снимается через `_css_tr_cancel` (с `transitioncancel`). Замер: `CSSTransition-canceling.tentative.html` 9/11 → 11/11, `.ini` удалён; `CSSAnimation-canceling.tentative.html` 9/9 без изменений; юнит-тест `a_transition_is_cancelled_when_the_element_stops_generating_a_box`; `dump_golden.py` 12/12 (пиксели не двигаются — правится только вычисленное значение). Остаток модели (псевдоэлементы) — CSSANIM-MODEL-3. **Сделано (2026-11-18, ветка `p1-cssanim-model-2-s5`), срез S5 — нарисованный кадр перехода:** команды скрипта дошли и до `TransitionScheduler`: `CssMotionCmd::{TransitionCancel,TransitionSeek}` (ключ — `(nid, kebab-свойство)`) кладёт натив `_lumen_css_motion_cmd` по видам `tcancel`/`tseek`, оболочка (`on_redraw_requested`) разводит очередь по двум планировщикам до тика; `TransitionScheduler::cancel` снимает запись `(node, property)`, `seek` ставит `start_time = now - current_time`. Шим шлёт команды только от перехода, сделанного по `transitionrun` (`_ev`), — свои переходы наложение рисует и отменяет в JS само; `cancel()` оседает снимок вычисленного стиля по одному свойству (`settle_animated_property`). Остаток — `play()` после `cancel()` у нативного перехода двигает только вычисленное значение (`shortcut:` в `cancel`). Замер `CSSTransition-canceling.tentative.html`: 9/11, как до среза (все `cancel()`/`play()`/`currentTime` зелёные), два красных — `display:none` (S6), `.ini` ужат до 2; графтесты `--ipc` без смены статусов (A/B на `d6215c85c`). **Сделано (2026-11-18, ветка `p1-cssanim-model-2-s4`), срез S4 — нарисованный кадр:** команды скрипта дошли до кадрового цикла: `_lumen_css_motion_cmd(kind, nid, name, ms)` (`install_css_motion`) кладёт `CssMotionCmd::{Cancel,Restore,Seek}` в очередь рантайма, оболочка (`on_redraw_requested`) забирает её `take_css_motion_cmds` перед тиком и зовёт `AnimationScheduler::apply_cmd`; `Cancel` молча снимает экземпляр и заносит `(node, name)` в `suppressed` (кадр не рисуется, событий нет — `animationcancel` шлёт сам `_css_cancel`), подавление живёт до `Restore` или до исчезновения имени из стиля (`seen`), `Seek` выставляет `start_ms` по текущему времени скрипта — часы оболочки (`epoch.elapsed()`) и скрипта (`performance.now()`) с разными началами, поэтому через границу идёт расстояние от «сейчас», а не абсолютное время. `cancel()` дополнительно возвращает вычисленному стилю осевшее значение прямо в нативе: `patch_animated_computed_styles` сохраняет вытесненное значение под `settled_animated_key`, `settle_animated_style` (`selector_query.rs`) кладёт его назад (важно для used-`height`, который кадр переписывает на месте) и снимает маркер; WPT читает `transform` в той же задаче. JS: `_css_cancel` → `cancel`, `_css_revive` → `restore`, записи `startTime`/`currentTime`, `finish()` и `play()` → `seek`. Замер `CSSAnimation-canceling.tentative.html`: 8/9 → 9/9 (падал подтест «Animated style is cleared after canceling a running CSS animation»), `.ini` файла удалён; 12 соседних файлов (`CSSAnimation-*`, `Element-/Document-getAnimations`, `KeyframeEffect-getKeyframes`, `CSSTransition-canceling/-startTime`) без регрессий; `graphic_tests` — 0 смен статуса на 147 IPC-тестах (gdigrab-калибровка TEST-00 в этой среде не находится, прогон `--ipc`). **Сделано (2026-11-18, ветка `p1-cssanim-model-2-s2`), срез S2 — замена эффекта, composite:** заменённый эффект читается через наложение (`_wa_replaced_effect_value` в `_wa_gap_an_value`: кадр нового эффекта по `_wa_iter_progress` и часам анимации), в inline-стиль не пишется, `@keyframes` совпавшего имени не применяются; `effect = null` — фаза `after` (`finished` + `animationend`); первый кадр play-pending двигает фазу, поэтому замена эффекта у неигранной анимации шлёт `animationstart` на исходном элементе; `finish()` из `before` шлёт оба события; `animation-timeline` доехал до вычисленного стиля (`AnimationTimeline::None`, `to_css()`, запись в карту, пропуск анимации в планировщике), `CSSAnimation.timeline` — аксессор со сбросом стиля. Нарисованный кадр Rust-планировщика гасит срез S4. Замер `CSSAnimation-effect.tentative.html`: 4/8 → 8/8. **Сделано (2026-11-18, ветка `p1-cssanim-model-2`), срез S3 — стиль «до изменения» для непрочитанных свойств:** `_wa_motion_seed` (`web_api_shim_tail_b.js`) снимает `_lumen_get_computed_style_entries(nid, false)` при первом `getComputedStyle()` элемента и заводит `_wa_gap_tr`/`_wa_motion_by_nid` на каждое свойство-лонгхенд, поэтому `transition: all` ловит и то, что страница не читала (`div.style.left`, `border-*-width`, `opacity`); значение снимается той же формулой, по которой сверка ищет изменение (used px для width/margin/inset, список `transform`, разрешённый `url()` у `background-image`). Шорткаты и логические алиасы в снимок не попадают (`_wa_motion_seedable`): изменение `border-width` даёт 4 перехода лонгхендов, а не пятый на самом шорткате. Сверка (`_wa_motion_tr_sync`) обходит снимок только когда рантайм опубликовал новую редакцию стиля (`_lumen_style_epoch` — счётчик настоящих пересчётов в `FlushHandles::maybe_flush`): без него `document.getAnimations()` на странице с переходами стоил 8.4 мс на 4 элемента, с ним — 0.062 мс. Отклонения от брифа (`docs/tasks/CSSANIM-MODEL-2-slices.md` §S3): снимок снимается и когда `transition-*` у элемента ещё нет (`getComputedStyle(div).transitionProperty; div.style.transition = 'all 100s'; div.style.left = '100px'` иначе теряет изменение — это и есть критерий среза), и сверка не перечитывает свойства, пока стиль не пересчитан. Замер `css/css-transitions` + `css/css-animations` (338 id): 176→179 id, 1562→1580 подтестов; `Element-getAnimations` 4/7→7/7, `CSSTransition-startTime` 3/5→4/5, `CSSTransition-effect` 8/10→9/10, `KeyframeEffect-getKeyframes` 0/5→4/5, `Document-getAnimations` (transitions) 2/7→4/7; прочие расхождения — флаки (`CSSAnimation-canceling` 8/9 и на базе, и на ветке в одиночном прогоне) и время. Три файла `properties-value-001/003`, `-inherit-003` (0 PASS и до, и после) уходят из OK в TIMEOUT: их харнесс ждёт `transitionend` по каждому `getAnimations()` — это срез S1. Остаток CSSANIM-MODEL (срез 1 — объекты, часы, порядок, pending/ready, см. строку CSSANIM-MODEL). (2) **Замена эффекта:** `animation.effect = new KeyframeEffect(...)` / `= null` (`CSSAnimation-effect`, `CSSTransition-effect`) — пока лишь отключает наложение; нужно рисовать чужой эффект по часам CSS-анимации (`_applyAtP` базового класса), событие `animationend` при `effect = null`, `animation-composition` → `effect.composite` (`lists['composition']` пуст — вычисленного свойства нет в снимке). (3) **События от скриптовой перемотки:** `animationstart`/`animationend`/`transitionstart`/`transitionend` после `startTime`/`currentTime = …` (`CSSAnimation-startTime`, `CSSTransition-currentTime`, `-startTime` — TIMEOUT) — планировщик Rust о перемотке не знает; JS должен сам рассылать события по своим часам и гасить события планировщика. (4) **Нарисованный кадр:** `cancel()`/перемотка двигают только вычисленное значение; нативные `opacity`/`transform`/цвета/`height` ведёт кадровый цикл (`AnimationScheduler`/`TransitionScheduler`), `getComputedStyle().transform` после `cancel()` остаётся анимированным (`CSSAnimation-canceling`, `CSSTransition-canceling`) — нужна команда JS → планировщик (отмена, смещение часов). (5) `display: none` у предка: `getComputedStyle(child).marginLeft` отдаёт `''` вместо `0px` (`CSSAnimation-canceling` «ancestor»); `::marker` и `::before`/`::after` у переходов (`Element-getAnimations` transitions, pseudo-тесты); анимации на `::before`/`::after` без `content` не получают вычисленного стиля от слоя. Критерий готовности: `CSSAnimation-effect.tentative.html`, `CSSTransition-startTime.tentative.html`, `css-transitions/Element-getAnimations.tentative.html` зелёные.",
      "bugs": [
       "BUG-1581",
       "BUG-1293"
@@ -1252,7 +1252,7 @@
     {
      "id": "SW-MSG",
      "title": "SW-MSG: postMessage страница↔SW, ExtendableMessageEvent, Clients API, waitUntil",
-     "status": "planned",
+     "status": "done",
      "size": "L",
      "note": "Обмен сообщениями страница↔сервис-воркер и Clients API (кластер B разведки WPT-SW-SCOUT, `docs/wpt-vendor-notes/service-workers.md`: 79 id — TIMEOUT 59, OK 20; потолок ≈74.6 балла = 22.5 п.п. `service-workers`, крупнейший кластер категории; почти все тесты SW шлют результат из воркера через `postMessage`). Сейчас `ServiceWorker.postMessage` — no-op (`crates/js/src/shim/web_api_shim_mid_b.js:475`), `clients.get`/`matchAll` — заглушки (`crates/js/src/sw_worker.rs:92-97`), `waitUntil` ничего не ждёт. **Сделать:** (1) `ServiceWorker.postMessage` → задача в изолят SW, событие `message` как `ExtendableMessageEvent` (`data` через structured clone, `source` = `Client`, `origin`, `ports`), `MessagePort` в обе стороны; (2) `client.postMessage` / `MessagePort` из SW → `message` на `navigator.serviceWorker` страницы, очередь до `startMessages()` / присвоения `onmessage` (SW §client message queue); (3) `Clients`: `get`, `matchAll({type, includeUncontrolled})`, `claim` с реальным списком окон и воркеров origin, `Client`/`WindowClient` (`id`, `url`, `type`, `frameType`, `focus`, `navigate`), `clients.openWindow`; (4) `ExtendableEvent.waitUntil` продлевает жизнь события, `install`/`activate` ждут промисы (стык с BUG-1742); (5) конструктор `ExtendableMessageEvent`. **Готово, когда:** `run_corpus.py --prefixes service-workers/service-worker --processes 6` — `postmessage*`, `clients-*`, `client-navigate`, `claim-*`, `ServiceWorkerGlobalScope/extendable-message-event*` без TIMEOUT, прирост ≥ +12 п.п. категории; `scoped-test.sh` по `lumen-js` (`--features v8-backend`) зелёный; `CAPABILITIES.md` обновлён.",
      "bugs": [
@@ -1288,6 +1288,26 @@
      "note": "ЗАКРЫТ 2026-11-06 (ветка `zs1-wasm-v8-native-s3`): мёртвый интерпретатор `crates/js/src/wasm/` удалён (5747 строк), с ним `pub mod wasm` (`lib.rs`) и вызов `clear_registry` (`v8_runtime/thread.rs`); помощники `v8_compat.rs` (`V8NativeFnScoped`) оставлены — живые пользователи вне wasm-моста (document.all, atob/btoa, LONGTASK), поправлен только устаревший комментарий. Нативные тесты взамен: `Memory.grow` и импорт функции хоста (`dom/tests/v8_wasm_native.rs`; вызов экспорта с S1). WPT wasm, полный корпус `--processes 8`: pass-rate 66.89 % (409/612 id), сабтесты 178 657/178 931 — core 99.99 %, jsapi 93.3 %, webapi 95.0 %; `rg \"crate::wasm",
      "bugs": [
       "WASM-V8-NATIVE-S2"
+     ]
+    },
+    {
+     "id": "CSSANIM-MODEL-2-S1",
+     "title": "События от скриптовой перемотки CSS-анимации",
+     "status": "done",
+     "size": "M",
+     "note": "**Сделано (2026-11-18, ветка `p1-cssanim-model-2-s1`):** после записи `startTime`/`currentTime`/`effect`/`finish()` объект помечается `_jsev` (`_css_take_clock` запоминает фазу до записи), а `_css_state` (`crates/js/src/shim/web_api_shim_tail_b.js`) сверяет фазу `_css_phase` (before/active/after — `ct` против delay и delay+duration×iterations) и рассылает `animationstart`/`animationend` либо `transitionstart`/`transitionend` — задачей, как `_fire` (WPT взводит `EventWatcher` уже после записи, синхронный dispatch читается как «Not expecting event»); `elapsedTime` тот же, что у планировщика (0 на старте, вся активная длительность на конце), `transitionend` cancelable. `_lumen_deliver_*_events` (`web_api_shim_mid_b4.js`) отбрасывают start/end таких объектов (cancel/iteration остаются за Rust — JS их не рисует, а bookkeeping `_css_tr_retire`/`_css_tr_event_cancel` работает и без dispatch). Созданная, но ни разу не игранная анимация (`pend0`) считается фазой `before`: перемотка в середину активной фазы — это её старт. `_css_arm` теперь взводит таймер на ближайшую границу фаз (конец задержки, затем конец эффекта) — иначе естественный `animationstart` объекта с `_jsev` терялся бы: планировщик его шлёт, а JS не дублирует. Юнит-тесты `v8_cssanim_model.rs` (анимация и переход: по одному start/end на перемотку, событие планировщика на то же имя отброшено, на чужое — нет).",
+     "bugs": [
+      "CSSANIM-MODEL-2"
+     ]
+    },
+    {
+     "id": "CSSANIM-MODEL-3",
+     "title": "CSSANIM-MODEL-3: псевдоэлементы в модели анимаций",
+     "status": "done",
+     "size": "M",
+     "note": "Остаток модели CSS-анимаций — псевдоэлементы (вне срезов CSSANIM-MODEL-2). **Сделано (2026-11-18, ветка `p1-cssanim-model-3`), срез 1 — `::marker`, порядок и переходы на псевдоэлементах:** разведка замером пяти файлов дала 8 красных подтестов, из них 6 не про псевдоэлементы вовсе (`css-transitions/Document-getAnimations` «sort by transition generation» — `document.getAnimations()` не начинал новый «style change event», теперь инкремент `_css_gen` на вызов). `::marker` вошёл в модель как третий псевдоэлемент (`_wa_pseudo_targets`), в порядке `element, ::marker, ::before, ::after`; `document.getAnimations()` сортирует CSS-анимацию по её *владеющему* элементу/псевдоэлементу (`_wa_order_owner`), а не по `effect.target`, — иначе замена эффекта скриптом переставляла список (WPT «pseudo element with replaced target…»). Переходы на псевдоэлементах: снимок `::marker`/`::before`/`::after` берётся вместе со снимком элемента (`_wa_motion_seed_pseudos`), ключ записи — `nid::before:property` (`_wa_tr_key`), объект `CSSTransition` создаётся с `effect.pseudoElement`, оверлей значения читается и через `getComputedStyle(el, pseudo)`; `_lumen_get_computed_style_pseudo_entries` получил тот же запасной каскад, что и по-свойственный натив (псевдоэлемент с `content: \"\"` без бокса). Побочно исправлен `transition: all` по `currentcolor`: свойство, чьё вычисленное значение равно `color`, больше не заводит переход (у `::marker` с `color: red → green` было 9 переходов, стал 1). Замер: `css-animations/{Element,Document}-getAnimations`, `css-transitions/Element-getAnimations` — все подтесты PASS, `.ini` удалены; `css-animations/Element-getAnimations-dynamic-changes` 1 из 4 красных позеленел (`.ini` ужат), три остатка — про порядок списка при правке `animation-name`, не про псевдоэлементы. **Сделано (2026-11-18, ветка `p1-cssanim-model-3-s2`), срез 2 — документный «style change event»:** переходы Lumen ленивые (снимок при первом `getComputedStyle()` элемента, CSSANIM-MODEL-2-S3), поэтому переход элемента, чей стиль страница не читала, не наблюдался вовсе. Теперь flush перед заменой опубликованных `computed_styles` копирует записи (`StyleMap` — один общий `Arc`) узлов, чей **style** называет переход (`collect_transition_candidates` идёт по `LayoutBox`-дереву и читает только `ComputedStyle::transition_durations`, ни одна запись не сериализуется), а `document.getAnimations()` заводит модель от этих «до»-значений (`_lumen_style_change_candidates`/`_lumen_stale_style_entries` → `_wa_motion_stale_seed`, `_wa_motion_seed(nid, pre)`); цена включается только после первого `document.getAnimations()` страницы. Оба псевдо-подтеста `css-transitions/Document-getAnimations` PASS, `.ini` удалён; `element.getAnimations()` и псевдоэлементы элемента, чей стиль никто не читал, смену по-прежнему не наблюдают — записано в [docs/engine-gaps.md](docs/engine-gaps.md). Бриф — [docs/tasks/CSSANIM-MODEL-3-slices.md](docs/tasks/CSSANIM-MODEL-3-slices.md) §S2.",
+     "bugs": [
+      "BUG-1581"
      ]
     }
    ],
@@ -3308,6 +3328,13 @@
        "status": "done",
        "size": "L",
        "note": "ЗАКРЫТ 2026-11-17: S1+S2 в `main` — кандидатов 6 464 → 18 на флаш (359×), лучший флаш 34 % от HEAD, сумма 300 флашей 59–69 %; живой github под `LUMEN_VERIFY_INCR_CASCADE=1` — 11/11 «equal to a full cascade», но узкая рука там инертна (авторский shadow root), поэтому `BUG-935` остаётся DEBTOR с явной границей — [ADR-036](docs/decisions/ADR-036-incremental-restyle-invalidation.md). Архитектурная задача вместо микро-срезов BUG-935 (101 срез): инвалидационные наборы правил (флаш ebay — 610 тыс. кандидатов и 1,34 млн match-вызовов, проход github — 3,77 млн) плюс перенос грязных поддеревьев через REUSED_SUBTREE (хвост среза 101). Ворота — локальные стенды bug935_cascade_bench и v8_bug935_s101_stand; живой github.com — подтверждение, ebay 403 с 2026-11-12. Лимит 3 среза, дальше ADR. Бриф — [docs/tasks/PERF-INVALIDATION.md](docs/tasks/PERF-INVALIDATION.md). **Готово, когда:** стенды ≤50 % и ≤70 % от HEAD, под LUMEN_VERIFY_INCR_CASCADE=1 полный и инкрементальный каскад равны, ADR записан."
+      },
+      {
+       "id": "PERF-WIDE-ROAD",
+       "title": "PERF-WIDE-ROAD: shadow-DOM страницы выходят из широкой дороги",
+       "status": "done",
+       "size": "L",
+       "note": "**Закрыт 2026-11-18 исходом S1 (WONTFIX с числом, S2/S3 не выполнялись):** перепись на main `b7bb6eabf` (github ×4 живых прогона, cnn trace-nav/dump-layout + сэмплер) не нашла доминанты ≥ 40 % в границах двух кандидатов ADR-036 — клон `ComputedStyle` (`cs_init`) 0,5–1,2 % флаша (сам `CustomFlow` на shadow-страницах не запускается), shadow-индексация адресует 15,6 % (cnn) / 25–31 % (github); крупнейшие статьи вне кандидатов: `quote_pseudos`-проба 37,8 % (cnn), `flush.custom_props` 20–31 % (github); общий усилитель — `forced_same` 95,6–99,4 % (корни документа, класс с двумя откатами). cnn run-scripts 34,1 с против 49,4 с базы (снято LOAD-4…9). BUG-935/1778/1800 → `WONTFIX (Phase 3+)`, ADR-036 дополнен числом, числа — [docs/perf/journal.md](docs/perf/journal.md) §2026-11-18 и [bugs/BUG-1800-OPEN.md](bugs/BUG-1800-OPEN.md) §Срез 18."
       }
      ]
     },
@@ -6532,7 +6559,7 @@
        "title": "WPT-RUN-9: третья полная цифра pass-rate, с работающим https",
        "status": "done",
        "size": "M",
-       "note": "Перепрогнать корпус после фикса [BUG-792](bugs/BUG-792-FIXED.md) — третья полная цифра, первая, в которой https реально считается. Заводится решением пользователя 2026-08-20: прогон WPT-RUN-5 НЕ останавливается ради фикса (обе машины уже прошли часы, а правка в `lumen-network` затрагивает защиту от усечения ответа и идёт своим порядком), поэтому вторая цифра выйдет с гарантированно нулевым https, а перепрогон выделен в отдельную задачу. Стартовать только после того, как BUG-792 закрыт И бинарь пересобран: цифра привязана к сборке, прогон на старом бинаре повторит ноль. Порядок тот же, что в WPT-RUN-5 (`run_corpus.py --all --resume`, ~сутки на машину), но `.tmp/wpt-corpus` обязательно ОЧИСТИТЬ: `--resume` пропускает уже отработавшие шарды, а именно они и содержат нулевые https-результаты старой сборки (с 2026-08-20 он пропускает ещё и убитые по бюджету, из которых что-то спасено, — см. срез 9; поднятый бюджет требует `--retry-timeouts`, иначе они так и останутся частичными). Ожидаемый эффект измерим заранее, и с 2026-08-21 он измерен не наивно: 7190 id манифеста (10.6 %) сейчас стоят ноль при 0 harness OK из 635 фактически прогнанных https-тестов, но A/B среза 32 (`tests/wpt/tls_eof_audit.py`) оценивает прибавку к самой цифре в **+0.16 п.п.** (CI90 +0.065…+0.281), а не в 10.6 — https-корпус это платформенные API, которых у движка нет, поэтому доставленное тело даёт вердикт, а не балл. Перепрогон оправдан не цифрой, а тем, что 10.6 % знаменателя начнут проверять движок, и тем, что он ДЕШЕВЕЕТ: 49 id из 120 отвечают быстрее 2 с вместо полного таймаута. Второе обязательное отличие от WPT-RUN-5 — бюджет шарда, и с 2026-08-21 (срез 15) его не надо подбирать: `shard_timeout()` выводит бюджет из объявленных в манифесте таймаутов (`timeout: long` → 60 c плюс `extra_timeout` 5 c, иначе 10 + 5), делит на `--processes` и берёт запас 1.15, а `--shard-timeout-per-id` остался только для воспроизведения старого прогона. Прежнее предписание «поднять до 8» отменено: оно покрывало убитые шарды с запасом 2–4 %, то есть случайно. Проверено на 226 записанных шардах — ни один отработавший не съел больше 62 % выведенного бюджета, все пять убитых (`WebCryptoAPI`/`ai`/`bluetooth`/`encrypted-media`/`fledge`, у четырёх из пяти 96–99 % тестов помечены `long`) покрыты с запасом ≥1.4×, а сумма бюджетов по корпусу — 79 ч против 138 ч у плоских 8 c/id. На саму цифру это не влияет: 481 id, спасённый из тех же убитых шардов, набрал 2.00 балла, так что все 437 недобранных стоят ≈0.003 п.п. — бюджет поднимается ради честности охвата, не ради pass-rate, профиль замера — [docs/tasks/p2-wpt-runner-throughput.md](docs/tasks/p2-wpt-runner-throughput.md Третья оговорка к цифре, помимо https и бюджета шардов: перед публикацией прогнать `tests/wpt/cdata_audit.py` — [BUG-786](bugs/BUG-786-OPEN.md) печатает ложные reftest-PASS (срез 10, до 15.9 % всех reftest-PASS), так что после его починки цифра может УПАСТЬ, и это надо разделить с настоящим движением качества Оговорка про `cdata_audit.py` уточнена срезом 14: BUG-786 в сумме цифру не завышает, а занижает (замер `--repair`: +505 PASS против −93…303), так что после его починки ожидать надо роста; разделять с движением качества всё равно нужно Разблокирован 2026-10-01 решением пользователя: BUG-792 закрыт 2026-08-24, статус `blocked` был устаревшим; ссылка на баг снята из колонки `bugs`, чтобы генератор не вывел из закрытого бага `done` для непрогнанной задачи. Приоритет P2 №1 — последняя полная цифра снята 2026-08-21 на сборке с BUG-792/BUG-786, движок с тех пор не измерен. Подготовка 2026-10-04: `run_corpus.py --parallel-shards 2 --batch-small 150` даёт ×2.5–×4.7 по настенному времени при вердиктах в пределах шума повторов (замер — `docs/tasks/p2-wpt-runner-throughput.md` §WPT-RUN-9, подготовка), гонять в этом режиме; больше двух полос на 32 ГБ — только после [BUG-1267](bugs/BUG-1267-FIXED.md) (acid3 раздувает один `lumen` до 25 ГБ). Снято 2026-10-04 (ветка `p2-run9-memguard`): `run_corpus.py --max-browser-gb` (по умолчанию 4, `tests/wpt/browser_rss_cap.py`) убивает браузер своего прогона сверх порога — раздувают только тесты, которые и так TIMEOUT с 0 сабтестов (acid3, квотные `webstorage` — BUG-870, `Range-mutations-*`), их тест становится CRASH с пометкой `rss_cap_kills`, балл не меняется; 3 полосы на `dom`+8 держат ≥8 ГБ свободной памяти при балле внутри шума — гонять `--parallel-shards 3 --batch-small 150` (замер — там же, §ограничитель памяти). Снято 2026-10-04 (ветка `p2-wpt-fullpar`): `run_corpus.py --shared-queue` — тесты шарда из одной очереди (wptrunner `--fully-parallel --no-restart-on-new-group` + чередование по каталогам) вместо фиксированной хеш-раскладки по процессам: стена `dom`+8 −26 % (497 → 368 с), балл в шуме повторов; попутно найден [BUG-1268](bugs/BUG-1268-FIXED.md) — 2–4 id, чей вердикт зависит от предыдущего теста в процессе, «переезжают» при любом изменении порядка. Гонять `--parallel-shards 3 --batch-small 150 --shared-queue` (замер — там же, §общая очередь). Снято 2026-10-04 (ветка `p2-wpt-navaway`): хвост `encoding` был не движковой медленностью, а 65-секундным ожиданием результата у страницы, которая уже не тест — `form.submit()` с `target` на `<iframe>` уводит верхний документ ([BUG-1269](bugs/BUG-1269-OPEN.md)); `executorlumen.py` теперь кончает такой тест TIMEOUT через 15 с после ухода (`LUMEN_WPT_FOREIGN_GRACE_S`), шард `legacy-mb-japanese/euc-jp` 735 → 296 с, все 62 досрочно кончённых id и раньше были TIMEOUT 0/0 (замер — там же, §уход со страницы теста). Снято 2026-10-04 (ветка `p2-perf-10-s2`, PERF-10): `run_corpus.py` по умолчанию гонит testharness без растеризации (`--paint` — старый режим), CPU −14 %, память браузеров −40 %, балл в шуме; флаги прогона прежние (замер — там же, §PERF-10 срез 2). Снято 2026-10-04 (ветка `p2-wpt-urlquote`): `executorlumen.py` принимает результат, чей URL отличается от id только процент-кодированием (54 id с пробелами в query, `xhr/xmlhttprequest-timeout-*` — были ERROR + рестарт браузера, стали OK, балл `xhr` +22.0 — поправка раннера, не движка), и ограничивает весь тест потолком `timeout + 2·extra_timeout` вместо ожидания внешнего таймера wptrunner + `join(10)` (`LUMEN_WPT_HARD_CAP=off` — прежнее): стена −5 % на 1 299 id, балл совпадает до сотых (замер — там же, §URL результата и потолок теста). Снято 2026-10-04 (ветка `p2-wpt-startup`): `run_smoke.py` больше не импортирует wptrunner на уровне модуля — `spawn` на Windows исполнял этот импорт (~1 с) в каждом ребёнке, поэтому 7 серверов wptserve вставали по очереди: старт единицы прогона 16.7 → 8.5 с, перезапуск раннера 2.0 → 0.33 с, балл в шуме (замер — там же, §старт шарда); флаги прогона прежние. Снято 2026-10-04 (ветка `p2-wpt-spawnlock`): запуски браузеров одного wptrunner идут под блокировкой (`browsers/lumen.py`, `_SPAWN_LOCK`) — mozprocess на Windows создаёт ребёнка с `bInheritHandles=1`, браузер соседнего менеджера наследовал stdout-канал чужого запуска, и убийство браузера на перезапуске ждало EOF полный `kill(timeout=5)`: 6.1 с на каждом пятом перезапуске; простой на перезапусках −30 %, медленных остановок 0, балл в шуме (замер — там же, §одновременный запуск браузеров); флаги прогона прежние. Снято 2026-10-05 (ветка `p2-wpt-procs`): `--processes 14` вместо 7 при трёх полосах — стена −35 % на 1 970 id и −17 % на тяжёлом `dom`+6 (1 749 id), устойчиво разных вердиктов 6 на балл +0.08 (замер — там же, §процессы на шард); попутно найден и починен рассинхрон IPC рефтестов: после таймаута рендера исполнитель оставлял сокет, и опоздавший ответ получал следующий тест — все последующие рефтесты браузера были FAIL `expected Navigated, got variant 9` без сравнения пикселей (37 id на 1 970), теперь сокет сбрасывается и браузер перезапускается (`tests/wpt/verify_ipc_desync.py`), сдвиг цифры ~+9 баллов на наборе — поправка раннера. Гонять `--parallel-shards 3 --batch-small 150 --shared-queue --processes 14`. **ЗАКРЫТ 2026-10-05 (P2, ветки `p2-wpt-run9-full` + `p2-wpt-run9-sub`):** весь корпус на `d913a39b9`, Windows, флаги выше — **33.55 %** (22 854.54 / 68 116), исполнено 66 978 (98.3 %), не исполнено только 1 138 id без исполнителя, убитых шардов 0, `score_audit.py` — no leak, стена 2 ч 44 мин. https на поддоменах в прогоне не работал ([BUG-1271](bugs/BUG-1271-FIXED.md)), поэтому 189 затронутых шардов перепрогнаны тем же бинарём с новым сертификатом и подставлены: **33.71 %** с поддоменами (+0.16 п.п.; `mixed-content` при этом падает 265→232 — прежние PASS «blocked» на swap-scheme редиректе были ложными, движок отдаёт `upgraded`). Like-for-like со скорингом 08-18 — 18.16 %. Снимки `docs/wpt/runs/2026-10-05{,-subdomains}.json`, журнал — [docs/wpt/pass-rate.md](docs/wpt/pass-rate.md) §Третья полная цифра."
+       "note": "Перепрогнать корпус после фикса [BUG-792](bugs/BUG-792-FIXED.md) — третья полная цифра, первая, в которой https реально считается. Заводится решением пользователя 2026-08-20: прогон WPT-RUN-5 НЕ останавливается ради фикса (обе машины уже прошли часы, а правка в `lumen-network` затрагивает защиту от усечения ответа и идёт своим порядком), поэтому вторая цифра выйдет с гарантированно нулевым https, а перепрогон выделен в отдельную задачу. Стартовать только после того, как BUG-792 закрыт И бинарь пересобран: цифра привязана к сборке, прогон на старом бинаре повторит ноль. Порядок тот же, что в WPT-RUN-5 (`run_corpus.py --all --resume`, ~сутки на машину), но `.tmp/wpt-corpus` обязательно ОЧИСТИТЬ: `--resume` пропускает уже отработавшие шарды, а именно они и содержат нулевые https-результаты старой сборки (с 2026-08-20 он пропускает ещё и убитые по бюджету, из которых что-то спасено, — см. срез 9; поднятый бюджет требует `--retry-timeouts`, иначе они так и останутся частичными). Ожидаемый эффект измерим заранее, и с 2026-08-21 он измерен не наивно: 7190 id манифеста (10.6 %) сейчас стоят ноль при 0 harness OK из 635 фактически прогнанных https-тестов, но A/B среза 32 (`tests/wpt/tls_eof_audit.py`) оценивает прибавку к самой цифре в **+0.16 п.п.** (CI90 +0.065…+0.281), а не в 10.6 — https-корпус это платформенные API, которых у движка нет, поэтому доставленное тело даёт вердикт, а не балл. Перепрогон оправдан не цифрой, а тем, что 10.6 % знаменателя начнут проверять движок, и тем, что он ДЕШЕВЕЕТ: 49 id из 120 отвечают быстрее 2 с вместо полного таймаута. Второе обязательное отличие от WPT-RUN-5 — бюджет шарда, и с 2026-08-21 (срез 15) его не надо подбирать: `shard_timeout()` выводит бюджет из объявленных в манифесте таймаутов (`timeout: long` → 60 c плюс `extra_timeout` 5 c, иначе 10 + 5), делит на `--processes` и берёт запас 1.15, а `--shard-timeout-per-id` остался только для воспроизведения старого прогона. Прежнее предписание «поднять до 8» отменено: оно покрывало убитые шарды с запасом 2–4 %, то есть случайно. Проверено на 226 записанных шардах — ни один отработавший не съел больше 62 % выведенного бюджета, все пять убитых (`WebCryptoAPI`/`ai`/`bluetooth`/`encrypted-media`/`fledge`, у четырёх из пяти 96–99 % тестов помечены `long`) покрыты с запасом ≥1.4×, а сумма бюджетов по корпусу — 79 ч против 138 ч у плоских 8 c/id. На саму цифру это не влияет: 481 id, спасённый из тех же убитых шардов, набрал 2.00 балла, так что все 437 недобранных стоят ≈0.003 п.п. — бюджет поднимается ради честности охвата, не ради pass-rate, профиль замера — [docs/tasks/p2-wpt-runner-throughput.md](docs/tasks/p2-wpt-runner-throughput.md Третья оговорка к цифре, помимо https и бюджета шардов: перед публикацией прогнать `tests/wpt/cdata_audit.py` — [BUG-786](bugs/BUG-786-OPEN.md) печатает ложные reftest-PASS (срез 10, до 15.9 % всех reftest-PASS), так что после его починки цифра может УПАСТЬ, и это надо разделить с настоящим движением качества Оговорка про `cdata_audit.py` уточнена срезом 14: BUG-786 в сумме цифру не завышает, а занижает (замер `--repair`: +505 PASS против −93…303), так что после его починки ожидать надо роста; разделять с движением качества всё равно нужно Разблокирован 2026-10-01 решением пользователя: BUG-792 закрыт 2026-08-24, статус `blocked` был устаревшим; ссылка на баг снята из колонки `bugs`, чтобы генератор не вывел из закрытого бага `done` для непрогнанной задачи. Приоритет P2 №1 — последняя полная цифра снята 2026-08-21 на сборке с BUG-792/BUG-786, движок с тех пор не измерен. Подготовка 2026-10-04: `run_corpus.py --parallel-shards 2 --batch-small 150` даёт ×2.5–×4.7 по настенному времени при вердиктах в пределах шума повторов (замер — `docs/tasks/p2-wpt-runner-throughput.md` §WPT-RUN-9, подготовка), гонять в этом режиме; больше двух полос на 32 ГБ — только после [BUG-1267](bugs/BUG-1267-FIXED.md) (acid3 раздувает один `lumen` до 25 ГБ). Снято 2026-10-04 (ветка `p2-run9-memguard`): `run_corpus.py --max-browser-gb` (по умолчанию 4, `tests/wpt/browser_rss_cap.py`) убивает браузер своего прогона сверх порога — раздувают только тесты, которые и так TIMEOUT с 0 сабтестов (acid3, квотные `webstorage` — BUG-870, `Range-mutations-*`), их тест становится CRASH с пометкой `rss_cap_kills`, балл не меняется; 3 полосы на `dom`+8 держат ≥8 ГБ свободной памяти при балле внутри шума — гонять `--parallel-shards 3 --batch-small 150` (замер — там же, §ограничитель памяти). Снято 2026-10-04 (ветка `p2-wpt-fullpar`): `run_corpus.py --shared-queue` — тесты шарда из одной очереди (wptrunner `--fully-parallel --no-restart-on-new-group` + чередование по каталогам) вместо фиксированной хеш-раскладки по процессам: стена `dom`+8 −26 % (497 → 368 с), балл в шуме повторов; попутно найден [BUG-1268](bugs/BUG-1268-FIXED.md) — 2–4 id, чей вердикт зависит от предыдущего теста в процессе, «переезжают» при любом изменении порядка. Гонять `--parallel-shards 3 --batch-small 150 --shared-queue` (замер — там же, §общая очередь). Снято 2026-10-04 (ветка `p2-wpt-navaway`): хвост `encoding` был не движковой медленностью, а 65-секундным ожиданием результата у страницы, которая уже не тест — `form.submit()` с `target` на `<iframe>` уводит верхний документ ([BUG-1269](bugs/BUG-1269-FIXED.md)); `executorlumen.py` теперь кончает такой тест TIMEOUT через 15 с после ухода (`LUMEN_WPT_FOREIGN_GRACE_S`), шард `legacy-mb-japanese/euc-jp` 735 → 296 с, все 62 досрочно кончённых id и раньше были TIMEOUT 0/0 (замер — там же, §уход со страницы теста). Снято 2026-10-04 (ветка `p2-perf-10-s2`, PERF-10): `run_corpus.py` по умолчанию гонит testharness без растеризации (`--paint` — старый режим), CPU −14 %, память браузеров −40 %, балл в шуме; флаги прогона прежние (замер — там же, §PERF-10 срез 2). Снято 2026-10-04 (ветка `p2-wpt-urlquote`): `executorlumen.py` принимает результат, чей URL отличается от id только процент-кодированием (54 id с пробелами в query, `xhr/xmlhttprequest-timeout-*` — были ERROR + рестарт браузера, стали OK, балл `xhr` +22.0 — поправка раннера, не движка), и ограничивает весь тест потолком `timeout + 2·extra_timeout` вместо ожидания внешнего таймера wptrunner + `join(10)` (`LUMEN_WPT_HARD_CAP=off` — прежнее): стена −5 % на 1 299 id, балл совпадает до сотых (замер — там же, §URL результата и потолок теста). Снято 2026-10-04 (ветка `p2-wpt-startup`): `run_smoke.py` больше не импортирует wptrunner на уровне модуля — `spawn` на Windows исполнял этот импорт (~1 с) в каждом ребёнке, поэтому 7 серверов wptserve вставали по очереди: старт единицы прогона 16.7 → 8.5 с, перезапуск раннера 2.0 → 0.33 с, балл в шуме (замер — там же, §старт шарда); флаги прогона прежние. Снято 2026-10-04 (ветка `p2-wpt-spawnlock`): запуски браузеров одного wptrunner идут под блокировкой (`browsers/lumen.py`, `_SPAWN_LOCK`) — mozprocess на Windows создаёт ребёнка с `bInheritHandles=1`, браузер соседнего менеджера наследовал stdout-канал чужого запуска, и убийство браузера на перезапуске ждало EOF полный `kill(timeout=5)`: 6.1 с на каждом пятом перезапуске; простой на перезапусках −30 %, медленных остановок 0, балл в шуме (замер — там же, §одновременный запуск браузеров); флаги прогона прежние. Снято 2026-10-05 (ветка `p2-wpt-procs`): `--processes 14` вместо 7 при трёх полосах — стена −35 % на 1 970 id и −17 % на тяжёлом `dom`+6 (1 749 id), устойчиво разных вердиктов 6 на балл +0.08 (замер — там же, §процессы на шард); попутно найден и починен рассинхрон IPC рефтестов: после таймаута рендера исполнитель оставлял сокет, и опоздавший ответ получал следующий тест — все последующие рефтесты браузера были FAIL `expected Navigated, got variant 9` без сравнения пикселей (37 id на 1 970), теперь сокет сбрасывается и браузер перезапускается (`tests/wpt/verify_ipc_desync.py`), сдвиг цифры ~+9 баллов на наборе — поправка раннера. Гонять `--parallel-shards 3 --batch-small 150 --shared-queue --processes 14`. **ЗАКРЫТ 2026-10-05 (P2, ветки `p2-wpt-run9-full` + `p2-wpt-run9-sub`):** весь корпус на `d913a39b9`, Windows, флаги выше — **33.55 %** (22 854.54 / 68 116), исполнено 66 978 (98.3 %), не исполнено только 1 138 id без исполнителя, убитых шардов 0, `score_audit.py` — no leak, стена 2 ч 44 мин. https на поддоменах в прогоне не работал ([BUG-1271](bugs/BUG-1271-FIXED.md)), поэтому 189 затронутых шардов перепрогнаны тем же бинарём с новым сертификатом и подставлены: **33.71 %** с поддоменами (+0.16 п.п.; `mixed-content` при этом падает 265→232 — прежние PASS «blocked» на swap-scheme редиректе были ложными, движок отдаёт `upgraded`). Like-for-like со скорингом 08-18 — 18.16 %. Снимки `docs/wpt/runs/2026-10-05{,-subdomains}.json`, журнал — [docs/wpt/pass-rate.md](docs/wpt/pass-rate.md) §Третья полная цифра."
       },
       {
        "id": "WPT-RUN-10",
@@ -10162,7 +10189,7 @@
    "debtor": false
   },
   "BUG-935": {
-   "status": "open",
+   "status": "wontfix",
    "title": "ADR-016 M4-инкрементальный путь для rAF-DOM-мутаций (`try_relayout_raf_incremental`) не выполняется на дефолтной сборке: `&&`-короткое замыкание в `relayout_raf…",
    "component": "shell (`crates/shell/src/relayout.rs` — `relayout_raf_dirty`/`relayout_raf_dirty_readback`)",
    "date": null,
@@ -10434,13 +10461,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1269": {
-   "status": "open",
-   "title": "`form.submit()` страницы игнорирует `target`: форма с `target=\"<имя iframe>\"` навигирует верхний документ вместо фрейма (HTML LS §4.10.21.3, выбор navigable по…",
-   "component": "shell (`crates/shell/src/lumen/form_submit.rs::run_form_submission` — путь `NavigateRequest::SubmitForm`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1278": {
    "status": "open",
    "title": "`getComputedStyle()` возвращает `\"\"` для `caret-color`, `accent-color`, `outline-offset`, шорткода `outline`, `resize`, `user-select`, `appearance`/`-webkit-app…",
@@ -10637,31 +10657,10 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1468": {
-   "status": "open",
-   "title": "`position: sticky`: в корневом документе и внутри `overflow` контейнера липкий бокс не следует за прокруткой (`getBoundingClientRect` и снимок). Липкий бокс ост…",
-   "component": "layout/paint/shell (`crates/engine/paint/src/display_list/walk.rs:1056` — `BeginStickyLayer`; прокрутка вложенного контейнера в `crates/shell`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1469": {
    "status": "open",
    "title": "**Срез 1 влит (ANCHOR-SCROLL, 2026-10-21):** `--screenshot` и живое окно рисуют цель там, где прокрученный якорь; осталось — геометрия для скриптов (BUG-1166),…",
    "component": "layout/paint/js (`crates/engine/layout/src/anchor.rs` — `apply_anchor_positions` работает от геометрии без учёта прокрутки; скролл-контейнеры якорей)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1470": {
-   "status": "open",
-   "title": "`position:absolute`/`fixed` внутри inline-контекста ломает строку (следующий inline уходит на новую строку) либо занимает место в строке, а статическая позиция…",
-   "component": "layout (`crates/engine/layout/src/box_tree/` — `position:absolute`/`fixed` потомок внутри строки: разрыв строки и статическая позиция)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1471": {
-   "status": "open",
-   "title": "`position: relative` на `<tr>`, `<tbody>`, `<thead>`, `<tfoot>` не смещает строки таблицы (на `<td>` работает). CSS Positioned Layout 3 §3.1 распространяет отно…",
-   "component": "layout (`crates/engine/layout/src/box_tree/` — относительное смещение `position:relative` у `tr`/`tbody`/`thead`/`tfoot`)",
    "date": null,
    "debtor": false
   },
@@ -11638,13 +11637,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1742": {
-   "status": "open",
-   "title": "Найден WPT-SW-SCOUT: регистрация SW — таймерная имитация: `updatefound` до резолва `register()`, состояния без исполнения скрипта, scope не резолвится в URL, `u…",
-   "component": "js (`crates/js/src/shim/web_api_shim_mid_b.js` `_sw_container.register`, `_sw_run_lifecycle`; `sw_worker.rs` install/activate)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1743": {
    "status": "open",
    "title": "Найден WPT-SW-SCOUT: `iframe.contentWindow.<глобал>` пересекает границу изолятов по значению — `navigator.serviceWorker`, промис `fetch()`, `performance` теряют…",
@@ -11849,7 +11841,7 @@
    "debtor": false
   },
   "BUG-1778": {
-   "status": "open",
+   "status": "wontfix",
    "title": "cnn.com в живом окне держит поток движка задачей 25 с: `script.evaluate` отдаёт `engine thread busy: eval not run within 5.0 s (running task from about_to_wait.…",
    "component": "shell / js / layout (задача из `about_to_wait.rs:290` — `tick_timers` и пампы; что именно крутится — не локализовано)",
    "date": null,
@@ -11877,7 +11869,7 @@
    "debtor": false
   },
   "BUG-1800": {
-   "status": "open",
+   "status": "wontfix",
    "title": "ebay.com: задачи JS по 30–40 с (стек `getAttribute`), `maybe_flush` p50 ~1 с на 647 узлах, сумма flush 93–124 с за прогон; `ready_s` 19.8/150.5/84.1 с против Ch…",
    "component": "js/layout (same-tick flush, `style_flush.rs`; DOM-читалки шима)",
    "date": null,
@@ -11897,31 +11889,10 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1817": {
-   "status": "open",
-   "title": "`Referer`/`document.referrer` не обновляются после `history.replaceState`: `location.href` меняется, referrer остаётся от URL загрузки. Измерено на `referrer-po…",
-   "component": "shell (`crates/shell/src/resource_base.rs` — `ResourceBase` хранит снимок URL документа, от него `HttpClient::with_document_context`; JS-fetch/XHR-клиент в `page_pipeline.rs`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1818": {
-   "status": "open",
-   "title": "Все 12 файлов `referrer-policy/4K/gen/**/a-tag.http.html` — harness TIMEOUT без единого сабтеста (2026-11-15, `--processes 7`); TIMEOUT виден и до правок среза…",
-   "component": "не локализовано (`common.sub.js::requestViaNavigable` — iframe с `name`, `<a target>.click()`, ожидание `message` с `event.source === iframe.contentWindow`; `subresource/document.py`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1819": {
    "status": "open",
    "title": "`object-fit` не хранит пару `[ contain \\",
    "component": "layout (`style/values/flexgrid.rs::ObjectFit`, `style/apply/layout.rs:138`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1803": {
-   "status": "open",
-   "title": "Lumen игнорирует системный прокси Windows: у пользователя с ProxyEnable=1 Lumen всегда напрямую, маршрут отличается от Chrome (наблюдение на ebay: Chrome через…",
-   "component": "network (стек не читает WinINET; единственный механизм — `fingerprint.toml`, BUG-1210)",
    "date": null,
    "debtor": false
   },
@@ -11950,6 +11921,20 @@
    "status": "open",
    "title": "rutube-ru: тихий флап «полный рендер ↔ text=0» — 3 из 4 попыток `wait timeout: DocumentReady` за 40–45 с без JS-ошибок; в удачной попытке OK text 17112/17999 у…",
    "component": "не локализовано (живое окно — стадия готовности; SW-шим исключён — BUG-1805 закрыт)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1825": {
+   "status": "open",
+   "title": "`position: sticky` не зажат своим containing block (CSS Position 3 §2.2, sticky constraint rectangle = scrollport ∩ containing block): липкий бокс выходит за кр…",
+   "component": "layout/paint (`sticky_dy`/`sticky_dx` в `display_list/box_layer.rs`, `backends/femtovg_backend.rs`, `renderer/sticky_geom.rs`, `cpu_raster.rs`; геометрия — `sticky_snap.rs::sticky_correction`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1826": {
+   "status": "open",
+   "title": "claude.ai: после 403+«Just a moment» челлендж `chl_page` уходит в одну JS-задачу >135 с на движковом потоке без ошибок — страница висит, `eval` → `engine thread…",
+   "component": "js/engine (выполнение `cdn-cgi/challenge-platform` PoW-скрипта; семья BUG-935/1778/1800)",
    "date": null,
    "debtor": false
   },
@@ -22088,6 +22073,69 @@
    "component": "shell/js (`crates/js/src/shim/web_api_shim_head.js`, `web_api_shim_mid.js`; `crates/shell/src/app/about_to_wait.rs`, `lumen/scrolling.rs`, `page_load.rs`, `frames.rs`)",
    "date": "2026-11-17",
    "debtor": false
+  },
+  "BUG-1742": {
+   "status": "fixed",
+   "title": "Найден WPT-SW-SCOUT: регистрация SW — таймерная имитация: `updatefound` до резолва `register()`, состояния без исполнения скрипта, scope не резолвится в URL, `u…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid_b.js` `_sw_container.register`, `_sw_run_lifecycle`; `sw_worker.rs` install/activate)",
+   "date": "2026-11-18",
+   "debtor": false
+  },
+  "BUG-1817": {
+   "status": "fixed",
+   "title": "`referrer-policy/4K` 2026-11-15: 172 из 224 красных сабтестов ровно этой формы (`fetch` 24, `script-tag` 24, `xhr` 24, `iframe-tag` 64, `worker-classic`/`worker…",
+   "component": "shell/network (`crates/shell/src/resource_base.rs`, `app/about_to_wait.rs`; `crates/network/src/lib.rs`, `js_providers.rs`)",
+   "date": "2026-11-18",
+   "debtor": false
+  },
+  "BUG-1818": {
+   "status": "fixed",
+   "title": "12 файлов `referrer-policy/4K/gen/**/a-tag.http.html` — harness TIMEOUT без единого сабтеста (клик навигировал топ-документ на `document.py`, testharness исчеза…",
+   "component": "js/shell (`crates/js/src/shim/web_api_shim_tail_b.js`, `v8_runtime/install/storage.rs`; `crates/shell/src/app/about_to_wait.rs`)",
+   "date": "2026-11-18",
+   "debtor": false
+  },
+  "BUG-1269": {
+   "status": "fixed",
+   "title": "`target` читается с формы, `formtarget` перекрывает его тем же `apply_submitter_overrides`; адресат выбирает новый `form_submit_navigate` (HTML LS §4.10.21.4 ша…",
+   "component": "shell (`crates/shell/src/lumen/form_submit.rs`)",
+   "date": "2026-11-18",
+   "debtor": false
+  },
+  "BUG-1824": {
+   "status": "fixed",
+   "title": "`navigator_permissions_status_is_a_real_event_target` краснел на чистом `main` и ронял `-p lumen-js --lib` в `scoped-test.sh`; переменная теста переименована в…",
+   "component": "js (тест `crates/js/src/dom/tests/v8_idle_message_clipboard.rs`)",
+   "date": "2026-11-18",
+   "debtor": false
+  },
+  "BUG-1468": {
+   "status": "fixed",
+   "title": "hidden`) отражают прилипание)",
+   "component": "auto",
+   "date": "2026-11-18",
+   "debtor": false
+  },
+  "BUG-1470": {
+   "status": "fixed",
+   "title": "`position:absolute`/`fixed` внутри inline-контекста ломает строку (следующий inline уходит на новую строку) либо занимает место в строке, а статическая позиция…",
+   "component": "layout (`crates/engine/layout/src/box_tree/` — `position:absolute`/`fixed` потомок внутри строки: разрыв строки и статическая позиция)",
+   "date": "2026-11-18",
+   "debtor": false
+  },
+  "BUG-1471": {
+   "status": "fixed",
+   "title": "`position: relative` на `<tr>`/`<tbody>`/`<thead>`/`<tfoot>` не смещал строки таблицы (на `<td>` работало): строки и группы раскладывает `table_trampoline` напр…",
+   "component": "layout (`crates/engine/layout/src/box_tree/table_trampoline.rs` — `finish_table`)",
+   "date": "2026-11-18",
+   "debtor": false
+  },
+  "BUG-1803": {
+   "status": "fixed",
+   "title": "Lumen игнорировал системный прокси Windows: у пользователя с `ProxyEnable=1` Lumen всегда ходил напрямую, маршрут отличался от Chrome (ebay: Chrome через прокси…",
+   "component": "network/shell (`system_proxy.rs` — чтение HKCU Internet Settings через windows-sys; `cli_args` — дефолт до `init_global`; `lumen-network::fetch_single` — loopback минует прокси всегда)",
+   "date": "2026-11-18",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -23515,6 +23563,9 @@
   "js (оболочка `TextDecoder` в шиме `crates/js/src/shim/web_api_shim_*.js`, не натив `_lumen_text_decode`)": [
    "BUG-1083"
   ],
+  "js (тест `crates/js/src/dom/tests/v8_idle_message_clipboard.rs`)": [
+   "BUG-1824"
+  ],
   "js (тесты `crates/js/src/dom/tests/v8_webworker.rs`, `crates/js/src/worker.rs::tests_v8` — фиксированный `sleep` вместо опроса с дедлайном)": [
    "BUG-1111"
   ],
@@ -23602,6 +23653,9 @@
   "js/encoding (`TextDecoder`/`TextEncoder`, `lumen_encoding::from_label`)": [
    "BUG-1695"
   ],
+  "js/engine (выполнение `cdn-cgi/challenge-platform` PoW-скрипта; семья BUG-935/1778/1800)": [
+   "BUG-1826"
+  ],
   "js/layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map` — нет строк для `column-*`; `crates/js/src/shim/web_api_shim_mid.js` — валидация)": [
    "BUG-1402"
   ],
@@ -23679,6 +23733,9 @@
   ],
   "js/shell (`crates/js/src/shim/web_api_shim_mid.js` — `HTMLLinkElement.disabled`/`sheet`; `crates/shell/src/stylesheets.rs`)": [
    "BUG-1554"
+  ],
+  "js/shell (`crates/js/src/shim/web_api_shim_tail_b.js`, `v8_runtime/install/storage.rs`; `crates/shell/src/app/about_to_wait.rs`)": [
+   "BUG-1818"
   ],
   "js/shell (`crates/js/src/shim/web_api_shim_tail_mc.js` — `window.opener`/`_lumen_install_opener`)": [
    "BUG-1718"
@@ -23889,9 +23946,6 @@
   ],
   "layout (`crates/engine/layout/src/box_tree/` — вычисление `display` при `float`/`position:absolute`; `table.rs`)": [
    "BUG-1357"
-  ],
-  "layout (`crates/engine/layout/src/box_tree/` — относительное смещение `position:relative` у `tr`/`tbody`/`thead`/`tfoot`)": [
-   "BUG-1471"
   ],
   "layout (`crates/engine/layout/src/box_tree/` — относительное смещение внутри `InlineBlockRow`)": [
    "BUG-1291"
@@ -24198,6 +24252,9 @@
   ],
   "layout (`crates/engine/layout/src/box_tree/table_height.rs` — процентные высоты потомков ячейки)": [
    "BUG-1534"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/table_trampoline.rs` — `finish_table`)": [
+   "BUG-1471"
   ],
   "layout (`crates/engine/layout/src/box_tree/tests/grid_trampoline.rs`, `box_tree/grid_trampoline.rs`)": [
    "BUG-1266"
@@ -24697,6 +24754,9 @@
   "layout/paint (`stacking.rs::box_can_own_stacking_context`)": [
    "BUG-1810"
   ],
+  "layout/paint (`sticky_dy`/`sticky_dx` в `display_list/box_layer.rs`, `backends/femtovg_backend.rs`, `renderer/sticky_geom.rs`, `cpu_raster.rs`; геометрия — `sticky_snap.rs::sticky_correction`)": [
+   "BUG-1825"
+  ],
   "layout/paint (`style/apply/paint.rs`, `crates/engine/paint/src/display_list/walk.rs:49/87/138`, `style/values/color.rs::to_color_opt`)": [
    "BUG-1418"
   ],
@@ -24847,9 +24907,6 @@
   "network (резолвер)": [
    "BUG-304"
   ],
-  "network (стек не читает WinINET; единственный механизм — `fingerprint.toml`, BUG-1210)": [
-   "BUG-1803"
-  ],
   "network (тестовый хелпер `crates/network/src/http_cache.rs`, `mod tests`)": [
    "BUG-632"
   ],
@@ -24870,6 +24927,9 @@
   ],
   "network/shell (`crates/network/src/lib.rs:4326` `HttpClient::fetch_page` не читает `document_context`; `crates/shell/src/page_source.rs:240` — клиент навигации без документа-инициатора; `_lumen_document_referrer` в `web_api_shim_mid_b.js` всегда `''`)": [
    "BUG-1156"
+  ],
+  "network/shell (`system_proxy.rs` — чтение HKCU Internet Settings через windows-sys; `cli_args` — дефолт до `init_global`; `lumen-network::fetch_single` — loopback минует прокси всегда)": [
+   "BUG-1803"
   ],
   "network/shell (`tls/ocsp.rs`, `tls/fingerprint.rs`, `network/src/lib.rs`)": [
    "BUG-1618"
@@ -25247,7 +25307,7 @@
   "shell (`crates/shell/src/lumen/click.rs`, ветка `FormClickAction::ToggleRadio` → `crates/shell/src/forms.rs::toggle_checkbox`)": [
    "BUG-927"
   ],
-  "shell (`crates/shell/src/lumen/form_submit.rs::run_form_submission` — путь `NavigateRequest::SubmitForm`)": [
+  "shell (`crates/shell/src/lumen/form_submit.rs`)": [
    "BUG-1269"
   ],
   "shell (`crates/shell/src/lumen/form_submit.rs`, кодировка тела формы; `crates/shell/src/forms.rs` — нет кодировщика)": [
@@ -25339,9 +25399,6 @@
   ],
   "shell (`crates/shell/src/resource_base.rs` — `ResourceBase::resolve`/`resolve_str` для `ResourceBase::File`)": [
    "BUG-440"
-  ],
-  "shell (`crates/shell/src/resource_base.rs` — `ResourceBase` хранит снимок URL документа, от него `HttpClient::with_document_context`; JS-fetch/XHR-клиент в `page_pipeline.rs`)": [
-   "BUG-1817"
   ],
   "shell (`crates/shell/src/scripts.rs:58-64` `collect_scripts_ordered` — «defer/async are not modelled separately — the shell runs every script synchronously in document order»; цикл исполнения `scripts.rs:804`)": [
    "BUG-1120"
@@ -25488,6 +25545,9 @@
   "shell/network (`crates/network/src/csp.rs:242` — `CspPolicy::script_element_fetch_allows`; `crates/shell/src/scripts.rs:410`)": [
    "BUG-1124"
   ],
+  "shell/network (`crates/shell/src/resource_base.rs`, `app/about_to_wait.rs`; `crates/network/src/lib.rs`, `js_providers.rs`)": [
+   "BUG-1817"
+  ],
   "shell/network (`page_source.rs:266`, `resource_base.rs:206`, `network/src/lib.rs:2802`, `storage/src/cookies.rs:678`)": [
    "BUG-1616"
   ],
@@ -25573,9 +25633,6 @@
   ],
   "не локализован до конкретного фикса (механизм сужен — см. срез 22; сами файлы флака — `svg-embedded-sizing/svg-in-iframe-{auto,fixed,percentage}.html`)": [
    "BUG-1011"
-  ],
-  "не локализовано (`common.sub.js::requestViaNavigable` — iframe с `name`, `<a target>.click()`, ожидание `message` с `event.source === iframe.contentWindow`; `subresource/document.py`)": [
-   "BUG-1818"
   ],
   "не локализовано (живое окно — стадия готовности; SW-шим исключён — BUG-1805 закрыт)": [
    "BUG-1822"
