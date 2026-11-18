@@ -271,7 +271,12 @@ function _idb_to_range(q) {
 
 // --- IDBRequest / IDBOpenDBRequest (Indexed DB §3.5) -------------------------
 
+// Request, transaction and connection are EventTargets (BUG-1706/BUG-914
+// rewrite): one listener store per object, the DOM add/remove semantics
+// (capture flag, once, handleEvent) come from the shared EventTarget shim,
+// which loads ahead of this one in every scope that runs it.
 function IDBRequest(source, txn) {
+    EventTarget.call(this);
     this.result = undefined;
     this.error = null;
     this.source = source || null;
@@ -279,65 +284,107 @@ function IDBRequest(source, txn) {
     this.readyState = 'pending';
     this.onsuccess = null;
     this.onerror = null;
-    this._successListeners = [];
-    this._errorListeners = [];
     this._action = null;
 }
-IDBRequest.prototype.addEventListener = function(type, fn) {
-    if (typeof fn !== 'function') return;
-    if (type === 'success') this._successListeners.push(fn);
-    else if (type === 'error') this._errorListeners.push(fn);
-};
-IDBRequest.prototype.removeEventListener = function(type, fn) {
-    var arr = type === 'success' ? this._successListeners : (type === 'error' ? this._errorListeners : null);
-    if (!arr) return;
-    var i = arr.indexOf(fn);
-    if (i >= 0) arr.splice(i, 1);
-};
+IDBRequest.prototype = Object.create(EventTarget.prototype);
+IDBRequest.prototype.constructor = IDBRequest;
 
 function IDBOpenDBRequest() {
     IDBRequest.call(this, null, null);
     this.onupgradeneeded = null;
     this.onblocked = null;
-    this._upgradeListeners = [];
-    this._blockedListeners = [];
 }
 IDBOpenDBRequest.prototype = Object.create(IDBRequest.prototype);
 IDBOpenDBRequest.prototype.constructor = IDBOpenDBRequest;
-IDBOpenDBRequest.prototype.addEventListener = function(type, fn) {
-    if (typeof fn !== 'function') return;
-    if (type === 'upgradeneeded') this._upgradeListeners.push(fn);
-    else if (type === 'blocked') this._blockedListeners.push(fn);
-    else IDBRequest.prototype.addEventListener.call(this, type, fn);
-};
-IDBOpenDBRequest.prototype.removeEventListener = function(type, fn) {
-    var arr = type === 'upgradeneeded' ? this._upgradeListeners
-            : (type === 'blocked' ? this._blockedListeners : null);
-    if (!arr) { IDBRequest.prototype.removeEventListener.call(this, type, fn); return; }
-    var i = arr.indexOf(fn);
-    if (i >= 0) arr.splice(i, 1);
-};
 
 // Fires `blocked` at an open/delete request whose database still has another
 // connection open (Indexed DB §3.3.1 step «fire blocked»). Delete carries
 // newVersion = null.
 function _idb_fire_blocked(req, oldVersion, newVersion) {
-    var ev = _idb_make_event('blocked', req, { oldVersion: oldVersion, newVersion: newVersion });
-    if (typeof req.onblocked === 'function') {
-        try { req.onblocked(ev); } catch(e) { _lumen_console_error('IDB onblocked: ' + e); }
+    _idb_dispatch(req,
+        _idb_make_event('blocked', req, { oldVersion: oldVersion, newVersion: newVersion }),
+        [req]);
+}
+
+// Real `Event`s: only `error` bubbles and is cancelable (§3.5.6); `abort`
+// bubbles without being cancelable; every other type here neither bubbles nor
+// cancels. `isTrusted` is forced — this shim is the trusted source of its own
+// events. Extra fields (`oldVersion`, `newVersion`) stay plain properties
+// until IDB-EVENTS-S4 mints IDBVersionChangeEvent.
+function _idb_make_event(type, target, extra) {
+    var ev = new Event(type, {
+        bubbles: type === 'error' || type === 'abort',
+        cancelable: type === 'error'
+    });
+    ev.isTrusted = true;
+    if (extra) for (var k in extra) ev[k] = extra[k];
+    return ev;
+}
+
+// Propagation path of a request event, nearest target first: the request, its
+// transaction, that transaction's connection (Indexed DB §3.5.6). An open
+// request carries no transaction, so its path is just itself.
+function _idb_request_path(req) {
+    return req.transaction ? [req, req.transaction, req.transaction.db] : [req];
+}
+
+// Runs one node's listeners for `event` at `phase`. Capturing runs capture
+// listeners only, bubbling non-capture ones only, and at the target both run
+// in registration order. The `on<type>` property stays ahead of the listeners
+// at its own node (bubble/target phases only, never capture) — the order this
+// shim has always used. The live list is snapshotted before the on<type>
+// handler and the walk (BUG-1706): a listener added during the dispatch — by
+// the onX handler included — never sees this event, and one removed before
+// its turn is skipped.
+function _idb_invoke(node, event, phase) {
+    event.currentTarget = node;
+    event.eventPhase = phase;
+    var type = event.type;
+    var store = node._listeners;
+    var list = store ? store[type] : null;
+    var snapshot = list ? list.slice() : null;
+    if (phase !== 1) {
+        var handler = node['on' + type];
+        if (typeof handler === 'function') {
+            try { handler.call(node, event); } catch (e) { _lumen_console_error('IDB on' + type + ': ' + e); }
+        }
     }
-    for (var i = 0; i < req._blockedListeners.length; i++) {
-        try { req._blockedListeners[i](ev); } catch(e) { _lumen_console_error('IDB blocked listener: ' + e); }
+    if (!snapshot) return;
+    for (var i = 0; i < snapshot.length; i++) {
+        var entry = snapshot[i];
+        if (list.indexOf(entry) < 0) continue;
+        if (phase === 1 ? !entry.capture : (phase === 3 && entry.capture)) continue;
+        try {
+            if (typeof entry.callback === 'function') entry.callback.call(node, event);
+            else if (entry.callback && typeof entry.callback.handleEvent === 'function') entry.callback.handleEvent(event);
+        } catch (e) { _lumen_console_error('IDB ' + type + ' listener: ' + e); }
+        if (entry.once) node.removeEventListener(type, entry.callback, entry.capture);
+        if (event._stopImmediate) break;
     }
 }
 
-function _idb_make_event(type, target, extra) {
-    var ev = { type: type, target: target, currentTarget: target, bubbles: false, _prevented: false };
-    ev.preventDefault = function() { this._prevented = true; };
-    ev.stopPropagation = function() {};
-    ev.stopImmediatePropagation = function() {};
-    if (extra) for (var k in extra) ev[k] = extra[k];
-    return ev;
+// Dispatches `event` along `path` (targets nearest-first, Indexed DB §3.5.6):
+// capture far-to-near over the ancestors, the target, then bubble near-to-far
+// while the event bubbles (BUG-914). `stopPropagation`/`stopImmediatePropagation`
+// (`cancelBubble`/`_stopImmediate`) cut the rest of the path; currentTarget and
+// eventPhase reset once the dispatch is over. A default action a caller derives
+// from `defaultPrevented` runs only after this whole traversal.
+function _idb_dispatch(target, event, path) {
+    event.target = target;
+    var i;
+    for (i = path.length - 1; i > 0; i--) {
+        if (event.cancelBubble) return;
+        _idb_invoke(path[i], event, 1);
+    }
+    if (!event.cancelBubble) _idb_invoke(target, event, 2);
+    if (event.bubbles) {
+        for (i = 1; i < path.length; i++) {
+            if (event.cancelBubble) return;
+            _idb_invoke(path[i], event, 3);
+        }
+    }
+    event.currentTarget = null;
+    event.eventPhase = 0;
 }
 
 // Runs a request's deferred action (data read/write), then fires its
@@ -353,31 +400,24 @@ function _idb_dispatch_request(req) {
     }
     req.readyState = 'done';
     if (req.error) {
-        var ev = _idb_make_event('error', req, { bubbles: true });
-        if (typeof req.onerror === 'function') {
-            try { req.onerror(ev); } catch(e) { _lumen_console_error('IDB onerror: ' + e); }
-        }
-        for (var i = 0; i < req._errorListeners.length; i++) {
-            try { req._errorListeners[i](ev); } catch(e) { _lumen_console_error('IDB error listener: ' + e); }
-        }
-        if (req.transaction && !ev._prevented) {
+        var ev = _idb_make_event('error', req);
+        _idb_dispatch(req, ev, _idb_request_path(req));
+        // The error's default action — abort the owning transaction — is
+        // decided only after the whole path has run, so a preventDefault at
+        // any of its nodes suppresses the abort (§3.5.6).
+        if (req.transaction && !ev.defaultPrevented) {
             req.transaction.error = req.error;
             req.transaction._aborted = true;
         }
     } else {
-        var ev2 = _idb_make_event('success', req);
-        if (typeof req.onsuccess === 'function') {
-            try { req.onsuccess(ev2); } catch(e) { _lumen_console_error('IDB onsuccess: ' + e); }
-        }
-        for (var j = 0; j < req._successListeners.length; j++) {
-            try { req._successListeners[j](ev2); } catch(e) { _lumen_console_error('IDB success listener: ' + e); }
-        }
+        _idb_dispatch(req, _idb_make_event('success', req), _idb_request_path(req));
     }
 }
 
 // --- IDBTransaction (Indexed DB §3.4) ----------------------------------------
 
 function IDBTransaction(db, storeNames, mode, durability) {
+    EventTarget.call(this);
     this.db = db;
     this.mode = mode || 'readonly';
     this.durability = durability || 'default';
@@ -386,8 +426,6 @@ function IDBTransaction(db, storeNames, mode, durability) {
     this.oncomplete = null;
     this.onabort = null;
     this.onerror = null;
-    this._completeListeners = [];
-    this._abortListeners = [];
     this._queue = [];
     this._stores = {};
     this._aborted = false;
@@ -405,6 +443,8 @@ function IDBTransaction(db, storeNames, mode, durability) {
     this._isUpgrade = false;
     this._snapshot = null;
 }
+IDBTransaction.prototype = Object.create(EventTarget.prototype);
+IDBTransaction.prototype.constructor = IDBTransaction;
 Object.defineProperty(IDBTransaction.prototype, 'objectStoreNames', {
     get: function() { return _idb_string_list(this._storeNames); }
 });
@@ -429,28 +469,12 @@ IDBTransaction.prototype.commit = function() {
     this._committing = true;
     _idb_schedule_txn(this);
 };
-IDBTransaction.prototype.addEventListener = function(type, fn) {
-    if (typeof fn !== 'function') return;
-    if (type === 'complete') this._completeListeners.push(fn);
-    else if (type === 'abort') this._abortListeners.push(fn);
-};
-IDBTransaction.prototype.removeEventListener = function(type, fn) {
-    var arr = type === 'complete' ? this._completeListeners : (type === 'abort' ? this._abortListeners : null);
-    if (!arr) return;
-    var i = arr.indexOf(fn);
-    if (i >= 0) arr.splice(i, 1);
-};
 
+// `abort` bubbles to the connection (BUG-914); `complete` stops at the
+// transaction (Indexed DB §3.4).
 function _idb_fire_txn(txn, type) {
-    var ev = _idb_make_event(type, txn);
-    var handler = type === 'complete' ? txn.oncomplete : txn.onabort;
-    if (typeof handler === 'function') {
-        try { handler(ev); } catch(e) { _lumen_console_error('IDB txn ' + type + ': ' + e); }
-    }
-    var arr = type === 'complete' ? txn._completeListeners : txn._abortListeners;
-    for (var i = 0; i < arr.length; i++) {
-        try { arr[i](ev); } catch(e) { _lumen_console_error('IDB txn listener: ' + e); }
-    }
+    _idb_dispatch(txn, _idb_make_event(type, txn),
+        type === 'abort' ? [txn, txn.db] : [txn]);
 }
 
 function _idb_schedule_txn(txn) {
@@ -622,13 +646,9 @@ function _idb_abort_txn_requests(txn) {
         req.result = undefined;
         req.error = _idb_error('AbortError', 'transaction was aborted');
         req.readyState = 'done';
-        var ev = _idb_make_event('error', req, { bubbles: true });
-        if (typeof req.onerror === 'function') {
-            try { req.onerror(ev); } catch(e) { _lumen_console_error('IDB onerror: ' + e); }
-        }
-        for (var j = 0; j < req._errorListeners.length; j++) {
-            try { req._errorListeners[j](ev); } catch(e) { _lumen_console_error('IDB error listener: ' + e); }
-        }
+        // At the request only: the transaction is already aborting, and this
+        // event must not ride up the path to re-abort or re-report it.
+        _idb_dispatch(req, _idb_make_event('error', req), [req]);
     }
 }
 
@@ -651,6 +671,7 @@ function _idb_make_request(source, txn, fn) {
 // --- IDBDatabase (Indexed DB §3.3) -------------------------------------------
 
 function IDBDatabase(data) {
+    EventTarget.call(this);
     this._data = data;
     this.name = data.name;
     this.version = data.version;
@@ -665,34 +686,12 @@ function IDBDatabase(data) {
     this.onabort = null;
     this.onerror = null;
     this.onclose = null;
-    // Only `versionchange` has a dispatch site today; the other three types are
-    // accepted so a page can register for them without a TypeError.
-    this._dbListeners = { versionchange: [], abort: [], error: [], close: [] };
 }
-IDBDatabase.prototype.addEventListener = function(type, fn) {
-    if (typeof fn !== 'function') return;
-    var arr = this._dbListeners[type];
-    if (arr) arr.push(fn);
-};
-IDBDatabase.prototype.removeEventListener = function(type, fn) {
-    var arr = this._dbListeners[type];
-    if (!arr) return;
-    var i = arr.indexOf(fn);
-    if (i >= 0) arr.splice(i, 1);
-};
+IDBDatabase.prototype = Object.create(EventTarget.prototype);
+IDBDatabase.prototype.constructor = IDBDatabase;
 
-// Fires an event at a connection, on<type> first and then the listener list —
-// the same order every other dispatch in this shim uses.
 function _idb_fire_db_event(db, type, extra) {
-    var ev = _idb_make_event(type, db, extra);
-    var handler = db['on' + type];
-    if (typeof handler === 'function') {
-        try { handler(ev); } catch(e) { _lumen_console_error('IDB db on' + type + ': ' + e); }
-    }
-    var arr = db._dbListeners[type] || [];
-    for (var i = 0; i < arr.length; i++) {
-        try { arr[i](ev); } catch(e) { _lumen_console_error('IDB db ' + type + ' listener: ' + e); }
-    }
+    _idb_dispatch(db, _idb_make_event(type, db, extra), [db]);
 }
 
 // A connection blocks an upgrade until close() has been called AND every
@@ -1406,13 +1405,12 @@ function _idb_process_open(entry, budget) {
             db.version = entry.newVersion;
             req.transaction = txn;
             req.readyState = 'done';
-            var ev = _idb_make_event('upgradeneeded', req, { oldVersion: entry.oldVersion, newVersion: entry.newVersion });
-            if (typeof req.onupgradeneeded === 'function') {
-                try { req.onupgradeneeded(ev); } catch(e) { _lumen_console_error('IDB onupgradeneeded: ' + e); }
-            }
-            for (var i = 0; i < req._upgradeListeners.length; i++) {
-                try { req._upgradeListeners[i](ev); } catch(e) { _lumen_console_error('IDB upgrade listener: ' + e); }
-            }
+            // The upgrade transaction is the request's parent for this event
+            // (Indexed DB §3.5.6), so capture listeners on it and on the
+            // connection see `upgradeneeded` before onupgradeneeded runs.
+            _idb_dispatch(req,
+                _idb_make_event('upgradeneeded', req, { oldVersion: entry.oldVersion, newVersion: entry.newVersion }),
+                [req, txn, db]);
         }
         while (txn._queue.length > 0 && !txn._aborted && budget > 0) {
             budget--;
@@ -1450,12 +1448,7 @@ function _idb_process_open(entry, budget) {
     var ev2 = entry._delete
         ? _idb_make_event('success', req, { oldVersion: entry.oldVersion, newVersion: null })
         : _idb_make_event('success', req);
-    if (typeof req.onsuccess === 'function') {
-        try { req.onsuccess(ev2); } catch(e) { _lumen_console_error('IDB open onsuccess: ' + e); }
-    }
-    for (var j = 0; j < req._successListeners.length; j++) {
-        try { req._successListeners[j](ev2); } catch(e) { _lumen_console_error('IDB open success listener: ' + e); }
-    }
+    _idb_dispatch(req, ev2, _idb_request_path(req));
     return budget;
 }
 

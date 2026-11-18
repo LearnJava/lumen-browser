@@ -11,7 +11,7 @@ Third full test category, added 2026-07-22 by the WPT-VENDOR backlog (`ROADMAP.m
 
 ## Разведка WPT-IDB-SCOUT (2026-10-26)
 
-Статус: **закрыта** (2026-10-26). Код не менялся. Дефекты — BUG-1705…1710 и [BUG-914](../../bugs/BUG-914-OPEN.md) (указатели в `STATUS-P3.md`), фича — `IDB-EVENTS` (P1, `ROADMAP.md`), раннер — `WPT-IDB-RUNNER` (P2).
+Статус: **закрыта** (2026-10-26). Код не менялся. Дефекты — BUG-1705…1710 и [BUG-914](../../bugs/BUG-914-FIXED.md) (указатели в `STATUS-P3.md`), фича — `IDB-EVENTS` (P1, `ROADMAP.md`), раннер — `WPT-IDB-RUNNER` (P2).
 
 **Прогон** (`run_corpus.py --prefixes IndexedDB --processes 7`, `dev-release` от `main` `6a43c1d0d`): 813 id, **12.02 %**, harness OK 556, сабтесты 582/3 692 (статусы: OK 556, TIMEOUT 211, ERROR 46). Повтор на чистом `target/dev-release/data/idb` — 12.05 %, то есть накопленное состояние IDB счёт почти не двигает (но ломает `indexedDB.databases()`, см. кластер N). Данные: `.tmp/wpt-idb2/` (первый), `.tmp/wpt-idb3/` (чистый) в слоте `p2-work`; классификатор — `.tmp/idb_cl.py`; пробы — `.tmp/probes/zz-scout-probe*.{html,any.js}` (в `tests/wpt/IndexedDB/` их держать нельзя — попадут в корпус).
 
@@ -33,7 +33,7 @@ Third full test category, added 2026-07-22 by the WPT-VENDOR backlog (`ROADMAP.m
 | H | `idlharness.any.html` | 1 | 161 | FAIL | движок: нет глобалов `IDBFactory` и `IDBVersionChangeEvent`; свойства-данные вместо аксессоров (`IDBRequest.result` — own), интерфейсные объекты перечислимы, `.length`/`.name` методов. Проба p5 | 0.8 (0.1) |
 | I | бинарные ключи (`ArrayBuffer`/view), `indexedDB.cmp` | 4 | 29 | FAIL | движок: `_idb_is_valid_key` не знает бинарных ключей (`DataError: invalid key`; `put` с `Uint8Array`-ключом → abort). Проба p3 | 3.5 (0.43) |
 | J | порядок проверок (`*-exception-order`) | 13 | 45 | FAIL | движок: `InvalidStateError`/`TransactionInactiveError`/`DataError` проверяются в другом порядке | 8.2 (1.0) |
-| K | события: исключение в обработчике, bubbling, active-флаг | 9 | 41 | FAIL | движок: [BUG-914](../../bugs/BUG-914-OPEN.md) (проба p8: `db.onerror`/`tx.onerror` = 0 вызовов), исключение в слушателе не отменяет транзакцию, транзакция активна «в следующей задаче» | 7.0 (0.86) |
+| K | события: исключение в обработчике, bubbling, active-флаг | 9 | 41 | FAIL | движок: [BUG-914](../../bugs/BUG-914-FIXED.md) (проба p8: `db.onerror`/`tx.onerror` = 0 вызовов), исключение в слушателе не отменяет транзакцию, транзакция активна «в следующей задаче» | 7.0 (0.86) |
 | L | `close()` в `upgradeneeded` | 2 | 13 | FAIL | движок: `open` после `db.close()` в апгрейде обязан дать `AbortError`, шим шлёт `success` | 1.4 (0.18) |
 | M | атрибуты `[[Writable]]` | 5 | 15 | FAIL | движок: `cursor.direction/key/primaryKey/source` — own-свойства данных | 4.3 (0.53) |
 | N | harness TIMEOUT/ERROR без сабтестов | 15 | 0 | TIMEOUT/ERROR | раннер: `indexedDB.databases()` видит БД параллельных тестов того же origin (`abort-in-initial-upgradeneeded`: `dbs.length` 1…231 вместо 0) и БД, накопленные с прошлых прогонов (`target/dev-release/data/idb`: 63 МБ после одного прогона, 450 МБ WAL после двух). Лечится `--processes 1` для `databases()`-тестов и чисткой `data/idb` перед прогоном | 1.0 (0.12) |
@@ -54,12 +54,12 @@ Third full test category, added 2026-07-22 by the WPT-VENDOR backlog (`ROADMAP.m
 |---|---|
 | A, B | [BUG-1705](../../bugs/BUG-1705-OPEN.md) — шим IndexedDB не ставится в Dedicated/SharedWorker |
 | C | [BUG-1226](../../bugs/BUG-1226-OPEN.md) (общая для корпуса) |
-| D | [BUG-1706](../../bugs/BUG-1706-OPEN.md) + `IDB-EVENTS` |
+| D | [BUG-1706](../../bugs/BUG-1706-FIXED.md) + `IDB-EVENTS` |
 | E | [BUG-1707](../../bugs/BUG-1707-OPEN.md) |
 | G | [BUG-1708](../../bugs/BUG-1708-OPEN.md) |
 | I | [BUG-1709](../../bugs/BUG-1709-OPEN.md) |
 | P | [BUG-1710](../../bugs/BUG-1710-OPEN.md) |
-| F, H, J, K, L, M | `IDB-EVENTS` (P1, `ROADMAP.md`); K — также [BUG-914](../../bugs/BUG-914-OPEN.md) (дописана микротаск-находка) |
+| F, H, J, K, L, M | `IDB-EVENTS` (P1, `ROADMAP.md`); K — также [BUG-914](../../bugs/BUG-914-FIXED.md) (дописана микротаск-находка) |
 | N | `WPT-IDB-RUNNER` (P2, сделано 2026-10-27, см. ниже) — serial lane и чистка `data/idb`; остаток — [BUG-1753](../../bugs/BUG-1753-OPEN.md) |
 | O, Q | не заведены: разнородный хвост по одному-двум id; брать после `IDB-EVENTS` повторной разведкой |
 

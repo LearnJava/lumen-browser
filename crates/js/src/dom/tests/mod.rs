@@ -226,6 +226,9 @@ mod v8_window_anim_compress;
 mod v8_idb;
 
 #[cfg(feature = "v8-backend")]
+mod v8_idb_events;
+
+#[cfg(feature = "v8-backend")]
 mod v8_formdata;
 
 #[cfg(feature = "v8-backend")]
