@@ -798,12 +798,16 @@ function _lumen_deliver_transition_events(events) {
         if (!type) continue;
         var propertyName = events[i][2];
         if (kind === 'run') _css_tr_from_event(nid, propertyName);
-        var evt = new TransitionEvent(type, {
-            bubbles: true, cancelable: type === 'transitionend', isTrusted: true,
-            propertyName: propertyName, elapsedTime: events[i][3]
-        });
-        evt.target = _lumen_make_element(nid);
-        _lumen_dispatch(nid, evt);
+        // A transition a script drives (`_css_take_clock`) fires its own start/end at the boundary
+        // a seek crossed: the scheduler never saw the seek. Its cancel/end bookkeeping still runs.
+        if (!((kind === 'start' || kind === 'end') && _css_js_owns_events(nid, propertyName, true))) {
+            var evt = new TransitionEvent(type, {
+                bubbles: true, cancelable: type === 'transitionend', isTrusted: true,
+                propertyName: propertyName, elapsedTime: events[i][3]
+            });
+            evt.target = _lumen_make_element(nid);
+            _lumen_dispatch(nid, evt);
+        }
         if (kind === 'cancel') _css_tr_event_cancel(nid, propertyName);
         else if (kind === 'end') _css_tr_retire(nid, propertyName);
     }
@@ -831,6 +835,9 @@ function _lumen_deliver_animation_events(events) {
         if (!type) continue;
         var animationName = events[i][2];
         if (kind === 'start' || kind === 'cancel') _css_an_update(nid, null);
+        // A script-driven animation (`_css_take_clock`) fires its own start/end at the boundary a
+        // seek crossed: the scheduler never saw the seek.
+        if ((kind === 'start' || kind === 'end') && _css_js_owns_events(nid, animationName, false)) continue;
         var evt = new AnimationEvent(type, {
             bubbles: true, cancelable: false, isTrusted: true,
             animationName: animationName, elapsedTime: events[i][3]

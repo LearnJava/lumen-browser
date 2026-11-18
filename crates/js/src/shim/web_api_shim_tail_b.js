@@ -7399,13 +7399,104 @@ function _css_ct_real(a) {
 }
 
 function _css_state(a) {
-    if (a._cx) return 'idle';
+    if (a._cx) { a._ph = 'idle'; return 'idle'; }
     var c = a._c, st;
     if (c.pausedAt !== null) st = 'paused';
     else if (c.pending === 'play') st = 'running';
     else st = _css_ct(a) >= _css_end(a) ? 'finished' : 'running';
     _css_sync_finished(a, st === 'finished');
+    _css_js_events(a);
     return st;
+}
+
+// Web Animations §4.4.9 «animation effect phases»: where the effect's local time sits against its
+// start delay and active duration.
+function _css_phase(a) {
+    var e = a._eff;
+    if (a._cx || !e) return 'idle';
+    // A created-but-never-played animation (pending, no first frame yet) has not entered its
+    // active interval: a seek of it is the start, not a step inside it.
+    if (a._c.pend0) return 'before';
+    var ct = _css_ct(a), t = e._timing, delay = +t.delay || 0;
+    if (ct === null) return 'idle';
+    var dur = +t.duration || 0, it = t.iterations == null ? 1 : +t.iterations;
+    var active = (dur === 0 || it === 0) ? 0 : dur * it;
+    if (ct < delay) return 'before';
+    return ct >= delay + active ? 'after' : 'active';
+}
+
+// A script that writes a clock takes the animation's events over: the shell's scheduler never
+// sees the seek and would report the boundaries of its own clock, so `_lumen_deliver_*_events`
+// drops the start/end of a `_jsev` object and this file fires them instead. The phase the write
+// starts from is the one before it.
+function _css_take_clock(a) {
+    if (a._jsev) return;
+    a._jsev = true;
+    a._ph = _css_phase(a);
+}
+
+// CSS Animations L2 §4.2: a move across a phase boundary into `active` owes an
+// `animationstart`/`transitionstart`, a move out of it an `animationend`/`transitionend`; a move
+// from `before` straight to `after` (or back) crosses no active interval and fires nothing.
+function _css_js_events(a) {
+    if (!a._jsev) return;
+    var was = a._ph, now = _css_phase(a);
+    a._ph = now;
+    if (was === now || was === 'idle' || now === 'idle') return;
+    if ((now === 'active') === (was === 'active')) return;
+    var start = now === 'active';
+    var t = a._eff._timing, dur = +t.duration || 0, it = t.iterations == null ? 1 : +t.iterations;
+    // `elapsedTime` as the shell's own events carry it (`AnimationScheduler`): 0 at the start,
+    // the whole active duration at the end.
+    var elapsed = start ? 0 : (dur === 0 || it === 0 ? 0 : dur * it) / 1000;
+    var evt;
+    if (a._ctype === 't') {
+        evt = new TransitionEvent(start ? 'transitionstart' : 'transitionend', {
+            bubbles: true, cancelable: !start, isTrusted: true,
+            propertyName: a._cprop, elapsedTime: elapsed
+        });
+    } else {
+        evt = new AnimationEvent(start ? 'animationstart' : 'animationend', {
+            bubbles: true, cancelable: false, isTrusted: true,
+            animationName: a._cname, elapsedTime: elapsed
+        });
+    }
+    _css_queue_css_event(a._nid, evt);
+}
+
+// Queue one CSS animation/transition event as a task, for the reason and with the mechanism of
+// `Animation.prototype._fire`: WPT's `EventWatcher` is armed after the write that triggers the
+// event, so a synchronous dispatch reads as «Not expecting event».
+function _css_queue_css_event(nid, evt) {
+    var rec = { sent: false, run: function() {
+        if (rec.sent) return;
+        rec.sent = true;
+        var at = _wa_pending_events.indexOf(rec);
+        if (at >= 0) _wa_pending_events.splice(at, 1);
+        evt.target = _lumen_make_element(nid);
+        _lumen_dispatch(nid, evt);
+    } };
+    _wa_pending_events.push(rec);
+    var deadline = _lumen_now_ms();
+    _lumen_timers.push({
+        id: _lumen_timer_seq++, fn: function() { rec.run(); },
+        deadline: deadline, interval: null, nesting: 0,
+    });
+    _lumen_request_wakeup(deadline);
+}
+
+// Does a script drive the clocks of the animation this shell event names?
+function _css_js_owns_events(nid, name, transition) {
+    if (transition) {
+        var t = _css_tr_by_key[nid + ':' + name];
+        return !!(t && t._jsev);
+    }
+    var list = _css_an_by_key[nid + ':'];
+    if (!list) return false;
+    for (var i = 0; i < list.length; i++) {
+        if (list[i]._cname === name && list[i]._jsev) return true;
+    }
+    return false;
 }
 
 // Web Animations §4.4.14 «update the finished state»: resolve `finished` and queue the `finish`
@@ -7455,13 +7546,16 @@ function _css_complete_pending(a) {
     if (res) res(a);
 }
 
-// Arms a one-shot timer for the end of an observed animation, so `finished` settles and `finish`
-// fires without the script polling. Not armed for the many animations nobody looked at.
+// Arms a one-shot timer for the next phase boundary of an observed animation — the end of the
+// delay while it waits, the end of the effect after that — so `finished` settles, `finish` fires
+// and a script-driven animation gets its `animationstart` without the script polling. Not armed
+// for the many animations nobody looked at.
 function _css_arm(a) {
     if (a._armed || a._cx || a._c.pausedAt !== null || !a._eff) return;
-    var end = _css_end(a);
-    if (end === Infinity) return;
-    var wait = Math.max(0, end - _css_ct(a));
+    var ct = _css_ct(a), delay = +a._eff._timing.delay || 0;
+    var target = ct < delay ? delay : _css_end(a);
+    if (target === Infinity) return;
+    var wait = Math.max(0, target - ct);
     a._armed = true;
     var deadline = _lumen_now_ms() + wait;
     _lumen_timers.push({
@@ -7499,6 +7593,7 @@ _css_define('currentTime', {
         }
         v = +v;
         if (isNaN(v)) throw new TypeError("Failed to set the 'currentTime' property on 'Animation': The provided double value is non-finite.");
+        _css_take_clock(this);
         var a = this, c = a._c, now = _css_now();
         _css_readd(a);
         if (a._cx) { _css_revive(a); c.pausedAt = now; }
@@ -7525,13 +7620,14 @@ _css_define('startTime', {
         var wasPaused = !a._cx && c.pausedAt !== null;
         if (v === null || v === undefined) {
             // An unresolved start time freezes the animation at its current time.
-            if (!a._cx && c.pausedAt === null) { var ct = _css_ct_real(a); c.start = now - ct; c.pausedAt = now; }
+            if (!a._cx && c.pausedAt === null) { _css_take_clock(a); var ct = _css_ct_real(a); c.start = now - ct; c.pausedAt = now; }
             if (c.pending) _css_complete_pending(a);
             _css_note_ps(a, wasPaused);
             return;
         }
         v = +v;
         if (isNaN(v)) throw new TypeError("Failed to set the 'startTime' property on 'Animation': The provided double value is non-finite.");
+        _css_take_clock(a);
         _css_readd(a);
         if (a._cx) _css_revive(a);
         c.pausedAt = null;
@@ -7663,6 +7759,7 @@ _css_define('finish', {
         _css_refresh(a);
         var end = _css_end(a);
         if (end === Infinity) throw _css_invalid_state('Cannot finish an animation with an infinite effect end');
+        _css_take_clock(a);
         if (a._cx) _css_revive(a);
         c.start = _css_now() - end;
         c.pausedAt = null;
@@ -7694,6 +7791,7 @@ function _css_new(proto, nid, pseudo, clock) {
         get: function() { _css_refresh(this); return this._eff; },
         set: function(v) {
             if (v === this._eff) return;
+            _css_take_clock(this);
             this._eff = v || null;
             this._effRepl = true;
             if (v) Object.defineProperty(v, '_animation', { value: this, writable: true, configurable: true });
