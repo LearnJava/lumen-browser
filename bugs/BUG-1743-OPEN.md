@@ -42,3 +42,7 @@ WPT-SW-SCOUT, кластер J (`docs/wpt-vendor-notes/service-workers.md`): 64 
 ## Как проверить
 
 Проба выше в `*.https.html` рядом с тестом (`run_smoke.py`). `run_corpus.py --prefixes service-workers` — кластер J без сообщений «reading 'controller'» / «.then is not a function» / «response.text is not a function».
+
+## Смежное: контроллер на iframe-клиентах (из BUG-1742)
+
+Модель controller уже готова ([BUG-1742](BUG-1742-FIXED.md), `_sw_controller` — стабильная ссылка на активного worker-а). Единственное, что держит `unregister-then-register` сабтесты 2–4 и `active.https.html` красными — `iframe.contentWindow.navigator.serviceWorker.controller` уходит через фасад по значению (этот баг). После фикса фасада iframe-клиент получит свой контроллер тем же `_sw_controller`-механизмом, отдельной доработки контроллера не нужно.

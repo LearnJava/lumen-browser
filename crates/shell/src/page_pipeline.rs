@@ -151,6 +151,7 @@ pub(crate) fn render_bytes(
             cert_info: None,
             response_policies: ResponsePolicies::default(),
             prescript_layout_rects: parsed.prescript_layout_rects,
+            layout_passes: parsed.layout_passes,
         },
         layout_source,
         parsed.js_ctx,
@@ -413,6 +414,8 @@ pub(crate) struct LoadedPage {
     /// (`buffered: true` semantics). `None` for a page with no parse-time
     /// script, matching `parse_time_snapshot`'s own gate.
     pub(crate) prescript_layout_rects: Option<std::collections::HashMap<u32, [f32; 4]>>,
+    /// LOAD-9: см. [`ParsedPage::layout_passes`] — carried into the health log.
+    pub(crate) layout_passes: u32,
 }
 
 impl LoadedPage {
@@ -455,6 +458,7 @@ impl LoadedPage {
             cert_info: None,
             response_policies: ResponsePolicies::default(),
             prescript_layout_rects: None,
+            layout_passes: 0,
         }
     }
 }
@@ -521,6 +525,9 @@ pub(crate) struct ParsedPage {
     /// Измеритель текста, которым собран `layout`: headless-снимок досчитывает им
     /// layout после `load`/rAF-обработчиков страницы (`dump_mode::settle_after_load`).
     pub(crate) measurer: lumen_paint::MultiFontMeasurer,
+    /// LOAD-9: сколько полных layout-проходов стоил этот проход (1 — экранная
+    /// фаза переиспользовала дерево скриптового, 2–3 — пересобирала).
+    pub(crate) layout_passes: u32,
 }
 
 /// Источник для повторного layout без повторной загрузки/парсинга.
@@ -949,6 +956,18 @@ pub(crate) fn collect_js_layout_snapshot(
     }
 }
 
+thread_local! {
+    /// LOAD-9: полных проходов `layout_page` на этом потоке. Конвейер загрузки
+    /// берёт прирост вокруг своего вызова и отдаёт его в `ParsedPage` (health-log:
+    /// `layout_passes`).
+    static LAYOUT_PASSES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// [`LAYOUT_PASSES`] — сколько полных layout-проходов уже было на этом потоке.
+fn layout_passes_so_far() -> u32 {
+    LAYOUT_PASSES.with(std::cell::Cell::get)
+}
+
 /// One layout pass with BUG-270's per-pass `print` media flag bracketed.
 pub(crate) fn layout_page(
     doc: &Document,
@@ -959,6 +978,7 @@ pub(crate) fn layout_page(
     dark_mode: bool,
     media_print: bool,
 ) -> LayoutBox {
+    LAYOUT_PASSES.with(|c| c.set(c.get().saturating_add(1)));
     // BUG-270: печать в PDF фильтрует каскад по media_type="print" через
     // sticky thread-local. Флаг per-pass, поэтому сбрасываем сразу после layout,
     // чтобы последующие экранные проходы на этом же потоке не наследовали print.
@@ -1089,6 +1109,9 @@ pub(crate) fn parse_and_layout(
     // COMPAT-PACK-CSS: записи пакета для хоста этого документа (пусто — не применяется).
     compat_inject: crate::compat_inject::CompatInject,
 ) -> Result<ParsedPage, Box<dyn Error>> {
+    // LOAD-9: сколько полных layout-проходов этот вызов стоит — прирост на этом
+    // потоке (health-log: `layout_passes`, ворота «один проход на неизменный DOM»).
+    let layout_passes_before = layout_passes_so_far();
     // LOAD-1: живое окно (есть `Lumen`, на который можно слать `ImageDecoded`) отдаёт
     // страницу, не дожидаясь картинок; `--deterministic` (graphic_tests, gdigrab-снимки)
     // и все headless-вызовы получают полностью загруженную страницу, как раньше.
@@ -1390,6 +1413,10 @@ pub(crate) fn parse_and_layout(
     // `collect_layout_shift_rects`'s doc-comment.
     let prescript_layout_rects =
         parse_time_box.as_ref().map(lumen_layout::collect_layout_shift_rects);
+    // LOAD-9: дерево последнего полного прохода — экранная фаза отдаёт его как
+    // есть, пока ничто ниже не перечеркнуло геометрию (мутации скриптов и
+    // `DOMContentLoaded`, intrinsic-размеры картинок, скрытие баннеров).
+    let mut screen_layout = parse_time_box;
 
     let run_scripts_span = lumen_core::trace::span("run-scripts", "script");
     // BUG-480 срез 1: клоны провайдеров/хранилищ для sub-документов <iframe> —
@@ -1543,16 +1570,16 @@ pub(crate) fn parse_and_layout(
             d.set_style_attr_csp_blocked(blocked_style_attr_nodes);
         }
         if scripts_changed_css || dom_touched || adopted_changed {
-            let snapshot = {
+            let (snapshot, tree) = {
                 let d = doc_arc.lock().unwrap();
-                collect_js_layout_snapshot(
-                    &layout_page(
-                        &d, &cascade.sheet, &cascade.measurer, viewport, hp, dark_mode, media_print,
-                    ),
-                    &d,
-                    viewport,
-                )
+                let tree = layout_page(
+                    &d, &cascade.sheet, &cascade.measurer, viewport, hp, dark_mode, media_print,
+                );
+                (collect_js_layout_snapshot(&tree, &d, viewport), tree)
             };
+            // LOAD-9: этот проход описывает DOM после скриптов — экранная фаза
+            // переиспользует его, если ниже геометрия не сдвинется снова.
+            screen_layout = Some(tree);
             js.update_layout_rects(snapshot.rects);
             js.update_client_rects(snapshot.client_rects);
             js.update_computed_styles(snapshot.styles);
@@ -1579,12 +1606,34 @@ pub(crate) fn parse_and_layout(
     // + DOMContentLoaded event. Fires before images/fonts are decoded.
     #[cfg(feature = "v8")]
     if let Some(js) = &js_ctx {
+        // LOAD-9: `DOMContentLoaded` — последний JS, который может сдвинуть
+        // геометрию до экранного прохода. Флаг мутаций для планировщика
+        // монотонный (его забирает шелл после `RenderDone`), поэтому здесь он
+        // снимается на время диспатча — иначе «уже грязно после скриптов» и
+        // «грязно от обработчика» не различить, — и возвращается как был.
+        let dirty = js.dom_dirty_flag();
+        let was_dirty = dirty
+            .as_ref()
+            .is_some_and(|f| f.swap(false, std::sync::atomic::Ordering::Relaxed));
         // BUG-640: bracket the real dispatch — `domInteractive`/
         // `domContentLoadedEventStart` share the "before" instant,
         // `domContentLoadedEventEnd` is the "after" one.
         crate::nav_timing::record_dom_content_loaded_start();
         js.notify_dom_content_loaded();
         crate::nav_timing::record_dom_content_loaded_end();
+        // `None` — у рантайма нет такого флага (заглушки тестов): считаем, что
+        // обработчики могли тронуть дерево.
+        let touched = dirty
+            .as_ref()
+            .is_none_or(|f| f.load(std::sync::atomic::Ordering::Relaxed));
+        if touched {
+            screen_layout = None;
+        }
+        if let Some(f) = &dirty
+            && (was_dirty || touched)
+        {
+            f.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     {
@@ -1684,6 +1733,11 @@ pub(crate) fn parse_and_layout(
         && let Some(js) = &js_ctx
     {
         js.note_shell_attr_writes(&intrinsic_written);
+    }
+    // LOAD-9: дописанные `width`/`height` меняют геометрию — дерево скриптового
+    // прохода на них уже не годится.
+    if !intrinsic_written.is_empty() {
+        screen_layout = None;
     }
     // GAP-CSPENF срез 4: `securitypolicyviolation` for every `img-src`-blocked
     // URL. `blocked_by_img_src` came back from a fetch pass that ran before
@@ -1973,15 +2027,22 @@ pub(crate) fn parse_and_layout(
     // COMPAT-PACK-CSS: hide_banner — после скриптов (баннеры часто вставлены ими),
     // до финальной раскладки; правка style-атрибута попадает в неё сама.
     if !compat_inject.hide_banners.is_empty() {
+        // LOAD-9: `display:none` от записей пакета — новая геометрия.
+        screen_layout = None;
         let mut d = doc_arc.lock().unwrap();
         crate::compat_inject::apply_hide_banners(&mut d, &compat_inject.hide_banners);
     }
 
     // BUG-443: same helper the pre-script layout uses, so the print-media
     // bracket (BUG-270) cannot drift between the two passes.
-    let layout = {
-        let d = doc_arc.lock().unwrap();
-        layout_page(&d, &sheet, &measurer, viewport, hp, dark_mode, media_print)
+    // LOAD-9: экранный проход — только когда последнее дерево устарело; иначе
+    // возвращается оно же (один полный layout на неизменный DOM).
+    let layout = match screen_layout {
+        Some(tree) => tree,
+        None => {
+            let d = doc_arc.lock().unwrap();
+            layout_page(&d, &sheet, &measurer, viewport, hp, dark_mode, media_print)
+        }
     };
 
     // BUG-480 срез 13: размер host-бокса каждого `<iframe>` известен только
@@ -2099,6 +2160,7 @@ pub(crate) fn parse_and_layout(
         frame_env,
         prescript_layout_rects,
         measurer,
+        layout_passes: layout_passes_so_far().saturating_sub(layout_passes_before),
     })
 }
 

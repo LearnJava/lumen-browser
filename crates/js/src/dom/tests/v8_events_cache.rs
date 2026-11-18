@@ -605,6 +605,53 @@ fn sw_register_concurrent_same_scope_serializes() {
     );
 }
 
+/// BUG-1742: a rejected `install` `waitUntil` must transition the worker to
+/// `redundant` and roll the (active-less) registration out — not advance it to
+/// `activated` as the old simulated lifecycle did.
+#[test]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+fn sw_install_waituntil_reject_makes_worker_redundant() {
+    let (rt, _store) = v8_sw_runtime_at(
+        "https://reject.test/",
+        "self.addEventListener('install', function(e) { e.waitUntil(Promise.reject(new Error('boom'))); });",
+    );
+    rt.eval(
+        "navigator.serviceWorker.register('/sw.js', { scope: '/app/' });
+         var reg = _sw_registrations['https://reject.test/app/'];
+         globalThis._w = reg ? reg.installing : null;",
+    )
+    .unwrap();
+    assert!(
+        sw_wait_flag(&rt, "globalThis._w && globalThis._w.state === 'redundant'"),
+        "install waitUntil rejection did not make the worker redundant"
+    );
+    assert_eq!(
+        rt.eval("_sw_registrations['https://reject.test/app/'] === undefined").unwrap(),
+        lumen_core::JsValue::Bool(true)
+    );
+}
+
+/// BUG-1742 guard: a fulfilled `install` `waitUntil` still reaches `activated`
+/// (the lifecycle now waits for the isolate's install outcome before advancing).
+#[test]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+fn sw_install_waituntil_fulfill_reaches_activated() {
+    let (rt, _store) = v8_sw_runtime_at(
+        "https://fulfill.test/",
+        "self.addEventListener('install', function(e) { e.waitUntil(Promise.resolve()); });",
+    );
+    rt.eval(
+        "navigator.serviceWorker.register('/sw.js', { scope: '/app/' });
+         var reg = _sw_registrations['https://fulfill.test/app/'];
+         globalThis._w = reg ? reg.installing : null;",
+    )
+    .unwrap();
+    assert!(
+        sw_wait_flag(&rt, "globalThis._w && globalThis._w.state === 'activated'"),
+        "install waitUntil fulfill did not activate the worker"
+    );
+}
+
 /// BUG-675: evaluates `register(args)` and returns the rejection's `name`,
 /// or `"resolved:<scriptURL>"`, plus whether a registration was recorded.
 fn sw_register_outcome(page: &str, args: &str) -> (String, bool) {
@@ -763,6 +810,60 @@ fn sw_register_default_scope_and_unregister_twice() {
     );
     assert_eq!(rt.eval("u1").unwrap(), lumen_core::JsValue::Bool(true));
     assert_eq!(rt.eval("u2").unwrap(), lumen_core::JsValue::Bool(false));
+}
+
+/// BUG-1742: a client's `controller` is a stable reference captured when the
+/// client became controlled — `unregister()` + re-register with a different
+/// script must leave the old worker as the controller, not resurrect the new
+/// one (`unregister-then-register` «does not resurrect»).
+#[test]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+fn sw_controller_survives_unregister_reregister() {
+    let (rt, _store) = v8_sw_runtime_at("https://example.com/", "self.onmessage = function() {};");
+    rt.eval(
+        "window._a = null; window._b = null;
+         navigator.serviceWorker.register('/a.js', { scope: '/' })
+             .then(function(r) { window._a = r; });",
+    )
+    .unwrap();
+    assert!(
+        sw_wait_flag(&rt, "window._a != null && window._a.active != null"),
+        "first worker never activated"
+    );
+    rt.eval("window._ctrlA = navigator.serviceWorker.controller.scriptURL;")
+        .unwrap();
+    rt.eval(
+        "window._a.unregister().then(function() {
+             return navigator.serviceWorker.register('/b.js', { scope: '/' });
+         }).then(function(r) { window._b = r; });",
+    )
+    .unwrap();
+    assert!(
+        sw_wait_flag(&rt, "window._b != null && window._b.active != null"),
+        "second worker never activated"
+    );
+    rt.eval("window._ctrlB = navigator.serviceWorker.controller.scriptURL;")
+        .unwrap();
+    assert_eq!(
+        rt.eval("window._ctrlA").unwrap(),
+        lumen_core::JsValue::String("https://example.com/a.js".into())
+    );
+    // The re-registered worker activated, but the controller is unchanged.
+    assert_eq!(
+        rt.eval("window._b.active.scriptURL").unwrap(),
+        lumen_core::JsValue::String("https://example.com/b.js".into())
+    );
+    assert_eq!(
+        rt.eval("window._ctrlB").unwrap(),
+        lumen_core::JsValue::String("https://example.com/a.js".into())
+    );
+    assert!(
+        matches!(
+            rt.eval("navigator.serviceWorker.controller === window._b.active").unwrap(),
+            lumen_core::JsValue::Bool(false)
+        ),
+        "re-registered worker must not become the controller"
+    );
 }
 
 // BUG-1742: a classic script with a non-JS MIME type rejects with
@@ -1777,6 +1878,103 @@ fn v8_sw_runtime_at(url: &str, script: &'static str) -> (V8JsRuntime, lumen_core
     )
     .unwrap();
     (rt, store)
+}
+
+/// BUG-1742: records which requests went through the SW-script fetch path
+/// (`fetch_bypassing_sw_with_headers`) versus the plain page fetch, so a test
+/// can assert the `Service-Worker: script` header rides only on the main script.
+type BypassCall = (String, Vec<(String, String)>);
+
+struct HeaderRecordingFetch {
+    bypass_calls: std::sync::Mutex<Vec<BypassCall>>,
+    plain_calls: std::sync::Mutex<Vec<String>>,
+}
+
+impl HeaderRecordingFetch {
+    fn new() -> Self {
+        HeaderRecordingFetch {
+            bypass_calls: std::sync::Mutex::new(Vec::new()),
+            plain_calls: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl lumen_core::ext::JsFetchProvider for HeaderRecordingFetch {
+    fn fetch_sync(
+        &self,
+        url: &str,
+        _method: &str,
+    ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        self.plain_calls.lock().unwrap().push(url.to_string());
+        Ok(lumen_core::ext::JsFetchResult {
+            status: 200,
+            status_text: "OK".into(),
+            headers: vec![("content-type".to_string(), "text/javascript".to_string())],
+            body: b"self.onmessage = function() {};".to_vec(),
+            url: url.to_string(),
+        })
+    }
+
+    fn fetch_bypassing_sw_with_headers(
+        &self,
+        url: &str,
+        _method: &str,
+        headers: &[(&str, &str)],
+    ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        self.bypass_calls.lock().unwrap().push((
+            url.to_string(),
+            headers
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        ));
+        Ok(lumen_core::ext::JsFetchResult {
+            status: 200,
+            status_text: "OK".into(),
+            headers: vec![("content-type".to_string(), "text/javascript".to_string())],
+            body: b"importScripts('/import.js'); self.onmessage = function() {};".to_vec(),
+            url: url.to_string(),
+        })
+    }
+}
+
+/// BUG-1742: the registration script fetch sends the UA `Service-Worker: script`
+/// header (bypassing the interceptor), while the imported script fetch does not —
+/// WPT `service-worker-header.https.html`.
+#[test]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+fn sw_register_sends_service_worker_script_header() {
+    let recording = Arc::new(HeaderRecordingFetch::new());
+    let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = recording.clone();
+    let rt = V8JsRuntime::new().unwrap();
+    let store: lumen_core::ext::SwWorkerStore = Arc::default();
+    rt.install_dom(
+        make_doc(), "https://example.com/", Some(provider), None, None, None, None, None,
+        Some(Arc::new(MockCacheBackend::new())), None, Some(Arc::clone(&store)), false, None,
+    )
+    .unwrap();
+    rt.eval(
+        "var _settled = false;
+         navigator.serviceWorker.register('/sw.js', { scope: '/' })
+             .then(function() { _settled = true; });",
+    )
+    .unwrap();
+    assert!(sw_wait_flag(&rt, "_settled"), "register() never settled");
+
+    let bypass = recording.bypass_calls.lock().unwrap();
+    assert_eq!(bypass.len(), 1, "the main script must be fetched once with the header");
+    assert_eq!(bypass[0].0, "https://example.com/sw.js");
+    assert_eq!(
+        bypass[0].1,
+        vec![("service-worker".to_string(), "script".to_string())]
+    );
+
+    let plain = recording.plain_calls.lock().unwrap();
+    assert!(
+        plain.iter().any(|u| u == "https://example.com/import.js"),
+        "the imported script must be fetched without the header, got {:?}",
+        *plain
+    );
 }
 
 /// Pump fetches, timers and the worker-message pump until `flag` turns true.

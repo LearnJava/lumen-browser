@@ -287,6 +287,12 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// [`Self::update_viewport_size`]'s write, no relayout triggered here.
     #[allow(dead_code)] // called only from #[cfg(feature = "v8")] blocks
     fn update_stylesheet(&self, sheet: Arc<lumen_css_parser::Stylesheet>);
+    /// BUG-1306: push the page's loaded `@font-face` web fonts so the
+    /// synchronous same-tick flush measures with them (not bundled Inter).
+    /// Called when a font finishes loading. Default no-op covers the
+    /// non-QuickJS builds and `NullPersistentJs`.
+    #[allow(dead_code)]
+    fn update_web_fonts(&self, _fonts: Vec<lumen_paint::WebFontFace>) {}
     /// Call `_lumen_deliver_resize_observers()` and
     /// `_lumen_deliver_intersection_observers()` in JS.
     ///
@@ -1130,6 +1136,8 @@ impl PersistentJs for V8PersistentJs {
             lumen_js::NavigateRequest::Reload     => JsNavigateRequest::Reload,
             lumen_js::NavigateRequest::SubmitForm { form, submitter } =>
                 JsNavigateRequest::SubmitForm { form, submitter },
+            lumen_js::NavigateRequest::Link { url, target } =>
+                JsNavigateRequest::Link { url, target },
         })
     }
     fn take_nav_intercept_result(&self) -> Vec<(bool, bool)> {
@@ -1259,6 +1267,9 @@ impl PersistentJs for V8PersistentJs {
     }
     fn update_stylesheet(&self, sheet: Arc<lumen_css_parser::Stylesheet>) {
         self.rt.update_stylesheet(sheet);
+    }
+    fn update_web_fonts(&self, fonts: Vec<lumen_paint::WebFontFace>) {
+        self.rt.update_web_fonts(fonts);
     }
     fn deliver_layout_observers(&self) {
         self.eval_js("_lumen_deliver_resize_observers_layout();_lumen_deliver_intersection_observers();_lumen_deliver_canvas_css_resize();");

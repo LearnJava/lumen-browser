@@ -1190,6 +1190,43 @@ struct FontFaceSlot {
     line_gap_override: Option<f32>,
 }
 
+/// Данные одного загруженного `@font-face` для пересборки [`MultiFontMeasurer`]
+/// на JS-потоке (BUG-1306) — та же форма, что у shell-`LoadedWebFont`, но без
+/// `weight`/`style` (нужны только для CSS font-matching, не для измерения).
+/// `Clone` — пуш из shell в JS-рантайм владеет копией, как и off-thread relayout.
+#[derive(Clone)]
+pub struct WebFontFace {
+    /// CSS `font-family` дескриптор.
+    pub family: String,
+    /// Диапазоны `unicode-range` дескриптора.
+    pub unicode_range: Vec<UnicodeRange>,
+    /// `ascent-override` дескриптор (CSS Fonts L4 §14), `None` — `normal`/отсутствует.
+    pub ascent_override: Option<f32>,
+    /// `descent-override` дескриптор, та же семантика.
+    pub descent_override: Option<f32>,
+    /// `size-adjust` дескриптор (CSS Fonts L4 §14.4), `None` = `100%`.
+    pub size_adjust: Option<f32>,
+    /// `line-gap-override` дескриптор (CSS Fonts L4 §14.3), та же семантика.
+    pub line_gap_override: Option<f32>,
+    /// Декодированные sfnt-байты (TrueType / OTF после WOFF/WOFF2-распаковки).
+    pub bytes: Vec<u8>,
+}
+
+impl MultiFontMeasurer {
+    /// Регистрирует загруженный `@font-face` ([`WebFontFace`]) под его family.
+    pub fn register_web_font(&mut self, wf: &WebFontFace) {
+        self.register_family_with_overrides(
+            &wf.family,
+            wf.bytes.clone(),
+            wf.unicode_range.clone(),
+            wf.ascent_override,
+            wf.descent_override,
+            wf.size_adjust,
+            wf.line_gap_override,
+        );
+    }
+}
+
 /// Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты.
 ///
 /// Расширяет [`FontMeasurer`]: при вызове [`TextMeasurer::char_width_with_families`]

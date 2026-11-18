@@ -588,6 +588,11 @@ impl Lumen {
             // LOAD-3A: без JS-хэндла блок выше не сработал — очередь всё равно надо опустошить,
             // иначе `load` ждал бы скрипты, которым негде исполниться.
             self.drive_async_scripts();
+            // LOAD-7: картинка без ответа держит `load` только до дедлайна; его момент — в
+            // WaitUntil. Просроченные URL до ошибки `apply_stream_intrinsic_sizes` ниже.
+            if let Some(at) = self.expire_dead_images() {
+                next_wakeup = Some(next_wakeup.map_or(at, |t| t.min(at)));
+            }
             self.apply_stream_intrinsic_sizes();
             self.maybe_fire_window_load();
         }
@@ -783,12 +788,20 @@ impl Lumen {
                     // BUG-1780: строго ПОСЛЕ снимка в `push_same_document_entry` —
                     // запись back-стека хранит свой (предыдущий) URL источника.
                     self.source.retarget_url(&url);
+                    // BUG-1817: same-document URL — источник `Referer`; живая
+                    // ячейка базы должна следовать за ним.
+                    if let Some(env) = &self.frame_env {
+                        env.page_base.retarget_url(&url);
+                    }
                     pushed = true;
                 } else {
                     // replaceState: update URL + state, no nav_back push.
                     self.current_history_state_json = new_state_json;
                     self.display_url = Some(url.clone());
                     self.source.retarget_url(&url);
+                    if let Some(env) = &self.frame_env {
+                        env.page_base.retarget_url(&url);
+                    }
                     replaced = true;
                 }
             }
@@ -918,6 +931,9 @@ impl Lumen {
                                     // BUG-1780: same-document URL и здесь — URL документа;
                                     // для push строго после снимка записи (см. дренаж pushState).
                                     self.source.retarget_url(&new_url);
+                                    if let Some(env) = &self.frame_env {
+                                        env.page_base.retarget_url(&new_url);
+                                    }
                                     if let Some(t) = title {
                                         self.title = Some(t.clone());
                                         if let Some(w) = self.window.as_ref() {
@@ -1873,6 +1889,15 @@ impl Lumen {
                     click_log::log_js_nav("form.submit", &self.source.describe());
                     self.run_form_submission(form_id, submitter_id, false);
                 }
+                // BUG-1818: scripted `<a target=…>`/`<area target=…>` activation.
+                JsNavigateRequest::Link { url, target } => {
+                    click_log::log_js_nav("link.target", &url);
+                    if let Some(code) = javascript_url_code(&url) {
+                        self.queue_javascript_url(code);
+                    } else if let Some((resolved, uir)) = self.js_navigate_to_gate(&url) {
+                        self.scripted_link_navigate(&resolved, &target, uir);
+                    }
+                }
             }
         }
     }
@@ -1925,6 +1950,53 @@ impl Lumen {
         });
         eprintln!("location: navigation to {resolved} blocked by CSP navigate-to");
         None
+    }
+
+    /// BUG-1818: куда ведёт `target` скриптовой активации гиперссылки
+    /// (`<a target=…>.click()` / `<area target=…>.click()`) — HTML LS §7.3.2
+    /// «the rules for choosing a navigable», тем же порядком, что нативный
+    /// клик в `click.rs` уже применяет к реальному нажатию. Шим маршрутизирует
+    /// сюда только `_blank` и именованные target'ы; `_self`/`_top`/`_parent`/
+    /// пустой он навигирует сам.
+    ///
+    /// `resolved` — адрес, уже прошедший `js_navigate_to_gate` (CSP + UIR).
+    /// shortcut: opener/rel/referrerpolicy атрибуты ссылки сюда не доезжают —
+    /// они нужны только ветке `_blank`, которую referrer-policy a-tag не
+    /// использует; добавить при первом тесте со scripted `_blank`-кликом.
+    fn scripted_link_navigate(&mut self, resolved: &str, target: &str, uir: bool) {
+        let t = target.trim();
+        let is_reserved = t.is_empty()
+            || t.eq_ignore_ascii_case("_self")
+            || t.eq_ignore_ascii_case("_top")
+            || t.eq_ignore_ascii_case("_parent");
+        if !is_reserved && !t.eq_ignore_ascii_case("_blank") {
+            // Именованный target: сначала живой фрейм этого документа, затем
+            // уже открытая вкладка с таким `window.name`, затем новая вкладка.
+            if let Some(idx) = self.find_frame_by_name(t) {
+                if links::is_navigable_href(resolved)
+                    && let Some(nav_base) = self.frame_env.as_ref().map(|e| e.page_base.clone())
+                {
+                    self.navigate_frame_to(idx, resolved, &nav_base, None);
+                }
+                return;
+            }
+            if let Some(tab_idx) = self.find_tab_by_window_name(t) {
+                lumen_js::window_messaging::arm_pending_window_name(t.to_owned());
+                self.switch_tab(tab_idx);
+            } else {
+                self.open_new_tab();
+                lumen_js::window_messaging::arm_pending_window_name(t.to_owned());
+            }
+        } else if t.eq_ignore_ascii_case("_blank") {
+            self.open_new_tab();
+        }
+        // `_self`/`_top`/`_parent`/пустой — текущая страница (шим их не шлёт,
+        // но прямой вызов значит именно её); `_blank`/именованная вкладка —
+        // активная вкладка после `open_new_tab`/`switch_tab` выше.
+        match resolve_js_navigation(resolved, &self.source) {
+            Ok(source) => self.navigate_to(source.with_uir_header(uir)),
+            Err(reason) => eprintln!("Навигация заблокирована: {reason}"),
+        }
     }
 
     /// `navigate-to` гейт для `window.open(url)` — `None` если политика

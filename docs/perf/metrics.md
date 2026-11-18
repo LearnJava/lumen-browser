@@ -52,6 +52,10 @@ PerformanceObserver paint-timing будет дописан в движке (JS-�
 | `final_frame_s` | первый `RedrawRequested` после применения финальной страницы |
 | `ready_s` | прежнее: `readyState == complete` по MCP |
 
+LOAD-9: в той же записи `load_timing` есть `layout_passes` — сколько полных проходов
+`layout_page` стоил pipeline этой навигации (1 на неизменный DOM); `perf_audit.py` его
+пока не читает, поле для журнала поля.
+
 Эти же поля — замер «до/после» для всех задач дорожки LOAD, на списке
 [corpus-user-ru.txt](corpus-user-ru.txt) без прокси.
 

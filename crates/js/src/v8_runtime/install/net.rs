@@ -97,6 +97,39 @@ pub(crate) fn install_service_worker(
             );
         }
 
+        // BUG-1742: the registration/update script fetch carries the
+        // UA-controlled `Service-Worker: script` header (SW §Update) and
+        // bypasses the fetch interceptor, so a SW already live on this scope
+        // cannot serve its own script. The page `fetch()` cannot set that
+        // header (forbidden request-header), hence this native. Returns
+        // `{status,statusText,headers,body,url}` JSON, or `None` on a network
+        // error — the JS shim maps that to a rejected register()/update().
+        {
+            let fp = fp_sw_net.clone();
+            reg!(scope, ctx, store,
+                "_lumen_sw_fetch_script",
+                move |url: String| -> Option<String> {
+                    let provider = fp.as_deref()?;
+                    let res = provider
+                        .fetch_bypassing_sw_with_headers(&url, "GET", &[("service-worker", "script")])
+                        .ok()?;
+                    let headers: serde_json::Map<String, serde_json::Value> = res
+                        .headers
+                        .iter()
+                        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                        .collect();
+                    serde_json::to_string(&serde_json::json!({
+                        "status": res.status,
+                        "statusText": res.status_text,
+                        "headers": headers,
+                        "body": String::from_utf8_lossy(&res.body),
+                        "url": res.url,
+                    }))
+                    .ok()
+                }
+            );
+        }
+
         let sw = Arc::clone(&sw_regs);
         let o = page_origin.clone();
         reg!(scope, ctx, store,
@@ -303,10 +336,10 @@ pub(crate) fn install_service_worker(
             let det_sw = determinism.clone();
             let o = page_origin.clone();
             let sw_pending_act = Arc::clone(&sw_pending);
-            reg!(scope, ctx, store, "_lumen_sw_activate_script", move |scope: String, text: String, script_url: String, sw_type: String, wid: f64| {
+            reg!(scope, ctx, store, "_lumen_sw_activate_script", move |scope: String, text: String, script_url: String, sw_type: String, wid: f64, script_resources_json: Option<String>| {
                 let origin = o.clone();
                 if let (Some(store), Some(cache)) = (sws.as_ref(), cbe_sw.as_ref()) {
-                    let handle = crate::sw_worker::spawn_sw_worker_v8(
+                    let handle = crate::sw_worker::spawn_sw_worker_v8_with_resources(
                         origin.clone(),
                         scope.clone(),
                         text,
@@ -317,6 +350,7 @@ pub(crate) fn install_service_worker(
                         idb_sw.clone(),
                         det_sw.clone(),
                         wid as u64,
+                        script_resources_json.unwrap_or_default(),
                     );
                     // Deliver messages queued while the worker was
                     // installing/waiting (SW §3.1.3), in order.

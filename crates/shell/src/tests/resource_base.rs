@@ -312,3 +312,32 @@ fn effective_base_does_not_change_page_origin() {
         "the un-adjusted base's Origin must stay example.com, not follow <base> to cdn.example"
     );
 }
+
+// -- BUG-1817: retarget_url keeps the referrer source live ------------------
+
+#[test]
+fn retarget_url_updates_url_for_clones_sharing_the_cell() {
+    let base = ResourceBase::url_base("https://example.com/page.html".to_owned());
+    let clone = base.clone();
+    assert_eq!(
+        base.url().map(|u| u.as_str().to_owned()),
+        Some("https://example.com/page.html".to_owned()),
+    );
+    base.retarget_url("https://example.com/AAAA");
+    // Клон разделяет живую ячейку (Arc) — и его url() видит переписанный адрес.
+    assert_eq!(
+        clone.url().map(|u| u.as_str().to_owned()),
+        Some("https://example.com/AAAA".to_owned()),
+    );
+    assert_eq!(
+        base.url().map(|u| u.as_str().to_owned()),
+        Some("https://example.com/AAAA".to_owned()),
+    );
+}
+
+#[test]
+fn retarget_url_is_noop_for_file_base() {
+    let base = ResourceBase::file_base(PathBuf::from("D:/site/page.html"));
+    base.retarget_url("https://example.com/AAAA");
+    assert!(base.url().is_none(), "file-база не имеет живого URL");
+}

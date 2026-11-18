@@ -462,6 +462,14 @@ var caches = {
 
 var _sw_registrations = {};
 
+// BUG-1742: the client's `controller` is a stable ServiceWorker reference set
+// once when the client becomes controlled (activation, `clients.claim()`, or a
+// restored active registration) and NOT recomputed from the live registry —
+// `unregister()` + re-register must not resurrect a new worker as the
+// controller of an already-controlled client (`unregister-then-register`
+// «does not resurrect»). Per-isolate: each browsing context has its own.
+var _sw_controller = null;
+
 // SW §Register job queue: per-scope FIFO. Concurrent register() calls on one
 // scope must not interleave — the second job's `installing` may only replace
 // the first's once the first register() promise has settled
@@ -657,21 +665,22 @@ function _sw_make_registration(scope, scriptUrl, type) {
                     // `_scriptPromise` in the lifecycle below).
                     return reg._scriptPromise;
                 })
-                .then(function() { return fetch(String(reg.scriptURL)); })
+                .then(function() { return _sw_fetch_script(String(reg.scriptURL)); })
                 .then(function(res) {
                     // SW §Update fetch hook: redirect rejection, MIME (classic
                     // included) and the path restriction — the same checks
                     // register() runs.
                     _sw_check_script_resource(String(reg.scriptURL), res, reg.scope);
                     return res.text().then(function(text) {
-                        return _sw_script_bytes(reg.scriptURL, text).then(function(bytes) {
+                        return _sw_script_bytes(reg.scriptURL, text).then(function(result) {
+                            reg._importScripts = result.imports;
                             // SW-MODULE s4: a freshly installed worker gates the
                             // update() promise on the isolate's evaluation
                             // result and starts the isolate itself (raw text —
                             // the byte-check input is not executable); an
                             // unchanged script (byte-check hit) resolves
                             // without one.
-                            var installed = _sw_update_with_script(reg, type, bytes);
+                            var installed = _sw_update_with_script(reg, type, result.bytes);
                             if (installed) {
                                 _sw_start_isolate(_sw_registrations[reg.scope], text);
                             }
@@ -785,6 +794,46 @@ function _sw_is_js_mime(ct) {
     }
 }
 
+// BUG-1742: fetch the main SW script with the UA `Service-Worker: script`
+// header (SW §Update) and bypassing the fetch interceptor — the page `fetch()`
+// cannot set that forbidden header. Falls back to plain fetch() in a bare
+// harness where the native is not installed.
+function _sw_fetch_script(scriptUrl) {
+    if (typeof _lumen_sw_fetch_script === 'function') {
+        var raw = _lumen_sw_fetch_script(scriptUrl);
+        if (raw !== undefined && raw !== null) {
+            return Promise.resolve(_lumen_sw_script_response(raw, scriptUrl));
+        }
+        return Promise.reject(new TypeError(
+            'Failed to register a ServiceWorker: the script resource fetch failed.'));
+    }
+    return fetch(scriptUrl);
+}
+
+// Response-shaped object over the native's JSON result — just the surface
+// `_sw_check_script_resource` and the callers read: status, redirected,
+// headers.get() and text(). Header names arrive lowercased from Rust.
+function _lumen_sw_script_response(raw, requestedUrl) {
+    var j = JSON.parse(raw);
+    var hdrs = {};
+    if (j.headers) {
+        for (var k in j.headers) hdrs[k] = j.headers[k];
+    }
+    return {
+        status: j.status,
+        statusText: j.statusText,
+        redirected: !!(j.url && requestedUrl && j.url !== requestedUrl),
+        url: j.url,
+        headers: {
+            get: function(n) {
+                var v = hdrs[String(n).toLowerCase()];
+                return (v === undefined || v === null) ? null : v;
+            },
+        },
+        text: function() { return Promise.resolve(j.body); },
+    };
+}
+
 // SW §Update fetch hook (shared by register() and update()): the script
 // resource response must not be a redirect, must carry a JavaScript MIME type
 // (classic scripts included — the rejection is SecurityError, not TypeError),
@@ -833,14 +882,26 @@ function _sw_script_bytes(scriptUrl, mainText) {
     var re = /importScripts\(\s*(['"])(.*?)\1[^)]*\)|import\s+[^'";()]*?from\s*(['"])(.*?)\3|import\s*(['"])(.*?)\5/g;
     var m;
     while ((m = re.exec(mainText))) urls.push(m[2] || m[4] || m[6]);
-    if (!urls.length) return Promise.resolve(mainText);
+    if (!urls.length) return Promise.resolve({ bytes: mainText, imports: {} });
     var base = new URL(scriptUrl, _sw_origin).href;
     return Promise.all(urls.map(function(u) {
-        return fetch(new URL(u, base)).then(function(r) {
-            return r.text();
-        }).catch(function() { return '<import fetch error>'; });
-    })).then(function(ts) {
-        return mainText + '\n' + ts.join('\n');
+        var abs = new URL(u, base).href;
+        return fetch(abs).then(function(r) {
+            return r.text().then(function(t) { return { url: abs, text: t, ok: true }; });
+        }).catch(function() { return { url: abs, text: '<import fetch error>', ok: false }; });
+    })).then(function(items) {
+        // BUG-1742: the imports map (absolute URL → text) rides along with the
+        // byte-check string — the isolate reuses these bytes in `importScripts`
+        // instead of fetching them a second time. A failed page fetch is left
+        // OUT of the map (the sentinel stays in the byte-check string), so the
+        // isolate falls back to its own network fetch rather than evaluating it.
+        var imports = {};
+        var texts = [];
+        for (var i = 0; i < items.length; i++) {
+            texts.push(items[i].text);
+            if (items[i].ok) imports[items[i].url] = items[i].text;
+        }
+        return { bytes: mainText + '\n' + texts.join('\n'), imports: imports };
     });
 }
 
@@ -865,6 +926,10 @@ function _sw_install_script_text(scope, scriptUrl, type, uvc, text) {
     // SW-MODULE s6: identity of the worker this install's evaluation/lifecycle
     // belongs to (see `_sw_run_lifecycle`).
     reg._evalWorker = sw;
+    // BUG-1742: a fresh install has no install outcome yet — clear any parked
+    // callback / stale result from a previous worker on this scope.
+    reg._installOk = undefined;
+    reg._awaitInstall = null;
     _sw_registrations[scope] = reg;
     // Register immediately in Rust-side map (for _lumen_sw_has_registration sync checks).
     _lumen_sw_register(scope, String(scriptUrl));
@@ -878,7 +943,8 @@ function _sw_install_script_text(scope, scriptUrl, type, uvc, text) {
 function _sw_start_isolate(reg, text) {
     if (typeof _lumen_sw_activate_script !== 'function' || !reg.installing) return false;
     reg._isolateStarted = true;
-    _lumen_sw_activate_script(reg.scope, text, reg.scriptURL, reg.installing._type || reg.type, reg.installing._wid);
+    _lumen_sw_activate_script(reg.scope, text, reg.scriptURL, reg.installing._type || reg.type, reg.installing._wid,
+        JSON.stringify(reg._importScripts || {}));
     return true;
 }
 
@@ -908,6 +974,10 @@ function _sw_update_with_script(reg, type, text) {
     sw._type = type;
     reg.installing = sw;
     reg._scriptText = text;
+    // BUG-1742: clear any stale install outcome / parked callback from a
+    // previous worker before this one's install runs.
+    reg._installOk = undefined;
+    reg._awaitInstall = null;
     // The lifecycle starts on the isolate's evaluation result (see register()).
     reg._awaitLifecycle = true;
     return true;
@@ -943,90 +1013,118 @@ function _sw_run_lifecycle(reg, scriptText) {
         // still catch it, so it can't fire synchronously inside register().
         var uf = new Event('updatefound');
         reg.dispatchEvent(uf);
-        // Fire install event (SW spec §8.2.4)
+        // Fire install event (SW spec §8.2.4) — placeholder: the real install
+        // event already ran inside the isolate, so this no-op `waitUntil` only
+        // keeps page-side listeners honest.
         var installEvt = new Event('install');
         installEvt.waitUntil = function() {};
-        if (sw.state === 'installing') {
-            sw._setState('installed');
-            // SW-MODULE s6: only touch the registration's pointers if they
-            // still hold THIS worker — a register() racing this lifecycle may
-            // have installed a newer one (SW §9.2: the old worker's
-            // installation was discarded).
-            if (reg.installing === sw) {
-                reg.waiting = sw;
-                reg.installing = null;
-            }
-            _lumen_sw_register(reg.scope, reg.scriptURL);
-            setTimeout(function() {
-                if (reg.waiting === sw) reg.waiting = null;
-                sw._setState('activating');
-                reg.active = sw;
-                _sw_container.controller = sw;
-                var activateEvt = new Event('activate');
-                activateEvt.waitUntil = function() {};
-                sw._setState('activated');
-                // SW-MODULE s6: messages queued for this worker while it was
-                // installing are delivered at its activation (SW §3.1.3) —
-                // the isolate spawned before the lifecycle (s4), so the
-                // spawn-time drain already ran.
-                if (typeof _lumen_sw_flush_pending === 'function') {
-                    _lumen_sw_flush_pending(reg.scope);
-                }
-                _sw_persist();
-                // PH3-20/SW-MODULE: hand the SW script to the Rust execution
-                // thread. A registration created by update() carries the text
-                // already; otherwise fetch it here — a module script with a
-                // non-JS MIME type never activates (SW §2.2.2).
-                // SW-MODULE s4: register()/update() already started the
-                // isolate before the lifecycle — don't spawn a second one.
-                if (typeof _lumen_sw_activate_script === 'function' && !reg._isolateStarted) {
-                    (function(scope, scriptURL, type, text, wid) {
-                        if (text) {
-                            _lumen_sw_activate_script(scope, text, scriptURL, type, wid);
-                            return;
-                        }
-                        if (typeof fetch !== 'function') return;
-                        // Update()'s byte-check waits on this promise before it
-                        // compares bytes: otherwise an update() racing the
-                        // activation fetch sees `_scriptText === undefined`
-                        // and wrongly installs a new worker.
-                        reg._scriptPromise = fetch(scriptURL)
-                            .then(function(res) {
-                                return res.text().then(function(t) {
-                                    var mimeOk = type !== 'module' || _sw_is_js_mime(
-                                        res.headers && typeof res.headers.get === 'function'
-                                            ? res.headers.get('Content-Type') : null);
-                                    if (!mimeOk) {
-                                        // Bad MIME: the script never runs; the
-                                        // worker is redundant (SW §9.2 step 7.4).
-                                        return undefined;
-                                    }
-                                    return _sw_script_bytes(scriptURL, t).then(function(bytes) {
-                                        return [t, bytes];
-                                    });
-                                });
-                            })
-                            .then(function(pair) {
-                                if (pair) {
-                                    var reg = _sw_registrations[scope];
-                                    if (reg) reg._scriptText = pair[1];
-                                    _lumen_sw_activate_script(scope, pair[0], scriptURL, type, wid);
-                                }
-                            })
-                            .catch(function() {}); // ignore fetch errors — lifecycle still simulated
-                    })(reg.scope, reg.scriptURL, reg.type, scriptText, sw._wid);
-                }
-                // Fire controllerchange
-                var ce = new Event('controllerchange');
-                _sw_container.dispatchEvent(ce);
-                // Resolve ready
-                if (_sw_ready_resolve) {
-                    _sw_ready_resolve(reg);
-                    _sw_ready_resolve = null;
-                }
-            }, 0);
-        }
+        // SW §9.2: the worker stays `installing` until the isolate's install
+        // event (with its `waitUntil` promises) settles — a rejection means
+        // `redundant`, never `installed`/`activated` (BUG-1742).
+        _sw_finish_install(reg, sw, scriptText);
     }, 0);
+}
+
+// BUG-1742: advance the worker past `installing` once the isolate's install
+// outcome is known. A rejected install `waitUntil` makes the worker redundant
+// and rolls it out of the registration (SW §9.2 step 7.4); success moves it to
+// installed → activating → activated.
+function _sw_finish_install(reg, sw, scriptText) {
+    // The isolate's install result may not have reached the page yet — park a
+    // callback `_lumen_deliver_sw_install_results` invokes when it arrives.
+    if (reg._isolateStarted && reg._installOk === undefined) {
+        reg._awaitInstall = function() { _sw_finish_install(reg, sw, scriptText); };
+        return;
+    }
+    if (reg._installOk === false && sw.state !== 'redundant') {
+        _sw_fail_eval(reg.scope, new TypeError('ServiceWorker installation failed.'));
+        return;
+    }
+    if (sw.state === 'installing') {
+        sw._setState('installed');
+        // SW-MODULE s6: only touch the registration's pointers if they
+        // still hold THIS worker — a register() racing this lifecycle may
+        // have installed a newer one (SW §9.2: the old worker's
+        // installation was discarded).
+        if (reg.installing === sw) {
+            reg.waiting = sw;
+            reg.installing = null;
+        }
+        _lumen_sw_register(reg.scope, reg.scriptURL);
+        setTimeout(function() {
+            if (reg.waiting === sw) reg.waiting = null;
+            sw._setState('activating');
+            reg.active = sw;
+            // BUG-1742: control is established once and only once — a later
+            // worker activating on this scope (update, re-register) must not
+            // steal the controller of an already-controlled client.
+            if (_sw_controller === null) _sw_controller = sw;
+            var activateEvt = new Event('activate');
+            activateEvt.waitUntil = function() {};
+            sw._setState('activated');
+            // SW-MODULE s6: messages queued for this worker while it was
+            // installing are delivered at its activation (SW §3.1.3) —
+            // the isolate spawned before the lifecycle (s4), so the
+            // spawn-time drain already ran.
+            if (typeof _lumen_sw_flush_pending === 'function') {
+                _lumen_sw_flush_pending(reg.scope);
+            }
+            _sw_persist();
+            // PH3-20/SW-MODULE: hand the SW script to the Rust execution
+            // thread. A registration created by update() carries the text
+            // already; otherwise fetch it here — a module script with a
+            // non-JS MIME type never activates (SW §2.2.2).
+            // SW-MODULE s4: register()/update() already started the
+            // isolate before the lifecycle — don't spawn a second one.
+            if (typeof _lumen_sw_activate_script === 'function' && !reg._isolateStarted) {
+                (function(scope, scriptURL, type, text, wid) {
+                    if (text) {
+                        _lumen_sw_activate_script(scope, text, scriptURL, type, wid);
+                        return;
+                    }
+                    if (typeof fetch !== 'function') return;
+                    // Update()'s byte-check waits on this promise before it
+                    // compares bytes: otherwise an update() racing the
+                    // activation fetch sees `_scriptText === undefined`
+                    // and wrongly installs a new worker.
+                    reg._scriptPromise = _sw_fetch_script(scriptURL)
+                        .then(function(res) {
+                            return res.text().then(function(t) {
+                                var mimeOk = type !== 'module' || _sw_is_js_mime(
+                                    res.headers && typeof res.headers.get === 'function'
+                                        ? res.headers.get('Content-Type') : null);
+                                if (!mimeOk) {
+                                    // Bad MIME: the script never runs; the
+                                    // worker is redundant (SW §9.2 step 7.4).
+                                    return undefined;
+                                }
+                                return _sw_script_bytes(scriptURL, t).then(function(result) {
+                                    return [t, result.bytes, result.imports];
+                                });
+                            });
+                        })
+                        .then(function(pair) {
+                            if (pair) {
+                                var reg = _sw_registrations[scope];
+                                if (reg) reg._scriptText = pair[1];
+                                if (reg) reg._importScripts = pair[2];
+                                _lumen_sw_activate_script(scope, pair[0], scriptURL, type, wid,
+                                    JSON.stringify(pair[2] || {}));
+                            }
+                        })
+                        .catch(function() {}); // ignore fetch errors — lifecycle still simulated
+                })(reg.scope, reg.scriptURL, reg.type, scriptText, sw._wid);
+            }
+            // Fire controllerchange
+            var ce = new Event('controllerchange');
+            _sw_container.dispatchEvent(ce);
+            // Resolve ready
+            if (_sw_ready_resolve) {
+                _sw_ready_resolve(reg);
+                _sw_ready_resolve = null;
+            }
+        }, 0);
+    }
 }
 
 // Restore registrations saved from a previous page load.
@@ -1048,6 +1146,10 @@ function _sw_run_lifecycle(reg, scriptText) {
                     reg.active = sw;
                     _sw_registrations[item.scope] = reg;
                     _lumen_sw_register(item.scope, item.scriptURL);
+                    // BUG-1742: a page loading over an already-active worker is
+                    // controlled by it from the first tick (the same value the
+                    // old computed getter returned).
+                    if (_sw_controller === null) _sw_controller = sw;
                 }
             }
         }
@@ -1130,10 +1232,7 @@ function _sw_check_register_urls(scriptUrl, scopeOpt) {
 var _sw_container_et = _sw_make_event_target();
 var _sw_container = Object.assign({
     get controller() {
-        for (var sc in _sw_registrations) {
-            if (_sw_registrations[sc].active) return _sw_registrations[sc].active;
-        }
-        return null;
+        return _sw_controller;
     },
     get ready() { return _sw_ready_promise; },
     oncontrollerchange: null,
@@ -1215,7 +1314,7 @@ var _sw_container = Object.assign({
                 _sw_run_lifecycle(reg, undefined);
                 return pending;
             }
-            fetch(scriptUrl).then(function(res) {
+            _sw_fetch_script(scriptUrl).then(function(res) {
                 // SW §Update fetch hook: redirect rejection, MIME type (classic
                 // scripts included) and the path restriction with
                 // `Service-Worker-Allowed` — a failure here rejects and rolls the
@@ -1227,10 +1326,11 @@ var _sw_container = Object.assign({
                     // The isolate evaluates the script while the page lifecycle
                     // (updatefound → install → activate) is parked on the eval
                     // result — spec order: register() resolves before updatefound.
-                    return _sw_script_bytes(scriptUrl, text).then(function(bytes) {
+                    return _sw_script_bytes(scriptUrl, text).then(function(result) {
                         var r2 = _sw_registrations[scope];
                         if (!r2) return;
-                        r2._scriptText = bytes;
+                        r2._scriptText = result.bytes;
+                        r2._importScripts = result.imports;
                         _sw_start_isolate(r2, text);
                     });
                 });
@@ -1326,6 +1426,22 @@ function _lumen_deliver_sw_eval_results(msgs) {
     }
 }
 
+// BUG-1742: install outcomes of SW isolates (Rust pump → hub → here). `ok`
+// lets the parked lifecycle advance past `installing`; a failure rolls the
+// worker to `redundant` instead (SW §9.2 — a rejected install `waitUntil`).
+function _lumen_deliver_sw_install_results(msgs) {
+    for (var i = 0; i < msgs.length; i++) {
+        var reg = _sw_registrations[msgs[i].scope];
+        if (!reg) continue;
+        reg._installOk = !!msgs[i].ok;
+        if (reg._awaitInstall) {
+            var cb = reg._awaitInstall;
+            reg._awaitInstall = null;
+            cb();
+        }
+    }
+}
+
 // ── SW → page messages (SW §3.1.4 client message queue, SW-MSG-S4) ───────────
 // The Rust pump (`V8JsRuntime::pump_workers`) calls `_lumen_deliver_sw_messages`
 // with already-parsed envelopes `[{scope, json}]` — `json` is embedded as raw
@@ -1372,13 +1488,16 @@ function _lumen_deliver_sw_messages(msgs) {
     }
     _sw_drain_msg_queue();
 }
-// SW-MSG-S6: `clients.claim()` control messages — fire `controllerchange`
-// for scopes this page has an active registration for (the getter picks the
-// controller up from `_sw_registrations`, so nothing to assign).
+// SW-MSG-S6: `clients.claim()` control messages — assign the claiming worker
+// as the controller and fire `controllerchange` for scopes this page has an
+// active registration for.
 function _lumen_deliver_sw_control(msgs) {
     for (var i = 0; i < msgs.length; i++) {
         var reg = _sw_registrations[msgs[i].scope];
         if (reg && reg.active) {
+            // BUG-1742: `clients.claim()` is an explicit takeover — it may
+            // overwrite an existing controller (activation alone never does).
+            _sw_controller = reg.active;
             var ce = new Event('controllerchange');
             _sw_container_et.dispatchEvent.call(_sw_container, ce);
         }

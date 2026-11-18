@@ -312,6 +312,20 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
       if (_lumen_sw_check_worker_src(abs)) {{
         throw new Error('importScripts: cannot load script: ' + abs);
       }}
+      // BUG-1742: an import already fetched by the page's byte-check (SW
+      // Update fetches the main script + its imports once) is reused verbatim —
+      // a second network fetch would break server-side stash guards.
+      if (globalThis._sw_script_resources__ === undefined
+          && typeof globalThis._sw_script_resources_json__ === 'string') {{
+        try {{
+          globalThis._sw_script_resources__ = JSON.parse(globalThis._sw_script_resources_json__);
+        }} catch (e) {{ globalThis._sw_script_resources__ = {{}}; }}
+      }}
+      if (globalThis._sw_script_resources__
+          && Object.prototype.hasOwnProperty.call(globalThis._sw_script_resources__, abs)) {{
+        _lumen_sw_eval_script(globalThis._sw_script_resources__[abs]);
+        continue;
+      }}
       var raw = _lumen_sw_net_fetch(abs, 'GET');
       if (!raw) throw new Error('importScripts: cannot load script: ' + abs);
       var res = JSON.parse(raw);
@@ -826,8 +840,12 @@ pub(crate) fn base64_decode(encoded: &str) -> Option<Vec<u8>> {
 // unchanged РІР‚вЂќ plain channel plumbing, no engine-specific types.
 
 /// V8 port of [`spawn_sw_worker`].
+///
+/// Test-only convenience: production always goes through
+/// [`spawn_sw_worker_v8_with_resources`] so the page's byte-check can hand the
+/// isolate its already-fetched imports.
+#[cfg(test)]
 #[cfg(feature = "v8-backend")]
-#[allow(clippy::expect_used)]  // РЎС“Р Р…Р В°РЎРѓР В»Р ВµР Т‘Р С•Р Р†Р В°Р Р…Р С•, docs/lint-policy.md Р’В§10
 #[allow(clippy::too_many_arguments)]  // BUG-768 added determinism, same shape as worker.rs's spawn_worker_v8
 pub(crate) fn spawn_sw_worker_v8(
     origin: String,
@@ -840,6 +858,41 @@ pub(crate) fn spawn_sw_worker_v8(
     idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
     determinism: Option<crate::worker::WorkerDeterminism>,
     wid: u64,
+) -> SwWorkerHandle {
+    spawn_sw_worker_v8_with_resources(
+        origin,
+        scope,
+        script,
+        script_url,
+        is_module,
+        cache_backend,
+        fetch_provider,
+        idb_backend,
+        determinism,
+        wid,
+        String::new(),
+    )
+}
+
+/// BUG-1742: the page's byte-check already fetched the SW's `importScripts`
+/// imports (SW §Update fetches main script + imports once) — hand those bytes
+/// to the isolate so `importScripts` reuses them instead of a second network
+/// round-trip that breaks server-side stash guards.
+#[cfg(feature = "v8-backend")]
+#[allow(clippy::expect_used)]  // РЎС“Р Р…Р В°РЎРѓР В»Р ВµР Т‘Р С•Р Р†Р В°Р Р…Р С•, docs/lint-policy.md Р’В§10
+#[allow(clippy::too_many_arguments)]  // BUG-768 added determinism, same shape as worker.rs's spawn_worker_v8
+pub(crate) fn spawn_sw_worker_v8_with_resources(
+    origin: String,
+    scope: String,
+    script: String,
+    script_url: String,
+    is_module: bool,
+    cache_backend: Arc<dyn CacheBackend>,
+    fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
+    idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
+    determinism: Option<crate::worker::WorkerDeterminism>,
+    wid: u64,
+    script_resources_json: String,
 ) -> SwWorkerHandle {    let (tx, rx) = std::sync::mpsc::channel::<SwWorkerMessage>();
     let thread_name = format!("lumen-sw-v8-{origin}{scope}");
     // SW-PRELOAD-ROUTER: static-router rules cross the thread boundary through
@@ -851,7 +904,7 @@ pub(crate) fn spawn_sw_worker_v8(
     let handle = std::thread::Builder::new()
         .name(thread_name)
         .spawn(move || {
-            run_sw_thread_v8(origin, scope, script, script_url, is_module, rx, cache_backend, fetch_provider, idb_backend, determinism, slot)
+            run_sw_thread_v8(origin, scope, script, script_url, is_module, rx, cache_backend, fetch_provider, idb_backend, determinism, slot, script_resources_json)
         })
         .expect("failed to spawn SW thread (v8)");
     SwWorkerHandle { tx, _thread: handle, wid, routes_json }
@@ -871,6 +924,7 @@ fn run_sw_thread_v8(
     idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
     determinism: Option<crate::worker::WorkerDeterminism>,
     routes_json: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    script_resources_json: String,
 ) {
     let rt = match V8JsRuntime::new() {
         Ok(r) => r,
@@ -913,6 +967,16 @@ fn run_sw_thread_v8(
         eprintln!("[sw {origin}{scope}] set script url failed: {e:?}");
     }
 
+    // BUG-1742: imports already fetched by the page's byte-check ride into the
+    // isolate as a JSON map (absolute URL → script text); `importScripts` reads
+    // it lazily and only hits the network for imports not present there.
+    if let Err(e) = rt.set_global(
+        "_sw_script_resources_json__",
+        lumen_core::JsValue::String(script_resources_json),
+    ) {
+        eprintln!("[sw {origin}{scope}] set script resources failed: {e:?}");
+    }
+
     // SW-MODULE: the script of a `{type:'module'}` registration evaluates as
     // an ES module under its own URL (static imports fetch at install time
     // and join the byte-check input), same shape as a module dedicated worker.
@@ -952,7 +1016,11 @@ fn run_sw_thread_v8(
     // SW-MSG-S2: each phase waits for its `waitUntil` promises (timers keep
     // running) before the next one starts.
     let _ = rt.eval("if(typeof _sw_fire_event==='function'){_sw_fire_event('install');}");
-    drain_extend_v8(&rt, true);
+    let install_failed = drain_extend_v8(&rt, true);
+    // SW §9.2: a `waitUntil` rejection in the install event fails the install —
+    // report it so the page transitions the worker to `redundant` instead of
+    // `activated` (BUG-1742).
+    crate::sw_clients::push_install_result(&origin, scope.clone(), !install_failed);
     // SW-PRELOAD-ROUTER: serialise the routes `InstallEvent.addRoutes`
     // collected — the interceptor applies them before dispatching any fetch.
     let _ = rt.eval(
@@ -1036,10 +1104,10 @@ fn run_sw_thread_v8(
 
 /// SW-MSG-S2: run the isolate's task loop until the last extendable dispatch
 /// has no unsettled `waitUntil` promises left, capped at [`EXTEND_TIMEOUT`].
-/// `log_rejected` is `install` only: a rejected promise there means a failed
-/// install (full failed-install behaviour is BUG-1742), so it is logged.
+/// Returns `true` when the install's `waitUntil` promise rejected — the page
+/// must fail the install and make the worker redundant (BUG-1742).
 #[cfg(feature = "v8-backend")]
-fn drain_extend_v8(rt: &V8JsRuntime, log_rejected: bool) {
+fn drain_extend_v8(rt: &V8JsRuntime, log_rejected: bool) -> bool {
     let start = std::time::Instant::now();
     while matches!(
         rt.eval("typeof _sw_extend_pending==='function'?_sw_extend_pending():0"),
@@ -1056,12 +1124,21 @@ fn drain_extend_v8(rt: &V8JsRuntime, log_rejected: bool) {
         std::thread::sleep(wait.min(Duration::from_millis(20)));
     }
     if log_rejected {
+        // A waitUntil rejection records `_sw_extend_error__` (the shim's
+        // `_sw_ext_track` rejection handler); its presence means install failed.
+        let failed = matches!(
+            rt.eval("globalThis._sw_extend_error__ === undefined ? false : true"),
+            Ok(lumen_core::JsValue::Bool(true))
+        );
         if let Ok(lumen_core::JsValue::String(e)) =
             rt.eval("globalThis._sw_extend_error__ === undefined ? null : _sw_extend_error__")
         {
             eprintln!("[sw] waitUntil rejected during install: {e}");
         }
         let _ = rt.eval("globalThis._sw_extend_error__ = undefined;");
+        failed
+    } else {
+        false
     }
 }
 
@@ -1666,6 +1743,27 @@ mod tests_v8 {
             lumen_core::JsValue::String("Р Т‘Р В°".into())
         );
         assert_eq!(net.intercepted(), 0, "Р В·Р В°Р С—РЎР‚Р С•РЎРѓ Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚Р В° РЎС“РЎв‚¬РЎвЂР В» Р Р† Р С—Р ВµРЎР‚Р ВµРЎвЂ¦Р Р†Р В°РЎвЂљРЎвЂЎР С‘Р С”");
+    }
+
+    /// BUG-1742: an import the page's byte-check already fetched must be
+    /// evaluated from the passed resource map, not fetched again — the network
+    /// provider serves nothing (a re-fetch would 404), so only the map can
+    /// supply the script text.
+    #[test]
+    fn sw_import_scripts_reuses_passed_resource_map() {
+        let net = SwNet::new(&[]);
+        let rt = sw_rt("https://example.com", "/", &net);
+        rt.eval(
+            "_sw_script_resources_json__ = JSON.stringify({\
+                 'https://example.com/lib.js': 'globalThis.__from_map = 1;' });",
+        )
+        .unwrap();
+        rt.eval("importScripts('https://example.com/lib.js');").unwrap();
+        assert_eq!(
+            rt.eval("globalThis.__from_map").unwrap(),
+            lumen_core::JsValue::Number(1.0),
+            "importScripts must evaluate the byte-check map, not re-fetch"
+        );
     }
 
     /// Р С›РЎвЂљР Р…Р С•РЎРѓР С‘РЎвЂљР ВµР В»РЎРЉР Р…РЎвЂ№Р в„– Р В°Р Т‘РЎР‚Р ВµРЎРѓ РЎРѓРЎвЂЎР С‘РЎвЂљР В°Р ВµРЎвЂљРЎРѓРЎРЏ Р С•РЎвЂљ Р В°Р Т‘РЎР‚Р ВµРЎРѓР В° РЎРѓР В°Р СР С•Р С–Р С• Р Р†Р С•РЎР‚Р С”Р ВµРЎР‚Р В°.

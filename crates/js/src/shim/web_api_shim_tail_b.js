@@ -3729,7 +3729,38 @@ function _lumen_run_activation_behavior(nid, el) {
         // HTML LS §4.6.9 "Ping": fires independently of whether navigation
         // itself succeeds, so it runs before the navigate/fragment call below.
         _lumen_fire_hyperlink_ping(nid, targetHref);
-        if (targetHref) _lumen_navigate_or_fragment(targetHref, false);
+        if (targetHref) {
+            // BUG-1818: `target` naming another browsing context. `_self`/
+            // `_top`/`_parent`/empty navigate the current page; a name first
+            // resolves to a child frame of THIS document (HTML LS §7.3.2) — set
+            // its `src` synchronously, the exact path `iframe.src =` takes, so
+            // the frame scanner sees the final URL in the same turn. `_blank`
+            // and names that match no frame here go to the shell (named tab /
+            // new tab).
+            var rawTarget = el.target;
+            var target = (typeof rawTarget === 'string') ? rawTarget : '';
+            var t = target.trim();
+            if (t !== '' && t !== '_self' && t !== '_top' && t !== '_parent') {
+                var handled = false;
+                if (t !== '_blank' && typeof document !== 'undefined'
+                    && typeof document.getElementsByName === 'function') {
+                    var named = document.getElementsByName(t);
+                    for (var i = 0; i < named.length; i++) {
+                        var ftag = (named[i].tagName || '').toUpperCase();
+                        if (ftag === 'IFRAME' || ftag === 'FRAME') {
+                            named[i].setAttribute('src', targetHref);
+                            handled = true;
+                            break;
+                        }
+                    }
+                }
+                if (!handled && typeof _lumen_navigate_target === 'function') {
+                    _lumen_navigate_target(targetHref, t);
+                }
+            } else {
+                _lumen_navigate_or_fragment(targetHref, false);
+            }
+        }
         return;
     }
     if (tag === 'SUMMARY') {

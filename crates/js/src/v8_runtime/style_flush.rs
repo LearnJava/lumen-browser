@@ -87,6 +87,11 @@ pub(crate) struct FlushHandles {
     pub(crate) custom_properties: Arc<Mutex<CustomPropertySnapshot>>,
     pub(crate) viewport_size: Arc<Mutex<[f32; 2]>>,
     pub(crate) stylesheet: Arc<Mutex<Option<Arc<lumen_css_parser::Stylesheet>>>>,
+    /// BUG-1306: page's loaded `@font-face` web fonts, pushed by the shell so a
+    /// same-tick flush measures text with the real faces instead of the bundled
+    /// Inter fallback. Empty until the shell pushes the first font (or never, on
+    /// the headless path without web-font loading).
+    pub(crate) web_fonts: Arc<Mutex<Vec<lumen_paint::WebFontFace>>>,
     /// BUG-935 S34: sibling of `V8JsRuntime::dom_dirty` (see its doc comment),
     /// set at every same DOM-mutating call site but gated/cleared only here
     /// by [`Self::maybe_flush`] — the scheduler's own `dom_dirty` is a
@@ -610,9 +615,15 @@ impl FlushHandles {
         let Ok(font) = lumen_font::Font::parse(FLUSH_FONT) else {
             return;
         };
-        let Ok(measurer) = lumen_paint::FontMeasurer::new(&font) else {
+        // BUG-1306: a MultiFontMeasurer lets the flush measure with the page's
+        // loaded @font-face faces; without them it degrades to the bundled Inter
+        // fallback, byte-identical to the old bare FontMeasurer.
+        let Ok(mut measurer) = lumen_paint::MultiFontMeasurer::new(&font) else {
             return;
         };
+        for wf in self.web_fonts.lock().unwrap_or_else(|e| e.into_inner()).iter() {
+            measurer.register_web_font(wf);
+        }
         let viewport = lumen_core::geom::Size::new(vw, vh);
         // BUG-560: install the engine thread's same-tick focus mirror before
         // laying out, so `:focus`/`:focus-within`/`:focus-visible` resolve
@@ -1121,7 +1132,7 @@ impl FlushHandles {
         counters: &lumen_layout::CounterMap,
         viewport: lumen_core::geom::Size,
         sheet: &Arc<lumen_css_parser::Stylesheet>,
-        measurer: &lumen_paint::FontMeasurer<'_>,
+        measurer: &lumen_paint::MultiFontMeasurer,
     ) {
         let full_rects = lumen_layout::collect_layout_rects(layout_root, doc);
         // The truth: a layout from scratch of the same document.
@@ -1292,7 +1303,7 @@ impl FlushHandles {
         doc: &lumen_dom::Document,
         sheet: &Arc<lumen_css_parser::Stylesheet>,
         viewport: lumen_core::geom::Size,
-        measurer: &lumen_paint::FontMeasurer<'_>,
+        measurer: &lumen_paint::MultiFontMeasurer,
         current_focus: Option<u32>,
         current_hover: Option<u32>,
         touched: &super::dom_touched::DomTouched,

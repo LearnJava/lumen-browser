@@ -15,6 +15,8 @@ pub struct LoadTimings {
     pub first_content_ms: Option<f64>,
     pub final_applied_ms: f64,
     pub final_frame_ms: f64,
+    /// LOAD-9: полных layout-проходов за навигацию (см. `ParsedPage::layout_passes`).
+    pub layout_passes: u32,
 }
 
 #[derive(Debug, Default)]
@@ -22,6 +24,7 @@ pub struct LoadMarks {
     t0: Option<Instant>,
     first_content: Option<Instant>,
     final_applied: Option<Instant>,
+    layout_passes: u32,
     /// Итог уже выдан — повторные кадры ничего не пишут.
     reported: bool,
 }
@@ -30,6 +33,11 @@ impl LoadMarks {
     /// Новая навигация: всё сбрасывается, отсчёт идёт от `now`.
     pub fn reset(&mut self, now: Instant) {
         *self = Self { t0: Some(now), ..Self::default() };
+    }
+
+    /// LOAD-9: столько полных layout-проходов стоил pipeline этой навигации.
+    pub fn set_layout_passes(&mut self, passes: u32) {
+        self.layout_passes = passes;
     }
 
     /// Первый непустой display list потокового пути. Повторы игнорируются.
@@ -59,6 +67,7 @@ impl LoadMarks {
             first_content_ms: self.first_content.map(ms),
             final_applied_ms: ms(applied),
             final_frame_ms: ms(now),
+            layout_passes: self.layout_passes,
         })
     }
 }
@@ -81,10 +90,12 @@ mod tests {
         m.mark_first_content(at(t0, 100));
         m.mark_first_content(at(t0, 200)); // повтор не сдвигает метку
         m.mark_final_applied(at(t0, 900));
+        m.set_layout_passes(2);
         let t = m.mark_frame(at(t0, 920)).expect("итог");
         assert_eq!(t.first_content_ms, Some(100.0));
         assert_eq!(t.final_applied_ms, 900.0);
         assert_eq!(t.final_frame_ms, 920.0);
+        assert_eq!(t.layout_passes, 2);
         assert!(m.mark_frame(at(t0, 950)).is_none(), "второй кадр молчит");
     }
 

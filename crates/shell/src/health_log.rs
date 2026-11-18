@@ -171,6 +171,8 @@ pub fn log_load_timing(url: &str, t: crate::load_marks::LoadTimings) {
     }
     obj.insert("final_applied_ms".into(), JsonValue::Number(t.final_applied_ms));
     obj.insert("final_frame_ms".into(), JsonValue::Number(t.final_frame_ms));
+    // LOAD-9: полных layout-проходов за навигацию — один на неизменный DOM.
+    obj.insert("layout_passes".into(), JsonValue::Number(f64::from(t.layout_passes)));
     append(obj);
 }
 

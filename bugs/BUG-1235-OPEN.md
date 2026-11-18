@@ -51,11 +51,11 @@
 
 ### Что осталось в 4K (224 сабтеста) — вне этого бага
 
-- **172** — `Referer` не обновляется после `history.replaceState` → [BUG-1817](BUG-1817-OPEN.md).
+- **172** — `Referer` не обновляется после `history.replaceState` → [BUG-1817](BUG-1817-FIXED.md).
 - **52** `img-tag` (48 `IndexSizeError` + 4 с причиной из 1817) — `getImageData(0, 0,
   img.clientWidth, img.clientHeight)` сразу после `load` видит `clientWidth` 0 →
-  [BUG-1306](BUG-1306-OPEN.md) (геометрия обновляется только следующим кадром).
-- **12** файлов `a-tag` — TIMEOUT без сабтестов → [BUG-1818](BUG-1818-OPEN.md).
+  [BUG-1306](BUG-1306-FIXED.md) (геометрия обновляется только следующим кадром).
+- **12** файлов `a-tag` — TIMEOUT без сабтестов → [BUG-1818](BUG-1818-FIXED.md).
 
 ### Регенерация baseline не сделана
 

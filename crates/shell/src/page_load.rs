@@ -822,6 +822,7 @@ impl Lumen {
                         });
                     }
                 }
+                self.load_marks.set_layout_passes(page.layout_passes);
                 self.load_marks.mark_final_applied(std::time::Instant::now());
                 click_log::log_load_ok(&self.source.describe(), title);
                 click_log::log_page_ready(&self.source.describe(), self.scroll_y);
@@ -926,6 +927,8 @@ impl Lumen {
             response_policies: Default::default(),
             // lumen-driver's headless pipeline has no parse-time snapshot pass.
             prescript_layout_rects: None,
+            // LOAD-9: driver's pipeline counts its own passes; nothing to report here.
+            layout_passes: 0,
         })
     }
 
@@ -1724,7 +1727,14 @@ impl Lumen {
             let cookie_jar = self.active_cookie_jar();
             let proxy = self.load_proxy.clone();
             let target = self.target_color_space();
+            // LOAD-7: отметку старта ставит сама задача пула — очередь воркеров
+            // дедлайном не считается (см. `ImageRequestLedger::started`).
+            let ledger = std::sync::Arc::clone(&self.stream_images_requested);
             let job = move || {
+                {
+                    let mut requested = ledger.lock().unwrap_or_else(|e| e.into_inner());
+                    requested.started.entry(req.url.clone()).or_insert_with(std::time::Instant::now);
+                }
                 // Fill the shared cache so the final `fetch_and_decode_images` pass
                 // reuses these pixels instead of re-fetching+re-decoding (BUG-172).
                 // Ключ кэша — сырой `req.url` (его знают layout/рендерер);
@@ -1861,6 +1871,9 @@ impl Lumen {
     /// в будущем для других путей загрузки.
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn apply_loaded_page(&mut self, mut page: LoadedPage, new_layout_source: Option<LayoutSource>, new_js_ctx: Option<Arc<dyn PersistentJs>>) {
+        // LOAD-9: pipeline's full-layout passes for this navigation, reported in
+        // the `load_timing` health record next to the LOAD-0 marks.
+        self.load_marks.set_layout_passes(page.layout_passes);
         // Drop JS closures before layout_source to release Arc clones in QuickJS.
         self.set_js_ctx(None);
         self.layout_source = new_layout_source;
@@ -2431,6 +2444,8 @@ mod css_pending;
 pub(crate) use css_pending::{stream_css_outstanding, stream_css_pending, stream_css_pending_add, stream_css_pending_done};
 #[cfg(test)]
 pub(crate) use css_pending::TEST_LOCK as STREAM_CSS_TEST_LOCK;
+mod dead_subresource;
+pub(crate) use dead_subresource::{frame_deadline_passed, load_deadline_disabled, DEAD_SUBRESOURCE_DEADLINE};
 
 /// Прогнать порцию HTML через preload-сканер, эмитнуть `EarlyPreloadHints` и
 /// параллельно загрузить найденные стили (PH1-2 / PH1-8). Общая логика для обоих

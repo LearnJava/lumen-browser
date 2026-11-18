@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-11-17T23:29:20",
+  "timestamp": "2026-11-18T04:17:08",
   "git": {
-    "commit": "ed105a7e2",
-    "branch": "p6-load-4",
-    "subject": "Влить ветку p6-load-5: LOAD-5 — картинки со стримингового сканера, пул 8"
+    "commit": "df0212c41",
+    "branch": "p6-load6-parallel-match",
+    "subject": "Влить ветку p6-load-9: LOAD-9 - экранная раскладка переиспользует дерево прохода"
   },
   "crop_offset": [
     8,

@@ -23,6 +23,15 @@ use crate::*;
 pub(crate) struct ResourceBase {
     pub(crate) kind: ResourceBaseKind,
     pub(crate) tab: lumen_core::event::TabId,
+    /// BUG-1817: живой URL документа для сетевых баз — общая ячейка, которую
+    /// same-document rewrite (`history.replaceState`/`pushState`) переписывает
+    /// через [`ResourceBase::retarget_url`]. `url()` читает отсюда, поэтому
+    /// `Referer` подресурсов и `fetch()`/XHR следуют за текущим `location.href`,
+    /// а не за снимком на момент загрузки. `None` — файловая база (у `file:`
+    /// нет tuple-origin, и реферер спецификацией не предусмотрен). Клоны базы
+    /// разделяют ячейку (`Arc`), поэтому `frame_env.page_base` и построенный из
+    /// неё JS-клиент видят одну и ту же переписанную величину.
+    pub(crate) live_url: Option<Arc<Mutex<String>>>,
 }
 
 /// Адрес базы — файл или URL (бывший enum `ResourceBase`).
@@ -41,12 +50,20 @@ const BASE_HREF_DIR_SENTINEL: &str = "_lumen_base_href_sentinel";
 impl ResourceBase {
     /// База-файл без вкладки (тесты, tab-less пути).
     pub(crate) fn file_base(path: PathBuf) -> Self {
-        Self { kind: ResourceBaseKind::File(path), tab: lumen_core::event::TabId(0) }
+        Self {
+            kind: ResourceBaseKind::File(path),
+            tab: lumen_core::event::TabId(0),
+            live_url: None,
+        }
     }
 
     /// База-URL без вкладки (тесты, tab-less пути).
     pub(crate) fn url_base(base_url: String) -> Self {
-        Self { kind: ResourceBaseKind::Url(base_url), tab: lumen_core::event::TabId(0) }
+        Self {
+            kind: ResourceBaseKind::Url(base_url.clone()),
+            tab: lumen_core::event::TabId(0),
+            live_url: Some(Arc::new(Mutex::new(base_url))),
+        }
     }
 
     /// Пометить базу вкладкой-владельцем документа (COMPAT-PANEL-TAB-SHIELDS).
@@ -171,11 +188,33 @@ impl ResourceBase {
     /// `HttpClient::with_document_context`. `None` для файловой base:
     /// `file:` не несёт tuple origin, поэтому реферер спецификацией не
     /// предусмотрен для таких документов.
+    ///
+    /// BUG-1817: читает живую ячейку `live_url`, если она есть, — после
+    /// `history.replaceState`/`pushState` это текущий `location.href`, а не
+    /// снимок загрузки. Откат на `kind` — только при отсутствии/отравлении
+    /// ячейки либо для file-базы.
     pub(crate) fn url(&self) -> Option<lumen_core::url::Url> {
+        if let Some(cell) = &self.live_url
+            && let Ok(guard) = cell.lock()
+            && let Ok(parsed) = lumen_core::url::Url::parse(&guard)
+        {
+            return Some(parsed);
+        }
         if let ResourceBaseKind::Url(base_url) = &self.kind {
             return lumen_core::url::Url::parse(base_url).ok();
         }
         None
+    }
+
+    /// BUG-1817: переписать живой URL документа после same-document rewrite
+    /// (`history.replaceState`/`pushState`). Без ячейки (`file:`-база) — no-op:
+    /// несетевой базе URL по построению не принадлежит.
+    pub(crate) fn retarget_url(&self, url: &str) {
+        if let Some(cell) = &self.live_url
+            && let Ok(mut guard) = cell.lock()
+        {
+            *guard = url.to_owned();
+        }
     }
 
     /// Построить `HttpClient` для загрузки подресурсов. Если страница загружена
@@ -282,9 +321,14 @@ impl ResourceBase {
             .and_then(|u| crate::lumen::compat::compat_identity_for_url(u.as_str()));
         if let Some(document_url) = document_url {
             // PERF-13: pooled connections are partitioned by document site.
-            client = client
-                .with_connection_site(&crate::config::connection_site(&document_url))
-                .with_document_context(document_url, referrer_policy);
+            client = client.with_connection_site(&crate::config::connection_site(&document_url));
+            // BUG-1817: referrer/Origin/Sec-Fetch-* follow the live cell so a
+            // `history.replaceState`/`pushState` retargets them in place;
+            // fallback to the snapshot only for a base without a cell.
+            client = match self.live_url.clone() {
+                Some(cell) => client.with_document_context_cell(cell, referrer_policy),
+                None => client.with_document_context(document_url, referrer_policy),
+            };
         }
         if let Some(profile) = identity_profile {
             client = client.with_identity(profile.identity());

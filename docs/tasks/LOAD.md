@@ -318,6 +318,16 @@ BUG-804). `load` окна лист держит (HTML LS §4.6.7, счётчик
 окна, у `<img>` приходит `error`; на корпусе нет `ready_s` кратных 10 с сверх
 `final_applied_s` + дедлайн; статусы сайтов не ухудшаются.
 
+**Сделано (2026-11-18):** дедлайн 10 с от старта сетевого запроса — `ImageRequestLedger.started`
+(отметку ставит задача пула, очередь `WARM_POOL` стартом не считается) и метка в
+`pending_new_frames`; логика — `page_load/dead_subresource.rs`. Просроченный URL уходит в
+`stream_image_errors` (`<img>` получает `error` через `apply_stream_intrinsic_sizes`), фрейм
+перестаёт держать `load` (`deferred_frames_busy`), бронь фрейма живёт до ответа потока. Откат —
+`LUMEN_NO_LOAD_DEADLINE=1`. Живая проба (5 сайтов, зонд `LUMEN_LOAD_PROBE=1`, снят):
+сетевых держателей дольше 2,7 с нет, дедлайн не срабатывает; остаток
+`ready_s − final_applied_s` (36–50 с у ok-ru) — очередь задач движкового потока (BUG-1800, P3,
+брифом исключён), а не сеть. Цифры — [journal](../perf/journal.md) §2026-11-18 LOAD-7.
+
 ## LOAD-9 — одна экранная раскладка на загрузку (P6, M)
 
 **Depends on:** —. **Files:** `crates/shell/src/page_pipeline.rs` (`parse_and_layout`:
@@ -336,6 +346,18 @@ layout для скриптов и экранный layout — карта фаз 
 
 **Done when:** unit-тест — одинаковый DOM даёт один layout; на github (dev-release,
 `--trace-nav`) спанов `layout` на загрузку меньше на один; graphic_tests без изменений.
+
+**Сделано (2026-11-18):** последнее полное дерево (`screen_layout`) отдаётся экранной фазе, пока
+геометрию не перечеркнуло: изменения скриптов (DOM/листы/inline/adopted), мутации обработчиков
+`DOMContentLoaded` (флаг грязноты снимается на время диспатча и возвращается как был — иначе «уже
+грязно после скриптов» и «грязно от обработчика» не различить), intrinsic `width`/`height` от картинок
+и `hide_banners` пакета. Счётчик — `ParsedPage::layout_passes`, health-log `load_timing.layout_passes`.
+**Граница ворот «github −1»:** замер `--trace-nav https://github.com` даёт те же 3 прохода (2,84 / 2,05 /
+2,93 с), и все три заслужены — скрипты пересобирают каскад и мутируют DOM, `DOMContentLoaded` мутирует
+снова, две картинки пишут intrinsic-размеры; по брифу это «изменились — как сейчас». Переиспользование
+покрывает неизменный DOM (1 проход, юнит-тест) и пост-скриптовую мутацию (2). Попутно закрыт настоящий
+источник лишнего прохода: `document_adopted_fingerprint()` для пустого списка давал ненулевой хеш против
+`DynamicCssBase::adopted_fp = 0` — убран. Цифры — [journal](../perf/journal.md) §2026-11-18 LOAD-9.
 
 ## LOAD-6 — параллельный матчинг селекторов начального каскада (P6, L)
 
@@ -357,6 +379,24 @@ layout для скриптов и экранный layout — карта фаз 
 **Done when:** полный каскад на живом github ≤ 50 % wall time против HEAD на 8
 потоках; дифференциал равен; graphic_tests и `dump_golden.py` без изменений; запись
 до/после в `docs/perf/journal.md`.
+
+**Сделано (2026-11-18):** `precompute_counters` перед `walk` матчит все элементы composed-дерева
+на пуле rayon (`style/pre_match.rs`): на воркере ставится `StyleEnvSnapshot`, ancestor-bloom
+восстанавливается по цепочке `FlatTree::parent_of` (без него матчинг платит 2,6–2,9× —
+BUG-1800 срез 5), у каждого узла сохраняется `MatchedRule`-запись и флаг `shareable`. Последовательный
+`walk` больше не сканирует кандидатов: `compute_style_shareable` находит запись и применяет её той же
+«суженной» дорогой, что инкрементальный каскад (`MatchRestriction` + пустой `InvalidatedRules`), а
+`match_only` отсекает в предпроходе apply, `::part`/shadow-интерьер и инлайн-декларации — их всё равно
+делает `walk` с настоящим унаследованным стилем. `@scope` и shadow-правила в `MatchedRule` не входят и
+матчатся в `walk`, как раньше. Откат/A/B — `LUMEN_NO_PRE_MATCH=1`; документы < 64 элементов остаются
+последовательными. **Стенд** `bug935_cascade_bench` (2591 элемент, 1504 правила, лучший из 39, один
+бинарь, A/B по флагу): 73,5 → 34,5 мс (47 %). **Живой github** (`--trace-nav`, две пары подряд):
+сумма `precompute_counters` 19,8 → 7,7 с (39 %; по парам 31 % и 51 % — страница динамическая),
+сумма `layout` 13,6 → 6,4 с (47 %). **Дифференциал:** `pre_match_tests` — обе дороги дают одинаковый
+`CascadeStyles` на странице с `@media`/`@layer`/`:has()` и на документе с author shadow tree, под
+`:hover`/`:focus`/`:focus-visible`; таблица покрывает все элементы и отвергает чужой лист/вьюпорт.
+Попутно: `StyleEnvSnapshot` не нёс `KEYBOARD_FOCUS` — воркеры `build_box` каскадировали
+`:focus-visible` как «фокус мышью».
 
 ## LOAD-8 — preconnect/dns-prefetch исполняется (P6, S)
 

@@ -107,6 +107,14 @@ pub(crate) enum JsNavigateRequest {
         /// Индекс узла-сабмиттера, либо `-1`, если его нет.
         submitter: i32,
     },
+    /// Скриптовая активация гиперссылки с `target` (`<a target=…>.click()`,
+    /// BUG-1818) — shell резолвит `target` (фрейм/вкладка/новая вкладка).
+    Link {
+        /// Резолвленный адрес назначения.
+        url: String,
+        /// Сырое значение `target` (`_blank` или имя).
+        target: String,
+    },
 }
 
 /// Pending intercepted navigation awaiting handler completion.

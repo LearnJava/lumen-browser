@@ -340,6 +340,9 @@ pub struct StyleEnvSnapshot {
     hover_nid: u32,
     focus_nid: u32,
     active_nid: u32,
+    /// UX-FOCUS-RING: `:focus-visible` reads it — a worker without it would cascade a
+    /// focused element as if the focus came from the mouse.
+    keyboard_focus: bool,
     forced_colors: bool,
     print_media: bool,
     device_pixel_ratio: f32,
@@ -353,6 +356,7 @@ impl StyleEnvSnapshot {
             hover_nid:     HOVER_NID.with(Cell::get),
             focus_nid:     FOCUS_NID.with(Cell::get),
             active_nid:    ACTIVE_NID.with(Cell::get),
+            keyboard_focus: KEYBOARD_FOCUS.with(Cell::get),
             forced_colors: FORCED_COLORS.with(Cell::get),
             print_media:   PRINT_MEDIA.with(Cell::get),
             device_pixel_ratio: DEVICE_PIXEL_RATIO.with(Cell::get),
@@ -365,6 +369,7 @@ impl StyleEnvSnapshot {
         HOVER_NID.with(|h| h.set(self.hover_nid));
         FOCUS_NID.with(|f| f.set(self.focus_nid));
         ACTIVE_NID.with(|a| a.set(self.active_nid));
+        KEYBOARD_FOCUS.with(|k| k.set(self.keyboard_focus));
         FORCED_COLORS.with(|f| f.set(self.forced_colors));
         PRINT_MEDIA.with(|p| p.set(self.print_media));
         DEVICE_PIXEL_RATIO.with(|d| d.set(self.device_pixel_ratio));

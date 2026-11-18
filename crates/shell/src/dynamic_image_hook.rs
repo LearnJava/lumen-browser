@@ -29,6 +29,10 @@ use crate::{image_cache, subresources};
 /// BUG-1048 — which `<img>` nodes asked for them through the hook.
 ///
 /// `urls` is the dedup set `spawn_image_requests` and the hook share.
+/// `started` (LOAD-7) — когда задача запроса фактически стартовала: от этого
+/// момента считается дедлайн `Lumen::expire_dead_images`. Постановка в очередь
+/// пула (`WARM_POOL`) стартом не считается — иначе картинка, ждущая воркера,
+/// получала бы `error`, не сделав ни одного сетевого запроса.
 /// `script_nodes` exists because `apply_stream_intrinsic_sizes` finds the
 /// nodes waiting on a URL by walking the document tree, and a disconnected
 /// `<img>` (`new Image()` that is never inserted — the usual preload and
@@ -38,6 +42,8 @@ use crate::{image_cache, subresources};
 #[derive(Default)]
 pub(crate) struct ImageRequestLedger {
     pub(crate) urls: std::collections::HashSet<String>,
+    /// URL -> старт сетевого запроса (пишется задачей пула перед декодом).
+    pub(crate) started: std::collections::HashMap<String, std::time::Instant>,
     /// `(NodeId::raw, raw src)` in the order script assigned them.
     pub(crate) script_nodes: Vec<(u32, String)>,
 }
@@ -129,6 +135,7 @@ impl lumen_core::ext::ImageLoadHook for DynamicImgFetchHook {
             if !requested.urls.insert(raw_src.to_string()) {
                 return;
             }
+            requested.started.insert(raw_src.to_string(), std::time::Instant::now());
         }
         let self_origin = self.base.origin();
         let resolved_url = self.base.resolve_str(raw_src);

@@ -77,6 +77,7 @@
     mod text_cssom_tests;
     mod masonry_auto_flow_tests;
     mod node_fanout_tests;
+    mod pre_match_tests;
     mod restyle_cache_tests;
     mod rule_index_regression;
     mod shadow_dom_selectors;
