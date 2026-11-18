@@ -339,6 +339,37 @@ fn extract_trace_nav_with_url_source() {
     assert_eq!(rest, args(&["https://example.com"]));
 }
 
+// ── BUG-1821: режимы с позиционным источником не совмещаются ──────────────
+
+#[test]
+fn mode_mix_dump_flag_left_in_rest_is_error() {
+    // Сломанная форма из карточки: после extract_trace_nav позиционный/флаг
+    // dump-режима оставался в rest и становился «источником» trace-nav.
+    for rest in [
+        vec!["--dump-layout", "https://example.com"],
+        vec!["--dump-tls", "example.com"],
+    ] {
+        let rest = args(&rest);
+        assert!(
+            mode_mix_error(false, false, true, &rest).is_some(),
+            "{rest:?}"
+        );
+    }
+}
+
+#[test]
+fn mode_mix_two_output_flags_is_error() {
+    // Один позиционный на двоих — второй режим молча игнорировался диспетчем.
+    assert!(mode_mix_error(false, true, true, &args(&["https://example.com"])).is_some());
+}
+
+#[test]
+fn mode_mix_single_mode_passes() {
+    assert!(mode_mix_error(false, false, false, &args(&["--dump-layout", "a.html"])).is_none());
+    assert!(mode_mix_error(false, false, true, &args(&["https://example.com"])).is_none());
+    assert!(mode_mix_error(true, false, false, &args(&["out.pdf", "a.html"])).is_none());
+}
+
 #[test]
 fn extract_viewport_override_basic() {
     let (size, rest) = extract_viewport_override(&args(&["--viewport", "1024x720", "page.html"]));
