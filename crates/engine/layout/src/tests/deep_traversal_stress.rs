@@ -101,6 +101,18 @@ fn collect_computed_styles_deep_chain_does_not_overflow_the_stack() {
     assert!(styles.contains_key(&(SHALLOWER_DEPTH as u32)));
 }
 
+/// CSSANIM-MODEL-3: the transition candidates a document «style change event» compares against —
+/// the boxes whose own style names a non-zero `transition-duration`, and nothing else.
+#[test]
+fn collect_transition_candidates_lists_only_the_boxes_that_ask_for_a_transition() {
+    let mut timed = block(2, vec![]);
+    let mut style = ComputedStyle::root();
+    style.transition_durations = vec![1.0];
+    timed.style = std::sync::Arc::new(style);
+    let root = block(1, vec![timed, block(3, vec![block(4, vec![])])]);
+    assert_eq!(collect_transition_candidates(&root), vec![2]);
+}
+
 #[test]
 fn collect_layout_rects_deep_chain_does_not_overflow_the_stack() {
     let root = deep_chain(DEPTH);

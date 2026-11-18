@@ -141,6 +141,18 @@ pub(crate) struct FlushHandles {
     /// style read per property — the difference between an O(1) `getAnimations()` on a page
     /// with transitions and a full sweep per call.
     pub(crate) style_epoch: Arc<AtomicU64>,
+    /// CSSANIM-MODEL-3 срез 2: the entries of the nodes whose style names a transition, copied
+    /// out of the outgoing `computed_styles` before a recompute replaces it — the before-change
+    /// style a change nobody read would otherwise lose. Read through
+    /// `_lumen_style_change_events` by `document.getAnimations()`; the [`StyleMap`] clone is one
+    /// shared `Arc`.
+    ///
+    /// [`StyleMap`]: lumen_layout::StyleMap
+    pub(crate) transition_stale: Arc<Mutex<HashMap<u32, lumen_layout::StyleMap>>>,
+    /// Set once the page has read `document.getAnimations()`: only then is the candidate walk
+    /// over the layout tree (`collect_transition_candidates`) and the copy above worth their
+    /// cost on every flush.
+    pub(crate) transition_stale_needed: Arc<AtomicBool>,
     /// CSSOM-8 вариант C / BUG-493: the per-`<style>`/`<link>` registry, the
     /// CSSOM edit log and its "grew since the last flush" flag, bundled with
     /// what reconciles the registry with the DOM — see
@@ -492,6 +504,30 @@ impl FlushHandles {
         note_scroll_moved(&self.stylesheet, &self.dom_touched, &self.flush_stale);
     }
 
+    /// CSSANIM-MODEL-3 срез 2: keep the before-change values of the nodes whose style names a
+    /// transition — this flush is about to replace them, and `document.getAnimations()` turns a
+    /// change nobody read into a transition (`_wa_motion_stale_seed` in
+    /// `web_api_shim_tail_b.js`). Must run before the flush takes its own `computed_styles`
+    /// lock: the map is replaced in place on the scoped path.
+    fn snapshot_transition_stale(&self, root: &lumen_layout::LayoutBox) {
+        if !self.transition_stale_needed.load(Ordering::Relaxed) {
+            return;
+        }
+        let _scope = lumen_core::profile::scope("flush.transition_stale");
+        let ids = lumen_layout::collect_transition_candidates(root);
+        let mut stale = self.transition_stale.lock().unwrap_or_else(|e| e.into_inner());
+        stale.clear();
+        if ids.is_empty() {
+            return;
+        }
+        let cs = self.computed_styles.lock().unwrap_or_else(|e| e.into_inner());
+        for nid in ids {
+            if let Some(m) = cs.get(&nid) {
+                stale.insert(nid, m.clone());
+            }
+        }
+    }
+
     /// The page scroll position JS sees: a not-yet-applied instant request wins over the
     /// committed one (the same rule as `window.scrollY`).
     fn page_scroll(&self) -> (f32, f32) {
@@ -814,6 +850,7 @@ impl FlushHandles {
             }
             if self.computed_styles_needed.load(Ordering::Relaxed) {
                 let _styles_scope = lumen_core::profile::scope("flush.collect_computed_styles");
+                self.snapshot_transition_stale(&layout_root);
                 let mut cs = self.computed_styles.lock().unwrap_or_else(|e| e.into_inner());
                 // BUG-1211 (post-collectors) regression: `computed_styles`
                 // is collected lazily (first read only, guarded by
@@ -875,6 +912,7 @@ impl FlushHandles {
             // calls `maybe_flush` right after, so a page's very first read still
             // forces a real collect here rather than serving a stale/empty map.
             if self.computed_styles_needed.load(Ordering::Relaxed) {
+                self.snapshot_transition_stale(&layout_root);
                 *self.computed_styles.lock().unwrap_or_else(|e| e.into_inner()) =
                     lumen_layout::collect_computed_styles(&layout_root, &doc_guard, Some(&counters), viewport);
                 self.computed_styles_collected.store(true, Ordering::Relaxed);

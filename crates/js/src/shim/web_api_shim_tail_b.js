@@ -5701,6 +5701,50 @@ function _wa_motion_seed(nid) {
     _wa_motion_seed_pseudos(nid, boxless);
 }
 
+// CSSANIM-MODEL-3 срез 2: the document's style change event. A transition belongs to
+// `transition-property`, so a change nobody read starts one too — but its before-change value
+// only exists in the snapshot the pending recompute replaces, and a lazy seed here would read
+// the new style instead. Rust keeps the entries of every node whose style names a transition,
+// diffs them against the recomputed ones (`_lumen_style_change_events`) and this starts the
+// `CSSTransition` for every property that moved — the same `_wa_gap_tr_value` a read uses.
+//
+// The node is deliberately *not* added to `_wa_motion_by_nid`: that set is what every later
+// `getComputedStyle()`-driven sweep re-reads (~300 properties per element), and a document that
+// never read this element must not grow it. A page that does read the element again takes the
+// full snapshot in `_wa_motion_seed`, which keeps the records made here.
+//
+// Only `document.getAnimations()` asks for this: an element's own `getAnimations()` is answered
+// from what the page already observed (WPT has no case where it must find its siblings' work).
+// A transition on a pseudo-element of an element nobody read stays invisible — the entries of an
+// element carry no pseudo snapshot.
+function _wa_motion_stale_seed() {
+    if (typeof _lumen_style_change_events !== 'function') return false;
+    var events;
+    try { events = JSON.parse(_lumen_style_change_events()); } catch (e) { return false; }
+    for (var i = 0; i < events.length; i++) {
+        var nid = events[i][0], snapColor = events[i][1], pairs = events[i][2];
+        // The page read this element: `_wa_motion_seed` took its whole style and the sweep below
+        // compares every property of it anyway.
+        if (_wa_motion_seeded[nid]) continue;
+        var boxless = _css_boxless(nid);
+        for (var j = 0; j < pairs.length; j++) {
+            var kebab = pairs[j][0], from = pairs[j][1];
+            if (!_wa_motion_seedable(kebab) || from === '') continue;
+            var key = nid + ':' + kebab;
+            if (!_wa_gap_tr[key]) {
+                if (++_wa_gap_tr_count > 50000) {
+                    _wa_gap_tr = {}; _wa_motion_by_nid = {}; _wa_motion_pseudo = {};
+                    _wa_motion_pseudo_seeded = {}; _wa_gap_tr_count = 1;
+                }
+                _wa_gap_tr[key] = { seen: from, run: null, boxless: boxless,
+                                    cur: _wa_follows_color(kebab, from, snapColor) };
+            }
+            _wa_motion_read(nid, null, kebab, pairs[j][2]);
+        }
+    }
+    return true;
+}
+
 // The `color` of a computed-style snapshot (`_lumen_get_computed_style_entries` pairs).
 function _wa_snapshot_color(entries) {
     for (var i = 0; i < entries.length; i++) if (entries[i][0] === 'color') return entries[i][1];
@@ -6081,12 +6125,14 @@ function _wa_motion_resolve(eff, camel, v) {
 // recomputes the flush has published; the read before it flushes whatever the page changed,
 // so a mutation always moves the epoch past the last sweep of this element.
 var _wa_motion_synced = {};
-function _wa_motion_tr_sync(target) {
+function _wa_motion_tr_sync(target, flushed) {
     var nid = target && target.__nid__;
     if (nid == null) return;
     var props = _wa_motion_by_nid[nid];
     if (!props) return;
-    _lumen_get_computed_style(nid, 'display');
+    // Force the recompute the sweep is about; the document path already paid it
+    // (`_wa_motion_stale_seed`), and one native call per node is its largest cost there.
+    if (!flushed) _lumen_get_computed_style(nid, 'display');
     var epoch = typeof _lumen_style_epoch === 'function' ? _lumen_style_epoch() : 0;
     if (epoch !== 0 && _wa_motion_synced[nid] === epoch) return;
     _wa_motion_synced[nid] = epoch;
@@ -7424,8 +7470,10 @@ function _wa_doc_get_animations() {
     // and sort by property name, a transition a later call starts goes after them (CSS Transitions
     // L2 §2.2, WPT `getAnimations for CSS Transitions sort by transition generation`).
     _css_gen++;
-    // A style change nobody read since is a transition too (see `_wa_motion_tr_sync`).
-    for (var nid in _wa_motion_by_nid) _wa_motion_tr_sync({ __nid__: +nid });
+    // A style change nobody read since is a transition too (see `_wa_motion_stale_seed`); its
+    // call already flushed the style these reads compare against.
+    var flushed = _wa_motion_stale_seed();
+    for (var nid in _wa_motion_by_nid) _wa_motion_tr_sync({ __nid__: +nid }, flushed);
     _css_an_update_all();
     // A CSS animation is listed while its target is in the document (Web Animations §5.21); one a
     // style change took off the markup and a script played again outlives its element's removal.

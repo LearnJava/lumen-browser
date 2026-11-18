@@ -1644,6 +1644,67 @@ pub(crate) fn install_computed_styles(
             epoch.load(Ordering::Relaxed) as f64
         });
     }
+    // CSSANIM-MODEL-3 срез 2: the document «style change event». The flush this call forces keeps,
+    // for every node whose style names a transition, the entries the recompute replaced; comparing
+    // them with the fresh ones names the properties that actually moved — the before-change values
+    // `document.getAnimations()` starts its transitions from, so a change nobody read starts one
+    // too (CSS Transitions L1 §3). `[[node, its old colour, [[property, from, to], …]], …]`.
+    {
+        // `(property, before, after)` / `(node, its old colour, its changes)`.
+        type PropChange = (String, String, String);
+        type NodeChanges = (u32, String, Vec<PropChange>);
+        let stale = Arc::clone(&flush.transition_stale);
+        let cs = Arc::clone(&computed_styles);
+        let needed = Arc::clone(&flush.transition_stale_needed);
+        let handles = flush.clone();
+        reg!(scope, ctx, store, "_lumen_style_change_events", move || -> String {
+            needed.store(true, Ordering::Relaxed);
+            handles.maybe_flush();
+            let stale = stale.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(cs) = cs.lock().ok() else { return "[]".to_string() };
+            let mut out: Vec<NodeChanges> = Vec::new();
+            let mut key = String::with_capacity(48);
+            for (&nid, old) in stale.iter() {
+                let Some(new) = cs.get(&nid) else { continue };
+                // The same cascaded style object and the same used geometry: no value can have
+                // moved, and only such a node is cheap to answer.
+                if old.same_style(new) {
+                    continue;
+                }
+                let mut changed: Vec<PropChange> = Vec::new();
+                for (k, v) in old.iter() {
+                    if k.starts_with(lumen_layout::COMPUTED_VALUE_KEY_PREFIX) {
+                        continue;
+                    }
+                    let (from, to) = if k == "transform" {
+                        let from = old.get(lumen_layout::TRANSFORM_LIST_KEY).unwrap_or(v).clone();
+                        let Some(to) = new
+                            .get(lumen_layout::TRANSFORM_LIST_KEY)
+                            .or_else(|| new.get(k))
+                        else {
+                            continue;
+                        };
+                        (from, to.clone())
+                    } else {
+                        key.clear();
+                        key.push_str(lumen_layout::COMPUTED_VALUE_KEY_PREFIX);
+                        key.push_str(k);
+                        let from = old.get(&key).unwrap_or(v).clone();
+                        let Some(to) = new.get(&key).or_else(|| new.get(k)) else { continue };
+                        (from, to.clone())
+                    };
+                    if from != to {
+                        changed.push((k.to_owned(), from, to));
+                    }
+                }
+                if !changed.is_empty() {
+                    let colour = old.get("color").cloned().unwrap_or_default();
+                    out.push((nid, colour, changed));
+                }
+            }
+            serde_json::to_string(&out).unwrap_or_else(|_| "[]".to_string())
+        });
+    }
     // VT-API: every rendered element carrying a `view-transition-name`, as a JSON
     // `[[nodeIndex, name], …]` ordered by node index. The View Transitions shim
     // (`view_transitions.rs`) checks it for duplicate names at the capture and
