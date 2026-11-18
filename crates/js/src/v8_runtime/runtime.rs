@@ -69,6 +69,11 @@ pub struct V8JsRuntime {
     /// fragment (visual line for a multi-line inline element) instead of
     /// [`Self::layout_rects`]'s single union rect.
     pub(super) client_rects: Arc<Mutex<HashMap<u32, Vec<[f32; 4]>>>>,
+    /// BUG-1468: static geometry of `position: sticky` boxes inside scroll containers,
+    /// backing the read-time stuck shift of `getBoundingClientRect`/`getClientRects`/
+    /// `getBoxQuads`. Updated alongside [`Self::layout_rects`] (the scroll offsets are
+    /// read live from [`Self::scroll_states`], so this map stays scroll-independent).
+    pub(super) sticky_geoms: Arc<Mutex<HashMap<u32, lumen_layout::StickyGeom>>>,
     /// `LayoutBox` tree snapshot for `document.elementFromPoint`/`elementsFromPoint`
     /// (CSSOM View §3, BUG-464/BUG-477), updated after each relayout by the shell
     /// alongside [`Self::layout_rects`] — same tree, same coordinate frame, same
@@ -521,6 +526,7 @@ impl V8JsRuntime {
             raf_pending: Arc::new(AtomicBool::new(false)),
             layout_rects: Arc::new(Mutex::new(HashMap::new())),
             client_rects: Arc::new(Mutex::new(HashMap::new())),
+            sticky_geoms: Arc::new(Mutex::new(HashMap::new())),
             hit_test_tree: Arc::new(Mutex::new(None)),
             page_flush_handles: Mutex::new(None),
             viewport_size: Arc::new(Mutex::new([0.0, 0.0])),
@@ -1173,6 +1179,13 @@ impl V8JsRuntime {
         // `highlightsFromPoint()` re-collects against the new layout.
         self.text_frags_collected.store(false, std::sync::atomic::Ordering::Relaxed);
         self.pseudo_rects_collected.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Replace the sticky-geometry table (BUG-1468) backing the read-time stuck
+    /// shift of `getBoundingClientRect`/`getClientRects`/`getBoxQuads`. Called
+    /// alongside [`Self::update_layout_rects`] wherever the shell pushes fresh geometry.
+    pub fn update_sticky_geoms(&self, geoms: HashMap<u32, lumen_layout::StickyGeom>) {
+        *self.sticky_geoms.lock().unwrap_or_else(|e| e.into_inner()) = geoms;
     }
 
     /// Replace the `LayoutBox` tree snapshot backing `elementFromPoint`/

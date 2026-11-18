@@ -1,6 +1,6 @@
 # BUG-1468 — `position: sticky`: в корневом документе и внутри `overflow` контейнера липкий бокс не следует за прокруткой (`getBoundingClientRect` и снимок)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-11-18 (P3, срезы 1–5)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 21, `css/css-anchor-position` + `css/css-position` + `css/css-display`)
 **Область:** layout/paint/shell (`crates/engine/paint/src/display_list/walk.rs:1056` — `BeginStickyLayer`; прокрутка вложенного контейнера в `crates/shell`)
 
@@ -58,3 +58,15 @@ WPT-RUN-14 срез 21: `css-position/sticky/position-sticky-top-003.html`, `pos
 - **`BeginFixedLayer`** отменяет запечённый scroll трансформом `translation(+scroll_x, +scroll_y)`: fixed-контент уже в координатах вьюпорта, прокрутка его сдвигать не должна.
 
 Юнит-тесты в `cpu_raster/tests.rs`: `page_scroll_shifts_content_up`, `page_level_sticky_sticks_at_top`, `fixed_content_stays_put_under_scroll`. Правки не затрагивают вывод при `scroll=0` (запекание — тождество, коррекция и отмена — нули), поэтому графический гейт и snapshot-тесты не двигаются. Остаток (1) закрыт.
+
+## Срез 5 (2026-11-18, P3): геометрия для скриптов — `getBoundingClientRect`/`offsetTop` липкого бокса
+
+Пункт (2) «Что делать» закрыт: `getBoundingClientRect`/`getClientRects`/`getBoxQuads`/`offsetLeft`/`offsetTop` липкого бокса в scroll-контейнере теперь отражают прилипание. Механика зеркалит BUG-1166 (сдвиг считается **при чтении**, а не запекается в прямоугольники):
+
+- **layout** (`sticky_snap.rs`): `collect_sticky_geoms(root)` собирает статическую геометрию липких боксов — резолвленные инсеты (`top`/`bottom`/`left`/`right`), ближайший scroll-контейнер (`overflow: scroll|auto|hidden`) и его scrollport (padding box; на неклипуемой оси — `BIG`-сентинел, как paint `overflow_clip_rect`). `StickyGeom::correction(flow, scroll_x, scroll_y)` даёт поправку `[cdx, cdy]` — ровно то, что paint-овые `sticky_dy`/`sticky_dx` добавляют сверх `-scroll`. Page-level sticky (без контейнера) в карту не попадает — его сдвиг зависит от прокрутки страницы (BUG-1166).
+- **js**: новая нативная `_lumen_get_sticky_shift(nid)` (читает `sticky_geoms` + `layout_rects` + `scroll_states` из `FlushHandles`, считает на чтении) и шим `web_api_shim_mid.js` — `getBoundingClientRect`/`getClientRects`/`getBoxQuads` прибавляют `+st[0]/+st[1]`, `offsetLeft`/`offsetTop` — тоже (border edge относительно offsetParent включает липкий сдвиг, в отличие от прокрутки предков).
+- **shell/driver**: `sticky_geoms` публикуется теми же путями, что `client_rects` (`PrecollectedJsData`, `JsLayoutSnapshot`, relayout/page_load/frames/hibernation/scripts/driver) и пересчитывается в `maybe_flush`.
+
+Тесты: `sticky_correction_*`/`collect_sticky_geoms_*` (layout) + `get_bounding_client_rect_sticky_sticks_inside_scrolled_container` (js, нативный + шим). WPT `position-sticky-top.html`: «до прилипания» и «после прилипания» зелёные.
+
+**Осталось (вне этого среза):** (a) **containing-block constraint** — липкий бокс не зажат своим containing block (CSS Position 3 §2.2, sticky constraint rectangle = scrollport ∩ containing block): при `scrollTop=300` в `position-sticky-top.html` `offsetTop` даёт 350 вместо 300 (бокс уезжает за нижний край `container`, y=100..400). Тот же пробел во всех четырёх paint-путях (`sticky_dy/dx` в `box_layer.rs`, `femtovg_backend.rs`, `renderer/sticky_geom.rs`, `cpu_raster.rs`) — заведено отдельно как [BUG-1825](BUG-1825-OPEN.md). (b) Page-level sticky геометрия (`getBoundingClientRect` липкого бокса на странице) — прокрутка страницы, [BUG-1166](BUG-1166-OPEN.md).

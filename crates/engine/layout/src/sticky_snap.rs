@@ -174,6 +174,165 @@ pub fn compute_sticky_offset(
     (off_x, off_y)
 }
 
+/// Static geometry of a `position: sticky` box that lives inside a scroll
+/// container — everything `getBoundingClientRect` needs to compute the stuck
+/// offset *at read time*, without re-walking the tree on every scroll.
+///
+/// The container's current scroll is deliberately *not* stored here: it changes
+/// on every wheel/`scrollTop` write (which publishes `scroll_states` but does not
+/// relayout), so the reader looks it up from `scroll_states` and passes it to
+/// [`StickyGeom::correction`]. Only page-level sticky (no scroll container on the
+/// ancestor chain) is absent from [`collect_sticky_geoms`] — its geometry depends
+/// on the page scroll, a separate gap (BUG-1166).
+#[derive(Debug, Clone, Copy)]
+pub struct StickyGeom {
+    /// Resolved `top`/`bottom`/`left`/`right` insets in px; `None` = `auto`.
+    pub top: Option<f32>,
+    pub bottom: Option<f32>,
+    pub left: Option<f32>,
+    pub right: Option<f32>,
+    /// Node index of the nearest ancestor scroll container.
+    pub container: u32,
+    /// That container's scrollport `[x, y, width, height]` in document coords.
+    pub scrollport: [f32; 4],
+}
+
+impl StickyGeom {
+    /// The stuck shift `[cdx, cdy]` in CSS px to add on top of the ancestor-scroll
+    /// shift `getBoundingClientRect` already applies (it subtracts the container
+    /// scrolls). `[0, 0]` = not stuck. Mirrors paint's `sticky_dy`/`sticky_dx`
+    /// (`display_list/box_layer.rs`) and `renderer/sticky_geom.rs`.
+    pub fn correction(&self, flow: [f32; 4], scroll_x: f32, scroll_y: f32) -> [f32; 2] {
+        let (cdx, cdy) = sticky_correction(
+            lumen_core::geom::Rect::new(flow[0], flow[1], flow[2], flow[3]),
+            self.top,
+            self.bottom,
+            self.left,
+            self.right,
+            scroll_x,
+            scroll_y,
+            lumen_core::geom::Rect::new(
+                self.scrollport[0],
+                self.scrollport[1],
+                self.scrollport[2],
+                self.scrollport[3],
+            ),
+        );
+        [cdx, cdy]
+    }
+}
+
+/// CSS Positioning L3 §6.3 — the extra shift a stuck `position: sticky` box gets
+/// beyond `-scroll` (the plain ancestor-scroll translation). `flow` is the box's
+/// document-space flow rect, `bound` the nearest scroll container's scrollport,
+/// `scroll_x`/`scroll_y` that container's own scroll offset. Returns `(cdx, cdy)`
+/// in CSS px; `(0, 0)` when not stuck. Exact mirror of paint's `sticky_dy`/`sticky_dx`.
+#[allow(clippy::too_many_arguments)] // mirror of the two paint helpers, one fn for both axes
+pub fn sticky_correction(
+    flow: lumen_core::geom::Rect,
+    top: Option<f32>,
+    bottom: Option<f32>,
+    left: Option<f32>,
+    right: Option<f32>,
+    scroll_x: f32,
+    scroll_y: f32,
+    bound: lumen_core::geom::Rect,
+) -> (f32, f32) {
+    let mut cdy = 0.0;
+    if let Some(t) = top {
+        let screen_y = flow.y - scroll_y;
+        let min_y = bound.y + t;
+        if screen_y < min_y {
+            cdy += min_y - screen_y;
+        }
+    }
+    if let Some(b) = bottom {
+        let max_screen_y = bound.y + bound.height - b - flow.height;
+        let actual_screen_y = flow.y - scroll_y;
+        if actual_screen_y > max_screen_y {
+            cdy -= actual_screen_y - max_screen_y;
+        }
+    }
+    let mut cdx = 0.0;
+    if let Some(l) = left {
+        let screen_x = flow.x - scroll_x;
+        let min_x = bound.x + l;
+        if screen_x < min_x {
+            cdx += min_x - screen_x;
+        }
+    }
+    if let Some(r) = right {
+        let max_screen_x = bound.x + bound.width - r - flow.width;
+        let actual_screen_x = flow.x - scroll_x;
+        if actual_screen_x > max_screen_x {
+            cdx -= actual_screen_x - max_screen_x;
+        }
+    }
+    (cdx, cdy)
+}
+
+/// Collect the [`StickyGeom`] of every sticky box whose nearest scroll container
+/// is an ancestor (the "baked" case paint emits as `PushClipRect`→`PushTransform`).
+/// Page-level sticky boxes (no scroll container) are omitted — their stuck offset
+/// depends on the page scroll, tracked separately (BUG-1166).
+pub fn collect_sticky_geoms(root: &LayoutBox) -> std::collections::HashMap<u32, StickyGeom> {
+    use style::{Overflow, Position};
+
+    let mut out = std::collections::HashMap::new();
+    // (box, nearest ancestor scroll container: (scrollport, node index))
+    let mut stack: Vec<(&LayoutBox, Option<(lumen_core::geom::Rect, u32)>)> = vec![(root, None)];
+    while let Some((b, nearest)) = stack.pop() {
+        let is_sc = matches!(
+            b.style.overflow_x,
+            Overflow::Scroll | Overflow::Auto | Overflow::Hidden
+        ) || matches!(
+            b.style.overflow_y,
+            Overflow::Scroll | Overflow::Auto | Overflow::Hidden
+        );
+        let next = if is_sc {
+            Some((sticky_scrollport(b), b.node.index() as u32))
+        } else {
+            nearest
+        };
+        if matches!(b.style.position, Position::Sticky) && let Some((bound, container)) = next {
+            let em = b.style.font_size;
+            let vp = lumen_core::geom::Size::new(0.0, 0.0);
+            let inset = |len: &style::LengthOrAuto, basis: f32| len.resolve(em, basis, vp);
+            out.entry(b.node.index() as u32).or_insert(StickyGeom {
+                top: inset(&b.style.top, bound.height),
+                bottom: inset(&b.style.bottom, bound.height),
+                left: inset(&b.style.left, bound.width),
+                right: inset(&b.style.right, bound.width),
+                container,
+                scrollport: [bound.x, bound.y, bound.width, bound.height],
+            });
+        }
+        for child in b.children.iter().rev() {
+            stack.push((child, next));
+        }
+    }
+    out
+}
+
+/// The scrollport a `position: sticky` box is clamped against — the scroll
+/// container's padding box on the axes it clips, a `BIG` sentinel on the others
+/// (mirror of paint's `overflow_clip_rect`), so a single-axis scroller never
+/// spuriously clamps the free axis.
+fn sticky_scrollport(b: &LayoutBox) -> lumen_core::geom::Rect {
+    use style::Overflow;
+    const BIG: f32 = 1_000_000.0;
+    let s = &b.style;
+    let (bl, bt, br, bb) = (s.border_left_width, s.border_top_width, s.border_right_width, s.border_bottom_width);
+    let clip_x = !matches!(s.overflow_x, Overflow::Visible);
+    let clip_y = !matches!(s.overflow_y, Overflow::Visible);
+    lumen_core::geom::Rect::new(
+        if clip_x { b.rect.x + bl } else { -BIG },
+        if clip_y { b.rect.y + bt } else { -BIG },
+        if clip_x { (b.rect.width - bl - br).max(0.0) } else { 2.0 * BIG },
+        if clip_y { (b.rect.height - bt - bb).max(0.0) } else { 2.0 * BIG },
+    )
+}
+
 // ─── CSS Scroll Snap L1 algorithm stub ───────────────────────────────────────
 // CSS: scroll-snap-type, scroll-snap-align, scroll-snap-stop
 //

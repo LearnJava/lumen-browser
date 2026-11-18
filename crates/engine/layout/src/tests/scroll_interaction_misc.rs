@@ -692,6 +692,76 @@ fn sticky_bottom_inset() {
     assert!((dy2 - (-60.0)).abs() < 0.001, "expected dy≈-60, got {dy2}");
 }
 
+// ── BUG-1468: sticky geometry for `getBoundingClientRect` (read-time) ─────
+
+#[test]
+fn sticky_correction_sticks_at_top_inside_scrolled_container() {
+    use lumen_core::geom::Rect;
+    // Probe from BUG-1468: flow y=200, top:100, container scroll_y=250, scrollport 250×150.
+    let (cdx, cdy) = sticky_correction(
+        Rect::new(0.0, 200.0, 100.0, 40.0),
+        Some(100.0),
+        None,
+        None,
+        None,
+        0.0,
+        250.0,
+        Rect::new(0.0, 0.0, 250.0, 150.0),
+    );
+    assert_eq!(cdx, 0.0);
+    assert!((cdy - 150.0).abs() < 0.001, "expected cdy=150, got {cdy}");
+}
+
+#[test]
+fn sticky_correction_zero_when_not_stuck() {
+    use lumen_core::geom::Rect;
+    let (_, cdy) = sticky_correction(
+        Rect::new(0.0, 200.0, 100.0, 40.0),
+        Some(100.0),
+        None,
+        None,
+        None,
+        0.0,
+        50.0,
+        Rect::new(0.0, 0.0, 250.0, 150.0),
+    );
+    assert_eq!(cdy, 0.0, "scroll_y=50 keeps flow y at 150, above top:100");
+}
+
+#[test]
+fn collect_sticky_geoms_records_scroll_container_and_insets() {
+    let root = lay_full(
+        "<div id='sc'><div id='st'>sticky</div></div>",
+        "body{margin:0} #sc{overflow:auto;height:150px} #st{position:sticky;top:100px;height:40px}",
+    );
+    let geoms = collect_sticky_geoms(&root);
+    assert_eq!(geoms.len(), 1, "expected exactly one container-sticky box: {geoms:?}");
+    let g = geoms.values().next().unwrap();
+    assert_eq!(g.top, Some(100.0));
+    assert_eq!(g.bottom, None);
+    assert_eq!(g.left, None);
+    assert_eq!(g.right, None);
+    // #st sits at the top of #sc (y=0), so scrolled 250 it sticks 100px below the top.
+    assert!((g.scrollport[3] - 150.0).abs() < 0.001, "scrollport height: {g:?}");
+    let corr = g.correction([0.0, 0.0, 800.0, 40.0], 0.0, 250.0);
+    assert!((corr[1] - 350.0).abs() < 0.001, "expected cdy=350, got {corr:?}");
+}
+
+#[test]
+fn collect_sticky_geoms_recognises_overflow_hidden_scroller() {
+    // WPT position-sticky-top.html scrollers use `overflow: hidden`, which is
+    // programmatically scrollable and must still stick its sticky children.
+    let root = lay_full(
+        "<div id='sc'><div id='st'>sticky</div></div>",
+        "body{margin:0} #sc{overflow:hidden;height:200px} #st{position:sticky;top:50px;height:100px}",
+    );
+    let geoms = collect_sticky_geoms(&root);
+    assert_eq!(geoms.len(), 1, "expected one sticky box inside the hidden scroller: {geoms:?}");
+    let g = geoms.values().next().unwrap();
+    assert_eq!(g.top, Some(50.0));
+    assert!((g.scrollport[3] - 200.0).abs() < 0.001, "scrollport height: {g:?}");
+}
+
 #[test]
 fn collect_sticky_boxes_empty_document() {
     let root = lay_full("<p>no sticky</p>", "");

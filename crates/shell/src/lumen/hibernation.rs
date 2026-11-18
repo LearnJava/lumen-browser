@@ -274,6 +274,7 @@ impl Lumen {
             // seed in `page_load.rs::apply_loaded_page`.
             self.prev_layout_shift_rects = rects.clone();
             let client_rects = collect_client_rects(lb_ref, &doc_guard);
+            let sticky_geoms = collect_sticky_geoms(lb_ref);
             let hit_test_tree = Arc::new(lb_ref.clone());
             let styles = collect_computed_styles(lb_ref, &doc_guard, None, viewport);
             let pseudo_styles = collect_pseudo_computed_styles(lb_ref);
@@ -283,6 +284,7 @@ impl Lumen {
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                 js.update_layout_rects(rects);
                 js.update_client_rects(client_rects);
+                js.update_sticky_geoms(sticky_geoms);
                 js.update_hit_test_tree(hit_test_tree);
                 js.update_computed_styles(styles);
                 js.update_pseudo_computed_styles(pseudo_styles);

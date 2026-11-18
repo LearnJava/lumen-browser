@@ -32,6 +32,39 @@ fn get_bounding_client_rect_method_on_element() {
     assert_eq!(bottom, lumen_core::JsValue::Number(110.0));
 }
 
+/// BUG-1468: `getBoundingClientRect()` of a `position: sticky` box inside a
+/// scrolled container reports where it sticks, not its normal-flow position —
+/// the ancestor-scroll shift plus the stuck clamp. `div#main` flows at y=200,
+/// `body` scrolled 250, `top: 100px` → stuck at y=100.
+#[test]
+fn get_bounding_client_rect_sticky_sticks_inside_scrolled_container() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let doc_arc = make_doc();
+    let (body_nid, div_nid) = {
+        let doc = doc_arc.lock().unwrap();
+        (
+            super::super::find_element_by_tag(&doc, "body").unwrap().index() as u32,
+            super::super::find_element_by_tag(&doc, "div").unwrap().index() as u32,
+        )
+    };
+    rt.update_layout_rects([(div_nid, [0.0, 200.0, 100.0, 40.0])].into_iter().collect());
+    rt.update_scroll_states([(body_nid, [0.0, 250.0, 250.0, 400.0])].into_iter().collect());
+    rt.update_sticky_geoms(
+        [(div_nid, lumen_layout::StickyGeom {
+            top: Some(100.0),
+            bottom: None,
+            left: None,
+            right: None,
+            container: body_nid,
+            scrollport: [0.0, 0.0, 250.0, 150.0],
+        })]
+        .into_iter()
+        .collect(),
+    );
+    let y = rt.eval("document.getElementById('main').getBoundingClientRect().y").unwrap();
+    assert_eq!(y, lumen_core::JsValue::Number(100.0));
+}
+
 /// BUG-1007: `getClientRects()` must answer with one real `DOMRect` per
 /// fragment the native `_lumen_get_client_rects` reports — a multi-line plain
 /// inline element pushes more than one `[x, y, w, h]` entry (see

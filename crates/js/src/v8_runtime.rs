@@ -348,6 +348,7 @@ impl V8JsRuntime {
             let raf_pending = Arc::clone(&self.raf_pending);
             let layout_rects = Arc::clone(&self.layout_rects);
             let client_rects = Arc::clone(&self.client_rects);
+            let sticky_geoms = Arc::clone(&self.sticky_geoms);
             let hit_test_tree = Arc::clone(&self.hit_test_tree);
             let viewport_size = Arc::clone(&self.viewport_size);
             let zoom_factor = Arc::clone(&self.zoom_factor);
@@ -394,6 +395,7 @@ impl V8JsRuntime {
                 doc: Arc::clone(&doc),
                 layout_rects: Arc::clone(&layout_rects),
                 client_rects: Arc::clone(&client_rects),
+                sticky_geoms: Arc::clone(&sticky_geoms),
                 computed_styles: Arc::clone(&computed_styles),
                 pseudo_computed_styles: Arc::clone(&pseudo_computed_styles),
                 custom_properties: Arc::clone(&custom_properties),

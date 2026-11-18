@@ -971,6 +971,9 @@ pub(crate) struct JsLayoutSnapshot {
     /// `node index -> per-fragment rects` (BUG-1007), for `getClientRects()`/
     /// `getBoxQuads()` — same tree `rects` was collected from.
     pub(crate) client_rects: std::collections::HashMap<u32, Vec<[f32; 4]>>,
+    /// `node index -> static sticky geometry` (BUG-1468) — same tree `rects`
+    /// was collected from.
+    pub(crate) sticky_geoms: std::collections::HashMap<u32, lumen_layout::StickyGeom>,
     /// `LayoutBox` tree for `document.elementFromPoint`/`elementsFromPoint`
     /// (BUG-464/BUG-477) — same tree `rects` was collected from.
     pub(crate) tree: Arc<LayoutBox>,
@@ -996,6 +999,7 @@ pub(crate) fn collect_js_layout_snapshot(
     JsLayoutSnapshot {
         rects: lumen_layout::collect_layout_rects(root, doc),
         client_rects: lumen_layout::collect_client_rects(root, doc),
+        sticky_geoms: lumen_layout::collect_sticky_geoms(root),
         tree: Arc::new(root.clone()),
         styles: lumen_layout::collect_computed_styles(root, doc, None, viewport),
         pseudo_styles: lumen_layout::collect_pseudo_computed_styles(root),
@@ -1630,6 +1634,7 @@ pub(crate) fn parse_and_layout(
             screen_layout = Some(tree);
             js.update_layout_rects(snapshot.rects);
             js.update_client_rects(snapshot.client_rects);
+            js.update_sticky_geoms(snapshot.sticky_geoms);
             js.update_computed_styles(snapshot.styles);
             js.update_pseudo_computed_styles(snapshot.pseudo_styles);
             js.update_custom_properties(snapshot.customs);

@@ -354,6 +354,33 @@ pub(crate) fn install_element_geometry(
         });
     }
 
+    // BUG-1468: the stuck shift of a `position: sticky` box inside a scroll container —
+    // `[cdx, cdy]` in CSS px to add on top of `_lumen_get_scroll_shift` so
+    // `getBoundingClientRect` reports the box where it actually sticks, not where
+    // normal flow left it. The static geometry (insets + scrollport + nearest
+    // container) comes from the flush; the current scroll is read from
+    // `scroll_states` (published by both relayout and scroll paths), so this stays
+    // correct without a relayout on every scroll. `[0, 0]` for a non-sticky box or
+    // a page-level sticky (its stuck shift depends on the page scroll — BUG-1166).
+    {
+        let flush_sticky = flush.clone();
+        reg!(scope, ctx, store, "_lumen_get_sticky_shift", move |nid: u32| -> Vec<f64> {
+            flush_sticky.maybe_flush();
+            let g = flush_sticky.sticky_geoms.lock().unwrap().get(&nid).copied();
+            let Some(g) = g else { return vec![0.0, 0.0] };
+            let flow = flush_sticky.layout_rects.lock().unwrap().get(&nid).copied();
+            let Some(flow) = flow else { return vec![0.0, 0.0] };
+            let (sx, sy) = flush_sticky
+                .scroll_states
+                .lock()
+                .unwrap()
+                .get(&g.container)
+                .map_or((0.0, 0.0), |s| (s[0], s[1]));
+            let [cdx, cdy] = g.correction(flow, sx, sy);
+            vec![f64::from(cdx), f64::from(cdy)]
+        });
+    }
+
     // GAP-HLHITTEST: which character of which text node is laid out under a
     // viewport point — flat `[nid, utf16Offset, nid, utf16Offset, …]`,
     // usually zero or one pair. Backs `CSS.highlights.highlightsFromPoint()`.
