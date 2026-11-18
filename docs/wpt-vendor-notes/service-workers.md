@@ -10,7 +10,7 @@ Test category, added 2026-08-06 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 
 ## Разведка WPT-SW-SCOUT (2026-10-27)
 
-Статус: закрыта 2026-10-27. Баги [BUG-1742](../../bugs/BUG-1742-OPEN.md)…[BUG-1747](../../bugs/BUG-1747-OPEN.md) и дополнение к [BUG-1226](../../bugs/BUG-1226-OPEN.md) (очередь P3 в порядке J → C → A → F → D → E → G), задачи SW-MSG, SW-MODULE, SW-PRELOAD-ROUTER (очередь P1). Код не менялся.
+Статус: закрыта 2026-10-27. Баги [BUG-1742](../../bugs/BUG-1742-FIXED.md)…[BUG-1747](../../bugs/BUG-1747-OPEN.md) и дополнение к [BUG-1226](../../bugs/BUG-1226-OPEN.md) (очередь P3 в порядке J → C → A → F → D → E → G), задачи SW-MSG, SW-MODULE, SW-PRELOAD-ROUTER (очередь P1). Код не менялся.
 
 **Прогон** (`run_corpus.py --prefixes service-workers --processes 6`, `dev-release` от `main` `c9bcc4bab`, 1133 с): 331 id, **11.52 %** (в WPT-RUN-16 — 11.44 %), балл 38.14, harness OK 161, сабтесты 299 / 2 367. Статусы: OK 160, PASS 1, TIMEOUT 146, ERROR 21, CRASH 2, FAIL 1. Одно убийство по RSS-лимиту (4.02 ГБ).
 
@@ -24,7 +24,7 @@ Test category, added 2026-08-06 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 |---|---|---|---|---|---|---|---|
 | A | `*.any.serviceworker.html` | 16 | 0 / 0 | TIMEOUT 16 | 70 «importScripts: HTTP 404», scope склеен как `https://localhost:18443resources/...` (11 в `cache-storage/`, `idlharness`) | [BUG-1226](../../bugs/BUG-1226-OPEN.md) | 16.0 (4.8) |
 | B | сообщения страница↔SW, Clients | 79 | 24 / 498 | TIMEOUT 59, OK 20 | `ServiceWorker.postMessage` no-op, нет `ExtendableMessageEvent`, `clients.get/matchAll` — заглушки, `waitUntil` не ждёт (`postmessage.https.html`, `clients-matchall.https.html`) | SW-MSG | 74.6 (22.5) |
-| C | регистрация и жизненный цикл | 33 | 56 / 167 | TIMEOUT 16, OK 17 | `updatefound` до резолва `register()`, scope не резолвится, `update()` — заглушка (`registration-service-worker-attributes`, `register-default-scope`) | [BUG-1742](../../bugs/BUG-1742-OPEN.md) | 27.3 (8.2) |
+| C | регистрация и жизненный цикл | 33 | 56 / 167 | TIMEOUT 16, OK 17 | `updatefound` до резолва `register()`, scope не резолвится, `update()` — заглушка (`registration-service-worker-attributes`, `register-default-scope`) | [BUG-1742](../../bugs/BUG-1742-FIXED.md) | 27.3 (8.2) |
 | D | точность перехвата fetch | 21 | 6 / 173 | OK 15, TIMEOUT 5, FAIL 1 | из `respondWith` доходит только тело (status 200, без заголовков), `preventDefault` не даёт network error (`fetch-event-network-error`) | [BUG-1744](../../bugs/BUG-1744-OPEN.md) | 19.8 (6.0) |
 | E | Cache API в окне | 17 | 34 / 157 | OK 12, TIMEOUT 5 | нет `Cache`, тело «101,103,…», `statusText` «OK», опции match игнорируются (`cache-match.https.any.html`) | [BUG-1745](../../bugs/BUG-1745-OPEN.md) | 14.3 (4.3) |
 | F | `caches` в Dedicated/SharedWorker | 23 | 0 / 295 | ERROR 16, OK 7 | `self.caches` undefined, cleanup «reading 'delete'» (`cache-put.https.any.worker.html`) | [BUG-1746](../../bugs/BUG-1746-OPEN.md) | 23.0 (6.9) |

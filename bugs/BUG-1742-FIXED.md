@@ -1,7 +1,8 @@
 # BUG-1742 — регистрация сервис-воркера: таймерная имитация вместо Register/Update/Install, `updatefound` до резолва `register()`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-11-18 (дефект закрыт работой P3; остаток «контроллер на iframe-клиентах» — за BUG-1743)
 **Заведён:** 2026-10-27 (P2, WPT-SW-SCOUT)
+**Закрыт:** 2026-11-18 (P3)
 **Область:** js (`crates/js/src/shim/web_api_shim_mid_b.js` — `_sw_container.register`, `_sw_run_lifecycle`, `_sw_make_registration`; `crates/js/src/sw_worker.rs` — install/activate в изоляте SW)
 
 ## Симптом
@@ -65,6 +66,6 @@ WPT-SW-SCOUT, кластер C (`docs/wpt-vendor-notes/service-workers.md`): 33 
 
 **Срез 2026-11-18 (P3, модель controller):** `navigator.serviceWorker.controller` больше не вычисляется из живого реестра (геттер возвращал первого активного worker-а, поэтому `unregister()`+повторная регистрация «воскрешала» нового worker-а контроллером). Теперь это стабильная ссылка `_sw_controller`, выставляемая один раз, когда клиент становится контролируемым: при активации (`_sw_finish_install`, только если ещё не выставлен — `update()`/повторная регистрация не крадут контроллер), при `clients.claim()` (`_lumen_deliver_sw_control`, явный захват — перезаписывает) и при восстановлении активной регистрации из персиста. `unregister()`/`_sw_fail_eval` контроллер не трогают. Регресс-тест `sw_controller_survives_unregister_reregister` (в `v8_events_cache.rs`): регистрация → активация → снятие → повторная регистрация другим скриптом — контроллер остаётся прежним worker-ом. Полный `sw_`-набор — 90/90.
 
-Осталось (вне P3, заблокировано на BUG-1743):
+Остаток (закрыт как FIXED — перенесён на BUG-1743):
 
-- **Распространение контроллера на клиенты-iframe.** `unregister-then-register` сабтесты 2–4 читают `iframe.contentWindow.navigator.serviceWorker.controller` — это фасад iframe по значению (BUG-1743), а не модель controller этого бага. После BUG-1743 iframe-клиент получит свой контроллер тем же `_sw_controller`-механизмом.
+- **Распространение контроллера на клиенты-iframe.** `unregister-then-register` сабтесты 2–4 читают `iframe.contentWindow.navigator.serviceWorker.controller` — это фасад iframe по значению ([BUG-1743](BUG-1743-OPEN.md)), а не модель controller этого бага. После BUG-1743 iframe-клиент получит свой контроллер тем же `_sw_controller`-механизмом.
