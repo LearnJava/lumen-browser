@@ -230,6 +230,15 @@ impl Lumen {
                 width: self.viewport_width_css(),
                 height: self.viewport_height_css(),
             };
+            // CSSANIM-MODEL-2 S4: a script's `cancel()`/`play()`/seek moves the frame the
+            // scheduler paints — drain its commands before the tick that uses them.
+            let motion_cmds = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.take_css_motion_cmds()
+            })
+            .unwrap_or_default();
+            for cmd in motion_cmds {
+                self.animation_scheduler.apply_cmd(cmd);
+            }
             let (mut frame, anim_events) = self.animation_scheduler.tick(
                 timestamp_ms,
                 lb,

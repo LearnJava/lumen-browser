@@ -462,6 +462,7 @@ impl V8JsRuntime {
             let pending_nav_intercepted = Arc::clone(&self.pending_nav_intercepted);
             let navigate_listeners = Arc::clone(&self.navigate_listeners);
             let fullscreen_requests = Arc::clone(&self.fullscreen_requests);
+            let css_motion_cmds = Arc::clone(&self.css_motion_cmds);
             let print_requests = Arc::clone(&self.print_requests);
             let pending_focus_requests = Arc::clone(&self.pending_focus_requests);
 
@@ -642,6 +643,14 @@ impl V8JsRuntime {
             install::install_window_open(scope, ctx, store, Arc::clone(&window_open_requests))?;
 
             install::install_fullscreen(scope, ctx, store, Arc::clone(&fullscreen_requests))?;
+
+            install::install_css_motion(
+                scope,
+                ctx,
+                store,
+                Arc::clone(&css_motion_cmds),
+                Arc::clone(&computed_styles),
+            )?;
 
             install::install_pointer_lock(scope, ctx, store)?;
 

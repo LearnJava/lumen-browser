@@ -7463,6 +7463,16 @@ function _css_take_clock(a) {
     a._ph = _css_phase(a);
 }
 
+// A script that drives a CSS animation's clock moves the painted frame with it: `cancel()`
+// hands the element back its settled style, `play()`/a seek give the animation back to the
+// frame loop. The shell's `AnimationScheduler` paints `opacity`/`transform`/colours/`height`
+// and writes them into the computed-style snapshot; only it can stop doing so
+// (CSSANIM-MODEL-2 срез S4). Transitions are the `TransitionScheduler`'s own (S5).
+function _css_motion_cmd(kind, a, arg) {
+    if (a._ctype !== 'a' || !a._cname || typeof _lumen_css_motion_cmd !== 'function') return;
+    _lumen_css_motion_cmd(kind, a._nid, a._cname, arg || 0);
+}
+
 // CSS Animations L2 §4.2: a move across a phase boundary into `active` owes an
 // `animationstart`/`transitionstart`, a move out of it an `animationend`/`transitionend`; a move
 // from `before` straight to `after` (or back) crosses no active interval and fires nothing.
@@ -7640,6 +7650,7 @@ _css_define('currentTime', {
         if (c.pending) _css_complete_pending(a);
         _css_state(a);
         _css_tr_restore(a);
+        _css_motion_cmd('seek', a, _css_ct(a));
         _css_arm(a);
     },
 });
@@ -7674,6 +7685,7 @@ _css_define('startTime', {
         _css_note_ps(a, wasPaused);
         _css_state(a);
         _css_tr_restore(a);
+        _css_motion_cmd('seek', a, _css_ct(a));
         _css_arm(a);
     },
 });
@@ -7693,6 +7705,7 @@ function _css_revive(a) {
     a._fin = false;
     a._c.pausedAt = null;
     if (_wa_animations.indexOf(a) < 0) _wa_animations.push(a);
+    _css_motion_cmd('restore', a);
 }
 
 function _css_cancel(a) {
@@ -7709,6 +7722,7 @@ function _css_cancel(a) {
     if (a._finishRej) a._finishRej(abort());
     a._fin = false;
     _css_fresh_finished(a);
+    _css_motion_cmd('cancel', a);
     a._fire('cancel', null);
 }
 
@@ -7740,6 +7754,7 @@ function _css_play(a) {
         _css_fresh_finished(a);
         _css_pend(a, 'play');
         _css_tr_restore(a);
+        _css_motion_cmd('seek', a, 0);
         _css_arm(a);
         return;
     }
@@ -7755,6 +7770,7 @@ function _css_play(a) {
     if (finished) _css_sync_finished(a, false);
     _css_note_ps(a, wasPaused);
     _css_tr_restore(a);
+    _css_motion_cmd('seek', a, _css_ct(a));
     _css_arm(a);
 }
 
@@ -7810,6 +7826,7 @@ _css_define('finish', {
         a._ph = 'after';
         if (was === 'before') _css_fire_boundary(a, true);
         if (was === 'before' || was === 'active') _css_fire_boundary(a, false);
+        _css_motion_cmd('seek', a, _css_ct(a));
         _css_state(a);
     },
     writable: true,

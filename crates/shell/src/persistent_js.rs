@@ -786,6 +786,16 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// `window.set_fullscreen(None)` accordingly.
     #[allow(dead_code)]
     fn take_fullscreen_requests(&self) -> Vec<(bool, u32)>;
+    /// Drain `CSSAnimation` clock commands queued by a script's `cancel()` /
+    /// `play()` / `startTime`/`currentTime`/`finish()` (CSSANIM-MODEL-2 срез S4).
+    ///
+    /// Shell drains these right before its per-frame `AnimationScheduler::tick`
+    /// and applies each with `AnimationScheduler::apply_cmd`: the painted frame
+    /// follows the animation's own clock instead of the scheduler's.
+    #[allow(dead_code)]
+    fn take_css_motion_cmds(&self) -> Vec<lumen_js::CssMotionCmd> {
+        Vec::new()
+    }
     /// Drain CSS View Transition events from `document.startViewTransition`.
     ///
     /// Shell drains these in `about_to_wait`: `Begin` captures old display list,
@@ -1573,6 +1583,9 @@ impl PersistentJs for V8PersistentJs {
                 lumen_js::FullscreenRequest::Exit => (false, 0),
             })
             .collect()
+    }
+    fn take_css_motion_cmds(&self) -> Vec<lumen_js::CssMotionCmd> {
+        self.rt.take_css_motion_cmds()
     }
     fn take_view_transition_events(&self) -> Vec<ViewTransitionEvent> {
         self.rt

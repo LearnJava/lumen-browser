@@ -242,6 +242,24 @@ pub enum FullscreenRequest {
     Exit,
 }
 
+/// A command a script's `CSSAnimation` sends to the frame loop's
+/// `AnimationScheduler` (CSSANIM-MODEL-2 срез S4): the painted frame follows the
+/// animation's own clock, so a `cancel()`/`play()`/seek has to reach it too.
+///
+/// Captured in `css_motion_cmds` by `_lumen_css_motion_cmd` and drained by the
+/// shell right before its per-frame `AnimationScheduler::tick`.
+#[derive(Debug, Clone)]
+pub enum CssMotionCmd {
+    /// `animation.cancel()` — the element shows its settled style; the
+    /// scheduler skips this node's animation until `Restore`.
+    Cancel { node: u32, name: String },
+    /// `play()` on a cancelled/idle animation — back in the scheduler's hands.
+    Restore { node: u32, name: String },
+    /// `startTime`/`currentTime` written, or `finish()`: the scheduler's
+    /// current time becomes `current_time_ms`.
+    Seek { node: u32, name: String, current_time_ms: f64 },
+}
+
 // ─── primitive registrations ──────────────────────────────────────────────────
 
 /// Extract `"method"` field from a cache meta JSON string.

@@ -307,6 +307,9 @@ pub struct V8JsRuntime {
     pub(super) navigate_listeners: Arc<AtomicBool>,
     /// Fullscreen requests emitted by `element.requestFullscreen()` / `document.exitFullscreen()`.
     pub(super) fullscreen_requests: Arc<Mutex<Vec<crate::dom::FullscreenRequest>>>,
+    /// CSSANIM-MODEL-2 S4: `cancel()`/`play()`/seek commands a script's
+    /// `CSSAnimation` sends to the frame loop's scheduler.
+    pub(super) css_motion_cmds: Arc<Mutex<Vec<crate::dom::CssMotionCmd>>>,
     /// CSS View Transitions L1 events emitted by `document.startViewTransition` (Ph3
     /// V8 migration S12b-G5). Mirrors [`crate::QuickJsRuntime`]'s field of the same
     /// name; drained by the shell in `about_to_wait` via `take_view_transition_events()`.
@@ -587,6 +590,7 @@ impl V8JsRuntime {
             pending_nav_intercepted: Arc::new(Mutex::new(Vec::new())),
             navigate_listeners: Arc::new(AtomicBool::new(false)),
             fullscreen_requests: Arc::new(Mutex::new(Vec::new())),
+            css_motion_cmds: Arc::new(Mutex::new(Vec::new())),
             view_transition_events: Arc::new(Mutex::new(Vec::new())),
             print_requests: Arc::new(Mutex::new(Vec::new())),
             pending_focus_requests: Arc::new(Mutex::new(Vec::new())),
@@ -1422,11 +1426,31 @@ impl V8JsRuntime {
         for (node, props) in patches {
             let entry = styles.entry(*node).or_default();
             for (prop, value) in props {
+                let marker = lumen_layout::animated_marker_key(prop);
+                // CSSANIM-MODEL-2 S4: remember what the first frame of this animation
+                // displaced, so `settle_animated_computed_styles` can put it back. A
+                // republished snapshot drops the marker (and the saved value) with it.
+                if entry.get(&marker).is_none() {
+                    let settled = entry.get(prop).cloned().unwrap_or_default();
+                    entry.insert(lumen_layout::settled_animated_key(prop), settled);
+                }
                 entry.insert(prop.clone(), value.clone());
                 // BUG-1293: tell the JS read-time transition overlay this value is the
                 // scheduler's, not a style change (see `animated_marker_key`).
-                entry.insert(lumen_layout::animated_marker_key(prop), "1".to_string());
+                entry.insert(marker, "1".to_string());
             }
+        }
+    }
+
+    /// Put the settled style back for `node` — `animation.cancel()` handed the element back
+    /// to its own computed style, so the frame loop's animated `opacity`/`transform`/colours/
+    /// `height` stop being what `getComputedStyle()` answers (CSSANIM-MODEL-2 S4). Called
+    /// synchronously from the JS `cancel()` that queued the scheduler command: WPT reads the
+    /// transform in the very same task.
+    pub fn settle_animated_computed_styles(&self, node: u32) {
+        let mut styles = self.computed_styles.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = styles.get_mut(&node) {
+            lumen_layout::settle_animated_style(entry);
         }
     }
 
@@ -1603,6 +1627,13 @@ impl V8JsRuntime {
     /// Mirrors [`crate::QuickJsRuntime::take_fullscreen_requests`].
     pub fn take_fullscreen_requests(&self) -> Vec<FullscreenRequest> {
         std::mem::take(&mut *self.fullscreen_requests.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Drain the `CSSAnimation` clock commands (`cancel`/`play`/seek) queued by
+    /// `_lumen_css_motion_cmd` since the last call, for the shell's per-frame
+    /// `AnimationScheduler::apply_cmd`.
+    pub fn take_css_motion_cmds(&self) -> Vec<crate::dom::CssMotionCmd> {
+        std::mem::take(&mut *self.css_motion_cmds.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     /// Drain CSS View Transition events queued by `document.startViewTransition()` natives.

@@ -1363,6 +1363,43 @@ pub(crate) fn install_fullscreen(
     Ok(())
 }
 
+/// CSS Animations L2 §«CSSAnimation»: a script that drives an animation's clock
+/// (`cancel()`, `play()`, `startTime`/`currentTime`, `finish()`) tells the frame
+/// loop's `AnimationScheduler` too — the painted frame and the `getComputedStyle()`
+/// it feeds follow the animation's own clock (CSSANIM-MODEL-2 срез S4).
+///
+/// Shell drains the queue with `take_css_motion_cmds()` right before its per-frame
+/// tick. A `cancel` also settles the node's computed-style snapshot here, in the
+/// script's own task: WPT reads `getComputedStyle(el).transform` right after
+/// `cancel()`, before any frame could deliver the command.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+pub(crate) fn install_css_motion(
+    scope: &mut v8::PinScope<'_, '_>,
+    ctx: v8::Local<'_, v8::Context>,
+    store: &mut Vec<OwnedNativeFn>,
+    cmds: Arc<Mutex<Vec<crate::dom::CssMotionCmd>>>,
+    computed_styles: Arc<Mutex<HashMap<u32, lumen_layout::StyleMap>>>,
+) -> JsResult<()> {
+    reg!(scope, ctx, store, "_lumen_css_motion_cmd",
+        move |kind: String, nid: u32, name: String, current_time_ms: f64| {
+            let cmd = match kind.as_str() {
+                "cancel" => {
+                    let mut styles = computed_styles.lock().unwrap();
+                    if let Some(entry) = styles.get_mut(&nid) {
+                        lumen_layout::settle_animated_style(entry);
+                    }
+                    crate::dom::CssMotionCmd::Cancel { node: nid, name }
+                }
+                "restore" => crate::dom::CssMotionCmd::Restore { node: nid, name },
+                "seek" => crate::dom::CssMotionCmd::Seek { node: nid, name, current_time_ms },
+                _ => return,
+            };
+            cmds.lock().unwrap().push(cmd);
+        }
+    );
+    Ok(())
+}
+
 /// `_lumen_url_parse(href, base?)` — LIB-11 (BUG-693): native URL parser
 /// binding onto `lumen_core::url::Url` (see `crate::js_url` for the shared
 /// mapping/resolution logic and rationale). Registered here, inside the
