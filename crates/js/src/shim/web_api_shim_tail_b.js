@@ -92,7 +92,7 @@ function _lumen_normalize_pseudo_elt(pseudoElt) {
 window.getComputedStyle = function(element, pseudoElt) {
     _css_gen++;
     var nid = element && element.__nid__ != null ? element.__nid__ : null;
-    if (nid != null) { _wa_motion_prune(nid); _css_tr_prune(nid); }
+    if (nid != null) { _wa_motion_seed(nid); _wa_motion_prune(nid); _css_tr_prune(nid); }
     var pseudo = _lumen_normalize_pseudo_elt(pseudoElt);
     var illFormed = pseudo === _LUMEN_PSEUDO_INVALID;
     if (illFormed) pseudo = null;
@@ -5594,6 +5594,56 @@ function _wa_motion_box() {
     return [w, h];
 }
 
+// The before-change style of *every* property, taken once per element. A transition belongs to
+// `transition-property`, not to what the page happened to read: with `transition: all`, setting
+// `div.style.left` after reading only `color` still starts a `left` transition (CSS Transitions
+// L1 §3, «before-change style»). The per-property record `_wa_gap_tr_value` makes on a read is
+// therefore seeded from one full snapshot at the element's first observation — that is the
+// style the page last saw, and what a later `_wa_motion_tr_sync` compares against.
+var _wa_motion_seeded = {};
+// A shorthand (`margin`, `border-width`) or a logical alias of a physical property
+// (`margin-block-start` over `margin-top`, `inset-block-start` over `top`) carries the same
+// change a second time: `transition-property` names longhands only, so a transition per key
+// would list — and interpolate — one change twice. Reads still animate whatever the page asks
+// for; these two patterns keep the snapshot to the longhands nothing derives from.
+var _wa_motion_shorthand_re = /^(all|block-step|border(-(width|style|color|image|radius))?|columns?|column-rule(-(break|inset.*|style|visibility-items|width))?|contain-intrinsic-size|container|flex(-flow)?|font(-variant)?|gap|grid-(area|column|row|gap|column-gap|row-gap)|inset|list-style|margin|mask|outline|overflow|padding|place-.+|rule.*|scroll-margin|scroll-padding|text-decoration|text-emphasis|text-wrap|white-space)$/;
+var _wa_motion_logical_re = /-(block|inline)(-\w+)?$|^(block|inline)-(size|start|end)$|^(min|max)-(block|inline)-size$|^border-(block|inline)-|^border-(start|end)-(start|end)-radius$|^overscroll-behavior-(block|inline)$/;
+function _wa_motion_seedable(kebab) {
+    return _wa_motion_eligible(kebab) && !_wa_motion_shorthand_re.test(kebab)
+        && !_wa_motion_logical_re.test(kebab);
+}
+function _wa_motion_seed(nid) {
+    if (_wa_motion_seeded[nid]) return;
+    var entries;
+    try { entries = JSON.parse(_lumen_get_computed_style_entries(nid, false)); } catch (e) { return; }
+    // Not rendered (no style map yet): the next observation seeds instead, or the page would
+    // lose every transition this element starts after it enters the document.
+    if (!entries.length) return;
+    // Same bound as `_wa_gap_tr_value`, and the same wholesale forget: one snapshot is ~300
+    // records, so a page reading every element would otherwise keep one per property for good.
+    // The seeds go with the records, so the next observation starts a fresh baseline.
+    if (_wa_gap_tr_count + entries.length > 50000) {
+        _wa_gap_tr = {}; _wa_motion_by_nid = {}; _wa_motion_seeded = {}; _wa_gap_tr_count = 1;
+    }
+    _wa_motion_seeded[nid] = 1;
+    var boxless = _css_boxless(nid);
+    var props = _wa_motion_by_nid[nid] || (_wa_motion_by_nid[nid] = {});
+    for (var i = 0; i < entries.length; i++) {
+        var kebab = entries[i][0], base = entries[i][1];
+        if (!_wa_motion_seedable(kebab) || base === '') continue;
+        // The exact value `_wa_motion_read` detects a change on: used px where layout replaces
+        // the computed one, the function list of `transform`.
+        if (kebab === 'transform') base = _lumen_get_transform_list(nid) || base;
+        else if (_wa_motion_used_re.test(kebab)) base = _lumen_get_computed_value(nid, kebab) || base;
+        else if (kebab === 'background-image') base = _lumen_resolve_css_urls(base);
+        if (!_wa_gap_tr[nid + ':' + kebab]) {
+            _wa_gap_tr[nid + ':' + kebab] = { seen: base, run: null, boxless: boxless };
+            _wa_gap_tr_count++;
+        }
+        props[kebab] = 1;
+    }
+}
+
 function _wa_motion_read(nid, kebab, resolved) {
     // A property the snapshot does not carry is not computed here, so nothing animates it.
     if (resolved === '') return resolved;
@@ -5907,11 +5957,22 @@ function _wa_motion_resolve(eff, camel, v) {
 // of the element the overlay has a settled value for (the read is what notices the change),
 // which starts and cancels the `CSSTransition` objects (`_css_tr_start`/`_css_drop`), and let
 // the ones that are over leave the list.
+//
+// A sweep is only worth its cost after a style recompute: the walk is one computed-style read
+// per snapshotted property, and a page that reads `getAnimations()`/`playState` in a loop
+// (`_css_refresh`, `_css_tr_prune`) would pay it every time. `_lumen_style_epoch` counts the
+// recomputes the flush has published; the read before it flushes whatever the page changed,
+// so a mutation always moves the epoch past the last sweep of this element.
+var _wa_motion_synced = {};
 function _wa_motion_tr_sync(target) {
     var nid = target && target.__nid__;
     if (nid == null) return;
     var props = _wa_motion_by_nid[nid];
     if (!props) return;
+    _lumen_get_computed_style(nid, 'display');
+    var epoch = typeof _lumen_style_epoch === 'function' ? _lumen_style_epoch() : 0;
+    if (epoch !== 0 && _wa_motion_synced[nid] === epoch) return;
+    _wa_motion_synced[nid] = epoch;
     for (var kebab in props) {
         if (_wa_motion_eligible(kebab)) {
             var resolved = _lumen_computed_property(nid, kebab);

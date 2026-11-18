@@ -1555,6 +1555,16 @@ pub(crate) fn install_computed_styles(
                 .unwrap_or_default()
         });
     }
+    // CSSANIM-MODEL-2: the number of real style recomputes the flush has published. The
+    // transitions overlay only looks for a style change among the properties it snapshotted
+    // when this moved (`_wa_motion_tr_sync`). 0 — no recompute ever ran in this context (a
+    // worker, a unit-test harness with no stylesheet) — means "always look".
+    {
+        let epoch = Arc::clone(&flush.style_epoch);
+        reg!(scope, ctx, store, "_lumen_style_epoch", move || -> f64 {
+            epoch.load(Ordering::Relaxed) as f64
+        });
+    }
     // VT-API: every rendered element carrying a `view-transition-name`, as a JSON
     // `[[nodeIndex, name], …]` ordered by node index. The View Transitions shim
     // (`view_transitions.rs`) checks it for duplicate names at the capture and
