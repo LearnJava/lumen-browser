@@ -1,6 +1,7 @@
 # BUG-1269 — `form.submit()` из скрипта игнорирует `target`: навигирует верхний документ вместо именованного `<iframe>`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-11-18 (P3)
+**Тип:** дефект реализованного кода — `run_form_submission` не читал атрибут `target` формы, поэтому `form.submit()` с `target="<имя iframe>"` навигировал верхний документ вместо фрейма.
 **Заведён:** 2026-10-04 (P2, найден при разборе стены WPT-прогона — `docs/tasks/p2-wpt-runner-throughput.md` §уход со страницы теста)
 **Область:** shell (`crates/shell/src/lumen/form_submit.rs::run_form_submission` — путь `NavigateRequest::SubmitForm` от `form.submit()`/`requestSubmit()` страницы)
 
@@ -57,3 +58,34 @@ CSP). Путь отправки формы *изнутри фрейма*
 - Поддержан ли `target` у формы при *клике* по кнопке на странице (путь
   `handle_click_at` → тот же `run_form_submission`, значит, вероятно, тоже нет).
 - `formtarget` у кнопки не учитывается нигде (записано в BUG-480).
+
+## Фикс
+
+`run_form_submission` читает `target` с формы (`doc.get(form).get_attr("target")`),
+а `formtarget` кнопки перекрывает его тем же `forms::apply_submitter_overrides`,
+что уже перекрывает `action`/`method`/`enctype` (до этого в позицию `target`
+передавался throwaway `&mut String::new()`). Адресат выбирает новый
+`Lumen::form_submit_navigate` (HTML LS §4.10.21.4 шаг 15 → §4.6.3 «rules for
+choosing a navigable»):
+
+1. Именованный живой фрейм (`find_frame_by_name`) — `navigate_frame_to_with_body`
+   с базой страницы (`frame_env.page_base`), как у `<a target>` страницы в
+   `click.rs`; тело POST уходит во фрейм отдельным `NavigationBody`.
+2. `_blank` и имя без совпадения — новое окно (`open_new_tab` + arming опенера и
+   `window.name`), как у `<a target=_blank>`.
+3. `_self`/`_top`/`_parent`(глубина 0)/пусто — текущая вкладка (`navigate_to`),
+   прежнее поведение.
+
+POST-ветка больше не вшивает тело в `PageSource` на месте: `form_submit_navigate`
+прикрепляет его к навигации страницы/нового окна либо передаёт во фрейм, а у
+не-http `action` (`file://`) по-прежнему печатает предупреждение и не отправляет
+тело. Путь `method="dialog"` не навигирует, поэтому `target` для него не важен.
+
+## Проверка
+
+- `cargo clippy -p lumen-shell --all-targets -- -D warnings` — чисто.
+- `cargo test -p lumen-shell` — 2551 passed / 0 failed (полный набор крейта).
+- WPT `encoding/**/*-encode-form*.html` не перепрогонялся: навигация именованного
+  фрейма идёт тем же `navigate_frame_to_with_body`, что уже рабочие ссылки/формы
+  фрейма, поэтому 583 id ожидаются не-TIMEOUT. Прогон и сверка вердиктов — на
+  владельце WPT-стены (P2).

@@ -55,9 +55,12 @@ impl Lumen {
             let root = doc.root();
             let submit_event = lumen_dom::submit_form(&doc, form);
             let mut enctype = forms::enctype_of_form(&doc, form);
-            // UX-FORM-SUBMITTER: `formaction`/`formmethod`/`formenctype` кнопки
-            // перекрывают атрибуты формы. `formtarget` у страницы не читается:
-            // вспомогательных окон нет, а навигация и так идёт в текущую вкладку.
+            // UX-FORM-SUBMITTER: `formaction`/`formmethod`/`formenctype`/
+            // `formtarget` кнопки перекрывают атрибуты формы. `target` формы
+            // читается и рулит адресатом навигации (HTML LS §4.10.21.4 шаг 15 →
+            // §4.6.3 «rules for choosing a navigable»): именованный живой фрейм,
+            // новое окно или текущая вкладка — см. `form_submit_navigate` ниже.
+            let mut target = doc.get(form).get_attr("target").unwrap_or_default().to_owned();
             let (mut action, mut method) = match &submit_event {
                 lumen_dom::FormSubmitEvent::Valid { action, method, .. } => {
                     (action.clone(), method.clone())
@@ -65,7 +68,7 @@ impl Lumen {
                 _ => (String::new(), String::new()),
             };
             forms::apply_submitter_overrides(
-                &doc, submitter, &mut action, &mut method, &mut enctype, &mut String::new(),
+                &doc, submitter, &mut action, &mut method, &mut enctype, &mut target,
             );
             let submit_event = match submit_event {
                 lumen_dom::FormSubmitEvent::Valid { fields, .. } => {
@@ -76,9 +79,9 @@ impl Lumen {
             let dialog_node =
                 lumen_dom::find_ancestor_dialog(&doc, submitter.unwrap_or(form));
             let csp_gate = crate::csp_enforce::document_csp_policy(&doc, root);
-            Some((submit_event, enctype, dialog_node, csp_gate))
+            Some((submit_event, enctype, dialog_node, target, csp_gate))
         });
-        if let Some((submit_event, enctype, dialog_node, csp_gate)) = prepared {
+        if let Some((submit_event, enctype, dialog_node, target, csp_gate)) = prepared {
             // GAP-CSPENF срез 29: `form-action` — checked once the resolved
             // navigation URL is known, right before the `get`/POST branches
             // below hand it to `navigate_to`. `dialog` never reaches here
@@ -181,7 +184,8 @@ impl Lumen {
                                 return;
                             }
                             let uir = crate::csp_enforce::navigation_wants_uir_header(csp_gate.as_ref());
-                            self.navigate_to(PageSource::from_arg(Some(&resolved)).with_uir_header(uir).with_referrer(self.initiator_referrer(&resolved, None, "")));
+                            let nav = PageSource::from_arg(Some(&resolved)).with_uir_header(uir).with_referrer(self.initiator_referrer(&resolved, None, ""));
+                            self.form_submit_navigate(&resolved, &target, nav, None);
                         }
                         _ => {
                             // HTML LS §form-submission step 23, «submit as
@@ -198,24 +202,8 @@ impl Lumen {
                                 return;
                             }
                             let uir = crate::csp_enforce::navigation_wants_uir_header(csp_gate.as_ref());
-                            let mut nav = PageSource::from_arg(Some(&resolved)).with_uir_header(uir).with_referrer(self.initiator_referrer(&resolved, None, ""));
-                            if let PageSource::Url { body: slot, .. } = &mut nav {
-                                *slot = Some(Box::new(lumen_network::NavigationBody::post(
-                                    content_type,
-                                    body_bytes,
-                                )));
-                            } else {
-                                // `action` резолвится не в http(s) — например
-                                // форма на локальной странице (`file://`).
-                                // Тела там отправлять некуда; переход по
-                                // адресу остаётся, чтобы поведение не стало
-                                // «клик молча ничего не делает».
-                                eprintln!(
-                                    "[forms] POST {resolved}: не сетевой адрес, тело ({} байт) не отправлено",
-                                    body.len()
-                                );
-                            }
-                            self.navigate_to(nav);
+                            let nav = PageSource::from_arg(Some(&resolved)).with_uir_header(uir).with_referrer(self.initiator_referrer(&resolved, None, ""));
+                            self.form_submit_navigate(&resolved, &target, nav, Some((content_type, body_bytes)));
                         }
                     }
                 }
@@ -269,6 +257,73 @@ impl Lumen {
         });
         eprintln!("forms: submit blocked by CSP form-action");
         true
+    }
+
+    /// Отправить разрешённый адрес формы в адресат, выбранный её `target`
+    /// (HTML LS §4.10.21.4 шаг 15 → §4.6.3 «rules for choosing a navigable»).
+    ///
+    /// `resolved` уже абсолютный (база страницы); `post` — `Some((content_type,
+    /// body_bytes))` у POST-отправки, `None` у GET (query уже в адресе). `nav` —
+    /// готовая навигация текущей вкладки, тело POST в неё НЕ вшито: его
+    /// прикрепляет этот метод (для фрейма оно уходит в
+    /// [`Self::navigate_frame_to_with_body`], для страницы/нового окна — в
+    /// `PageSource`, как раньше POST-ветка делала это напрямую).
+    fn form_submit_navigate(
+        &mut self,
+        resolved: &str,
+        target: &str,
+        mut nav: PageSource,
+        post: Option<(String, Vec<u8>)>,
+    ) {
+        let t = target.trim();
+        // Именованный живой фрейм — то же правило, что у `<a target>` страницы
+        // (click.rs): форма лежит в СТРАНИЦЕ, поэтому её база — база страницы.
+        if !t.is_empty()
+            && !t.eq_ignore_ascii_case("_self")
+            && !t.eq_ignore_ascii_case("_top")
+            && !t.eq_ignore_ascii_case("_parent")
+            && !t.eq_ignore_ascii_case("_blank")
+            && let Some(idx) = self.find_frame_by_name(t)
+        {
+            if links::is_navigable_href(resolved)
+                && let Some(base) = self.frame_env.as_ref().map(|e| e.page_base.clone())
+            {
+                let body = post.map(|(ct, b)| lumen_network::NavigationBody::post(ct, b));
+                self.navigate_frame_to_with_body(idx, resolved, &base, None, body);
+            }
+            return;
+        }
+        // Тело POST прикрепляется только для навигации страницы/нового окна; у
+        // не-http `action` (локальная `file://`-форма) отправлять его некуда.
+        if let PageSource::Url { body: slot, .. } = &mut nav {
+            if let Some((ct, b)) = post {
+                *slot = Some(Box::new(lumen_network::NavigationBody::post(ct, b)));
+            }
+        } else if let Some((_, b)) = post.as_ref() {
+            eprintln!(
+                "[forms] POST {resolved}: не сетевой адрес, тело ({} байт) не отправлено",
+                b.len()
+            );
+        }
+        // `_blank` и имя, не совпавшее ни с одним живым фреймом, — новое окно
+        // (HTML LS §7.3.2), как у `<a target=_blank>` страницы.
+        if t.eq_ignore_ascii_case("_blank")
+            || (!t.is_empty()
+                && !t.eq_ignore_ascii_case("_self")
+                && !t.eq_ignore_ascii_case("_top")
+                && !t.eq_ignore_ascii_case("_parent"))
+        {
+            let opener_tab_id = self.tab_strip.tabs[self.tab_strip.active].id as u32;
+            self.open_new_tab();
+            let new_tab_id = self.tab_strip.tabs[self.tab_strip.active].id as u32;
+            lumen_js::window_messaging::arm_pending_opener(new_tab_id, opener_tab_id);
+            if !t.eq_ignore_ascii_case("_blank") {
+                lumen_js::window_messaging::arm_pending_window_name(t.to_owned());
+            }
+            self.navigate_to(nav);
+            return;
+        }
+        self.navigate_to(nav);
     }
 
     /// THREAD-9 срез 6: ставит `submit`-событие в движок и запоминает форму до
