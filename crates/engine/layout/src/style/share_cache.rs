@@ -319,7 +319,7 @@ impl ShareCache {
         let key_was_some = key.is_some();
         let mut matched_rules = Vec::new();
         let (style, shareable) =
-            compute_style_shareable(doc, node, sheet, inherited, viewport, dark_mode, None, &mut matched_rules);
+            compute_style_shareable(doc, node, sheet, inherited, viewport, dark_mode, None, &mut matched_rules, false);
         let style = Arc::new(style);
         let matched_rules: Arc<[MatchedRule]> = Arc::from(matched_rules);
         if shareable && let Some(k) = key {

@@ -380,6 +380,24 @@ layout для скриптов и экранный layout — карта фаз 
 потоках; дифференциал равен; graphic_tests и `dump_golden.py` без изменений; запись
 до/после в `docs/perf/journal.md`.
 
+**Сделано (2026-11-18):** `precompute_counters` перед `walk` матчит все элементы composed-дерева
+на пуле rayon (`style/pre_match.rs`): на воркере ставится `StyleEnvSnapshot`, ancestor-bloom
+восстанавливается по цепочке `FlatTree::parent_of` (без него матчинг платит 2,6–2,9× —
+BUG-1800 срез 5), у каждого узла сохраняется `MatchedRule`-запись и флаг `shareable`. Последовательный
+`walk` больше не сканирует кандидатов: `compute_style_shareable` находит запись и применяет её той же
+«суженной» дорогой, что инкрементальный каскад (`MatchRestriction` + пустой `InvalidatedRules`), а
+`match_only` отсекает в предпроходе apply, `::part`/shadow-интерьер и инлайн-декларации — их всё равно
+делает `walk` с настоящим унаследованным стилем. `@scope` и shadow-правила в `MatchedRule` не входят и
+матчатся в `walk`, как раньше. Откат/A/B — `LUMEN_NO_PRE_MATCH=1`; документы < 64 элементов остаются
+последовательными. **Стенд** `bug935_cascade_bench` (2591 элемент, 1504 правила, лучший из 39, один
+бинарь, A/B по флагу): 73,5 → 34,5 мс (47 %). **Живой github** (`--trace-nav`, две пары подряд):
+сумма `precompute_counters` 19,8 → 7,7 с (39 %; по парам 31 % и 51 % — страница динамическая),
+сумма `layout` 13,6 → 6,4 с (47 %). **Дифференциал:** `pre_match_tests` — обе дороги дают одинаковый
+`CascadeStyles` на странице с `@media`/`@layer`/`:has()` и на документе с author shadow tree, под
+`:hover`/`:focus`/`:focus-visible`; таблица покрывает все элементы и отвергает чужой лист/вьюпорт.
+Попутно: `StyleEnvSnapshot` не нёс `KEYBOARD_FOCUS` — воркеры `build_box` каскадировали
+`:focus-visible` как «фокус мышью».
+
 ## LOAD-8 — preconnect/dns-prefetch исполняется (P6, S)
 
 **Depends on:** —. **Files:** `crates/shell/src/page_pipeline.rs`

@@ -75,8 +75,8 @@
 {
  "generated": "2026-11-18",
  "counts": {
-  "open": 311,
-  "fixed": 1443,
+  "open": 310,
+  "fixed": 1444,
   "inprogress": 0,
   "wontfix": 4
  },
@@ -10480,13 +10480,6 @@
    "status": "open",
    "title": "Фон на холсте: явный `transparent`/`none` на `<html>` отключает распространение фона `<body>`; градиент/картинка `<html>` рисуются в боксе корня, а не на холсте…",
    "component": "layout (`crates/engine/layout/src/box_tree/entry.rs::canvas_background_color`, paint корня)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1306": {
-   "status": "open",
-   "title": "`offsetWidth`/`getBoundingClientRect` читаются из устаревшего снимка: после загрузки `@font-face` значение остаётся оценкой шрифта (34,1 вместо 50 у `XX` Ahem 2…",
-   "component": "layout/shell (`crates/shell/src/page_pipeline.rs::collect_js_layout_snapshot` — снимок геометрии для JS)",
    "date": null,
    "debtor": false
   },
@@ -22038,6 +22031,13 @@
    "title": "Пара аксессоров `nodeValue` добавлена в `_LUMEN_WRAPPER_MEMBERS`, имя внесено в `_LUMEN_NODE_MEMBER_NAMES`, поэтому геттер ставится на `Node.prototype` и достаё…",
    "component": "js (`crates/js/src/shim/web_api_shim_mid.js`)",
    "date": "2026-11-15",
+   "debtor": false
+  },
+  "BUG-1306": {
+   "status": "fixed",
+   "title": "`offsetWidth`/`getBoundingClientRect` читались из устаревшего снимка: после загрузки `@font-face` значение оставалось оценкой шрифта (34,1 вместо 50 у `XX` Ahem…",
+   "component": "js/layout (`crates/js/src/v8_runtime/style_flush.rs`, `crates/engine/paint/src/lib.rs::WebFontFace`, `crates/shell/src/app/user_event.rs`)",
+   "date": "2026-11-18",
    "debtor": false
   },
   "BUG-1077": {
