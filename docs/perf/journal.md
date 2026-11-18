@@ -1209,4 +1209,31 @@ eBay снова 403 (`curl --noproxy "*"`, движковый UA) — канон
 `LUMEN_NO_LOAD_DEADLINE=1` (`docs/automation.md`). Юнит-тесты — `page_load/dead_subresource.rs`
 (`hanging_image_does_not_hold_window_load_past_deadline`). Следящий прогон корпуса — SITES-RECRAWL-1, как у LOAD-4/5.
 
+## 2026-11-18 — LOAD-9 — экранная раскладка переиспользует дерево прохода; на github остаются 3 заслуженных прохода — Windows 10, dev-release ветки p6-load-9
+
+`lumen.exe --trace-nav github.json https://github.com` (headless, `LUMEN_NO_ADBLOCK=1`): **3 спана
+`layout` — 2 837 / 2 054 / 2 932 мс** (7,82 с из 41 с навигации), столько же, сколько в THREAD-4.
+Временные зонды (сняты до коммита) показали, что заслужены все три: после скриптов
+`scripts_changed_css=true` (вставлен лист) и `dom_touched=true` — проход для JS-снапшота; обработчики
+`DOMContentLoaded` снова трогают DOM; две `<img>` получают intrinsic `width`/`height` до экранного
+прохода. По условию брифа («изменились — как сейчас») github остаётся на трёх; ворота «спанов меньше
+на один» поэтому не берутся, граница записана здесь.
+
+Что даёт переиспользование и тесты (`crates/shell/src/tests/page_pipeline.rs`): неизменный DOM после
+скриптов — **1** полный проход (`load9_unchanged_dom_costs_one_layout`), мутация скриптом — 2, из них
+экранный переиспользует пост-скриптовое дерево (`load9_script_mutation_reuses_post_script_layout`),
+мутация в `DOMContentLoaded` — 3→2 за счёт снятия/возврата флага грязноты
+(`load9_dom_content_loaded_mutation_forces_screen_layout`). Инструменталь — `ParsedPage::layout_passes`,
+health-log `load_timing.layout_passes` (LOAD-0).
+
+**Попутный дефект:** `document_adopted_fingerprint()` хешировал пустой список в ненулевую константу, а
+`DynamicCssBase::adopted_fp` стартует с 0 — каждая страница со скриптами считала adopted-листы
+изменёнными и платила лишний полный проход. Пустой список теперь даёт 0
+(`v8_runtime/install/constructed_stylesheets.rs`).
+
+Ворота пикселей: полный `graphic_tests/run.py --continue-on-fail` (dev-release, hybrid) — FAIL-набор
+ровно базовый (`21, 56, 61, 62, 150, 151, 155, 159, 173`); прогон `--ipc` в 147 IPC-тестах не изменил
+ни статус, ни diff% против предыдущего прогона (26 GPU_CAPTURE-тестов в IPC-режиме несравнимы, их
+проверяет hybrid-прогон выше). Результат hybrid — `graphic_tests/results/20261118-014627.json`.
+
 

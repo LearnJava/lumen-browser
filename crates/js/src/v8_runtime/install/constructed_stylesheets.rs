@@ -104,6 +104,14 @@ pub(crate) fn document_adopted_fingerprint(
         .get(&DOCUMENT_ADOPTED_SCOPE)
         .cloned()
         .unwrap_or_default();
+    // An empty list must hash to 0: that is what `DynamicCssBase::adopted_fp`
+    // starts at ("nothing adopted yet", `crates/shell/src/doc_extract.rs`).
+    // Hashing the empty list instead gave a fixed non-zero constant, so every
+    // scripted load compared "0 != hash(empty)" and re-laid the page out for a
+    // phantom adopted-sheet change (LOAD-9).
+    if ids.is_empty() {
+        return 0;
+    }
     let guard = sheets.lock().unwrap_or_else(|e| e.into_inner());
     for id in &ids {
         id.hash(&mut h);

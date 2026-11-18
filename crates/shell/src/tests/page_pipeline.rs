@@ -2168,3 +2168,42 @@ fn compat_hide_banner_hides_only_matching_text() {
     assert!(styles[1].is_none(), "без текста записи — не тронут");
 }
 
+// -- LOAD-9: одна экранная раскладка на неизменный DOM -----------------------
+
+/// Скрипт отработал, но ничего не поменял — экранная фаза берёт дерево
+/// скриптового прохода, второго полного layout-а нет.
+#[cfg(feature = "v8")]
+#[test]
+fn load9_unchanged_dom_costs_one_layout() {
+    let page = parse_and_layout_for_test(
+        "<!doctype html><html><body><p>hi</p><script>window.__ran = 1;</script></body></html>",
+    );
+    assert_eq!(page.layout_passes, 1, "same DOM after the script pass — one layout");
+}
+
+/// Скрипт мутировал DOM — проход после скриптов строится и становится
+/// экранным (без изменений после него второго прохода нет).
+#[cfg(feature = "v8")]
+#[test]
+fn load9_script_mutation_reuses_post_script_layout() {
+    let page = parse_and_layout_for_test(
+        "<!doctype html><html><body><p>hi</p>\
+         <script>document.body.appendChild(document.createElement('div'));</script></body></html>",
+    );
+    assert_eq!(page.layout_passes, 2, "script pass + post-script pass, no third");
+}
+
+/// `DOMContentLoaded`-обработчик дописал узел — дерево скриптового прохода
+/// устарело, экранный проход обязателен.
+#[cfg(feature = "v8")]
+#[test]
+fn load9_dom_content_loaded_mutation_forces_screen_layout() {
+    let page = parse_and_layout_for_test(
+        "<!doctype html><html><body><p>hi</p><script>\
+         document.addEventListener('DOMContentLoaded', () => {\
+           document.body.appendChild(document.createElement('div'));\
+         });</script></body></html>",
+    );
+    assert_eq!(page.layout_passes, 2, "pre-script pass + screen pass after the handler");
+}
+
