@@ -189,7 +189,7 @@ pub use text_track_store::{
 pub use css_properties_values_api::{RegisteredProperty, RegisteredPropertiesMap, get_registered_properties};
 pub use paint_worklet::paint_worklet_epoch;
 pub use dom::{
-    FullscreenRequest, HistoryUrlUpdate, NavigateRequest, PrintRequest, ScriptedFontFaceEntry,
+    CssMotionCmd, FullscreenRequest, HistoryUrlUpdate, NavigateRequest, PrintRequest, ScriptedFontFaceEntry,
 };
 /// BUG-341 S7: page-side DOM-mutation tracker outcome, feeding
 /// `lumen_layout::style::restyle_root_set_for_node_change`. Only compiled

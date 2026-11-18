@@ -148,6 +148,14 @@ impl StyleMap {
         }
     }
 
+    /// Drops an override so the base value answers again (CSSANIM-MODEL-2 срез S4:
+    /// the frame loop's animated value stops being the element's value).
+    pub fn remove(&mut self, key: &str) -> bool {
+        let before = self.over.len();
+        self.over.retain(|o| o.key != key);
+        before != self.over.len()
+    }
+
     /// Sets the *used* value of `name`. The computed value it displaced is answered under
     /// [`COMPUTED_VALUE_KEY_PREFIX`]`+name` when the two differ — decided on that read, so
     /// setting a used value does not serialise the base.

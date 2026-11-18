@@ -907,6 +907,46 @@ pub fn animated_marker_key(prop: &str) -> String {
     format!("{}-lumen-animated:{prop}", crate::resolved_geometry::COMPUTED_VALUE_KEY_PREFIX)
 }
 
+/// Key under which `patch_animated_computed_styles` remembers the settled value of `prop`
+/// — the one the frame loop's frame displaced (CSSANIM-MODEL-2 срез S4). A script's
+/// `cancel()` puts it back, so `getComputedStyle()` shows the settled style again without
+/// waiting for a relayout to republish the whole snapshot.
+pub fn settled_animated_key(prop: &str) -> String {
+    format!("{}-lumen-settled:{prop}", crate::resolved_geometry::COMPUTED_VALUE_KEY_PREFIX)
+}
+
+/// The properties the frame loop's `AnimationFrame` writes into the computed-style snapshot
+/// (`AnimationFrame::to_computed_style_patches`).
+pub const ANIMATED_STYLE_PROPERTIES: [&str; 5] =
+    ["opacity", "transform", "color", "background-color", "height"];
+
+/// Retract the frame loop's animated values of `map` (one node's snapshot entry) and put the
+/// settled values it displaced back — CSSANIM-MODEL-2 срез S4, `animation.cancel()`.
+///
+/// The settled value is the one `patch_animated_computed_styles` saved under
+/// [`settled_animated_key`] before the first frame wrote the property; it can be an override
+/// of its own (a used `height`), which is why the value is restored instead of the override
+/// being dropped.
+pub fn settle_animated_style(map: &mut crate::StyleMap) {
+    for prop in ANIMATED_STYLE_PROPERTIES {
+        let marker = animated_marker_key(prop);
+        if map.get(&marker).is_none() {
+            continue;
+        }
+        let settled = settled_animated_key(prop);
+        match map.get(&settled).cloned() {
+            Some(value) if !value.is_empty() => {
+                map.insert(prop, value);
+            }
+            _ => {
+                map.remove(prop);
+            }
+        }
+        map.remove(&settled);
+        map.remove(&marker);
+    }
+}
+
 /// Key under which the snapshot keeps a box's `transform` as a function list
 /// (`translate(200px, 0px) rotate(12.566371rad)`) next to the resolved `matrix()` —
 /// under [`COMPUTED_VALUE_KEY_PREFIX`](crate::resolved_geometry::COMPUTED_VALUE_KEY_PREFIX),

@@ -12,10 +12,11 @@
 //! 4. Интерполировать свойства между ближайшими keyframe-ами.
 //! 5. Записать в `AnimationFrame.overrides[node_id]`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use lumen_css_parser::{Keyframe, KeyframesRule, Stylesheet};
 use lumen_dom::NodeId;
+use lumen_js::CssMotionCmd;
 use lumen_layout::{
     animation::{
         AnimatedStyle, AnimationFrame, AnimationInterpolator, AnimValue, KeyframeStyle,
@@ -175,12 +176,46 @@ impl ScrollCtx<'_> {
 /// `RedrawRequested` после `run_rendering_step`.
 pub struct AnimationScheduler {
     running: HashMap<AnimKey, RunState>,
+    /// `(node, animation-name)` whose frame a script drives (CSSANIM-MODEL-2 срез S4):
+    /// a `cancel()` from script — the frame loop skips it, so the node paints its
+    /// settled style, until `Restore` or until the style stops naming the animation.
+    suppressed: HashSet<(NodeId, String)>,
+    /// `(node, animation-name)` → current time a script seeked to (ms), applied to
+    /// `RunState::start_ms` on the next tick: the shell's clock and the script's are
+    /// different origins, so only the distance from "now" is carried.
+    pending_seeks: HashMap<(NodeId, String), f64>,
 }
 
 impl AnimationScheduler {
     pub fn new() -> Self {
         Self {
             running: HashMap::new(),
+            suppressed: HashSet::new(),
+            pending_seeks: HashMap::new(),
+        }
+    }
+
+    /// A `CSSAnimation` clock command from a script (CSSANIM-MODEL-2 срез S4).
+    ///
+    /// `Cancel` drops the running instance silently — the script's own `cancel` event
+    /// is its (`_css_cancel`), and the node must show its settled style from the next
+    /// tick on. `Restore` hands the animation back; the next tick re-registers it at
+    /// "now", which is where `play()` put it. `Seek` is applied by the next tick that
+    /// meets the animation (see `pending_seeks`).
+    pub fn apply_cmd(&mut self, cmd: CssMotionCmd) {
+        match cmd {
+            CssMotionCmd::Cancel { node, name } => {
+                let node = NodeId::from_index(node as usize);
+                self.running.retain(|k, s| !(k.node == node && s.name == name));
+                self.suppressed.insert((node, name));
+            }
+            CssMotionCmd::Restore { node, name } => {
+                self.suppressed.remove(&(NodeId::from_index(node as usize), name));
+            }
+            CssMotionCmd::Seek { node, name, current_time_ms } => {
+                self.pending_seeks
+                    .insert((NodeId::from_index(node as usize), name), current_time_ms.max(0.0));
+            }
         }
     }
 
@@ -207,6 +242,7 @@ impl AnimationScheduler {
         let mut frame = AnimationFrame::default();
         let mut events = Vec::new();
         let mut visited: std::collections::HashSet<AnimKey> = std::collections::HashSet::new();
+        let mut seen: HashSet<(NodeId, String)> = HashSet::new();
         let ctx = ScrollCtx {
             root: layout,
             scroll_x,
@@ -215,7 +251,11 @@ impl AnimationScheduler {
             named_scroll: collect_named_scroll_timelines(layout),
             named_view: collect_named_view_timelines(layout),
         };
-        self.tick_box(timestamp_ms, layout, stylesheet, &ctx, &mut frame, &mut events, &mut visited);
+        self.tick_box(timestamp_ms, layout, stylesheet, &ctx, &mut frame, &mut events, &mut visited, &mut seen);
+        // Сценарийный `cancel()` держит анимацию подавленной, пока стиль её ещё
+        // называет; исчезла из стиля — подавление снимается вместе с ней.
+        self.suppressed.retain(|k| seen.contains(k));
+        self.pending_seeks.retain(|k, _| seen.contains(k));
         // Экземпляры, не встреченные этим обходом дерева, больше не описаны
         // текущим стилем (animation-name сменился/исчез, узел убран) — те из
         // них, что ещё не успели доиграть, отменены.
@@ -244,6 +284,8 @@ impl AnimationScheduler {
     /// Вызывать после load/reload, чтобы не накапливать мёртвые записи.
     pub fn clear(&mut self) {
         self.running.clear();
+        self.suppressed.clear();
+        self.pending_seeks.clear();
     }
 
     #[allow(clippy::too_many_arguments)] // внутренний рекурсивный обход, не публичный API
@@ -256,10 +298,11 @@ impl AnimationScheduler {
         frame: &mut AnimationFrame,
         events: &mut Vec<AnimationEventInfo>,
         visited: &mut std::collections::HashSet<AnimKey>,
+        seen: &mut HashSet<(NodeId, String)>,
     ) {
-        self.process_node(ts, lb, ss, ctx, frame, events, visited);
+        self.process_node(ts, lb, ss, ctx, frame, events, visited, seen);
         for child in &lb.children {
-            self.tick_box(ts, child, ss, ctx, frame, events, visited);
+            self.tick_box(ts, child, ss, ctx, frame, events, visited, seen);
         }
     }
 
@@ -274,6 +317,7 @@ impl AnimationScheduler {
         frame: &mut AnimationFrame,
         events: &mut Vec<AnimationEventInfo>,
         visited: &mut std::collections::HashSet<AnimKey>,
+        seen: &mut HashSet<(NodeId, String)>,
     ) {
         let style = &lb.style;
         if style.animation_names.is_empty() {
@@ -286,7 +330,12 @@ impl AnimationScheduler {
             if name.eq_ignore_ascii_case("none") || name.is_empty() {
                 continue;
             }
-
+            seen.insert((lb.node, name.clone()));
+            // A script's `cancel()` takes the animation off the frame loop: the node
+            // paints its settled style and the script's own events speak for it.
+            if self.suppressed.contains(&(lb.node, name.clone())) {
+                continue;
+            }
             // Параметры, общие для time-based и scroll-driven путей.
             let direction = get_cyclic(&style.animation_directions, i)
                 .copied()
@@ -353,7 +402,15 @@ impl AnimationScheduler {
                         last_local_time_s: 0.0,
                     });
 
+                    // A seek from script (CSSANIM-MODEL-2 S4): its current time is the
+                    // instance's, not the frame's — the two clocks have different origins,
+                    // so the distance from "now" is all that crosses the boundary.
+                    let seek_ms = self.pending_seeks.remove(&(lb.node, name.clone()));
+
                     let state = self.running.get_mut(&key).unwrap();
+                    if let Some(ct_ms) = seek_ms {
+                        state.start_ms = state.paused_at.unwrap_or(ts) - ct_ms;
+                    }
 
                     // Учёт play-state: пауза/возобновление.
                     match play_state {
@@ -1242,5 +1299,78 @@ mod tests {
         assert!((opacity_at_midpoint("add", 0.5) - 0.75).abs() < 1e-3);
         assert!((opacity_at_midpoint("accumulate", 0.5) - 0.75).abs() < 1e-3);
         assert!((opacity_at_midpoint("replace", 0.5) - 0.25).abs() < 1e-3);
+    }
+
+    // ── CSSANIM-MODEL-2 срез S4 — команды скрипта ────────────────────────────
+
+    fn linear_fade_box(id: u32, duration_s: f32) -> LayoutBox {
+        let mut lb = make_animated_box(id, "fade", duration_s, IterationCount::Finite(1.0));
+        std::sync::Arc::make_mut(&mut lb.style).animation_timing_functions =
+            vec![TimingFunction::Linear];
+        lb
+    }
+
+    #[test]
+    fn cancel_cmd_hands_the_node_its_settled_style_back_until_restore() {
+        let mut sched = AnimationScheduler::new();
+        let root = linear_fade_box(1, 100.0);
+        let sheet = fade_keyframes_sheet("fade");
+        let vp = Viewport { width: 1024.0, height: 720.0 };
+        let (frame, _) = sched.tick(0.0, &root, &sheet, 0.0, 0.0, vp);
+        assert!(frame.overrides.contains_key(&node(1)), "animation paints before cancel");
+
+        sched.apply_cmd(CssMotionCmd::Cancel { node: 1, name: "fade".into() });
+        let (frame, events) = sched.tick(500.0, &root, &sheet, 0.0, 0.0, vp);
+        assert!(frame.overrides.is_empty(), "cancelled animation paints nothing");
+        assert!(events.is_empty(), "cancel event belongs to the script's `_css_cancel`");
+
+        // Still suppressed while the style names the animation.
+        let (frame, _) = sched.tick(1000.0, &root, &sheet, 0.0, 0.0, vp);
+        assert!(frame.overrides.is_empty());
+
+        sched.apply_cmd(CssMotionCmd::Restore { node: 1, name: "fade".into() });
+        let (frame, _) = sched.tick(1500.0, &root, &sheet, 0.0, 0.0, vp);
+        assert!(frame.overrides.contains_key(&node(1)), "restored animation paints again");
+    }
+
+    #[test]
+    fn suppression_ends_when_the_style_stops_naming_the_animation() {
+        let mut sched = AnimationScheduler::new();
+        let root = linear_fade_box(1, 100.0);
+        let sheet = fade_keyframes_sheet("fade");
+        let vp = Viewport { width: 1024.0, height: 720.0 };
+        sched.tick(0.0, &root, &sheet, 0.0, 0.0, vp);
+        sched.apply_cmd(CssMotionCmd::Cancel { node: 1, name: "fade".into() });
+
+        let plain_root = make_box(1, 0.0, 0.0, 50.0, 50.0);
+        sched.tick(500.0, &plain_root, &sheet, 0.0, 0.0, vp);
+
+        // A later `animation-name: fade` is a fresh animation, not a suppressed one.
+        let (frame, events) = sched.tick(1000.0, &root, &sheet, 0.0, 0.0, vp);
+        assert!(frame.overrides.contains_key(&node(1)));
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, AnimationEventKind::Start);
+    }
+
+    #[test]
+    fn seek_cmd_moves_the_painted_frame_to_the_scripted_current_time() {
+        let mut sched = AnimationScheduler::new();
+        let mut root = linear_fade_box(1, 100.0);
+        std::sync::Arc::make_mut(&mut root.style).opacity = 1.0;
+        let sheet = lumen_css_parser::parse(
+            "@keyframes fade { from { opacity: 0; } to { opacity: 1; } }",
+        );
+        let vp = Viewport { width: 1024.0, height: 720.0 };
+        sched.tick(0.0, &root, &sheet, 0.0, 0.0, vp);
+
+        // `currentTime = 50s` of a 100 s animation: halfway, whatever the frame's own ts is.
+        sched.apply_cmd(CssMotionCmd::Seek {
+            node: 1,
+            name: "fade".into(),
+            current_time_ms: 50_000.0,
+        });
+        let (frame, _) = sched.tick(7.0, &root, &sheet, 0.0, 0.0, vp);
+        let opacity = frame.overrides.get(&node(1)).and_then(|s| s.opacity).expect("opacity");
+        assert!((opacity - 0.5).abs() < 1e-3, "expected 0.5, got {opacity}");
     }
 }

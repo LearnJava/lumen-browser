@@ -166,8 +166,7 @@ fn script_cancel_unlists_and_play_brings_it_back_without_a_second_object() {
 }
 
 #[test]
-fn seeking_moves_the_clock_the_overlay_reads() {
-    let rt = rt();
+fn seeking_moves_the_clock_the_overlay_reads() {    let rt = rt();
     let script = format!(
         "{PRELUDE}
         __css('k');
@@ -183,6 +182,44 @@ fn seeking_moves_the_clock_the_overlay_reads() {
     );
     // Paused at 5 s → 20px; resumed, a second later it is at 6 s.
     assert_eq!(eval_str(&rt, &script), "20px 5000 paused 6000 running");
+}
+
+// CSSANIM-MODEL-2 срез S4: the frame loop's scheduler paints `opacity`/`transform`/colours/
+// `height` and writes them into the computed-style snapshot, so `cancel()`/`play()`/a seek
+// has to reach it — the queue is what the shell drains before its tick.
+#[test]
+fn cancel_play_and_seek_queue_commands_for_the_frame_loop() {
+    use crate::CssMotionCmd;
+    let rt = rt();
+    let script = format!(
+        "{PRELUDE}
+        __css('k');
+        var a = __sync()[0];
+        a.cancel();
+        a.currentTime = 5000;
+        a.cancel();
+        a.play();
+        'ok'"
+    );
+    assert_eq!(eval_str(&rt, &script), "ok");
+    let cmds = rt.take_css_motion_cmds();
+    let shape: Vec<String> = cmds
+        .iter()
+        .map(|c| match c {
+            CssMotionCmd::Cancel { node, name } if *node == 1 && name == "k" => "cancel k".to_string(),
+            CssMotionCmd::Restore { node, name } if *node == 1 && name == "k" => "restore k".to_string(),
+            CssMotionCmd::Seek { node, name, current_time_ms } if *node == 1 && name == "k" => {
+                format!("seek k {current_time_ms}")
+            }
+            other => format!("unexpected {other:?}"),
+        })
+        .collect();
+    // `cancel` → the seek revives the object (restore) and lands at 5 s → `cancel` again →
+    // `play` revives it (restore) and restarts it from 0.
+    assert_eq!(
+        shape.join(" | "),
+        "cancel k | restore k | seek k 5000 | cancel k | restore k | seek k 0"
+    );
 }
 
 #[test]

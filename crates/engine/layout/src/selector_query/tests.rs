@@ -2116,3 +2116,41 @@ fn computed_map_filter_invalid_value_is_dropped() {
         }
     }
 }
+
+/// CSSANIM-MODEL-2 S4: `animation.cancel()` puts the value the frame loop displaced back —
+/// including a used value the animation overwrote in place (an animated `height`), which is
+/// why the settled value is restored instead of the override being dropped.
+#[test]
+fn settle_animated_style_restores_the_displaced_values() {
+    let doc = lumen_html_parser::parse("<div style='height: 40px; opacity: 0.5'>x</div>");
+    let sheet = lumen_css_parser::parse("");
+    let tree = crate::layout(&doc, &sheet, Size::new(1024.0, 600.0));
+    let mut styles = crate::collect_computed_styles(&tree, &doc, None, Size::new(1024.0, 600.0));
+    let div = {
+        fn find(b: &LayoutBox) -> Option<&LayoutBox> {
+            if (b.style.opacity - 0.5).abs() < 1e-6 {
+                return Some(b);
+            }
+            b.children.iter().find_map(find)
+        }
+        find(&tree).expect("the div's box")
+    };
+    let nid = div.node.index() as u32;
+    let entry = styles.get_mut(&nid).expect("div entry");
+    let settled_height = entry.get("height").cloned().expect("used height published");
+
+    // What `patch_animated_computed_styles` does: the settled value first, then the frame.
+    for (prop, value) in [("height", "73px"), ("opacity", "0.25")] {
+        let settled = entry.get(prop).cloned().unwrap_or_default();
+        entry.insert(settled_animated_key(prop), settled);
+        entry.insert(prop, value.to_string());
+        entry.insert(animated_marker_key(prop), "1".to_string());
+    }
+
+    settle_animated_style(entry);
+
+    assert_eq!(entry.get("height").cloned(), Some(settled_height));
+    assert_eq!(entry.get("opacity").cloned(), Some("0.5".to_string()));
+    assert!(entry.get(&animated_marker_key("height")).is_none());
+    assert!(entry.get(&settled_animated_key("opacity")).is_none());
+}
