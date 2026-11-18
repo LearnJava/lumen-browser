@@ -1257,3 +1257,52 @@ use super::text_and_images::Fixed8;
         assert!(apply_scroll_overrides(&mut dl, &[o]) >= 1);
         assert_dl_eq(&dl, &truth);
     }
+
+    /// CSS Positioning L3 §6.3: a `position: sticky` box inside an `overflow`
+    /// container bakes a scroll-clamped offset (`PushTransform`), since the box
+    /// escapes the container's `PushScrollLayer` and must be shifted by hand.
+    #[test]
+    fn sticky_in_scrolled_container_bakes_offset_transform() {
+        let html = r#"<div class='s'>
+            <div class='sp'></div><div class='sp'></div>
+            <div id='st' style="position:sticky;top:100px;width:100px;height:100px;background:green"></div>
+            <div class='sp'></div><div class='sp'></div>
+        </div>"#;
+        let css = "body{margin:0} .s{overflow:auto;width:150px;height:250px} .sp{height:100px}";
+        let mut tree = layout_for(html, css);
+        let scroller = lumen_layout::collect_scroll_containers(&tree)[0].node;
+        // flow y = 200; scroll_y = 200 → not stuck would be 0, `top:100px` clamps it to 100.
+        assert!(lumen_layout::set_scroll_position(&mut tree, scroller, 0.0, 200.0));
+        let dl = ordered_of(&tree);
+        let offsets: Vec<(f32, f32)> = dl
+            .iter()
+            .filter_map(|c| match c {
+                DisplayCommand::PushTransform { matrix } => Some((matrix.0[12], matrix.0[13])),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(offsets, vec![(0.0, -100.0)], "sticky offset must shift the box from y=200 to y=100");
+        let pops = dl.iter().filter(|c| matches!(c, DisplayCommand::PopTransform)).count();
+        assert_eq!(offsets.len(), pops, "transform layers balanced");
+    }
+
+    /// A sticky box at scroll 0 (not stuck) emits no offset transform — its flow
+    /// position is already correct and an identity transform would waste a layer.
+    #[test]
+    fn sticky_at_scroll_zero_emits_no_offset_transform() {
+        let html = r#"<div class='s'>
+            <div class='sp'></div><div class='sp'></div>
+            <div style="position:sticky;top:100px;width:100px;height:100px;background:green"></div>
+            <div class='sp'></div><div class='sp'></div>
+        </div>"#;
+        let css = "body{margin:0} .s{overflow:auto;width:150px;height:250px} .sp{height:100px}";
+        let dl = build_ordered(html, css);
+        let offsets: Vec<(f32, f32)> = dl
+            .iter()
+            .filter_map(|c| match c {
+                DisplayCommand::PushTransform { matrix } => Some((matrix.0[12], matrix.0[13])),
+                _ => None,
+            })
+            .collect();
+        assert!(offsets.is_empty(), "no offset at scroll 0, got {offsets:?}");
+    }
