@@ -79,6 +79,29 @@ pub(super) fn probe_display_and_flow(
     }
 }
 
+/// `position: absolute`/`fixed` of `id`, read from the same style cache as
+/// [`probe_display_and_flow`]. A float is deliberately NOT included: it must
+/// still leave the inline context for the block-level float placement, whereas
+/// an abs/fixed box stays transparent to the line (BUG-1470).
+/// shortcut: float inside inline content still breaks the line — needs float
+/// placement in the inline row, out of scope for BUG-1470.
+pub(super) fn probe_abs_fixed(
+    doc: &Document,
+    sheet: &Stylesheet,
+    id: NodeId,
+    inherited: &ComputedStyle,
+    viewport: Size,
+    dark_mode: bool,
+    counters: &CounterMap,
+) -> bool {
+    let pos = match counters.style_arc(id) {
+        Some(s) => s.position,
+        None => note_display_probe(|| compute_style(doc, id, sheet, inherited, viewport, dark_mode))
+            .position,
+    };
+    matches!(pos, Position::Absolute | Position::Fixed)
+}
+
 /// Порождает ли элемент содержимое, которое можно уплощить в `InlineSegment`-ы.
 ///
 /// `<img>`, `<video>`/`<canvas>`/`<audio>`/`<iframe>` (IFC-3) и form controls
@@ -792,7 +815,14 @@ pub(crate) fn inline_v_align(b: &LayoutBox) -> VerticalAlign {
 /// из inline-элемента, не может делить line box с текстом (CSS 2.1 §9.2.1.1).
 /// Анонимные прогоны и пробелы (`BoxRole::AnonymousInlineRun`) наследуют
 /// `display` блока-родителя, поэтому по стилю их отличить нельзя — только по роли.
+///
+/// Абсолютно/фиксированно позиционированный бокс ряда НЕ разрывает: он прозрачен
+/// для строки (не занимает места, не переносит), а его статическая позиция — это
+/// inline-курсор, который знает только `InlineBlockRow` (BUG-1470).
 pub(crate) fn breaks_inline_row(b: &LayoutBox) -> bool {
+    if matches!(b.style.position, Position::Absolute | Position::Fixed) {
+        return false;
+    }
     !matches!(b.origin.role, BoxRole::AnonymousInlineRun)
         && !matches!(
             b.style.display,
@@ -1224,7 +1254,15 @@ pub(crate) fn collect_inline_segments(
             // Уплощение в сегмент стоило бы такому потомку высоты: у сегмента
             // её нет, вертикальный размер строки считается по метрикам шрифта,
             // и `<img width=50 height=50>` внутри `<a>` рисовался 50×16.8.
-            if !produces_inline_segments(doc, id, s.display) {
+            //
+            // CSS 2.1 §9.7: абсолютно/фиксированно позиционированный потомок
+            // тоже не может быть сегментом — `produces_inline_segments` видит
+            // только `display` (у `position:absolute` inline-элемента он
+            // остаётся `Inline`), поэтому без явной проверки `position` такой
+            // бокс уплощался в текст и терял собственный бокс (BUG-1470).
+            if matches!(s.position, Position::Absolute | Position::Fixed)
+                || !produces_inline_segments(doc, id, s.display)
+            {
                 escapes.push(InlineEscape { at: out.len(), node: id, inherited: inherited.clone(), effects: Vec::new() });
                 return;
             }

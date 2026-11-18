@@ -42,10 +42,12 @@ pub(super) fn align_static_positions(
     if abs_deferred.is_empty() || !applies(b) {
         return;
     }
-    // An abspos box inside an inline element is a sibling of the container's inline runs here
-    // (the build flattens it out), and its static-position rectangle is the point in the line
-    // instead of the content box. The tree does not say which parent the box had, so a container
-    // with inline content keeps the start-aligned static position.
+    // An abspos box between inline content is laid out inside an `InlineBlockRow`
+    // (whose static position is the inline cursor, BUG-1470); an abspos box that
+    // is a direct sibling of the container's inline runs (before/after the text)
+    // has a static-position point in the line, not the content box. The tree does
+    // not say which parent the box had, so a container with inline content keeps
+    // the start-aligned static position.
     if b.children.iter().any(|c| matches!(c.kind, BoxKind::InlineRun { .. } | BoxKind::InlineBlockRow)) {
         return;
     }

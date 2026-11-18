@@ -1494,7 +1494,38 @@ children = dom_children.par_iter().filter_map(|&child_id| {
                         // display:none не прерывает inline-контекст — CSS §9.2.4.
                         i += 1;
                     } else {
-                        break;
+                        // CSS 2.1 §9.7: абсолютно/фиксированно позиционированный
+                        // ребёнок прозрачен для строки — он НЕ разрывает inline-контекст
+                        // (следующий inline остаётся в той же строке) и не занимает
+                        // места. Его бокс встаёт в ряд как прозрачный участник, а
+                        // статическую позицию (inline-курсор) запоминает InlineBlockRow
+                        // (BUG-1470). Пробелы вокруг него схлопываются как будто его нет,
+                        // поэтому `had_ws`/`had_break` здесь не сбрасываются. Float и
+                        // блочный потомок, наоборот, обязаны разорвать ряд (§9.2.1.1/§9.7).
+                        if super::inline_build::probe_abs_fixed(
+                            doc, sheet, cid, &style, viewport, dark_mode, counters,
+                        ) {
+                            if !pending.is_empty() || !pending_escapes.is_empty() {
+                                let from = row_items.len();
+                                split_inline_pieces(
+                                    doc, sheet, id, &style, viewport, flat, counters, registry,
+                                    dark_mode, prev_index,
+                                    std::mem::take(&mut pending),
+                                    std::mem::take(&mut pending_escapes),
+                                    &mut row_items,
+                                );
+                                assign_first_line_style(
+                                    &mut row_items[from..], &first_line_style, &mut first_line_assigned,
+                                );
+                            }
+                            row_items.push(build_box_or_reuse(
+                                doc, sheet, cid, &style, viewport, flat, counters, registry,
+                                dark_mode, prev_index,
+                            ));
+                            i += 1;
+                        } else {
+                            break;
+                        }
                     }
                 }
                 if !pending.is_empty() || !pending_escapes.is_empty() {
