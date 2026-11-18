@@ -948,7 +948,12 @@ pub fn precompute_counters(
     };
     let mut map = CounterMap::with_capacity(doc.node_count());
     let t = std::time::Instant::now();
+    // LOAD-6: match the whole document in parallel first, so the sequential walk below
+    // re-applies declarations instead of scanning candidate rules (see `style::pre_match`).
+    // Counted in `walk_ns`: it is part of the cascade stage now.
+    let _pre_matched = crate::style::pre_match::install(doc, sheet, viewport, dark_mode, flat);
     walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, None, false, doc.root(), false, false, None);
+    drop(_pre_matched);
     note_walk_ns(t.elapsed().as_nanos() as u64);
     map.styles.note_sheet_revision(sheet.revision());
     map.record_generated_content(doc, flat);

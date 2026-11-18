@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-11-18T01:46:27",
+  "timestamp": "2026-11-18T04:17:08",
   "git": {
-    "commit": "efa9299fc",
-    "branch": "p6-load-9",
-    "subject": "Влить ветку p6-load-7: LOAD-7 - сетевой дедлайн load окна"
+    "commit": "df0212c41",
+    "branch": "p6-load6-parallel-match",
+    "subject": "Влить ветку p6-load-9: LOAD-9 - экранная раскладка переиспользует дерево прохода"
   },
   "crop_offset": [
     8,

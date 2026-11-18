@@ -52,7 +52,7 @@ use crate::style::{
     FieldSizing, FontPalette, FontSizeBasis, FontWeight, Length, Overflow,
     FilterFn, SHADOW_HOST_SCOPE, SHADOW_SHEETS,
 };
-use crate::style::invalidation::{MatchRestriction, MatchedRule, RuleBlock};
+use crate::style::invalidation::{InvalidatedRules, MatchRestriction, MatchedRule, RuleBlock};
 
 /// BUG-341 S18 — process-wide tally of full [`compute_style`] runs.
 ///
@@ -161,6 +161,13 @@ fn overflow_goes_to_viewport(doc: &Document, node: NodeId, parent: &ComputedStyl
         && matches!(&doc.get(parent_id).data, NodeData::Element { name: p, .. } if p.local.eq_ignore_ascii_case("html"))
         && parent.overflow_x == Overflow::Visible
         && parent.overflow_y == Overflow::Visible
+}
+
+/// LOAD-6 — the invalidation set of a pre-matched full pass: the record *is* the whole
+/// answer, so no rule can flip.
+fn empty_invalidation() -> &'static InvalidatedRules {
+    static EMPTY: std::sync::OnceLock<InvalidatedRules> = std::sync::OnceLock::new();
+    EMPTY.get_or_init(InvalidatedRules::default)
 }
 
 /// Computes the `ComputedStyle` for `node` by running the CSS cascade.
@@ -279,7 +286,7 @@ pub(crate) fn compute_style_restricted(
 ) -> (ComputedStyle, Arc<[MatchedRule]>) {
     let mut matched_rules = Vec::new();
     let (style, _) =
-        compute_style_shareable(doc, node, sheet, inherited, viewport, dark_mode, Some(restriction), &mut matched_rules);
+        compute_style_shareable(doc, node, sheet, inherited, viewport, dark_mode, Some(restriction), &mut matched_rules, false);
     (style, Arc::from(matched_rules))
 }
 
@@ -292,7 +299,7 @@ pub fn compute_style(
     dark_mode: bool,
 ) -> ComputedStyle {
     let mut matched_rules = Vec::new();
-    compute_style_shareable(doc, node, sheet, inherited, viewport, dark_mode, None, &mut matched_rules).0
+    compute_style_shareable(doc, node, sheet, inherited, viewport, dark_mode, None, &mut matched_rules, false).0
 }
 
 /// THREAD-4 срез 2 — [`compute_style`] plus whether the result is safe to
@@ -332,6 +339,9 @@ pub(crate) fn compute_style_shareable(
     dark_mode: bool,
     restriction: Option<&MatchRestriction<'_>>,
     matched_rules: &mut Vec<MatchedRule>,
+    // LOAD-6: stop after the document-sheet match — see the early return before the
+    // shadow-interior block. The returned style is then a half-built placeholder.
+    match_only: bool,
 ) -> (ComputedStyle, bool) {
     // BUG-341 S10: permanent per-phase instrumentation. Same-named sibling
     // scopes are merged by `lumen_core::profile`, so a `LUMEN_PROFILE_TREE=1`
@@ -667,6 +677,23 @@ pub(crate) fn compute_style_shareable(
     };
     shareable &= is_svg_presentational_element(node_tag);
 
+    // LOAD-6: a full pass already matched this node in parallel (`style::pre_match`) —
+    // its record is exactly what a restricted pass carries, with nothing invalidated, so
+    // the candidate loops below are replaced by re-applying it through the same road
+    // (`@scope` and shadow-tree rules are not in the record and keep matching below).
+    let pre = restriction
+        .is_none()
+        .then(|| super::pre_match::lookup(node, sheet, viewport, dark_mode))
+        .flatten();
+    let pre_shareable = pre.as_ref().map(|(_, shareable)| *shareable);
+    let pre_restriction = pre
+        .as_ref()
+        .map(|(rules, _)| MatchRestriction { prev: &rules[..], invalidated: empty_invalidation() });
+    let restriction = restriction.or(pre_restriction.as_ref());
+    if let Some(pre_shareable) = pre_shareable {
+        shareable = pre_shareable;
+    }
+
     ensure_cascade_index(sheet, viewport, dark_mode);
     // BUG-1492: `key` is the rule's place in the source-order numbering shared with the
     // `@media`/`@supports` blocks (`RuleOrder`); `rule_idx` indexes `sheet.rules`.
@@ -967,6 +994,28 @@ pub(crate) fn compute_style_shareable(
     } else {
         None
     };
+    let interior_shadow: Option<Arc<Stylesheet>> = if any_shadow {
+        doc.enclosing_shadow_host(node)
+            .and_then(|host| SHADOW_SHEETS.with(|c| c.borrow().get(&host).cloned()))
+    } else {
+        None
+    };
+    // THREAD-4 срез 4: shadow disqualification is contextual, not
+    // document-wide. `own_shadow`/`host_shadow`/`interior_shadow` above
+    // already answer the only question that matters for `node` itself — is
+    // it a shadow host, a slotted light child, or inside a shadow tree? A
+    // node that is none of the three never touches `SHADOW_HOST_SCOPE` or a
+    // shadow stylesheet during its own cascade above, so an unrelated
+    // shadow tree elsewhere in the document cannot change its result.
+    shareable &= own_shadow.is_none() && host_shadow.is_none() && interior_shadow.is_none();
+    // LOAD-6: the parallel pre-pass wants only the document-sheet record, not a style — its
+    // inherited parent is a placeholder, so everything after this point (`:host`/`::slotted`
+    // matching, shadow-interior matching, `::part()`, inline declarations, the revert prepass,
+    // the whole apply) is work the sequential walk redoes with the real inherited style.
+    // None of it is part of the record, and the walk matches it itself.
+    if match_only {
+        return (style, shareable);
+    }
     // (a) `:host` / `:host(sel)` from the node's own shadow tree apply to the host.
     if let Some(ref shadow) = own_shadow {
         SHADOW_HOST_SCOPE.with(|c| c.set(node.index() as u32));
@@ -1023,20 +1072,6 @@ pub(crate) fn compute_style_shareable(
     // `node`'s index here) and `::slotted()` (a pseudo-element; `matches_simple`
     // always rejects `SimpleSelector::PseudoElement`), so no extra filtering
     // is needed to keep (a)/(b) semantics from being duplicated here.
-    let interior_shadow: Option<Arc<Stylesheet>> = if any_shadow {
-        doc.enclosing_shadow_host(node)
-            .and_then(|host| SHADOW_SHEETS.with(|c| c.borrow().get(&host).cloned()))
-    } else {
-        None
-    };
-    // THREAD-4 срез 4: shadow disqualification is contextual, not
-    // document-wide. `own_shadow`/`host_shadow`/`interior_shadow` above
-    // already answer the only question that matters for `node` itself — is
-    // it a shadow host, a slotted light child, or inside a shadow tree? A
-    // node that is none of the three never touches `SHADOW_HOST_SCOPE` or a
-    // shadow stylesheet during its own cascade above, so an unrelated
-    // shadow tree elsewhere in the document cannot change its result.
-    shareable &= own_shadow.is_none() && host_shadow.is_none() && interior_shadow.is_none();
     if let Some(ref shadow) = interior_shadow {
         let base = next_rule_idx
             + own_shadow.as_ref().map_or(0, |s| s.rules.len())
@@ -1934,8 +1969,11 @@ pub(crate) fn compute_style_shareable(
     // `shareable` verdict is built from "every candidate rule was safe", which this pass cannot
     // re-establish over the candidates it skipped. Never memoise its result (the share cache is
     // bypassed for restricted nodes anyway; this keeps the flag honest for any other caller).
+    // LOAD-6: a *pre-matched* pass is the exception — `pre_match` carries the verdict it
+    // established over the same candidates (and still runs `compute_style_shareable` itself,
+    // so "shareable" means what it always meant for a full match).
     if restriction.is_some() {
-        shareable = false;
+        shareable = pre_shareable.unwrap_or(false);
     }
     (style, shareable)
 }

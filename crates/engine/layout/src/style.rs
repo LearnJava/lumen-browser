@@ -55,6 +55,7 @@ mod math_value;
 pub(crate) mod has_cache;
 mod matching;
 mod parse;
+pub(crate) mod pre_match;
 mod presentational;
 mod property_syntax;
 mod pseudo;
