@@ -23,6 +23,17 @@ fn http_proxy_with_basic_auth() {
 }
 
 #[test]
+fn loopback_hosts_bypass_proxy() {
+    // BUG-1803: системный прокси не должен замыкаться на локальные серверы.
+    assert!(is_loopback_host("localhost"));
+    assert!(is_loopback_host("LOCALHOST."));
+    assert!(is_loopback_host("127.0.0.1"));
+    assert!(is_loopback_host("[::1]"));
+    assert!(!is_loopback_host("claude.ai"));
+    assert!(!is_loopback_host("127.0.0.1.example.com"));
+}
+
+#[test]
 fn http_client_with_proxy() {
     let proxy = Arc::new(HttpProxy::new("proxy.local".to_string(), 3128));
     let client = HttpClient::new().with_proxy(Arc::clone(&proxy));

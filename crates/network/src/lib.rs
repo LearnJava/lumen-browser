@@ -289,6 +289,17 @@ pub fn install_no_proxy_patterns(patterns: &[String]) {
     }
 }
 
+/// `true` для loopback-хоста (`localhost`, `127.0.0.1`, `::1`) — такие адреса
+/// не проксируются: прокси на loopback замкнулся бы сам на себя, а серверы
+/// автотестов (wptserve, MCP-порт) слушают именно там (BUG-1803).
+fn is_loopback_host(host: &str) -> bool {
+    let host = host.trim_end_matches('.').trim_matches(['[', ']']);
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
 /// `true` when `host` is covered by a no-proxy pattern: `host` equals the
 /// pattern or is a subdomain of it. Same matching semantics as
 /// [`protection_exempt_for_site`].
@@ -1883,7 +1894,9 @@ fn fetch_single(
     // real target, not the SOCKS5 server).
     // COMPAT-NOPROXY: правило «этот сайт без прокси» сильнее обоих — и
     // HTTP-прокси, и SOCKS5-туннель (Tor) пропускаются, соединение прямое.
-    let direct = no_proxy_for_host(Some(host));
+    // BUG-1803: loopback минует прокси всегда — прокси на 127.0.0.1 иначе бы
+    // замкнулся сам на себя, а серверы автотестов (wptserve, MCP) живут там же.
+    let direct = no_proxy_for_host(Some(host)) || is_loopback_host(host);
     let socks5_proxy = if direct { None } else { socks5_proxy };
     let effective_proxy = if socks5_proxy.is_some() || direct { None } else { proxy };
 
