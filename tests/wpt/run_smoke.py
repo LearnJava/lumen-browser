@@ -102,6 +102,11 @@ os.environ.setdefault("LUMEN_DISABLE_CANVAS_NOISE", "1")
 # `webaudio/*` constant-source tests (`assert_array_equals` against an exact
 # rendered sample) the same way uncontrolled canvas noise did above.
 os.environ.setdefault("LUMEN_DISABLE_AUDIO_NOISE", "1")
+# BUG-1803 made Lumen read the system HTTP proxy by default; WPT is served from
+# fake-TLD loopback hosts (`web-platform.test`) that a real proxy cannot route,
+# so every request 502s when the machine has one on. `setdefault` so an
+# explicit override in the calling shell still wins.
+os.environ.setdefault("LUMEN_NO_SYSTEM_PROXY", "1")
 
 #: WPT-RUN-9 parallel lanes: path of a `config.json` that replaces
 #: `tests/wpt/config.json` for this one wptrunner process. Upstream reads the
