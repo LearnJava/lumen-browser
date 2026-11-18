@@ -5508,7 +5508,7 @@ function _wa_gap_an_progress(t, ms) {
 // (what the transitions made of it) when no animation of the element touches it.
 function _wa_gap_an_value(nid, kebab, base, value, pseudo) {
     var list = _css_an_update(nid, pseudo || null);
-    if (!list.length) return value;
+    if (!list.length) return _wa_replaced_effect_value(nid, kebab, pseudo, value);
     var ms = _css_now();
     // A custom property keeps its `--name` and interpolates by its registered syntax.
     var custom = kebab.charCodeAt(0) === 45 && kebab.charCodeAt(1) === 45;
@@ -5557,7 +5557,32 @@ function _wa_gap_an_value(nid, kebab, base, value, pseudo) {
             : _wa_motion_interp(camel, _wa_motion_resolve(eff, camel, from.value),
                                 _wa_motion_resolve(eff, camel, to.value), local);
     }
-    return result;
+    return _wa_replaced_effect_value(nid, kebab, pseudo, result);
+}
+
+// True once any CSS animation's effect has been replaced by a script — until then the overlay
+// skips the scan below on every property read.
+var _wa_eff_repl_seen = false;
+
+// A CSS animation whose effect a script replaced paints the new effect's own keyframes on the
+// animation's clock instead of the `@keyframes` its `animation-name` still matches (CSS
+// Animations L2 §«CSSAnimation.effect»). Read-time like the transitions: the settled computed
+// value is the base and nothing is written into the target's inline style.
+function _wa_replaced_effect_value(nid, kebab, pseudo, value) {
+    if (!_wa_eff_repl_seen) return value;
+    var camel = kebab.replace(/-([a-z])/g, function(m, c) { return c.toUpperCase(); });
+    for (var i = 0; i < _wa_animations.length; i++) {
+        var a = _wa_animations[i], e = a._eff;
+        if (!a._css || !a._effRepl || a._cx || !e || !e.target) continue;
+        if (e.target.__nid__ !== nid || (e.pseudoElement || null) !== (pseudo || null)) continue;
+        var ct = _css_ct(a);
+        if (ct === null) continue;
+        var p = _wa_iter_progress(e._timing, ct);
+        if (p === -1 || p === -2) continue;
+        var styles = _wa_compute_at_p(e, p);
+        if (styles[camel] != null) value = String(styles[camel]);
+    }
+    return value;
 }
 
 // ── BUG-1293: read-time CSS Transitions / Animations for every property ──────
@@ -7413,7 +7438,10 @@ function _css_state(a) {
 // start delay and active duration.
 function _css_phase(a) {
     var e = a._eff;
-    if (a._cx || !e) return 'idle';
+    if (a._cx) return 'idle';
+    // A script that set the effect to `null` ended the animation (`_css_end` is 0), so the
+    // effect sits in its after phase — that is what fires its `animationend`.
+    if (!e) return 'after';
     // A created-but-never-played animation (pending, no first frame yet) has not entered its
     // active interval: a seek of it is the start, not a step inside it.
     if (a._c.pend0) return 'before';
@@ -7444,10 +7472,15 @@ function _css_js_events(a) {
     a._ph = now;
     if (was === now || was === 'idle' || now === 'idle') return;
     if ((now === 'active') === (was === 'active')) return;
-    var start = now === 'active';
-    var t = a._eff._timing, dur = +t.duration || 0, it = t.iterations == null ? 1 : +t.iterations;
-    // `elapsedTime` as the shell's own events carry it (`AnimationScheduler`): 0 at the start,
-    // the whole active duration at the end.
+    _css_fire_boundary(a, now === 'active');
+}
+
+// Fires one phase boundary of a script-driven animation: `start` enters the active interval
+// (`animationstart`/`transitionstart`), otherwise leaves it. `elapsedTime` as the shell's own
+// events carry it (`AnimationScheduler`): 0 at the start, the whole active duration at the end.
+function _css_fire_boundary(a, start) {
+    var t = (a._eff && a._eff._timing) || {}, dur = +t.duration || 0;
+    var it = t.iterations == null ? 1 : +t.iterations;
     var elapsed = start ? 0 : (dur === 0 || it === 0 ? 0 : dur * it) / 1000;
     var evt;
     if (a._ctype === 't') {
@@ -7544,6 +7577,10 @@ function _css_complete_pending(a) {
     var res = c.readyRes;
     c.readyRes = c.readyRej = null;
     if (res) res(a);
+    // The first frame of a play-pending animation is where its effect enters the active
+    // interval: a script that replaced the effect or took the clock owes its start event here
+    // (before this, the phase only moved for animations a seek touched).
+    _css_state(a);
 }
 
 // Arms a one-shot timer for the next phase boundary of an observed animation — the end of the
@@ -7760,11 +7797,19 @@ _css_define('finish', {
         var end = _css_end(a);
         if (end === Infinity) throw _css_invalid_state('Cannot finish an animation with an infinite effect end');
         _css_take_clock(a);
+        var was = a._ph;
         if (a._cx) _css_revive(a);
         c.start = _css_now() - end;
         c.pausedAt = null;
         c.pend0 = false;
         if (c.pending) _css_complete_pending(a);
+        // A `finish()` from before the active interval jumps over all of it, and a script
+        // that owns the clock owes both boundaries: the start it never got and the end it
+        // lands on (WPT `CSSAnimation-effect` «replacing a finished animation's effect with
+        // a longer one fires an animationstart»).
+        a._ph = 'after';
+        if (was === 'before') _css_fire_boundary(a, true);
+        if (was === 'before' || was === 'active') _css_fire_boundary(a, false);
         _css_state(a);
     },
     writable: true,
@@ -7794,11 +7839,23 @@ function _css_new(proto, nid, pseudo, clock) {
             _css_take_clock(this);
             this._eff = v || null;
             this._effRepl = true;
+            _wa_eff_repl_seen = true;
             if (v) Object.defineProperty(v, '_animation', { value: this, writable: true, configurable: true });
+            // The new effect has its own end: a timer armed for the old one is stale.
+            this._armed = false;
             _css_state(this);
+            _css_arm(this);
         },
         enumerable: true, configurable: true,
     });
+    // `timeline` reflects `animation-timeline`: a CSS animation reading it flushes style first,
+    // like every other CSS Animation member (`animation-timeline: none` is `null`).
+    Object.defineProperty(a, 'timeline', {
+        get: function() { _css_refresh(this); return this._tl; },
+        set: function(v) { this._tl = v; },
+        enumerable: true, configurable: true,
+    });
+    a._tl = _wa_doc_timeline;
     Object.defineProperty(a, '_state', {
         get: function() { return _css_state(this); },
         set: function() {},
@@ -7840,7 +7897,7 @@ function _css_prop(nid, pseudo, name) {
 function _css_an_lists(nid, pseudo) {
     var lists = {};
     ['name', 'duration', 'delay', 'timing-function', 'iteration-count', 'direction', 'fill-mode',
-     'play-state', 'composition'].forEach(function(p) {
+     'play-state', 'composition', 'timeline'].forEach(function(p) {
         lists[p] = _wa_gap_tr_split(_css_prop(nid, pseudo, 'animation-' + p));
     });
     return lists;
@@ -7898,6 +7955,16 @@ function _css_an_apply(a, lists, i) {
     }
     var comp = pick('composition');
     if (a._eff && !a._effRepl) a._eff.composite = comp === 'add' || comp === 'accumulate' ? comp : 'replace';
+    // `animation-timeline` maps to the Animation, not the effect, so — like the play state — a
+    // script's replacement of the effect does not freeze it. Only the two values a CSSAnimation
+    // can carry as a JS object are mapped: `none` detaches it (`timeline` is `null`), `auto`
+    // is the document timeline.
+    var tl = pick('timeline') || 'auto';
+    if (tl !== a._ctl) {
+        a._ctl = tl;
+        if (tl === 'none') a._tl = null;
+        else if (tl === 'auto') a._tl = _wa_doc_timeline;
+    }
 }
 
 function _css_vt_pseudo(pseudo) { return pseudo.indexOf('::view-transition') === 0; }
@@ -7929,7 +7996,22 @@ function _css_boxless(nid) {
 // Re-reads the element's (or pseudo-element's) `animation-name` list and brings its CSSAnimation
 // objects in line: new names create one, dropped names cancel theirs, repeated names keep one
 // object per occurrence. Returns `[{anim, i}]` in list order (`i` = slot in the computed lists).
+//
+// Not re-entrant: dropping an animation fires its `cancel`, and the playback event reads
+// `timeline` — a style flush. That nested update would still see the old list in
+// `_css_an_by_key` and mint a second object for one name (CSSANIM-MODEL-2-S2).
+var _css_an_updating = false;
 function _css_an_update(nid, pseudo) {
+    if (_css_an_updating) return [];
+    _css_an_updating = true;
+    try {
+        return _css_an_update_now(nid, pseudo);
+    } finally {
+        _css_an_updating = false;
+    }
+}
+
+function _css_an_update_now(nid, pseudo) {
     var key = nid + ':' + (pseudo || '');
     var cur = _css_an_by_key[key];
     var names = _wa_gap_tr_split(_css_prop(nid, pseudo, 'animation-name'));

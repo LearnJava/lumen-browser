@@ -304,6 +304,99 @@ fn a_scripted_seek_dispatches_the_transition_events_it_crosses() {
     );
 }
 
+/// CSSANIM-MODEL-2-S2: a replaced effect paints its own keyframes on the animation's clock, and
+/// the `@keyframes` its `animation-name` still matches stop applying.
+#[test]
+fn a_replaced_effect_paints_its_own_keyframes_and_drops_the_css_ones() {
+    let rt = rt();
+    let script = format!(
+        "{PRELUDE}
+        __css('k');
+        var a = __sync()[0], r = [];
+        a.pause();
+        a.currentTime = 5000;
+        a.effect = new KeyframeEffect(__el, {{ left: ['0px', '100px'] }}, 10000);
+        r.push(_wa_gap_an_value(1, 'margin-left', '0px', '0px'));
+        r.push(_wa_gap_an_value(1, 'left', 'auto', 'auto'));
+        r.push(a.playState);
+        r.join(' ')"
+    );
+    // Half-way through the new 10 s effect: left 50px on the target, margin-left back to base.
+    assert_eq!(eval_str(&rt, &script), "0px 50px paused");
+}
+
+/// CSSANIM-MODEL-2-S2: `effect = null` finishes the animation, the target returns to its settled
+/// style and the `animationend` a script now owns is dispatched.
+#[test]
+fn a_null_effect_finishes_the_animation_and_fires_its_end() {
+    let rt = rt();
+    let script = format!(
+        "{PRELUDE}
+        __css('k');
+        var a = __sync()[0], got = [];
+        a.currentTime = 5000;
+        __tick(16); _lumen_run_raf_callbacks(16);
+        _lumen_dispatch = function(nid, ev) {{ got.push(nid + ' ' + ev.type); }};
+        a.effect = null;
+        __tick(32); _lumen_run_raf_callbacks(32);
+        [a.playState, _wa_gap_an_value(1, 'margin-left', '0px', '0px'), got.join('|')].join(' ')"
+    );
+    assert_eq!(eval_str(&rt, &script), "finished 0px 1 animationend");
+}
+
+/// CSSANIM-MODEL-2-S2: a play-pending animation whose effect moves to another element still
+/// starts at its original element (the event is the CSS animation's, not the effect's).
+#[test]
+fn a_replaced_effect_starts_at_the_original_element() {
+    let rt = rt();
+    let script = format!(
+        "{PRELUDE}
+        __css('k');
+        var d2 = {{ __nid__: 2 }}, got = [];
+        _lumen_make_element = function(nid) {{ return nid === 2 ? d2 : __el; }};
+        _lumen_dispatch = function(nid, ev) {{ got.push(nid + ' ' + ev.type); }};
+        var a = __sync()[0];
+        a.effect = new KeyframeEffect(d2, {{ left: ['0px', '100px'] }}, 10000);
+        __tick(16); _lumen_run_raf_callbacks(16);
+        // The start is queued on the first frame as a task; the next frame's «update animations
+        // and send events» dispatches it, exactly as the shell's scheduler event would arrive.
+        __tick(32); _lumen_run_raf_callbacks(32);
+        [String(a.effect.target === d2), got.join('|')].join(' ')"
+    );
+    assert_eq!(eval_str(&rt, &script), "true 1 animationstart");
+}
+
+/// CSSANIM-MODEL-2-S2: `finish()` from before the active interval crosses it in one jump and
+/// dispatches both boundaries.
+#[test]
+fn finish_dispatches_the_boundaries_it_jumps_over() {
+    let rt = rt();
+    let script = format!(
+        "{PRELUDE}
+        __css('k');
+        var got = [];
+        _lumen_dispatch = function(nid, ev) {{ got.push(ev.type + ' ' + ev.elapsedTime); }};
+        var a = __sync()[0];
+        a.finish();
+        __tick(16); _lumen_run_raf_callbacks(16);
+        got.join('|')"
+    );
+    assert_eq!(eval_str(&rt, &script), "animationstart 0|animationend 10");
+}
+
+/// CSSANIM-MODEL-2-S2: `animation-timeline: none` detaches the animation — `timeline` is `null`.
+#[test]
+fn animation_timeline_none_detaches_the_animation() {
+    let rt = rt();
+    let script = format!(
+        "{PRELUDE}
+        __css('k', {{ 'timeline': 'none' }});
+        var a = __sync()[0];
+        [String(a.timeline), a.timeline === null].join(' ')"
+    );
+    assert_eq!(eval_str(&rt, &script), "null true");
+}
+
 /// CSSANIM-MODEL-2: a property the page never read transitions too — the element's first
 /// observation snapshots the whole computed style, and the next style recalc compares against
 /// that baseline (`_wa_motion_seed`). Real cascade here: only the stubbed harness above keeps its

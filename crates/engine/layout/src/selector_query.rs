@@ -2450,6 +2450,11 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
             AnimationPlayState::Paused => "paused",
         }).collect::<Vec<_>>().join(", ")
     });
+    m.insert("animation-timeline".into(), if style.animation_timelines.is_empty() {
+        "auto".into()
+    } else {
+        style.animation_timelines.iter().map(|t| t.to_css()).collect::<Vec<_>>().join(", ")
+    });
 
     // ── Scroll behaviour (CSSOM View §13 / CSS Overflow 3) ──────────
     // SMOOTH-SCROLL: the scroll methods' `behavior: "auto"` reads it from here.
