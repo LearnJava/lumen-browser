@@ -1284,6 +1284,36 @@ use super::text_and_images::Fixed8;
         assert_eq!(offsets, vec![(0.0, -100.0)], "sticky offset must shift the box from y=200 to y=100");
         let pops = dl.iter().filter(|c| matches!(c, DisplayCommand::PopTransform)).count();
         assert_eq!(offsets.len(), pops, "transform layers balanced");
+
+        // BUG-1468 срез 2: the escaped scroll layer also drops the scrollport clip,
+        // so the stuck box must be re-clipped to the container's padding box, with
+        // the offset transform nested *inside* the clip.
+        let clip = dl
+            .iter()
+            .find_map(|c| match c {
+                DisplayCommand::PushClipRect { rect } => Some(*rect),
+                _ => None,
+            })
+            .expect("stuck sticky box must be clipped to the scrollport");
+        assert_eq!(clip, Rect::new(0.0, 0.0, 150.0, 250.0), "clip must be the container scrollport");
+        let clip_pos = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::PushClipRect { .. }))
+            .unwrap();
+        let xform_pos = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::PushTransform { .. }))
+            .unwrap();
+        let pop_xform = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::PopTransform))
+            .unwrap();
+        let pop_clip = dl
+            .iter()
+            .rposition(|c| matches!(c, DisplayCommand::PopClip))
+            .unwrap();
+        assert!(clip_pos < xform_pos && xform_pos < pop_xform && pop_xform < pop_clip,
+            "clip must wrap the offset transform: clip={clip_pos} xform={xform_pos} pop_xform={pop_xform} pop_clip={pop_clip}");
     }
 
     /// A sticky box at scroll 0 (not stuck) emits no offset transform — its flow
