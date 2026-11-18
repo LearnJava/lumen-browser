@@ -113,3 +113,33 @@ github slow is untouched. The bug card carries the explicit boundary.
   [PERF-WIDE-ROAD](../tasks/PERF-WIDE-ROAD.md) (P6, 2026-11-18): it owns the
   remainder, and its S1 must name one of the two candidates with numbers or
   close the class as WONTFIX.
+
+## Addendum (2026-11-18): both candidates measured and closed by number — the class is WONTFIX (Phase 3+)
+
+PERF-WIDE-ROAD S1 ran the census this ADR demanded (github ×4 live compat-crawl
+runs, cnn trace-nav/dump-layout with a stack sampler; numbers —
+[journal](../perf/journal.md) §2026-11-18, [BUG-1800](../../bugs/BUG-1800-OPEN.md)
+§Срез 18). Neither candidate is a dominant article of the flush:
+
+- **The per-descendant clone class is dead by number.** `CustomFlow` never runs
+  on shadow-root pages at all (`inherited = 0` in every run — the
+  `has_author_shadow_roots` guard, `custom_flow.rs:171`), so the "clone per
+  descendant" this ADR attributed to github existed only on the s101 stand.
+  The generalized per-node construction (`ComputedStyle::inheriting`, `cs_init`)
+  measures **0.5–1.2 %** of the flush on both sites.
+- **Shadow-sheet indexing addresses a sub-dominant article**: document-sheet
+  wide matching is ≈ 25–31 % of the github flush (honest, uninstrumented) and
+  15.6 % on cnn — zeroing it entirely leaves ≥ 60 % of the cost.
+- The largest measured articles are *outside* both candidates: github's
+  `flush.custom_props` collector at 20–31 % (the scoped licence requires an
+  empty `cq_boxless`, and github uses `@container`), cnn's per-element
+  `::before`/`::after` probe (`quote_pseudos`) at ~38 % (detail-inflated).
+  The shared amplifier on both sites is the recompute volume itself
+  (`forced_same` 95.6–99.4 % — document-wide roots), the class §Alternatives
+  rejected with two rollbacks.
+
+Per the task's gate, no mechanism is built; BUG-935, BUG-1778 and BUG-1800 move
+to `WONTFIX (Phase 3+)` with these numbers. The wide road remains the
+contract's boundary; reopening takes a Phase 3+ decision, and the census names
+where the next percent actually lives (the pseudo-element probe, the
+`custom_props` scoped licence under non-empty `cq_boxless`).
