@@ -1,6 +1,6 @@
 # BUG-1800 — ebay.com: JS-задачи по 30–40 с — same-tick flush исполняется внутри DOM-чтений (`getAttribute`/`getBoundingClientRect`) из колбэков RO/IO; `document_ready` задержан на +9.5…+140 с
 
-**Статус:** OPEN (DEBTOR) — закрыт для P3 2026-11-17; остаток — PERF-INVALIDATION/[ADR-036](../docs/decisions/ADR-036-incremental-restyle-invalidation.md) (P6), граница долга в конце карточки
+**Статус:** OPEN (DEBTOR) — закрыт для P3 2026-11-17; остаток — [PERF-WIDE-ROAD](../docs/tasks/PERF-WIDE-ROAD.md)/[ADR-036](../docs/decisions/ADR-036-incremental-restyle-invalidation.md) (P6), граница долга в конце карточки
 **Открыт:** 2026-11-12 (P3, перф-аудит ebay, перф-скилл)
 **Компонент:** js/layout (`crates/js/src/v8_runtime/style_flush.rs`, `crates/engine/layout/src/scoped_collect.rs` — same-tick flush; DOM-читалки шима, вызывающие его)
 
