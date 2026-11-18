@@ -1793,6 +1793,29 @@ fn bug591_media_query_list_listener_exception_fires_window_error() {
     assert_eq!(result, lumen_core::JsValue::String("mql-boom".to_string()));
 }
 
+/// HR Time L3 «time coarsening»: the page-visible `performance.now()` is
+/// quantized to 100 µs (Chrome's exposed-clock quantum). The native
+/// `_lumen_now_ms` resolves ~0.25 µs, and that exposed precision is itself a
+/// fingerprinting signal — [BUG-1826]: the Cloudflare challenge never completes
+/// on a page whose clock is finer than a real browser's. `floor(x·10)/10`
+/// keeps the clock monotonic.
+#[test]
+fn performance_now_is_coarsened_to_100_us() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "var t0 = performance.now(); \
+                 var x = 0; for (var i = 0; i < 20000; i++) x += Math.sqrt(i); \
+                 var t1 = performance.now(); \
+                 var q = function(v) { return Math.abs(v * 10 - Math.round(v * 10)) < 1e-9; }; \
+                 globalThis.__coarse = q(t0) && q(t1) && t1 >= t0;",
+    )
+    .unwrap();
+    assert_eq!(
+        rt.eval("globalThis.__coarse").unwrap(),
+        lumen_core::JsValue::Bool(true)
+    );
+}
+
 /// The half of [BUG-840] that belongs to this bug: a
 /// `PerformanceObserver` callback's exception was eaten by the shim
 /// before any host-side path could see it, which is why the
