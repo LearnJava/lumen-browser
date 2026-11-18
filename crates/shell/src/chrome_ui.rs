@@ -1321,7 +1321,14 @@ impl Lumen {
     /// network registry. Call at startup and after every list change — the
     /// rule is decided per request in `fetch_single` from the request host.
     pub(crate) fn sync_no_proxy_rules(&self) {
-        let sites = self.settings_store.no_proxy_sites();
+        let mut sites = self.settings_store.no_proxy_sites();
+        // BUG-1803: `ProxyOverride` системных настроек Windows — тот же «напрямую»
+        // список, что и пользовательский, поэтому едет в тот же реестр сети.
+        for pattern in crate::system_proxy::bypass_patterns() {
+            if !sites.iter().any(|s| s == pattern) {
+                sites.push(pattern.clone());
+            }
+        }
         lumen_network::install_no_proxy_patterns(&sites);
     }
 

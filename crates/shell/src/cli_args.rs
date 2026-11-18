@@ -748,6 +748,30 @@ pub(crate) fn run_cli() -> ExitCode {
         );
     }
 
+    // BUG-1803: системный прокси Windows — дефолт, когда прокси не задан ни
+    // `--proxy`, ни `proxy =` в `fingerprint.toml` и это не Tor-режим. Читается
+    // до `init_global` (профиль — `OnceLock`, второй вызов молча игнорируется).
+    // `LUMEN_NO_SYSTEM_PROXY=1` возвращает прежнее прямое соединение автотестам.
+    let system_proxy_off = std::env::var("LUMEN_NO_SYSTEM_PROXY")
+        .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
+    if !system_proxy_off
+        && startup_profile.proxy.is_none()
+        && startup_profile.socks5_proxy.is_none()
+        && startup_profile.http_profile != lumen_network::HttpProfile::TorBrowser
+    {
+        match crate::system_proxy::system_proxy() {
+            Some(url) => {
+                eprintln!("lumen: системный прокси Windows: {url}");
+                startup_profile.proxy = Some(url);
+            }
+            None => {
+                if let Some(note) = crate::system_proxy::describe_disabled() {
+                    eprintln!("lumen: {note}");
+                }
+            }
+        }
+    }
+
     // UPD-5: first-run-after-update detection + `data/*.db` backup. Must run
     // before any `lumen_storage` store is constructed — see
     // `update::backup_before_migration_if_updated`. Skipped for

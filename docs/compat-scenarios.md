@@ -94,8 +94,9 @@
 3. Боевой прогон: `python scripts/compat_scenarios.py --ref --nightly --exe <свежий lumen.exe>` —
    каждый сценарий сначала проходит в Chrome; не прошёл там — `skip ref_fail`, в SPR-w не идёт.
 
-Маршрут сети: Lumen не читает системный прокси и `HTTPS_PROXY` (Chrome-эталон читает), поэтому иностранные сайты Lumen открывает
-только с явным `--proxy`. Раннер ведёт два прохода: `--lang ru` (напрямую) и `--lang en --lumen-arg=--proxy
+Маршрут сети: Lumen читает системный прокси Windows (WinINET `ProxyEnable`/`ProxyServer`, BUG-1803) и берёт его
+дефолтом, когда ни `--proxy`, ни `proxy =` в `fingerprint.toml` его не задают (`LUMEN_NO_SYSTEM_PROXY=1` возвращает
+прямое соединение); `HTTPS_PROXY` в окружении по-прежнему не читается. Раннер ведёт два прохода: `--lang ru` (напрямую) и `--lang en --lumen-arg=--proxy
 --lumen-arg=<url прокси>` (`--lumen-arg` повторяемый, значение с дефисом — через `=`); итог — один `results.jsonl`.
 Сценарий с `lang = "ru"` на иностранном узле (Telegram) идёт вторым проходом через `--only`.
 
