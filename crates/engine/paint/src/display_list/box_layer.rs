@@ -54,7 +54,7 @@ struct BoxLayerOps {
 /// переносится его transform-ом (CSS Masking L1 §9, BUG-140), при этом
 /// transform преобразует всё содержимое SC (включая собственные
 /// background/border бокса, эмитимые в `root_bg`).
-fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>, dpr: f32, sticky_offset: Option<(f32, f32, Rect)>) -> BoxLayerOps {
+fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>, dpr: f32, sticky_offset: Option<StickyEmit>) -> BoxLayerOps {
     let mut pre = Vec::new();
     let mut post = Vec::new();
     let mut overflow_pre = Vec::new();
@@ -81,25 +81,36 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>, dpr: f32, stick
         }
         return BoxLayerOps { pre, post, overflow_pre, overflow_post };
     }
-    // CSS Positioning L3 §6.3 — position:sticky nested in a scroll container. The
-    // offset is baked here (the container's scroll lives in the clip chain's
-    // `PushScrollLayer`), so the box's whole painted output shifts by a clamped
-    // amount instead of scrolling away. Outermost layer — wraps the anchor-scroll
-    // layers below, so the anchor offset composes with the sticky offset.
-    if let Some((dx, dy, clip)) = sticky_offset {
-        // The box escapes the container's `PushScrollLayer` (BUG-159 filter), so
-        // its scrollport clip is lost too — re-establish it here, outermost, so a
-        // stuck box that pokes out past the container's edge is clipped (BUG-1468
-        // срез 2). Clip is screen-space (the scrollport), the offset transform
-        // shifts the content inside it — mirror of the wgpu sticky_stack + clip_stack.
-        pre.push(DisplayCommand::PushClipRect { rect: clip });
-        pre.push(DisplayCommand::PushTransform {
-            matrix: lumen_layout::Mat4::translation_2d(dx, dy),
-        });
-        // `post` is reversed at the end, so push the clip's closer first (it
-        // becomes the outermost Pop after `post.reverse()`).
-        post.push(DisplayCommand::PopClip);
-        post.push(DisplayCommand::PopTransform);
+    // CSS Positioning L3 §6.3 — position:sticky. Two cases:
+    // - nested in a scroll container: the offset is baked here (the container's
+    //   scroll lives in the clip chain's `PushScrollLayer`), so the box's whole
+    //   painted output shifts by a clamped amount instead of scrolling away;
+    // - page-level (no scroll container): emit `BeginStickyLayer`/`EndStickyLayer`
+    //   so the renderer applies the page-scroll clamp at draw time (mirror of the
+    //   legacy `walk` path).
+    // Outermost layer either way — wraps the anchor-scroll layers below, so the
+    // anchor offset composes with the sticky offset.
+    match sticky_offset {
+        Some(StickyEmit::Baked { dx, dy, clip }) => {
+            // The box escapes the container's `PushScrollLayer` (BUG-159 filter), so
+            // its scrollport clip is lost too — re-establish it here, outermost, so a
+            // stuck box that pokes out past the container's edge is clipped (BUG-1468
+            // срез 2). Clip is screen-space (the scrollport), the offset transform
+            // shifts the content inside it — mirror of the wgpu sticky_stack + clip_stack.
+            pre.push(DisplayCommand::PushClipRect { rect: clip });
+            pre.push(DisplayCommand::PushTransform {
+                matrix: lumen_layout::Mat4::translation_2d(dx, dy),
+            });
+            // `post` is reversed at the end, so push the clip's closer first (it
+            // becomes the outermost Pop after `post.reverse()`).
+            post.push(DisplayCommand::PopClip);
+            post.push(DisplayCommand::PopTransform);
+        }
+        Some(StickyEmit::Page { top, bottom, left, right }) => {
+            pre.push(DisplayCommand::BeginStickyLayer { flow_rect: b.rect, top, bottom, left, right });
+            post.push(DisplayCommand::EndStickyLayer);
+        }
+        None => {}
     }
     // CSS Anchor Positioning L1 §4.3: an anchor-positioned box follows the scroll of its anchor's
     // containers — outermost layer, around the box's own background and border as well.
@@ -338,10 +349,9 @@ enum FillFrame<'a> {
         fixed_cb_clips: Option<usize>,
         /// See [`ContinueFrame::abs_cb_clips`] — the parent's value.
         abs_cb_clips: usize,
-        /// Baked draw-time offset and scrollport clip for a `position: sticky`
-        /// box nested in a scroll container (see [`sticky_offset_for`]).
-        /// `None` — not sticky, page-level sticky, or offset `(0, 0)`.
-        sticky_offset: Option<(f32, f32, Rect)>,
+        /// How to emit a `position: sticky` box (see [`sticky_offset_for`]).
+        /// `None` — not sticky, or the scroll-container offset is `(0, 0)`.
+        sticky_offset: Option<StickyEmit>,
     },
     /// Dispatch the next not-yet-visited child of `b` (or, once `next_idx`
     /// reaches the end, push `b`'s own [`FillFrame::Leave`]). Split out from
@@ -527,7 +537,7 @@ fn enter_fill<'a>(
     inherited_clips: &[DisplayCommand],
     fixed_cb_clips: Option<usize>,
     abs_cb_clips: usize,
-    sticky_offset: Option<(f32, f32, Rect)>,
+    sticky_offset: Option<StickyEmit>,
     anim: Option<&CompositorAnimFrame>,
     dpr: f32,
     buckets: &mut [ScBucket],
@@ -901,29 +911,52 @@ fn clip_pop_for(push: &DisplayCommand) -> DisplayCommand {
     }
 }
 
-/// CSS Positioning L3 §6.3 — the draw-time offset for a `position: sticky` box
-/// nested in a scroll container. Resolved at emit time: the container's scroll
-/// offset and scrollport are baked into the `PushScrollLayer` carried in the
-/// inherited clip chain (the box itself escapes that layer — `continue_fill`
-/// filters it out of `inherited_clips` — so its flow position must be shifted
-/// back by the clamped amount by hand).
+/// What the ordered builder emits for a `position: sticky` box.
+enum StickyEmit {
+    /// Stuck inside a scroll container: bake the clamped offset and the
+    /// container's scrollport clip (the box escapes the container's
+    /// `PushScrollLayer` — BUG-159 filter — so both are applied by hand).
+    Baked { dx: f32, dy: f32, clip: Rect },
+    /// Page-level sticky (no scroll container in the clip chain): emit
+    /// `BeginStickyLayer`/`EndStickyLayer` and let the renderer apply the
+    /// page-scroll clamp at draw time (the page scroll is a render-time
+    /// parameter, not baked into the display list).
+    Page { top: Option<f32>, bottom: Option<f32>, left: Option<f32>, right: Option<f32> },
+}
+
+/// CSS Positioning L3 §6.3 — how to emit a `position: sticky` box. A box nested
+/// in a scroll container gets its offset baked at emit time (the container's
+/// scroll lives in the clip chain's `PushScrollLayer`; the box itself escapes
+/// that layer — `continue_fill` filters it out of `inherited_clips` — so its
+/// flow position must be shifted back by the clamped amount by hand). A
+/// page-level sticky box has no scroll container, so it delegates to the
+/// renderer's `BeginStickyLayer`.
 ///
-/// Returns `None` when the box is not sticky, when there is no scroll container
-/// in its clip chain (page-level sticky — the page scroll is a render-time
-/// parameter, not baked, so it needs the renderer's `BeginStickyLayer` path,
-/// which the ordered builder does not emit yet), or when the offset is `(0, 0)`
-/// (scroll 0 / not stuck — the flow position is already correct, and an identity
-/// `PushTransform` would only waste an off-screen layer and risk an AA seam).
-fn sticky_offset_for(b: &LayoutBox, inherited_clips: &[DisplayCommand]) -> Option<(f32, f32, Rect)> {
+/// Returns `None` when the box is not sticky, or when the scroll-container
+/// offset is `(0, 0)` (scroll 0 / not stuck — the flow position is already
+/// correct, and an identity `PushTransform` would only waste an off-screen layer
+/// and risk an AA seam).
+fn sticky_offset_for(b: &LayoutBox, inherited_clips: &[DisplayCommand]) -> Option<StickyEmit> {
     if b.style.position != Position::Sticky {
         return None;
     }
-    let (scrollport, scroll_x, scroll_y) = inherited_clips.iter().rev().find_map(|c| match c {
+    let Some((scrollport, scroll_x, scroll_y)) = inherited_clips.iter().rev().find_map(|c| match c {
         DisplayCommand::PushScrollLayer { clip_rect, scroll_x, scroll_y, .. } => {
             Some((*clip_rect, *scroll_x, *scroll_y))
         }
         _ => None,
-    })?;
+    }) else {
+        // Page-level sticky. `%`/`em` insets drop here, same fallback as the
+        // legacy `walk` path's `to_px_opt` (the emit-time viewport/font context
+        // is not threaded into the ordered builder).
+        let s = &b.style;
+        return Some(StickyEmit::Page {
+            top: s.top.to_px_opt(),
+            bottom: s.bottom.to_px_opt(),
+            left: s.left.to_px_opt(),
+            right: s.right.to_px_opt(),
+        });
+    };
     let s = &b.style;
     let em = s.font_size;
     // Viewport units in a sticky inset are rare; the emit-time viewport is not
@@ -950,7 +983,7 @@ fn sticky_offset_for(b: &LayoutBox, inherited_clips: &[DisplayCommand]) -> Optio
         scroll_x,
         scrollport,
     );
-    (dx != 0.0 || dy != 0.0).then_some((dx, dy, scrollport))
+    (dx != 0.0 || dy != 0.0).then_some(StickyEmit::Baked { dx, dy, clip: scrollport })
 }
 
 /// CSS Positioning L3 §6.3 — clamped vertical sticky offset. Mirror of

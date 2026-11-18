@@ -1336,3 +1336,25 @@ use super::text_and_images::Fixed8;
             .collect();
         assert!(offsets.is_empty(), "no offset at scroll 0, got {offsets:?}");
     }
+
+    /// CSS Positioning L3 §6.3: a page-level `position: sticky` box (no scroll
+    /// container in its clip chain) emits `BeginStickyLayer`/`EndStickyLayer` so
+    /// the renderer applies the page-scroll clamp at draw time (BUG-1468 срез 3).
+    #[test]
+    fn page_level_sticky_emits_begin_end_layer() {
+        let html = r#"<div style="position:sticky;top:10px;width:100px;height:100px;background:green"></div>"#;
+        let css = "body{margin:0}";
+        let dl = build_ordered(html, css);
+        let top = dl
+            .iter()
+            .find_map(|c| match c {
+                DisplayCommand::BeginStickyLayer { top, .. } => Some(*top),
+                _ => None,
+            })
+            .expect("page-level sticky must emit BeginStickyLayer");
+        assert_eq!(top, Some(10.0), "sticky top inset must be 10px");
+        assert!(
+            dl.iter().any(|c| matches!(c, DisplayCommand::EndStickyLayer)),
+            "must emit EndStickyLayer"
+        );
+    }
