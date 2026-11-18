@@ -556,7 +556,9 @@ pub(crate) fn spawn_frame(
     // отклоняем с логом, не заваливая страницу.
     if let Some(nav) = child_nav {
         let target = match nav {
-            JsNavigateRequest::Push(url) | JsNavigateRequest::Replace(url) => url,
+            JsNavigateRequest::Push(url)
+            | JsNavigateRequest::Replace(url)
+            | JsNavigateRequest::Link { url, .. } => url,
             _ => "<reload/submit>".to_owned(),
         };
         eprintln!("iframe: навигация из под-документа ({child_url}) не поддерживается (BUG-480 срез 1), запрос '{target}' отклонён");

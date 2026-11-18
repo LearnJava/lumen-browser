@@ -247,6 +247,13 @@ pub(crate) fn install_navigation(
         reg!(scope, ctx, store, "_lumen_request_form_submit", move |form: u32, submitter: i32| {
             *nav.lock().unwrap() = Some(NavigateRequest::SubmitForm { form, submitter });
         });
+
+        // BUG-1818: a scripted `<a target=…>`/`<area target=…>` activation that
+        // names another browsing context. The shell resolves the target.
+        let nav = Arc::clone(&nav_out);
+        reg!(scope, ctx, store, "_lumen_navigate_target", move |url: String, target: String| {
+            *nav.lock().unwrap() = Some(NavigateRequest::Link { url, target });
+        });
     }
     Ok(())
 }

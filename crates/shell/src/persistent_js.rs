@@ -1136,6 +1136,8 @@ impl PersistentJs for V8PersistentJs {
             lumen_js::NavigateRequest::Reload     => JsNavigateRequest::Reload,
             lumen_js::NavigateRequest::SubmitForm { form, submitter } =>
                 JsNavigateRequest::SubmitForm { form, submitter },
+            lumen_js::NavigateRequest::Link { url, target } =>
+                JsNavigateRequest::Link { url, target },
         })
     }
     fn take_nav_intercept_result(&self) -> Vec<(bool, bool)> {

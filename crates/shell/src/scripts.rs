@@ -1230,6 +1230,8 @@ pub(crate) fn run_scripts_with_dom(
                     lumen_js::NavigateRequest::Reload     => JsNavigateRequest::Reload,
                     lumen_js::NavigateRequest::SubmitForm { form, submitter } =>
                         JsNavigateRequest::SubmitForm { form, submitter },
+                    lumen_js::NavigateRequest::Link { url, target } =>
+                        JsNavigateRequest::Link { url, target },
                 });
                 // Keep rt alive: return as PersistentJs so event handlers work after load.
                 // BUG-979: `rt` is `Arc`-wrapped (not owned by value) so a peer
