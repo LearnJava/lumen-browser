@@ -66,7 +66,7 @@ const TR_PRELUDE: &str = "
 var __vals = {}, __now = 0;
 _lumen_computed_property = function(nid, name) { return __vals[name] || ''; };
 performance.now = function() { return __now; };
-function __read(name) { _wa_gap_tr_clock_ms = null; return _wa_gap_tr_value(1, name, __vals[name]); }
+function __read(name) { _wa_gap_tr_clock_ms = null; return _wa_gap_tr_value(1, null, name, __vals[name]); }
 __vals['transition-property'] = 'row-rule-width';
 __vals['transition-duration'] = '10s';
 __vals['transition-delay'] = '0s';

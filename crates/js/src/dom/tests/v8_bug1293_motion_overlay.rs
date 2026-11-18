@@ -26,7 +26,7 @@ _lumen_computed_property = function(nid, name) { return __vals[name] || ''; };
 _wa_gap_keyframes_json = function(name) { return __kf[name] === undefined ? null : JSON.stringify(__kf[name]); };
 _lumen_make_element = function(nid) { return null; };
 performance.now = function() { return __now; };
-function __read(name) { _wa_gap_tr_clock_ms = null; return _wa_gap_tr_value(1, name, __vals[name]); }
+function __read(name) { _wa_gap_tr_clock_ms = null; return _wa_gap_tr_value(1, null, name, __vals[name]); }
 function __an(name, base) { _wa_gap_tr_clock_ms = null; return _wa_gap_an_value(1, name, base, base); }
 __vals['transition-property'] = 'all';
 __vals['transition-duration'] = '10s';

@@ -147,7 +147,11 @@ window.getComputedStyle = function(element, pseudoElt) {
         }
         if (pseudo) {
             var psScript = _wa_pseudo_applied(nid, '::' + pseudo, name.replace(/-([a-z])/g, function(m, c) { return c.toUpperCase(); }));
-            return psScript !== null ? psScript : _lumen_get_computed_style_pseudo(nid, pseudo, name) || '';
+            if (psScript !== null) return psScript;
+            var psBase = _lumen_get_computed_style_pseudo(nid, pseudo, name) || '';
+            // Same read-time overlay as an element's: a transition on the pseudo-element starts
+            // here, on the read that first sees the change.
+            return _wa_motion_eligible(name) ? _wa_motion_read(nid, '::' + pseudo, name, psBase) : psBase;
         }
         // CSS View Transitions L2 §2.4: the scope element of a running transition is `all`.
         if (name === 'view-transition-scope' && typeof _lumen_vt_scope_active === 'function'
@@ -163,11 +167,11 @@ window.getComputedStyle = function(element, pseudoElt) {
             if (/-color$/.test(name) && /currentcolor/i.test(base)) {
                 base = base.replace(/currentcolor/gi, _lumen_computed_property(nid, 'color') || 'rgb(0, 0, 0)');
             }
-            return _wa_gap_an_value(nid, name, base, _wa_gap_tr_value(nid, name, base));
+            return _wa_gap_an_value(nid, name, base, _wa_gap_tr_value(nid, null, name, base));
         }
         // BUG-1293: every other animatable property gets the same read-time overlay,
         // so a transition/animation exists as soon as the style it reacts to is read.
-        if (_wa_motion_eligible(name)) return _wa_motion_read(nid, name, base);
+        if (_wa_motion_eligible(name)) return _wa_motion_read(nid, null, name, base);
         return base;
     }
     var handler = {
@@ -5336,16 +5340,23 @@ function _wa_gap_tr_seconds(tok) {
     return m[2].toLowerCase() === 'ms' ? parseFloat(m[1]) / 1000 : parseFloat(m[1]);
 }
 
-// Timing of the transition for `kebab` from the element's computed lists, or null.
-function _wa_gap_tr_timing(nid, kebab) {
-    var props = _wa_gap_tr_split(_lumen_computed_property(nid, 'transition-property').toLowerCase());
+// Key of a transition in `_wa_gap_tr`/`_css_tr_by_key`: the element's own is `nid:property`, a
+// pseudo-element's (CSS Transitions L1 §3 — it has its own style and its own before-change style)
+// `nid::before:property`. The element form is unchanged, so the shell-event lookups that name an
+// element's transition (`_css_js_owns_events`) keep reading the same key.
+function _wa_tr_key(nid, pseudo, kebab) { return nid + ':' + (pseudo ? pseudo + ':' : '') + kebab; }
+
+// Timing of the transition for `kebab` from the element's (or pseudo-element's) computed lists,
+// or null.
+function _wa_gap_tr_timing(nid, pseudo, kebab) {
+    var props = _wa_gap_tr_split(_css_prop(nid, pseudo, 'transition-property').toLowerCase());
     var cover = _wa_motion_cover(kebab), idx = -1;
     for (var i = 0; i < props.length; i++) {
         if (cover.indexOf(props[i]) >= 0) idx = i;   // the last match wins
     }
     if (idx < 0) return null;
     var pick = function(name) {
-        var l = _wa_gap_tr_split(_lumen_computed_property(nid, name));
+        var l = _wa_gap_tr_split(_css_prop(nid, pseudo, name));
         return l[idx % l.length];
     };
     var dur = _wa_gap_tr_seconds(pick('transition-duration'));
@@ -5355,8 +5366,9 @@ function _wa_gap_tr_timing(nid, kebab) {
              discrete: pick('transition-behavior') === 'allow-discrete' };
 }
 
-function _wa_gap_tr_value(nid, kebab, base) {
-    var key = nid + ':' + kebab, rec = _wa_gap_tr[key];
+// The element's or pseudo-element's style change: a named property got a new value.
+function _wa_gap_tr_value(nid, pseudo, kebab, base) {
+    var key = _wa_tr_key(nid, pseudo, kebab), rec = _wa_gap_tr[key];
     // CSS Transitions L1 §3: an element that is not rendered (`display: none`, no box) has no
     // before-change style, so it never starts a transition — nor does one that just became
     // rendered.
@@ -5364,13 +5376,22 @@ function _wa_gap_tr_value(nid, kebab, base) {
     if (!rec) {
         // A page that reads many properties of many nodes would otherwise keep one record per
         // pair for good; forgetting them costs one missed before-change style, not a wrong value.
-        if (++_wa_gap_tr_count > 50000) { _wa_gap_tr = {}; _wa_motion_by_nid = {}; _wa_gap_tr_count = 1; }
+        if (++_wa_gap_tr_count > 50000) {
+            _wa_gap_tr = {}; _wa_motion_by_nid = {}; _wa_motion_pseudo = {}; _wa_motion_pseudo_seeded = {};
+            _wa_gap_tr_count = 1;
+        }
         _wa_gap_tr[key] = { seen: base, run: null, boxless: boxlessNow() };
-        (_wa_motion_by_nid[nid] || (_wa_motion_by_nid[nid] = {}))[kebab] = 1;
+        if (!pseudo) (_wa_motion_by_nid[nid] || (_wa_motion_by_nid[nid] = {}))[kebab] = 1;
         return base;
     }
     var now = _css_now();
     var camel = kebab.replace(/-([a-z])/g, function(m, c) { return c.toUpperCase(); });
+    // A property whose value is `currentcolor` follows every change of `color` in the computed
+    // style, but its *specified* value did not change, so no transition starts on it (CSS Color
+    // L4 §4.4; a `::marker` with `transition: all` and a new `color` starts one transition, on
+    // `color` alone). `rec.cur` marks a property seeded with exactly the target's `color`.
+    var tracksColor = rec.cur && base === _css_prop(nid, pseudo, 'color');
+    if (tracksColor) rec.seen = base;
     if (base !== rec.seen) {
         var from = rec.run ? _wa_gap_tr_current(rec, now, camel) : rec.seen;
         var timing = null;
@@ -5381,7 +5402,7 @@ function _wa_gap_tr_value(nid, kebab, base) {
             var flip = _wa_gap_tr_name_re.test(kebab)
                 ? _lumen_css_interpolate_gap_rule(kebab, String(from), String(base), 0.5) == null
                 : !_wa_motion_interpolable(camel, kebab, from, base);
-            timing = _wa_gap_tr_timing(nid, kebab);
+            timing = _wa_gap_tr_timing(nid, pseudo, kebab);
             if (timing && flip && !timing.discrete) timing = null;
         }
         var boxless = boxlessNow();
@@ -5394,8 +5415,8 @@ function _wa_gap_tr_value(nid, kebab, base) {
         rec.run = timing ? { from: from, to: base, start: now, dur: timing.dur * 1000,
                              delay: timing.delay * 1000, easing: timing.easing } : null;
         _css_tr_cancel(prevRun);
-        if (rec.run) _css_tr_start(nid, kebab, camel, rec.run);
-    } else if (rec.run && !rec.run.done && (boxlessNow() || !_wa_gap_tr_timing(nid, kebab))) {
+        if (rec.run) _css_tr_start(nid, pseudo, kebab, camel, rec.run);
+    } else if (rec.run && !rec.run.done && (boxlessNow() || !_wa_gap_tr_timing(nid, pseudo, kebab))) {
         // `transition-property` no longer names the property, or the combined duration is not
         // positive: the running transition is cancelled. Same for an element that stopped
         // generating a box (`display: none` on it or an ancestor): it runs no animation
@@ -5602,6 +5623,10 @@ function _wa_replaced_effect_value(nid, kebab, pseudo, value) {
 // `auto` that resolves to another size is not mistaken for a style change.
 var _wa_motion_used_re = /^(width|height|top|right|bottom|left|padding-(top|right|bottom|left)|margin-(top|right|bottom|left))$/;
 var _wa_motion_by_nid = {};
+// Pseudo-element snapshots: node → { '::before': { kebab: 1 } }, and the set already taken.
+// A pseudo-element has its own style, so its own before-change style (CSS Transitions L1 §3).
+var _wa_motion_pseudo = {};
+var _wa_motion_pseudo_seeded = {};
 var _wa_motion_native_re = /^(opacity|transform|color|background-color|height)$/;
 // Properties the overlay never touches: custom and vendor-prefixed ones, and the
 // `transition-*`/`animation-*` longhands that drive it.
@@ -5651,10 +5676,12 @@ function _wa_motion_seed(nid) {
     // records, so a page reading every element would otherwise keep one per property for good.
     // The seeds go with the records, so the next observation starts a fresh baseline.
     if (_wa_gap_tr_count + entries.length > 50000) {
-        _wa_gap_tr = {}; _wa_motion_by_nid = {}; _wa_motion_seeded = {}; _wa_gap_tr_count = 1;
+        _wa_gap_tr = {}; _wa_motion_by_nid = {}; _wa_motion_seeded = {};
+        _wa_motion_pseudo = {}; _wa_motion_pseudo_seeded = {}; _wa_gap_tr_count = 1;
     }
     _wa_motion_seeded[nid] = 1;
     var boxless = _css_boxless(nid);
+    var snapColor = _wa_snapshot_color(entries);
     var props = _wa_motion_by_nid[nid] || (_wa_motion_by_nid[nid] = {});
     for (var i = 0; i < entries.length; i++) {
         var kebab = entries[i][0], base = entries[i][1];
@@ -5665,26 +5692,88 @@ function _wa_motion_seed(nid) {
         else if (_wa_motion_used_re.test(kebab)) base = _lumen_get_computed_value(nid, kebab) || base;
         else if (kebab === 'background-image') base = _lumen_resolve_css_urls(base);
         if (!_wa_gap_tr[nid + ':' + kebab]) {
-            _wa_gap_tr[nid + ':' + kebab] = { seen: base, run: null, boxless: boxless };
+            _wa_gap_tr[nid + ':' + kebab] = { seen: base, run: null, boxless: boxless,
+                                              cur: _wa_follows_color(kebab, base, snapColor) };
             _wa_gap_tr_count++;
         }
         props[kebab] = 1;
     }
+    _wa_motion_seed_pseudos(nid, boxless);
 }
 
-function _wa_motion_read(nid, kebab, resolved) {
+// The `color` of a computed-style snapshot (`_lumen_get_computed_style_entries` pairs).
+function _wa_snapshot_color(entries) {
+    for (var i = 0; i < entries.length; i++) if (entries[i][0] === 'color') return entries[i][1];
+    return '';
+}
+
+// Is this property's value nothing but the target's `color` (`border-top-color: currentcolor`)?
+// Its computed value moves with `color`, its specified value does not.
+function _wa_follows_color(kebab, base, snapColor) {
+    return kebab !== 'color' && /-color$/.test(kebab) && snapColor !== '' && base === snapColor;
+}
+
+// The same snapshot for the element's `::before`/`::after`/`::marker`: a pseudo-element has its
+// own style, so its own before-change value and its own `transition-*` lists (CSS Transitions
+// L1 §3), and the element's read is the style change event that carries it. Only a pseudo that
+// asks for a transition is snapshotted — an icon that only has `content`/`position` pays one
+// short read.
+//
+// shortcut: a pseudo that *starts* naming a transition after its node's first read has no
+// before-change value, so its first transition is not modelled; the same limit the element
+// itself has for `transition-*`, but here the snapshot is not worth its cost on every pseudo.
+function _wa_motion_seed_pseudos(nid, boxless) {
+    var list = _wa_pseudo_targets({ __nid__: nid });
+    for (var i = 0; i < list.length; i++) {
+        var pseudo = list[i], seedKey = nid + pseudo;
+        if (_wa_motion_pseudo_seeded[seedKey]) continue;
+        if (!_wa_gap_tr_positive(_css_prop(nid, pseudo, 'transition-duration'))) continue;
+        var entries;
+        try { entries = JSON.parse(_lumen_get_computed_style_pseudo_entries(nid, pseudo.slice(2))); } catch (e) { continue; }
+        if (!entries.length) continue;
+        if (_wa_gap_tr_count + entries.length > 50000) {
+            _wa_gap_tr = {}; _wa_motion_by_nid = {}; _wa_motion_seeded = {};
+            _wa_motion_pseudo = {}; _wa_motion_pseudo_seeded = {}; _wa_gap_tr_count = 1;
+        }
+        _wa_motion_pseudo_seeded[seedKey] = 1;
+        var byNode = _wa_motion_pseudo[nid] || (_wa_motion_pseudo[nid] = {});
+        var props = byNode[pseudo] || (byNode[pseudo] = {});
+        var snapColor = _wa_snapshot_color(entries);
+        for (var e = 0; e < entries.length; e++) {
+            var kebab = entries[e][0], base = entries[e][1];
+            if (!_wa_motion_seedable(kebab) || base === '') continue;
+            if (kebab === 'background-image') base = _lumen_resolve_css_urls(base);
+            var key = _wa_tr_key(nid, pseudo, kebab);
+            if (!_wa_gap_tr[key]) {
+                _wa_gap_tr[key] = { seen: base, run: null, boxless: boxless,
+                                    cur: _wa_follows_color(kebab, base, snapColor) };
+                _wa_gap_tr_count++;
+            }
+            props[kebab] = 1;
+        }
+    }
+}
+
+// Does this `transition-duration` list name any non-zero duration?
+function _wa_gap_tr_positive(list) {
+    var parts = _wa_gap_tr_split(String(list || '')), any = false;
+    for (var i = 0; i < parts.length; i++) if (_wa_gap_tr_seconds(parts[i]) > 0) any = true;
+    return any;
+}
+
+function _wa_motion_read(nid, pseudo, kebab, resolved) {
     // A property the snapshot does not carry is not computed here, so nothing animates it.
     if (resolved === '') return resolved;
+    var rec = _wa_gap_tr[_wa_tr_key(nid, pseudo, kebab)];
     // The frame loop's scheduler drives opacity/transform/colours/height itself and writes
     // the live value into the snapshot: that value is not a style change.
-    var rec = _wa_gap_tr[nid + ':' + kebab];
-    if (_wa_motion_native_re.test(kebab) && _lumen_computed_is_animated(nid, kebab)) {
+    if (!pseudo && _wa_motion_native_re.test(kebab) && _lumen_computed_is_animated(nid, kebab)) {
         if (rec) {
             var run = rec.run;
             if (run && run._anim) {
                 // A transition the overlay started that the scheduler now drives: it is over
                 // when the style stops asking for it, otherwise the scheduler's events end it.
-                if (!run.done && !_wa_gap_tr_timing(nid, kebab)) _css_tr_cancel(run);
+                if (!run.done && !_wa_gap_tr_timing(nid, pseudo, kebab)) _css_tr_cancel(run);
                 else run._anim._ev = true;
             }
             rec.run = null;
@@ -5692,12 +5781,12 @@ function _wa_motion_read(nid, kebab, resolved) {
         }
         return resolved;
     }
-    var computed = kebab === 'transform' ? (_lumen_get_transform_list(nid) || resolved)
-                 : _wa_motion_used_re.test(kebab) ? (_lumen_get_computed_value(nid, kebab) || resolved) : resolved;
+    var computed = !pseudo && kebab === 'transform' ? (_lumen_get_transform_list(nid) || resolved)
+                 : !pseudo && _wa_motion_used_re.test(kebab) ? (_lumen_get_computed_value(nid, kebab) || resolved) : resolved;
     // The scheduler is done with it: the settled value is the new baseline, not a change.
     if (rec && rec.native) { rec.native = false; rec.seen = computed; }
     _wa_motion_nid = nid;
-    var v = _wa_gap_an_value(nid, kebab, computed, _wa_gap_tr_value(nid, kebab, computed));
+    var v = _wa_gap_an_value(nid, kebab, computed, _wa_gap_tr_value(nid, pseudo, kebab, computed), pseudo || null);
     _wa_motion_nid = null;
     // Nothing in flight: the resolved view (a used px, a `matrix()`) stands.
     return v === computed ? resolved : v;
@@ -6004,10 +6093,22 @@ function _wa_motion_tr_sync(target) {
     for (var kebab in props) {
         if (_wa_motion_eligible(kebab)) {
             var resolved = _lumen_computed_property(nid, kebab);
-            if (resolved !== '') _wa_motion_read(nid, kebab, resolved);
+            if (resolved !== '') _wa_motion_read(nid, null, kebab, resolved);
         }
         var a = _css_tr_by_key[nid + ':' + kebab];
-        if (a && !_css_relevant(a)) _css_tr_retire(nid, kebab);
+        if (a && !_css_relevant(a)) _css_tr_retire(nid, null, kebab);
+    }
+    // The pseudo-elements' own transitions, discovered by the same sweep.
+    var pseudos = _wa_motion_pseudo[nid] || {};
+    for (var pseudo in pseudos) {
+        for (var pk in pseudos[pseudo]) {
+            if (_wa_motion_eligible(pk)) {
+                var pv = _css_prop(nid, pseudo, pk);
+                if (pv !== '') _wa_motion_read(nid, pseudo, pk, pv);
+            }
+            var pa = _css_tr_by_key[_wa_tr_key(nid, pseudo, pk)];
+            if (pa && !_css_relevant(pa)) _css_tr_retire(nid, pseudo, pk);
+        }
     }
 }
 
@@ -7231,12 +7332,14 @@ function _wa_get_animations_for(target, options) {
     return out;
 }
 
-// The pseudo-elements of an element that can carry animations: `::before`/`::after`, and for
-// the root the `::view-transition` tree of the active transition — plus those of a finished one,
-// so the animations they carried are dropped on the next sync.
+// The pseudo-elements of an element that can carry animations: `::before`/`::after`, the list
+// item's `::marker` (CSS Lists L3 §3.1 — no snapshot entry unless the item generates a marker
+// box, so the extra read answers "" for every other element), and for the root the
+// `::view-transition` tree of the active transition — plus those of a finished one, so the
+// animations they carried are dropped on the next sync.
 var _wa_vt_seen = {};   // node index → { '::kind': true }
 function _wa_pseudo_targets(el) {
-    var list = ['::before', '::after'];
+    var list = ['::marker', '::before', '::after'];
     var nid = el && el.__nid__;
     if (nid != null && typeof _lumen_vt_pseudo_list === 'function') {
         var kinds = _lumen_vt_pseudo_list(nid);
@@ -7304,9 +7407,23 @@ function _wa_order_cmp(x, y) {
     return x.i - y.i;
 }
 
+// The element a CSS animation was created for — its place in `document.getAnimations()`'s order.
+// Not `effect.target`: a script may replace an animation's effect with one that targets another
+// element (Web Animations §5.2.3 sorts CSS animations by their owning element, and the WPT
+// `pseudo element with replaced target does not affect animation ordering` holds that order).
+function _wa_order_owner(a) {
+    if (a._css) return { el: _lumen_make_element(a._nid), pseudo: a._pseudo || null };
+    var e = _wa_eff(a);
+    return { el: (e && e.target) || null, pseudo: (e && e.pseudoElement) || null };
+}
+
 // document.getAnimations() — every relevant animation on this document, element after element
 // in tree order.
 function _wa_doc_get_animations() {
+    // One `getAnimations()` is one style change event: transitions it starts share a generation
+    // and sort by property name, a transition a later call starts goes after them (CSS Transitions
+    // L2 §2.2, WPT `getAnimations for CSS Transitions sort by transition generation`).
+    _css_gen++;
     // A style change nobody read since is a transition too (see `_wa_motion_tr_sync`).
     for (var nid in _wa_motion_by_nid) _wa_motion_tr_sync({ __nid__: +nid });
     _css_an_update_all();
@@ -7318,17 +7435,19 @@ function _wa_doc_get_animations() {
         return !(a._css && t && t.isConnected === false);
     });
     if (live.length > 1) {
-        live = live.map(function(a, i) { return { a: a, i: i }; }).sort(function(x, y) {
-            var ex = _wa_eff(x.a), ey = _wa_eff(y.a);
-            var tx = ex.target, ty = ey.target;
+        live = live.map(function(a, i) {
+            var own = _wa_order_owner(a);
+            return { a: a, i: i, el: own.el, pseudo: own.pseudo };
+        }).sort(function(x, y) {
+            var tx = x.el, ty = y.el;
             if (tx !== ty && tx && ty && tx.compareDocumentPosition) {
                 var pos = tx.compareDocumentPosition(ty);
                 if (pos & 4) return -1;      // ty follows tx
                 if (pos & 2) return 1;       // ty precedes tx
             }
             if (tx === ty) {
-                var pr = { '': 0, '::before': 1, '::after': 2 };
-                var px = pr[ex.pseudoElement || ''] || 0, py = pr[ey.pseudoElement || ''] || 0;
+                var pr = { '': 0, '::marker': 1, '::before': 2, '::after': 3 };
+                var px = pr[x.pseudo || ''] || 0, py = pr[y.pseudo || ''] || 0;
                 if (px !== py) return px - py;
                 return _wa_order_cmp(x, y);
             }
@@ -8081,14 +8200,15 @@ function _css_an_update_now(nid, pseudo) {
 }
 
 // A transition the overlay (or a `transitionrun` event) just started; `run` is its clock record
-// and what the overlay reads its progress from.
-function _css_tr_start(nid, kebab, camel, run) {
+// and what the overlay reads its progress from. `pseudo` — the pseudo-element the transition
+// runs on, `null` for the element itself.
+function _css_tr_start(nid, pseudo, kebab, camel, run) {
     run.pausedAt = null;
     run.pending = null;
     run.pend0 = true;
     run.readyRes = run.readyRej = null;
     run.raf = 0;
-    var a = _css_new(CSSTransition.prototype, nid, null, run);
+    var a = _css_new(CSSTransition.prototype, nid, pseudo, run);
     run._anim = a;
     a._ctype = 't';
     a._cprop = kebab;
@@ -8103,7 +8223,7 @@ function _css_tr_start(nid, kebab, camel, run) {
     k0[camel] = run.from;
     k1[camel] = run.to;
     a._eff._keyframes = [k0, k1];
-    _css_tr_by_key[nid + ':' + kebab] = a;
+    _css_tr_by_key[_wa_tr_key(nid, pseudo, kebab)] = a;
     return a;
 }
 
@@ -8117,19 +8237,19 @@ function _css_tr_cancel(run) {
 // once more: its record goes back under the overlay (unless the style has moved on since).
 function _css_tr_restore(a) {
     if (a._ctype !== 't' || a._cx) return;
-    var rec = _wa_gap_tr[a._nid + ':' + a._cprop], run = a._c;
+    var key = _wa_tr_key(a._nid, a._pseudo, a._cprop), rec = _wa_gap_tr[key], run = a._c;
     if (!rec || rec.run || rec.finishedRun !== run) return;
     if (_css_ct_real(a) >= _css_end(a)) return;
     run.done = false;
     rec.run = run;
     rec.finishedRun = null;
-    _css_tr_by_key[a._nid + ':' + a._cprop] = a;
+    _css_tr_by_key[key] = a;
 }
 
 // The transition is over (finished or cancelled): it leaves the element's list. The object
 // stays usable — a seek or `play()` puts it back.
-function _css_tr_retire(nid, kebab) {
-    var key = nid + ':' + kebab, a = _css_tr_by_key[key];
+function _css_tr_retire(nid, pseudo, kebab) {
+    var key = _wa_tr_key(nid, pseudo, kebab), a = _css_tr_by_key[key];
     if (!a) return;
     delete _css_tr_by_key[key];
     var i = _wa_animations.indexOf(a);
@@ -8141,10 +8261,10 @@ function _css_tr_retire(nid, kebab) {
 function _css_tr_from_event(nid, prop) {
     var key = nid + ':' + prop, a = _css_tr_by_key[key];
     if (a && !a._cx && _css_relevant(a)) return a;
-    var tm = _wa_gap_tr_timing(nid, prop);
+    var tm = _wa_gap_tr_timing(nid, null, prop);
     var run = { from: '', to: '', start: _css_now(), dur: tm ? tm.dur * 1000 : 0,
                 delay: tm ? tm.delay * 1000 : 0, easing: tm ? tm.easing : 'ease', done: false };
-    a = _css_tr_start(nid, prop, prop.replace(/-([a-z])/g, function(m, c) { return c.toUpperCase(); }), run);
+    a = _css_tr_start(nid, null, prop, prop.replace(/-([a-z])/g, function(m, c) { return c.toUpperCase(); }), run);
     a._ev = true;
     return a;
 }
@@ -8186,7 +8306,7 @@ function _css_an_update_all() {
     // (owners of a finished transition too: their pseudo-element animations are dropped here)
     for (var seenNid in _wa_vt_seen) if (vtOwners.indexOf(+seenNid) < 0) vtOwners.push(+seenNid);
     for (var o = 0; o < vtOwners.length; o++) {
-        var vtp = _wa_pseudo_targets({ __nid__: vtOwners[o] }).slice(2);
+        var vtp = _wa_pseudo_targets({ __nid__: vtOwners[o] }).filter(_css_vt_pseudo);
         for (var v = 0; v < vtp.length; v++) _css_an_update(vtOwners[o], vtp[v]);
     }
     if (typeof _lumen_has_keyframes === 'function' && !_lumen_has_keyframes()) return;
@@ -8195,8 +8315,8 @@ function _css_an_update_all() {
         var nid = els[n].__nid__;
         if (nid == null) continue;
         _css_an_update(nid, null);
-        _css_an_update(nid, '::before');
-        _css_an_update(nid, '::after');
+        var ps = _wa_pseudo_targets(els[n]);
+        for (var q = 0; q < ps.length; q++) _css_an_update(nid, ps[q]);
     }
 }
 

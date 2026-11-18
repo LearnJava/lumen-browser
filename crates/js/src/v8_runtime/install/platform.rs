@@ -1751,10 +1751,19 @@ pub(crate) fn install_computed_styles(
             let pairs: Vec<(String, String)> = pcs
                 .lock()
                 .unwrap()
-                .get(&(nid, kind))
+                .get(&(nid, kind.clone()))
                 .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
                 .unwrap_or_default();
-            _style_entries_to_json(pairs)
+            if !pairs.is_empty() {
+                return _style_entries_to_json(pairs);
+            }
+            // `::before`/`::after` whose `content` draws nothing have no box and so no snapshot
+            // entry; the same on-demand cascade as the per-property native above — a transition
+            // or animation on such a pseudo-element still has a computed style.
+            let on_demand: Vec<(String, String)> = generated_pseudo_style(&flush, nid, &kind)
+                .map(|m| m.into_iter().collect())
+                .unwrap_or_default();
+            _style_entries_to_json(on_demand)
         });
     }
     // Resolved value of the custom property `prop` (`--`-prefixed) on node
