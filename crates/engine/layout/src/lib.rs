@@ -1089,6 +1089,31 @@ pub fn collect_computed_styles(
     out
 }
 
+/// CSSANIM-MODEL-3: the nodes whose computed style names a transition (any non-zero
+/// `transition-duration`), in tree order — the candidates a document «style change event»
+/// compares against. Reads `ComputedStyle` fields only, so unlike a walk over the published
+/// [`StyleMap`]s it serialises no entry.
+///
+/// A transition belongs to `transition-property`, not to the properties the page happened to
+/// read (CSS Transitions L1 §3), so the transitions overlay must know which elements ask for
+/// one even when nobody read their style. Inline elements own no box and are not listed; their
+/// style is reachable through the block that flattens them.
+pub fn collect_transition_candidates(root: &LayoutBox) -> Vec<u32> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = vec![root];
+    while let Some(b) = stack.pop() {
+        if b.style.transition_durations.iter().any(|d| *d > 0.0) {
+            let idx = b.node.index() as u32;
+            if seen.insert(idx) {
+                out.push(idx);
+            }
+        }
+        stack.extend(b.children.iter().rev());
+    }
+    out
+}
+
 /// BUG-1191: publishes the cascaded style of node `idx` — an element with no box
 /// (empty inline, `display: none` / `content-visibility: hidden` descendant) —
 /// from `counters`, marked ([`resolved_geometry::BOXLESS_KEY`]) so «rendered»

@@ -519,6 +519,33 @@ fn a_property_nobody_read_transitions_from_the_first_observed_style() {
     }
 }
 
+/// CSSANIM-MODEL-3 срез 2: a transition the page never read. Its before-change style lives in
+/// the published snapshot only until the next recompute replaces it, so `document.getAnimations()`
+/// seeds the model from the entries the flush kept for the nodes whose style names a transition
+/// (`_lumen_style_change_candidates`). Without that the child's `left` change in WPT
+/// `css-transitions/Document-getAnimations` («CSS Transitions targetting (pseudo-)elements …»)
+/// never becomes a transition, even though its `transition-property` asks for one.
+#[test]
+fn a_transition_on_an_element_nobody_read_starts_at_a_document_style_change_event() {
+    let rt = super::v8_bug935_s55_content_journal::runtime(
+        super::v8_bug935_s55_content_journal::page(),
+    );
+    let script = "(function() {
+        var parent = document.createElement('div');
+        var child = document.createElement('div');
+        parent.appendChild(child);
+        document.body.appendChild(parent);
+        child.style.left = '0px';
+        child.style.transition = 'left 100s';
+        getComputedStyle(parent).left;
+        child.style.left = '100px';
+        var a = document.getAnimations();
+        return [a.length, a.length ? a[0].transitionProperty : '',
+                a.length ? String(a[0].effect.target === child) : ''].join(' ');
+    })()";
+    assert_eq!(eval_str(&rt, script), "1 left true");
+}
+
 /// CSSANIM-MODEL-3: `::marker` is one of the pseudo-elements the animation model looks at, and
 /// it sorts before `::before`/`::after` (CSS Pseudo-Elements L4; WPT `Document-getAnimations`
 /// «(::marker)» subtests). `document.getAnimations()` ranks a pseudo-element by the animation's

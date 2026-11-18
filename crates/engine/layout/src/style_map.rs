@@ -128,6 +128,24 @@ impl StyleMap {
         self.get(key).is_some()
     }
 
+    /// Can this entry and `other` publish a different value for any property? False when both
+    /// stand on the same cascaded style object and carry the same used geometry — CSSANIM-MODEL-3
+    /// skips such a node when it diffs two style snapshots (most nodes of a flush are unchanged).
+    pub fn same_style(&self, other: &Self) -> bool {
+        let same_base = Arc::ptr_eq(&self.base, &other.base)
+            || matches!(
+                (&self.base.style, &other.base.style),
+                (Some(a), Some(b)) if Arc::ptr_eq(a, b)
+            );
+        same_base
+            && self.over.len() == other.over.len()
+            && self
+                .over
+                .iter()
+                .zip(&other.over)
+                .all(|(a, b)| a.key == b.key && a.used == b.used && a.value == b.value)
+    }
+
     /// Sets `key`, returning the value it had.
     pub fn insert(&mut self, key: impl Into<Cow<'static, str>>, value: String) -> Option<String> {
         let key = key.into();
