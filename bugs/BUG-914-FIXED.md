@@ -1,6 +1,6 @@
 # BUG-914 — IndexedDB: события `error`/`abort` не всплывают с запроса на транзакцию и на соединение
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-11-18 (P1, срез IDB-EVENTS-S1)
 **Заведён:** 2026-08-25 (P1, чтением кода в ходе [BUG-841](BUG-841-FIXED.md))
 **Область:** `crates/js/src/dom.rs` — `_idb_dispatch_request` (стреляет `error`
 только по самому `IDBRequest`), `_idb_fire_txn` (стреляет `complete`/`abort`
@@ -49,4 +49,4 @@ triggered») перечисляют `transaction.error` и `db.error` явно.
 
 ## Дополнение WPT-IDB-SCOUT (2026-10-26)
 
-Проба p8 разведки: `db.onerror`/`tx.onerror` — 0 вызовов, подтверждено. Вторая находка в том же диспетчере: `_idb_flush_txn` рассылает запросы и коммитит транзакцию одним синхронным проходом, поэтому `await`/`.then()` после события `success` видят уже завершённую транзакцию (`TransactionInactiveError`, `complete` приходит раньше микротаска) — нужен microtask checkpoint между событием и деактивацией. Прячется за [BUG-1706](BUG-1706-OPEN.md) (живой массив слушателей). Чинить вместе: задача `IDB-EVENTS` (`ROADMAP.md`). Кластеры и пробы — `docs/wpt-vendor-notes/IndexedDB.md`.
+Проба p8 разведки: `db.onerror`/`tx.onerror` — 0 вызовов, подтверждено. Вторая находка в том же диспетчере: `_idb_flush_txn` рассылает запросы и коммитит транзакцию одним синхронным проходом, поэтому `await`/`.then()` после события `success` видят уже завершённую транзакцию (`TransactionInactiveError`, `complete` приходит раньше микротаска) — нужен microtask checkpoint между событием и деактивацией. Прячется за [BUG-1706](BUG-1706-FIXED.md) (живой массив слушателей). Чинить вместе: задача `IDB-EVENTS` (`ROADMAP.md`). Кластеры и пробы — `docs/wpt-vendor-notes/IndexedDB.md`.
