@@ -5395,9 +5395,12 @@ function _wa_gap_tr_value(nid, kebab, base) {
                              delay: timing.delay * 1000, easing: timing.easing } : null;
         _css_tr_cancel(prevRun);
         if (rec.run) _css_tr_start(nid, kebab, camel, rec.run);
-    } else if (rec.run && !rec.run.done && !_wa_gap_tr_timing(nid, kebab)) {
+    } else if (rec.run && !rec.run.done && (boxlessNow() || !_wa_gap_tr_timing(nid, kebab))) {
         // `transition-property` no longer names the property, or the combined duration is not
-        // positive: the running transition is cancelled.
+        // positive: the running transition is cancelled. Same for an element that stopped
+        // generating a box (`display: none` on it or an ancestor): it runs no animation
+        // (CSS Animations L1 §3), so the settled value is what the read answers — the end value
+        // does not change, so only this branch sees the box go away.
         _css_tr_cancel(rec.run);
         rec.run = null;
     }

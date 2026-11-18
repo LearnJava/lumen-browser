@@ -327,6 +327,30 @@ fn a_transition_is_cancelled_when_the_style_no_longer_asks_for_it() {
     assert_eq!(eval_str(&rt, &script), "running idle 0");
 }
 
+/// CSSANIM-MODEL-2-S6: an element that stops generating a box (`display: none` on it or on an
+/// ancestor) runs no transition (`CSSAnimation-canceling`/`CSSTransition-canceling`
+/// «Setting display:none …»). The settled value does not change when the box goes away, so only
+/// this branch of `_wa_gap_tr_value` can notice: the run is cancelled, the read answers the
+/// settled value and the object leaves the list.
+#[test]
+fn a_transition_is_cancelled_when_the_element_stops_generating_a_box() {
+    let rt = rt();
+    let script = format!(
+        "{PRELUDE}
+        __vals['transition-property'] = 'all'; __vals['transition-duration'] = '10s';
+        __vals['transition-delay'] = '0s'; __vals['transition-timing-function'] = 'linear';
+        __vals['margin-left'] = '10px'; _wa_gap_tr_clock_ms = null; _wa_gap_tr_value(1, 'margin-left', '10px');
+        __vals['margin-left'] = '30px'; _wa_gap_tr_clock_ms = null; _wa_gap_tr_value(1, 'margin-left', '30px');
+        var t = __sync()[0], r = [t.playState];
+        __tick(1000);
+        r.push(_wa_gap_tr_value(1, 'margin-left', '30px'));
+        _css_boxless = function() {{ return true; }};
+        r.push(t.playState, _wa_gap_tr_value(1, 'margin-left', '30px'), __sync().length);
+        r.join(' ')"
+    );
+    assert_eq!(eval_str(&rt, &script), "running 12px idle 30px 0");
+}
+
 /// CSSANIM-MODEL-2-S1: a seek over a phase boundary fires the CSS event the scheduler would have
 /// fired, and the scheduler's own event for that animation is dropped (it never saw the seek).
 #[test]
