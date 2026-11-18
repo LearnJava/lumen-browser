@@ -399,7 +399,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `position: static/relative/absolute/fixed` | ✅ | |
-| `position: sticky` | 🟡 | parsed; раскладка смещений есть (`collect_sticky_boxes`), но в `getBoundingClientRect` и в CPU-растре (`--screenshot`, `cpu_raster.rs` — `BeginStickyLayer` не реализован) прилипания нет, `--dump-display-list` не выдаёт `BeginStickyLayer` (WPT-RUN-14 S21, 2026-10-08, [BUG-1468](bugs/BUG-1468-OPEN.md)); 87 id `css-position/sticky` |
+| `position: sticky` | 🟡 | parsed; прилипание в отрисовке (ordered-билдер `BeginStickyLayer`/запечённый offset, CPU-растр) и в геометрии скриптов (`getBoundingClientRect`/`offsetTop`) сделано ([BUG-1468](bugs/BUG-1468-FIXED.md) срезы 1–5, 2026-11-18); остаток — containing-block constraint ([BUG-1825](bugs/BUG-1825-OPEN.md)) и page-level sticky геометрия (прокрутка страницы, [BUG-1166](bugs/BUG-1166-OPEN.md)) |
 | `top` / `right` / `bottom` / `left` / `inset` | ✅ | |
 | `z-index` | ✅ | stacking context + stable z-sort (neg/0/pos), stacking.rs:159 (CSS Painting Order L3) |
 | `overlay` | ⬜ | не разбирается (WPT-RUN-14 S21, 2026-10-08): `CSS.supports('overlay','auto')` — `false`, `'overlay' in getComputedStyle(el)` — `false`. CSS Position 4 §overlay (`none \| auto`, дискретная анимация, `transition-behavior: allow-discrete` для top layer). WPT `css-position/overlay/*` — 11 id (`overlay-computed`, `overlay-invalid`, `overlay-transition-*`, `animation/overlay-interpolation` 88 сабтестов) |

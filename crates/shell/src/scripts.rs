@@ -1005,6 +1005,7 @@ pub(crate) fn run_scripts_with_dom(
                 if let Some(snap) = parse_time_layout {
                     rt.update_layout_rects(snap.rects);
                     rt.update_client_rects(snap.client_rects);
+                    rt.update_sticky_geoms(snap.sticky_geoms);
                     rt.update_hit_test_tree(snap.tree);
                     rt.update_style_maps(snap.styles);
                     rt.update_pseudo_computed_styles(snap.pseudo_styles);

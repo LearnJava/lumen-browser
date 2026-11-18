@@ -24,6 +24,9 @@ pub(crate) struct PrecollectedJsData {
     pub(crate) layout_shift_sources: Vec<LayoutShiftSource>,
     pub(crate) had_input: bool,
     pub(crate) client_rects: std::collections::HashMap<u32, Vec<[f32; 4]>>,
+    /// BUG-1468: static sticky geometry for the read-time stuck shift of
+    /// `getBoundingClientRect` (see [`lumen_layout::collect_sticky_geoms`]).
+    pub(crate) sticky_geoms: std::collections::HashMap<u32, lumen_layout::StickyGeom>,
     pub(crate) hit_test_tree: Arc<lumen_layout::LayoutBox>,
     /// BUG-935 S44: `None` when the matching `*_needed` flag gated this
     /// collector off THIS tick — the caller must then skip the matching
@@ -175,6 +178,7 @@ fn collect_js_tree_data(
     let lb_ref: &lumen_layout::LayoutBox = &hit_test_tree;
     let rects = step!("collect_layout_rects", collect_layout_rects(lb_ref, &doc_guard));
     let client_rects = step!("collect_client_rects", collect_client_rects(lb_ref, &doc_guard));
+    let sticky_geoms = step!("collect_sticky_geoms", collect_sticky_geoms(lb_ref));
     let styles = if computed_styles_needed {
         Some(step!("collect_computed_styles", collect_computed_styles(lb_ref, &doc_guard, None, viewport)))
     } else {
@@ -213,6 +217,7 @@ fn collect_js_tree_data(
         layout_shift_sources: shift.sources,
         had_input: shift.had_input,
         client_rects,
+        sticky_geoms,
         hit_test_tree,
         styles,
         pseudo_styles,

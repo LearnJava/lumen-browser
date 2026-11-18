@@ -10373,9 +10373,11 @@ var _LUMEN_WRAPPER_MEMBERS = {
                 return new DOMRect(vp[0] / 2 - r[2] / 2, Math.max(0, vp[1] / 2 - r[3] / 2), r[2], r[3]);
             }
             // Ancestor scroll containers (and the anchor's, for an anchor-positioned box) move the
-            // box away from the document position the native answers with (BUG-1166).
+            // box away from the document position the native answers with (BUG-1166); a stuck
+            // `position: sticky` box additionally clamps to its scrollport (BUG-1468).
             var sh = _lumen_get_scroll_shift(nid);
-            return new DOMRect(r[0] - sh[0], r[1] - sh[1], r[2], r[3]);
+            var st = _lumen_get_sticky_shift(nid);
+            return new DOMRect(r[0] - sh[0] + st[0], r[1] - sh[1] + st[1], r[2], r[3]);
         },
         // BUG-1007: one `DOMRect` per CSS fragment — a multi-line plain inline
         // element (`<span>`, `<em>`, …) answers with one rect per visual line
@@ -10389,7 +10391,8 @@ var _LUMEN_WRAPPER_MEMBERS = {
             var nid = this.__nid__;
             var rs = _lumen_get_client_rects(nid);
             var sh = _lumen_get_scroll_shift(nid);
-            return new DOMRectList(rs.map(function(r) { return new DOMRect(r[0] - sh[0], r[1] - sh[1], r[2], r[3]); }));
+            var st = _lumen_get_sticky_shift(nid);
+            return new DOMRectList(rs.map(function(r) { return new DOMRect(r[0] - sh[0] + st[0], r[1] - sh[1] + st[1], r[2], r[3]); }));
         },
         // CSSOM View §6 getBoxQuads() — same per-fragment source as
         // getClientRects (BUG-1007), one DOMQuad per line instead of one
@@ -10398,7 +10401,8 @@ var _LUMEN_WRAPPER_MEMBERS = {
             var nid = this.__nid__;
             var rs = _lumen_get_client_rects(nid);
             var sh = _lumen_get_scroll_shift(nid);
-            return rs.map(function(r) { return DOMQuad.fromRect(new DOMRect(r[0] - sh[0], r[1] - sh[1], r[2], r[3])); });
+            var st = _lumen_get_sticky_shift(nid);
+            return rs.map(function(r) { return DOMQuad.fromRect(new DOMRect(r[0] - sh[0] + st[0], r[1] - sh[1] + st[1], r[2], r[3])); });
         },
         // `src` used to live here as an own property on EVERY element (BUG-305).
         // It is now one row of the reflection table (BUG-383) installed on the
@@ -10415,13 +10419,17 @@ var _LUMEN_WRAPPER_MEMBERS = {
             if (_lumen_is_body(nid)) return 0;
             var r = _lumen_get_bounding_rect(nid); if (!r) return 0;
             // The scroll of the anchor's containers is part of an anchor-positioned box's layout
-            // offset (CSS Anchor Positioning L1 §4.3); scrolling of ancestors is not.
-            return r[0] - _lumen_get_scroll_shift(nid)[2] - _lumen_offset_origin(nid)[0];
+            // offset (CSS Anchor Positioning L1 §4.3); scrolling of ancestors is not. A stuck
+            // sticky box also adds its clamp (BUG-1468) — offsetTop/offsetLeft are the border
+            // edge relative to the offsetParent, so the stuck shift counts, unlike ancestor scroll.
+            var st = _lumen_get_sticky_shift(nid);
+            return r[0] + st[0] - _lumen_get_scroll_shift(nid)[2] - _lumen_offset_origin(nid)[0];
         },
         get offsetTop()    { var nid = this.__nid__;
             if (_lumen_is_body(nid)) return 0;
             var r = _lumen_get_bounding_rect(nid); if (!r) return 0;
-            return r[1] - _lumen_get_scroll_shift(nid)[3] - _lumen_offset_origin(nid)[1];
+            var st = _lumen_get_sticky_shift(nid);
+            return r[1] + st[1] - _lumen_get_scroll_shift(nid)[3] - _lumen_offset_origin(nid)[1];
         },
         // BUG-482: the element itself, not just the origin it measures from —
         // same `_lumen_offset_parent_nid` walk BUG-476 built for offsetLeft/Top.

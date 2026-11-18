@@ -388,6 +388,7 @@ impl Lumen {
                             layout_shift_sources,
                             had_input,
                             client_rects,
+                            sticky_geoms,
                             hit_test_tree,
                             styles,
                             pseudo_styles,
@@ -400,6 +401,7 @@ impl Lumen {
                         };
                         timed_step!("update_layout_rects", js.update_layout_rects(rects));
                         timed_step!("update_client_rects", js.update_client_rects(client_rects));
+                        timed_step!("update_sticky_geoms", js.update_sticky_geoms(sticky_geoms));
                         timed_step!("update_hit_test_tree", js.update_hit_test_tree(hit_test_tree));
                         // BUG-935 S44: `None` means the collector was gated
                         // off this tick — skip the push entirely rather than
@@ -448,6 +450,7 @@ impl Lumen {
                     layout_shift_sources,
                     had_input,
                     client_rects,
+                    sticky_geoms,
                     hit_test_tree,
                     styles,
                     pseudo_styles,
@@ -459,6 +462,7 @@ impl Lumen {
                     lazy_reqs = apply_step!("js_push_blocking", route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                         js.update_layout_rects(rects);
                         js.update_client_rects(client_rects);
+                        js.update_sticky_geoms(sticky_geoms);
                         js.update_hit_test_tree(hit_test_tree);
                         // BUG-935 S44: see the sibling `defer_js_push` branch
                         // above — skip rather than overwrite with an empty map.

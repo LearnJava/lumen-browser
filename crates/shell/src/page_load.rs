@@ -721,6 +721,7 @@ impl Lumen {
                     // `collect_layout_shift_rects`'s doc-comment.
                     self.prev_layout_shift_rects = lumen_layout::collect_layout_shift_rects(lb_ref);
                     let client_rects = collect_client_rects(lb_ref, &doc_guard);
+                    let sticky_geoms = collect_sticky_geoms(lb_ref);
                     let hit_test_tree = Arc::new(lb_ref.clone());
                     let styles = collect_computed_styles(lb_ref, &doc_guard, None, viewport);
                     let pseudo_styles = collect_pseudo_computed_styles(lb_ref);
@@ -735,6 +736,7 @@ impl Lumen {
                     route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                         js.update_layout_rects(rects);
                         js.update_client_rects(client_rects);
+                        js.update_sticky_geoms(sticky_geoms);
                         js.update_hit_test_tree(hit_test_tree);
                         js.update_computed_styles(styles);
                         js.update_pseudo_computed_styles(pseudo_styles);
@@ -2025,6 +2027,7 @@ impl Lumen {
             // baseline silently scores every subsequent shift as zero.
             self.prev_layout_shift_rects = shift_rects;
             let client_rects = collect_client_rects(lb_ref, &doc_guard);
+            let sticky_geoms = collect_sticky_geoms(lb_ref);
             let hit_test_tree = Arc::new(lb_ref.clone());
             let styles = collect_computed_styles(lb_ref, &doc_guard, None, viewport);
             let pseudo_styles = collect_pseudo_computed_styles(lb_ref);
@@ -2042,6 +2045,7 @@ impl Lumen {
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                 js.update_layout_rects(rects);
                 js.update_client_rects(client_rects);
+                js.update_sticky_geoms(sticky_geoms);
                 js.update_hit_test_tree(hit_test_tree);
                 js.update_computed_styles(styles);
                 js.update_pseudo_computed_styles(pseudo_styles);
@@ -2315,6 +2319,7 @@ impl Lumen {
             type LazyImageGeom = (
                 HashMap<u32, [f32; 4]>,
                 HashMap<u32, Vec<[f32; 4]>>,
+                HashMap<u32, lumen_layout::StickyGeom>,
                 Arc<lumen_layout::LayoutBox>,
                 f32,
                 f32,
@@ -2334,6 +2339,7 @@ impl Lumen {
                             (
                                 collect_layout_rects(lb_ref, &doc_guard),
                                 collect_client_rects(lb_ref, &doc_guard),
+                                collect_sticky_geoms(lb_ref),
                                 Arc::new(lb_ref.clone()),
                                 viewport.width,
                                 viewport.height,
@@ -2359,9 +2365,10 @@ impl Lumen {
                 let pairs: Vec<(u32, &str)> =
                     owned_pairs.iter().map(|(n, u)| (*n, u.as_str())).collect();
                 js.register_lazy_images(&pairs);
-                if let Some((rects, client_rects, hit_test_tree, vw, vh)) = geom {
+                if let Some((rects, client_rects, sticky_geoms, hit_test_tree, vw, vh)) = geom {
                     js.update_layout_rects(rects);
                     js.update_client_rects(client_rects);
+                    js.update_sticky_geoms(sticky_geoms);
                     js.update_hit_test_tree(hit_test_tree);
                     js.update_viewport_size(vw, vh);
                     js.deliver_layout_observers();

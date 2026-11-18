@@ -251,6 +251,13 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// element) instead of [`Self::update_layout_rects`]'s single union rect.
     #[allow(dead_code)] // called only from #[cfg(feature = "v8")] blocks
     fn update_client_rects(&self, rects: HashMap<u32, Vec<[f32; 4]>>);
+    /// Push a fresh snapshot of static sticky geometry (BUG-1468) — the stuck
+    /// shift of `getBoundingClientRect` for a `position: sticky` box inside a
+    /// scroll container. Called alongside [`Self::update_layout_rects`]; the
+    /// scroll offsets are read live from the scroll-state cache, so this map is
+    /// scroll-independent.
+    #[allow(dead_code)] // called only from #[cfg(feature = "v8")] blocks
+    fn update_sticky_geoms(&self, geoms: HashMap<u32, lumen_layout::StickyGeom>);
     /// Push a fresh `LayoutBox` tree snapshot for `document.elementFromPoint`/
     /// `elementsFromPoint` (BUG-464/BUG-477).
     ///
@@ -1262,6 +1269,9 @@ impl PersistentJs for V8PersistentJs {
     }
     fn update_client_rects(&self, rects: HashMap<u32, Vec<[f32; 4]>>) {
         self.rt.update_client_rects(rects);
+    }
+    fn update_sticky_geoms(&self, geoms: HashMap<u32, lumen_layout::StickyGeom>) {
+        self.rt.update_sticky_geoms(geoms);
     }
     fn update_hit_test_tree(&self, tree: Arc<lumen_layout::LayoutBox>) {
         self.rt.update_hit_test_tree(tree);

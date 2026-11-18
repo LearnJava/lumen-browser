@@ -80,6 +80,9 @@ pub(crate) struct FlushHandles {
     /// so a same-tick `getClientRects()` after a DOM/style mutation never
     /// disagrees with `getBoundingClientRect()` over the same flush.
     pub(crate) client_rects: Arc<Mutex<HashMap<u32, Vec<[f32; 4]>>>>,
+    /// BUG-1468: static sticky geometry, refreshed alongside `layout_rects` so a
+    /// same-tick `getBoundingClientRect()` of a sticky box sees its stuck shift.
+    pub(crate) sticky_geoms: Arc<Mutex<HashMap<u32, lumen_layout::StickyGeom>>>,
     pub(crate) computed_styles: Arc<Mutex<HashMap<u32, lumen_layout::StyleMap>>>,
     /// CSSOM-6 (BUG-490): sibling of `computed_styles` for pseudo-elements,
     /// keyed by `(node, pseudo name)` — see `V8JsRuntime::pseudo_computed_styles`.
@@ -878,6 +881,11 @@ impl FlushHandles {
             }
         }
         *self.anchor_scrollers.lock().unwrap_or_else(|e| e.into_inner()) = counters.anchor_scrollers().clone();
+        // BUG-1468: sticky geometry is cheap and rare — a full walk on both the scoped and
+        // full paths (no DOM lock, no measurement), so a sticky box's stuck shift is fresh
+        // after any flush, incremental or not.
+        *self.sticky_geoms.lock().unwrap_or_else(|e| e.into_inner()) =
+            lumen_layout::collect_sticky_geoms(&layout_root);
         let collect_ms = collect_t0.elapsed().as_secs_f64() * 1000.0;
         drop(collect_scope);
         if incr_scope.is_some() {
