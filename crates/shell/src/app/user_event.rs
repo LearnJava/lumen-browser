@@ -220,6 +220,34 @@ impl Lumen {
                             && lumen_core::FontStyle::parse_keyword(&face.style) == Some(style)
                     });
                 }
+                self.web_fonts.push(LoadedWebFont {
+                    family: family.clone(), weight, style, unicode_range, ascent_override, descent_override,
+                    size_adjust, line_gap_override, bytes,
+                });
+                // BUG-1306: push the now-loaded face into the JS runtime so a
+                // same-tick geometry read after `document.fonts.ready` flushes
+                // with the real metrics (not bundled Inter). Route it BEFORE
+                // `_lumen_notify_css_font_loaded` so the notify's `ready`
+                // resolution and the synchronous read it triggers see the face
+                // (both are engine-thread tasks in FIFO order).
+                let js_web_fonts: Vec<lumen_paint::WebFontFace> = self
+                    .web_fonts
+                    .iter()
+                    .map(|wf| lumen_paint::WebFontFace {
+                        family: wf.family.clone(),
+                        unicode_range: wf.unicode_range.clone(),
+                        ascent_override: wf.ascent_override,
+                        descent_override: wf.descent_override,
+                        size_adjust: wf.size_adjust,
+                        line_gap_override: wf.line_gap_override,
+                        bytes: wf.bytes.clone(),
+                    })
+                    .collect();
+                route_task_js(
+                    self.engine_thread.as_ref(),
+                    self.js_ctx.as_ref(),
+                    move |js| js.update_web_fonts(js_web_fonts),
+                );
                 route_eval_js(
                     self.engine_thread.as_ref(),
                     self.js_ctx.as_ref(),
@@ -228,10 +256,6 @@ impl Lumen {
                         escape_js_string(&family)
                     ),
                 );
-                self.web_fonts.push(LoadedWebFont {
-                    family, weight, style, unicode_range, ascent_override, descent_override,
-                    size_adjust, line_gap_override, bytes,
-                });
                 // Relayout with the now-registered web font (FOUT → FOIT swap).
                 // ADR-016 M2.2b-8: the swap is a whole-page restyle (font metrics
                 // change) with no synchronous geometry read of its own — the same

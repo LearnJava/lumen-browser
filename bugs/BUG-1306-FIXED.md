@@ -1,8 +1,10 @@
 # BUG-1306 — JS-геометрия (`offsetWidth`, `getBoundingClientRect`) читается из устаревшего снимка: после загрузки `@font-face` и после мутации DOM до следующего кадра отдаёт оценку шрифта
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-11-18
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 7, `css/css-grid`)
 **Область:** shell/js (`crates/shell/src/page_pipeline.rs::collect_js_layout_snapshot` — снимок геометрии для `_lumen_get_bounding_rect`; связано с [BUG-1273](BUG-1273-FIXED.md) — тот же дефект для `--screenshot`; архитектурный корень — путь relayout/rAF, ADR-016, BUG-935/BUG-286 в `BUGS.md`)
+
+**Исправление (P3, 2026-11-18):** JS-флаш `FlushHandles::maybe_flush` меряет текст `MultiFontMeasurer`-ом из pushed web-шрифтов страницы, а не голым Inter. `lumen_paint::WebFontFace` + `MultiFontMeasurer::register_web_font`; `V8JsRuntime::update_web_fonts` пушит список в JS-рантайм и ставит `flush_stale`. Shell в `LoadEvent::FontLoaded` (`user_event.rs`) пушит загруженные `@font-face` в JS-рантайм через `route_task_js` ДО `_lumen_notify_css_font_loaded` (обе — FIFO-задачи движкового потока), поэтому `document.fonts.ready.then(checkLayout)` читает уже настоящие Ahem-метрики, а не оценку Inter. Регресс-тест `offset_width_uses_pushed_web_font_metrics` (Ahem 25px «XX» = 50px). Полный WPT-корпус `css/css-grid` не перепрогонялся — подтверждение счёта сабтестов отдельным прогоном.
 
 ## Симптом
 

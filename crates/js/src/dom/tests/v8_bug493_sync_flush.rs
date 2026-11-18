@@ -105,3 +105,37 @@ fn get_computed_style_resolves_geometry_but_typed_om_keeps_computed() {
         lumen_core::JsValue::String("705.6px|78.4px|auto|10%|true|false|".to_string())
     );
 }
+
+/// BUG-1306: after the shell pushes a loaded `@font-face` via
+/// [`V8JsRuntime::update_web_fonts`], a geometry read must flush with that
+/// face's metrics, not the bundled Inter fallback. Ahem's glyphs are all 1em
+/// wide, so "XX" at 25px measures exactly 50px — Inter's "X" (~0.68em) would
+/// give ~34px, a clear regression signal.
+#[test]
+fn offset_width_uses_pushed_web_font_metrics() {
+    let rt = v8_runtime_with_flush(make_doc());
+    rt.update_web_fonts(vec![lumen_paint::WebFontFace {
+        family: "Ahem".to_string(),
+        unicode_range: Vec::new(),
+        ascent_override: None,
+        descent_override: None,
+        size_adjust: None,
+        line_gap_override: None,
+        bytes: AHEM_TTF.to_vec(),
+    }]);
+    let r = rt
+        .eval(
+            "(function() {
+                var span = document.querySelector('span');
+                span.style.fontFamily = 'Ahem';
+                span.style.fontSize = '25px';
+                span.textContent = 'XX';
+                return span.offsetWidth;
+            })()",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Number(50.0));
+}
+
+/// Standard WPT Ahem: every glyph is a 1em square (see `tests/wpt/fonts/Ahem.ttf`).
+const AHEM_TTF: &[u8] = include_bytes!("../../../../../assets/fonts/Ahem.ttf");
