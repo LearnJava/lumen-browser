@@ -3603,7 +3603,17 @@ pub struct HttpClient {
     /// behavior. Set once via [`Self::with_document_context`] by the caller
     /// that owns the document (`crates/shell/src/page_pipeline.rs`), the same
     /// provenance as `connect_src_policy` above.
-    document_context: Option<(Url, ReferrerPolicy)>,
+    ///
+    /// BUG-1817: the URL lives in a shared `Mutex` cell so a same-document
+    /// rewrite (`history.replaceState`/`pushState`) can retarget it in place —
+    /// `Referer`/`Origin`/`Sec-Fetch-*` then follow the current `location.href`,
+    /// not the load-time snapshot. Read through [`Self::document_url`].
+    document_context: Option<(Arc<std::sync::Mutex<String>>, ReferrerPolicy)>,
+    /// BUG-1146: ASCII host of the document (EasyList `$domain=`), snapshotted at
+    /// construction. Kept apart from `document_context` because the host is
+    /// same-origin-constant (a `replaceState` cannot change it) and a `&str`
+    /// borrow from a locked guard cannot outlive the guard.
+    document_host: Option<String>,
     /// BUG-1116: the shell's process-global preload/prefetch cache, consulted
     /// only by [`Self::fetch_preload_cached`] (the `<link rel=preload|
     /// modulepreload|prefetch>` hint's own fetch) — never by the general
@@ -3661,6 +3671,7 @@ impl HttpClient {
             element_src_policy: None,
             sync_xhr_policy: (None, None),
             document_context: None,
+            document_host: None,
             navigation_referrer: None,
             subresource_cache: None,
         }
@@ -3674,6 +3685,30 @@ impl HttpClient {
     /// [`Self::fetch_request_impl`] reads this.
     #[must_use]
     pub fn with_document_context(mut self, referrer_url: Url, policy: ReferrerPolicy) -> Self {
+        self.document_host = Some(referrer_url.host_ascii_normalized().to_owned())
+            .filter(|h| !h.is_empty());
+        self.document_context = Some((
+            Arc::new(std::sync::Mutex::new(referrer_url.as_str().to_owned())),
+            policy,
+        ));
+        self
+    }
+
+    /// BUG-1817: like [`Self::with_document_context`], but the document URL is a
+    /// shared cell the shell retargets on `history.replaceState`/`pushState` so
+    /// later `fetch()`/subresource requests send the current URL as `Referer`.
+    #[must_use]
+    pub fn with_document_context_cell(
+        mut self,
+        referrer_url: Arc<std::sync::Mutex<String>>,
+        policy: ReferrerPolicy,
+    ) -> Self {
+        self.document_host = referrer_url
+            .lock()
+            .ok()
+            .and_then(|g| Url::parse(&g).ok())
+            .map(|u| u.host_ascii_normalized().to_owned())
+            .filter(|h| !h.is_empty());
         self.document_context = Some((referrer_url, policy));
         self
     }
@@ -3727,10 +3762,16 @@ impl HttpClient {
     /// ASCII host of the [`Self::with_document_context`] document — the page
     /// EasyList `$domain=` rules are checked against (BUG-1146).
     fn document_host(&self) -> Option<&str> {
-        self.document_context
-            .as_ref()
-            .map(|(doc_url, _)| doc_url.host_ascii_normalized())
-            .filter(|h| !h.is_empty())
+        self.document_host.as_deref()
+    }
+
+    /// BUG-1817: the live document URL parsed from the shared cell — the
+    /// referrer/`Origin`/`Sec-Fetch-*` source that follows `history.replaceState`/
+    /// `pushState`. `None` when the cell is absent or the URL no longer parses.
+    pub(crate) fn document_url(&self) -> Option<Url> {
+        let (cell, _) = self.document_context.as_ref()?;
+        let guard = cell.lock().ok()?;
+        Url::parse(&guard).ok()
     }
 
     /// Attach the document's CSP `connect-src` (or `default-src`) gate —
@@ -4599,11 +4640,14 @@ impl HttpClient {
         // `fetch_request_impl` there is no *method*-driven `Origin` to append
         // (Fetch §"append a request's Origin header" only triggers for
         // non-GET/HEAD); a `cors`-mode request adds its own below (BUG-1021).
+        let document_url = self.document_url();
         let referer_header = self
             .document_context
             .as_ref()
-            .and_then(|(referrer_url, policy)| {
-                referrer_policy::compute_referrer(*policy, referrer_url, url)
+            .and_then(|(_, policy)| {
+                document_url
+                    .as_ref()
+                    .and_then(|referrer_url| referrer_policy::compute_referrer(*policy, referrer_url, url))
             })
             .map(|referer| format!("Referer: {referer}\r\n"))
             .unwrap_or_default();
@@ -4614,7 +4658,7 @@ impl HttpClient {
         // `Referer`, so the conditional-GET branch below gets it too.
         let mode_headers = fetch_metadata::subresource_request_headers(
             self.fingerprint_profile,
-            self.document_context.as_ref().map(|(doc_url, _)| doc_url),
+            document_url.as_ref(),
             url,
             destination,
             fetch_metadata::RequestMode::for_destination(destination),
@@ -10744,6 +10788,52 @@ world\r\n\
 
         let req = captured.lock().unwrap()[0].clone();
         assert!(req.contains("Referer: http://127.0.0.1:1\r\n"), "{req}");
+    }
+
+    /// BUG-1817: a same-document rewrite (`history.replaceState`/`pushState`)
+    /// retargets the shared cell, so a later `fetch()` sends the *current* URL
+    /// as `Referer`, not the load-time snapshot.
+    #[test]
+    fn js_fetch_referer_follows_retargeted_document_url_cell() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_server_capturing_bodies(2, captured.clone(), |_| {
+            close_response("HTTP/1.1 200 OK", "", "{}")
+        });
+        let cell = Arc::new(Mutex::new(format!("http://127.0.0.1:{port}/page.html")));
+        let client = HttpClient::new().with_document_context_cell(
+            Arc::clone(&cell),
+            referrer_policy::ReferrerPolicy::default_policy(),
+        );
+        let request = |client: &HttpClient| {
+            client
+                .fetch_request(&JsFetchRequest {
+                    url: &format!("http://127.0.0.1:{port}/api"),
+                    method: "GET",
+                    headers: &[],
+                    body: None,
+                    mode: "",
+                    destination: "",
+                    cache: "",
+                    token: None,
+                })
+                .expect("GET must succeed");
+        };
+        request(&client);
+        *cell.lock().unwrap() = format!("http://127.0.0.1:{port}/AAAA");
+        request(&client);
+        server.join().unwrap();
+
+        let reqs = captured.lock().unwrap();
+        assert!(
+            reqs[0].contains(&format!("Referer: http://127.0.0.1:{port}/page.html\r\n")),
+            "{}",
+            reqs[0]
+        );
+        assert!(
+            reqs[1].contains(&format!("Referer: http://127.0.0.1:{port}/AAAA\r\n")),
+            "{}",
+            reqs[1]
+        );
     }
 
     /// GAP-REFERRER срез 2: `fetch_subresource` (the `<img>`/`<script

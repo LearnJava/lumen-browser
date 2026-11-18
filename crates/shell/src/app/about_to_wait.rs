@@ -788,12 +788,20 @@ impl Lumen {
                     // BUG-1780: строго ПОСЛЕ снимка в `push_same_document_entry` —
                     // запись back-стека хранит свой (предыдущий) URL источника.
                     self.source.retarget_url(&url);
+                    // BUG-1817: same-document URL — источник `Referer`; живая
+                    // ячейка базы должна следовать за ним.
+                    if let Some(env) = &self.frame_env {
+                        env.page_base.retarget_url(&url);
+                    }
                     pushed = true;
                 } else {
                     // replaceState: update URL + state, no nav_back push.
                     self.current_history_state_json = new_state_json;
                     self.display_url = Some(url.clone());
                     self.source.retarget_url(&url);
+                    if let Some(env) = &self.frame_env {
+                        env.page_base.retarget_url(&url);
+                    }
                     replaced = true;
                 }
             }
@@ -923,6 +931,9 @@ impl Lumen {
                                     // BUG-1780: same-document URL и здесь — URL документа;
                                     // для push строго после снимка записи (см. дренаж pushState).
                                     self.source.retarget_url(&new_url);
+                                    if let Some(env) = &self.frame_env {
+                                        env.page_base.retarget_url(&new_url);
+                                    }
                                     if let Some(t) = title {
                                         self.title = Some(t.clone());
                                         if let Some(w) = self.window.as_ref() {
