@@ -938,7 +938,7 @@ pub(in crate::box_tree) fn dispatch_box(
     // below. This one stays empty for every dispatch arm that still runs
     // inline (flex/grid resolve their own abs children directly; the rest
     // never had abs-positioned children to defer in the first place).
-    let abs_deferred: Vec<(usize, f32, f32)> = Vec::new();
+    let mut abs_deferred: Vec<(usize, f32, f32)> = Vec::new();
 
     match &mut b.kind {
         BoxKind::Block | BoxKind::FlowRoot | BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::Canvas { .. } | BoxKind::Audio { .. } | BoxKind::Iframe { .. } | BoxKind::FormControl { .. } => {
@@ -1383,6 +1383,20 @@ pub(in crate::box_tree) fn dispatch_box(
                     cur_x += space_w;
                     children.push(child);
                     metrics.push((0.0, 0.0));
+                    continue;
+                }
+                // CSS 2.1 §9.7: an absolutely/fixed-positioned box inside the row is
+                // transparent to the line — it takes no space and does not advance the
+                // inline cursor, and its static position is the inline cursor right here
+                // (`cur_x`, the current line's top). It is deferred to `finish_after_match`
+                // (`lay_out_abs_children`) which lays it out and places it at the static
+                // position when its insets are `auto` (BUG-1470). Not added to `cur_row`,
+                // so it never contributes to line height or vertical-align.
+                if matches!(child.style.position, Position::Absolute | Position::Fixed) {
+                    let idx = children.len();
+                    children.push(child);
+                    metrics.push((0.0, 0.0));
+                    abs_deferred.push((idx, cur_x, cur_y));
                     continue;
                 }
                 let is_run = matches!(child.kind, BoxKind::InlineRun { .. });
