@@ -16,25 +16,61 @@
 //!
 //! Отказной выключатель: `LUMEN_NO_SYSTEM_PROXY=1` в окружении — автопрогоны
 //! (WPT, graphic tests) и отладка получают прежнее прямое соединение.
+//!
+//! Доработка (2026-11-18): список обхода применяется, только когда системный
+//! прокси реально выбран маршрутом ([`note_applied`] из `cli_args`) — иначе
+//! `ProxyOverride` под `--tor`/`--proxy`/fingerprint-прокси пробивал бы
+//! прямые соединения мимо socks5-туннеля. `socks=` без http(s)-записи
+//! становится `socks5_proxy`; `<local>` и `prefix*` из `ProxyOverride`
+//! доезжают до матчера `no_proxy_for_host` (он их понимает с этого же среза).
 
-/// Прокси из системных настроек: URL для [`crate::config::FingerprintProfile::proxy`].
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Системные настройки прокси в виде полей [`crate::config::FingerprintProfile`].
+#[derive(Debug, Default)]
+pub struct SystemProxy {
+    /// `http(s)://…` — значение `FingerprintProfile::proxy`.
+    pub proxy: Option<String>,
+    /// `socks5://…` — значение `FingerprintProfile::socks5_proxy`; заполняется
+    /// только когда http(s)-прокси в `ProxyServer` нет вообще — иначе SOCKS5
+    /// перехватил бы весь трафик, чего WinINET не делает.
+    pub socks5_proxy: Option<String>,
+}
+
+static APPLIED: AtomicBool = AtomicBool::new(false);
+
+/// Отметить, что системный прокси выбран маршрутом. Зовётся из `cli_args`
+/// при применении — до этого `ProxyOverride` не должен ни на что влиять.
+pub fn note_applied() {
+    APPLIED.store(true, Ordering::Relaxed);
+}
+
+/// Прокси из системных настроек.
 #[cfg(target_os = "windows")]
-pub fn system_proxy() -> Option<String> {
+pub fn system_proxy() -> Option<SystemProxy> {
     let settings = read_internet_settings();
     if !settings.enabled {
         return None;
     }
-    settings.server.as_deref().and_then(parse_proxy_server)
+    parse_proxy_endpoints(settings.server.as_deref()?)
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn system_proxy() -> Option<SystemProxy> {
+    None
 }
 
 /// Список «ходи напрямую» из `ProxyOverride`, уже нормализованный под
-/// сопоставление [`lumen_network::no_proxy_for_host`] (точный хост или
-/// поддомены). Wildcard-записи, которые эта семантика не выражает
-/// (`127.*`, `192.168.*`), отбрасываются: loopback и так минует прокси
-/// (см. `is_loopback_host` в `lumen-network`).
+/// сопоставление [`lumen_network::no_proxy_for_host`]: точный хост/домен с
+/// поддоменами, `<local>` (intranet-имя без точки) и `prefix*` (IP-диапазоны
+/// вида `172.16.*`). Применяется, только когда системный прокси реально
+/// маршрутизирует трафик ([`note_applied`]).
 pub fn bypass_patterns() -> &'static [String] {
     static PATTERNS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
     PATTERNS.get_or_init(|| {
+        if !APPLIED.load(Ordering::Relaxed) {
+            return Vec::new();
+        }
         #[cfg(target_os = "windows")]
         {
             parse_proxy_override(read_internet_settings().overrides.as_deref().unwrap_or_default())
@@ -46,22 +82,37 @@ pub fn bypass_patterns() -> &'static [String] {
     })
 }
 
-#[cfg(not(target_os = "windows"))]
-pub fn system_proxy() -> Option<String> {
-    None
+/// URL прокси без userinfo — для stderr-лога (креды в лог не пишем).
+#[must_use]
+pub fn redact_for_log(url: &str) -> String {
+    match url.find("://") {
+        Some(scheme_end) => {
+            let rest = &url[scheme_end + 3..];
+            match rest.find('@') {
+                Some(at) => format!("{}://***@{}", &url[..scheme_end], &rest[at + 1..]),
+                None => url.to_string(),
+            }
+        }
+        None => url.to_string(),
+    }
 }
 
-/// `host:port` либо `http=host:port;https=host:port;socks=…` → `http://host:port`.
+/// `host:port` либо `http=host:port;https=host:port;socks=…` → поля
+/// [`FingerprintProfile`](crate::config::FingerprintProfile).
 ///
 /// `https=` приоритетнее `http=` (страницы в Lumen почти всегда https), при
 /// отсутствии `=` вся строка считается адресом одного прокси для всех схем.
-pub(crate) fn parse_proxy_server(server: &str) -> Option<String> {
+/// `socks=` берётся в `socks5_proxy` только когда http(s)-записи нет —
+/// WinINET шлёт через socks и http-трафик, но смешивать два системных
+/// прокси в одном профиле мы не будем.
+pub(crate) fn parse_proxy_endpoints(server: &str) -> Option<SystemProxy> {
     let server = server.trim();
     if server.is_empty() {
         return None;
     }
-    let address = if server.contains('=') {
-        let mut http = None;
+    let mut http: Option<&str> = None;
+    let mut socks: Option<&str> = None;
+    if server.contains('=') {
         for entry in server.split(';') {
             let Some((scheme, value)) = entry.split_once('=') else {
                 continue;
@@ -74,27 +125,57 @@ pub(crate) fn parse_proxy_server(server: &str) -> Option<String> {
                 // `https=` сильнее `http=` независимо от порядка записи.
                 "https" => http = Some(value),
                 "http" if http.is_none() => http = Some(value),
-                // Запись `socks=` сюда не годится: `FingerprintProfile::proxy`
-                // разбирает только `http(s)://`, и значение молча не применилось бы
-                // (SOCKS5 у Lumen задаётся отдельным `socks5_proxy`/`--tor`).
+                "socks" | "socks5" => socks = socks.or(Some(value)),
                 _ => {}
             }
         }
-        http?
     } else {
-        server
-    };
+        http = Some(server);
+    }
+    let proxy = http.and_then(to_http_proxy_url);
+    if proxy.is_some() {
+        return Some(SystemProxy {
+            proxy,
+            socks5_proxy: None,
+        });
+    }
+    let socks5_proxy = socks.and_then(to_socks5_url);
+    if socks5_proxy.is_some() {
+        return Some(SystemProxy {
+            proxy: None,
+            socks5_proxy,
+        });
+    }
+    None
+}
+
+/// `host:port`/`scheme://…` → `http(s)://…`; прочие схемы отбрасываем, чтобы
+/// не получить молча «без прокси».
+fn to_http_proxy_url(address: &str) -> Option<String> {
     let has_scheme = address.contains("://");
     let url = if has_scheme {
         address.to_string()
     } else {
         format!("http://{address}")
     };
-    // `parse_http_proxy`/`parse_socks5_proxy` в `config` принимают только
-    // `http(s)://` и `socks5://`; прочие схемы (например `ftp=` в
-    // ProxyServer) отбрасываем, чтобы не получить молча «без прокси».
-    if url.starts_with("http://") || url.starts_with("https://") || url.starts_with("socks5://") {
+    // `parse_http_proxy` в `config` принимает только `http(s)://`.
+    if url.starts_with("http://") || url.starts_with("https://") {
         Some(url)
+    } else {
+        None
+    }
+}
+
+/// `host:port`/`scheme://…` → `socks5://…`; `socks4`/`ftp` и прочее — мимо.
+fn to_socks5_url(address: &str) -> Option<String> {
+    let has_scheme = address.contains("://");
+    let url = if has_scheme {
+        address.to_string()
+    } else {
+        format!("socks5://{address}")
+    };
+    if url.starts_with("socks5://") || url.starts_with("socks5h://") {
+        Some(url.replacen("socks5h://", "socks5://", 1))
     } else {
         None
     }
@@ -106,13 +187,27 @@ pub(crate) fn parse_proxy_override(overrides: &str) -> Vec<String> {
     let mut out = Vec::new();
     for entry in overrides.split(';') {
         let entry = entry.trim();
-        if entry.is_empty() || entry.eq_ignore_ascii_case("<local>") {
+        if entry.is_empty() {
+            continue;
+        }
+        // `<local>` — intranet-имена без точки; матчится в `no_proxy_for_host`.
+        if entry.eq_ignore_ascii_case("<local>") {
+            if !out.iter().any(|p| p == "<local>") {
+                out.push("<local>".to_string());
+            }
             continue;
         }
         // Семантика реестра допускает `*.` перед доменом — это ровно «домен и
-        // поддомены», то же, что у сопоставителя. Прочие `*` не выражаются.
+        // поддомены», то же, что у сопоставителя. Хвостовой `*` (`172.16.*`)
+        // — префикс-диапазон; прочие `*`/`/`/`:` не выражаются.
         let pattern = entry.strip_prefix("*.").unwrap_or(entry);
-        if pattern.contains('*') || pattern.contains('/') || pattern.contains(':') {
+        if pattern.contains('/') || pattern.contains(':') {
+            continue;
+        }
+        if pattern == "*"
+            || pattern.matches('*').count() > 1
+            || (pattern.contains('*') && !pattern.ends_with('*'))
+        {
             continue;
         }
         let pattern = pattern.trim_end_matches('.').to_ascii_lowercase();
@@ -279,10 +374,14 @@ pub fn describe_disabled() -> Option<String> {
 mod tests {
     use super::*;
 
+    fn endpoints(server: &str) -> SystemProxy {
+        parse_proxy_endpoints(server).unwrap_or_default()
+    }
+
     #[test]
     fn plain_server_gets_http_scheme() {
         assert_eq!(
-            parse_proxy_server("127.0.0.1:12334").as_deref(),
+            endpoints("127.0.0.1:12334").proxy.as_deref(),
             Some("http://127.0.0.1:12334")
         );
     }
@@ -290,40 +389,82 @@ mod tests {
     #[test]
     fn server_with_scheme_is_kept() {
         assert_eq!(
-            parse_proxy_server("http://user:pass@proxy.local:8080").as_deref(),
+            endpoints("http://user:pass@proxy.local:8080").proxy.as_deref(),
             Some("http://user:pass@proxy.local:8080")
         );
     }
 
     #[test]
     fn per_scheme_list_prefers_https() {
+        let p = endpoints("http=proxy:3128;https=tls-proxy:3129");
+        assert_eq!(p.proxy.as_deref(), Some("http://tls-proxy:3129"));
+        assert!(p.socks5_proxy.is_none());
         assert_eq!(
-            parse_proxy_server("http=proxy:3128;https=tls-proxy:3129").as_deref(),
-            Some("http://tls-proxy:3129")
-        );
-        assert_eq!(
-            parse_proxy_server("http=proxy:3128").as_deref(),
+            endpoints("http=proxy:3128").proxy.as_deref(),
             Some("http://proxy:3128")
         );
     }
 
     #[test]
+    fn socks_only_becomes_socks5_proxy() {
+        let p = endpoints("socks=proxy:1080");
+        assert!(p.proxy.is_none());
+        assert_eq!(p.socks5_proxy.as_deref(), Some("socks5://proxy:1080"));
+    }
+
+    #[test]
+    fn http_proxy_wins_over_socks_entry() {
+        // WinINET шлёт через http-прокси; socks= при наличии http(s) не трогаем.
+        let p = endpoints("socks=proxy:1080;https=tls-proxy:3129");
+        assert_eq!(p.proxy.as_deref(), Some("http://tls-proxy:3129"));
+        assert!(p.socks5_proxy.is_none());
+    }
+
+    #[test]
+    fn socks5h_scheme_is_normalized() {
+        let p = endpoints("socks=socks5h://proxy:1080");
+        assert_eq!(p.socks5_proxy.as_deref(), Some("socks5://proxy:1080"));
+    }
+
+    #[test]
     fn empty_and_unsupported_values_are_rejected() {
-        assert!(parse_proxy_server("").is_none());
-        assert!(parse_proxy_server("ftp=proxy:21").is_none());
-        // Только `socks=` — не повод отдавать `proxy`, который не разберётся.
-        assert!(parse_proxy_server("socks=proxy:1080").is_none());
+        assert!(parse_proxy_endpoints("").is_none());
+        assert!(parse_proxy_endpoints("ftp=proxy:21").is_none());
+        assert!(parse_proxy_endpoints("socks4=proxy:1080").is_none());
+        assert!(endpoints("ftp=proxy:21").proxy.is_none());
+    }
+
+    #[test]
+    fn overrides_keep_local_and_ip_prefixes() {
         assert_eq!(
-            parse_proxy_server("socks=proxy:1080;https=tls-proxy:3129").as_deref(),
-            Some("http://tls-proxy:3129")
+            parse_proxy_override("localhost;127.*;*.Profi.ru;<local>;intranet"),
+            vec![
+                "localhost".to_string(),
+                "127.*".to_string(),
+                "profi.ru".to_string(),
+                "<local>".to_string(),
+                "intranet".to_string()
+            ]
         );
     }
 
     #[test]
-    fn overrides_drop_local_and_wildcard_middle() {
+    fn overrides_drop_mid_wildcards_and_ports() {
         assert_eq!(
-            parse_proxy_override("localhost;127.*;*.Profi.ru;<local>;intranet"),
-            vec!["localhost".to_string(), "profi.ru".to_string(), "intranet".to_string()]
+            parse_proxy_override("foo*bar;host:8080;*"),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn redact_hides_userinfo() {
+        assert_eq!(
+            redact_for_log("http://user:pass@proxy.local:8080"),
+            "http://***@proxy.local:8080"
+        );
+        assert_eq!(
+            redact_for_log("http://proxy.local:8080"),
+            "http://proxy.local:8080"
         );
     }
 }

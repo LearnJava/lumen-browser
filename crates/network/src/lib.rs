@@ -308,7 +308,21 @@ pub fn no_proxy_for_host(host: Option<&str>) -> bool {
     let Some(host) = host.map(|h| h.trim_end_matches('.')) else { return false };
     NO_PROXY_PATTERNS
         .read()
-        .map(|guard| guard.iter().any(|p| host == p || host.strip_suffix(p).is_some_and(|rest| rest.ends_with('.'))))
+        .map(|guard| {
+            guard.iter().any(|p| {
+                // WinINET `<local>` — intranet names without a dot. User
+                // patterns are validated hostnames, so this token can only
+                // come from the system-proxy bypass list (BUG-1803).
+                if p == "<local>" {
+                    return !host.contains('.');
+                }
+                // WinINET `prefix*` — prefix match for IP ranges (`172.16.*`).
+                if let Some(prefix) = p.strip_suffix('*') {
+                    return !prefix.is_empty() && host.starts_with(prefix);
+                }
+                host == p || host.strip_suffix(p).is_some_and(|rest| rest.ends_with('.'))
+            })
+        })
         .unwrap_or(false)
 }
 
@@ -8832,11 +8846,36 @@ ok".to_vec());
         let (proxy_port, proxy_srv) = mock_http_server(1, |_| {
             b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\nConnection: close\r\n\r\nvia-proxy".to_vec()
         });
-        let client = HttpClient::new().with_proxy(Arc::new(HttpProxy::new("127.0.0.1".to_string(), proxy_port)));
-        let url = Url::parse(&format!("http://127.0.0.1:{origin_port}/")).unwrap();
+        // Host must be non-loopback: BUG-1803 makes loopback bypass the proxy
+        // unconditionally, so a 127.0.0.1 URL could never reach the mock proxy.
+        // MockResolver maps the synthetic name onto loopback for the direct leg.
+        let resolver = Arc::new(MockResolver::with(
+            "site.test",
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        ));
+        // The proxy host itself is resolved through the same resolver.
+        resolver
+            .map
+            .lock()
+            .unwrap()
+            .insert("127.0.0.1".to_string(), std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+        let client = HttpClient::new()
+            .with_proxy(Arc::new(HttpProxy::new("127.0.0.1".to_string(), proxy_port)))
+            .with_dns_resolver(resolver);
+        let url = Url::parse(&format!("http://site.test:{origin_port}/")).unwrap();
         assert_eq!(client.fetch(&url).unwrap(), b"via-proxy", "без правила соединение идёт через прокси");
-        install_no_proxy_patterns(&["127.0.0.1".into()]);
+        install_no_proxy_patterns(&["site.test".into()]);
         assert_eq!(client.fetch(&url).unwrap(), b"ok", "сайт из правила идёт напрямую");
+        // BUG-1803 follow-up: WinINET forms `<local>` (dotless intranet name)
+        // and `prefix*` (IP ranges like `172.16.*`) in the same registry.
+        install_no_proxy_patterns(&["172.16.*".into(), "<local>".into(), "intranet".into()]);
+        assert!(no_proxy_for_host(Some("172.16.5.4")), "prefix* covers the IP range");
+        assert!(no_proxy_for_host(Some("intranet")), "plain host matches");
+        assert!(no_proxy_for_host(Some("host.intranet")), "subdomain matches");
+        assert!(no_proxy_for_host(Some("nas")), "<local> covers dotless names");
+        assert!(!no_proxy_for_host(Some("nas.example.com")), "<local> must not match dotted hosts");
+        assert!(!no_proxy_for_host(Some("172.15.9.9")), "prefix* must not overmatch");
+        assert!(!no_proxy_for_host(Some("example.com")), "unrelated host stays proxied");
         install_no_proxy_patterns(&[]);
         origin.join().unwrap();
         proxy_srv.join().unwrap();
