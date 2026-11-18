@@ -109,4 +109,7 @@ github slow is untouched. The bug card carries the explicit boundary.
   `::slotted` compounds indexed per sheet revision), or a new class for the
   cascade's per-descendant `ComputedStyle` clone. Either starts as a new task
   with its own stand and a fresh user decision; BUG-935 is closed only when the
-  github/cnn readiness symptom moves.
+  github/cnn readiness symptom moves. That task is
+  [PERF-WIDE-ROAD](../tasks/PERF-WIDE-ROAD.md) (P6, 2026-11-18): it owns the
+  remainder, and its S1 must name one of the two candidates with numbers or
+  close the class as WONTFIX.

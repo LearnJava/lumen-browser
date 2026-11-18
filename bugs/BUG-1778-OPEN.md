@@ -1,6 +1,6 @@
 # BUG-1778 — cnn.com: поток движка занят задачей `about_to_wait.rs:290` на 25 с, `geom_diff` не снимает страницу
 
-**Статус:** OPEN (DEBTOR) — закрыт для P3 2026-11-17; остаток — PERF-INVALIDATION/[ADR-036](../docs/decisions/ADR-036-incremental-restyle-invalidation.md) (P6), граница долга в конце карточки
+**Статус:** OPEN (DEBTOR) — закрыт для P3 2026-11-17; остаток — [PERF-WIDE-ROAD](../docs/tasks/PERF-WIDE-ROAD.md)/[ADR-036](../docs/decisions/ADR-036-incremental-restyle-invalidation.md) (P6), граница долга в конце карточки
 **Заведён:** 2026-10-28 (P3, остаток [BUG-1676](BUG-1676-FIXED.md))
 **Область:** shell / js / layout — локализовано: same-tick флаши внутри `run-scripts` (см. §Перепись)
 
