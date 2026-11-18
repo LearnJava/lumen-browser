@@ -253,3 +253,28 @@ fn a_transition_is_cancelled_when_the_style_no_longer_asks_for_it() {
     );
     assert_eq!(eval_str(&rt, &script), "running idle 0");
 }
+
+/// CSSANIM-MODEL-2: a property the page never read transitions too — the element's first
+/// observation snapshots the whole computed style, and the next style recalc compares against
+/// that baseline (`_wa_motion_seed`). Real cascade here: only the stubbed harness above keeps its
+/// computed style in `__vals`, and the bindings that read it cannot be replaced from a script.
+#[test]
+fn a_property_nobody_read_transitions_from_the_first_observed_style() {
+    let rt = super::v8_bug935_s55_content_journal::runtime(
+        super::v8_bug935_s55_content_journal::page(),
+    );
+    let script = "(function() {
+        var d = document.createElement('div');
+        document.body.appendChild(d);
+        d.style.left = '0px'; d.style.top = '0px';
+        getComputedStyle(d).transitionProperty;
+        d.style.transition = 'all 10s linear';
+        d.style.left = '100px'; d.style.top = '100px';
+        var t = d.getAnimations();
+        return [t.length, t[0].transitionProperty, t[1].transitionProperty].join(' ');
+    })()";
+    match rt.eval(script).unwrap_or_else(|e| panic!("{e:?}")) {
+        lumen_core::JsValue::String(s) => assert_eq!(s, "2 left top"),
+        other => panic!("expected a string, got {other:?}"),
+    }
+}

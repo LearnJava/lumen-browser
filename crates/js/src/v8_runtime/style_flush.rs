@@ -41,7 +41,7 @@
 //! `bugs/BUG-977-OPEN.md`'s residual for the follow-up.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::named_access::lock_document_bounded;
@@ -126,6 +126,13 @@ pub(crate) struct FlushHandles {
     /// [`Self::last_flushed_focus`], so a pointer move that changed `:hover`
     /// without touching the DOM still triggers a flush.
     pub(crate) last_flushed_hover: Arc<Mutex<Option<u32>>>,
+    /// CSSANIM-MODEL-2: how many real recomputes this flush has published, for
+    /// `_lumen_style_epoch()`. The transitions overlay re-reads every property of every
+    /// element the page has observed to find a style change (`_wa_motion_tr_sync`); without
+    /// a recompute since its last pass there is nothing to find, and the walk is a computed
+    /// style read per property — the difference between an O(1) `getAnimations()` on a page
+    /// with transitions and a full sweep per call.
+    pub(crate) style_epoch: Arc<AtomicU64>,
     /// CSSOM-8 вариант C / BUG-493: the per-`<style>`/`<link>` registry, the
     /// CSSOM edit log and its "grew since the last flush" flag, bundled with
     /// what reconciles the registry with the DOM — see
@@ -1067,6 +1074,9 @@ impl FlushHandles {
         drop(basis_scope);
         self.hit_tree_stale.store(true, Ordering::Relaxed);
         self.never_flushed.store(false, Ordering::Relaxed);
+        // A new style snapshot is live: the transitions overlay compares against it
+        // (`_lumen_style_epoch`).
+        self.style_epoch.fetch_add(1, Ordering::Relaxed);
         *self
             .last_flushed_focus
             .lock()
