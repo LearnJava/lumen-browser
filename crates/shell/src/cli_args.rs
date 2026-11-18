@@ -126,6 +126,48 @@ pub(crate) fn extract_trace_nav(args: &[String]) -> (Option<std::path::PathBuf>,
     }
 }
 
+/// BUG-1821: у каждого source-режима (`--dump-*`, `--print-to-pdf`, `--screenshot`,
+/// `--trace-nav`) свой позиционный источник, поэтому при двух режимах в одном запуске
+/// позиционный/флаг одного молча уходил в другой (`--dump-layout <url> --trace-nav
+/// out.json` трассировал флаг dump-режима как страницу). Возвращает текст ошибки,
+/// если запрошен больше чем один режим.
+pub(crate) fn mode_mix_error(
+    pdf: bool,
+    screenshot: bool,
+    trace_nav: bool,
+    rest: &[String],
+) -> Option<String> {
+    const SOURCE_MODES: [&str; 7] = [
+        "--dump-source",
+        "--dump-layout",
+        "--dump-display-list",
+        "--dump-tls",
+        "--print-to-pdf",
+        "--screenshot",
+        "--trace-nav",
+    ];
+    let mut modes: Vec<&str> = [
+        ("--print-to-pdf", pdf),
+        ("--screenshot", screenshot),
+        ("--trace-nav", trace_nav),
+    ]
+    .into_iter()
+    .filter_map(|(name, on)| on.then_some(name))
+    .collect();
+    modes.extend(
+        rest.iter()
+            .filter(|a| SOURCE_MODES.contains(&a.as_str()))
+            .map(String::as_str),
+    );
+    (modes.len() > 1).then(|| {
+        format!(
+            "режимы {} и {} не совмещаются — один запуск принимает один режим \
+             с одним позиционным источником",
+            modes[0], modes[1]
+        )
+    })
+}
+
 /// Извлечь `--mcp` / `--mcp-port N` из аргументов.
 ///
 /// Возвращает `(Some(McpMode), остальные_аргументы)` или `(None, все_аргументы)`.
@@ -859,6 +901,19 @@ pub(crate) fn run_cli() -> ExitCode {
     // BUG-1210: `--proxy`/`--tor` were already parsed and folded into
     // `startup_profile` before the single `config::init_global` call above —
     // no second parse/apply here, see the comment there.
+
+    // BUG-1821: source-режимы не совмещаются — иначе позиционный одного молча
+    // уходит в другой (см. `mode_mix_error`).
+    if let Some(err) = mode_mix_error(
+        pdf_output.is_some(),
+        screenshot_output.is_some(),
+        trace_nav_output.is_some(),
+        &rest_args,
+    ) {
+        eprintln!("Ошибка аргументов: {err}");
+        print_usage();
+        return ExitCode::FAILURE;
+    }
 
     let cli = if let Some(output) = pdf_output {
         let source = PageSource::from_arg(rest_args.first().map(|s| s.as_str()));

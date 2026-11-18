@@ -62,8 +62,8 @@
 2. github, две пары прогонов: `LUMEN_NO_ADBLOCK=1 python scripts/compat_crawl.py --only github`
    (`--maximized`), плюс `LUMEN_PROFILE_TREE=1` и `LUMEN_FRAME_LOG=1`; снять число флашей,
    `walk_sum`, `ready_s`, корзины `[engine] incr cascade`.
-3. cnn, две пары: `lumen --trace-nav <out.json> <url>` (порядок аргументов — ловушка
-   [BUG-1821](../../bugs/BUG-1821-OPEN.md)) и `lumen --dump-layout <url>`; сэмплер
+3. cnn, две пары: `lumen --trace-nav <out.json> <url>` и `lumen --dump-layout <url>`;
+   сэмплер
    `scripts/native_sample.py` — не меньше трёх срезов на горячем участке `run-scripts`.
 4. Разложить стоимость полного флаша на статьи: (a) широкий матчинг, (b) клон `ComputedStyle`
    в `CustomFlow`, (c) обход и сборка боксов, (d) прочее. Проценты — от измеренной суммы.
