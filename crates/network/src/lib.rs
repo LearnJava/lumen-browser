@@ -3966,6 +3966,86 @@ impl HttpClient {
         }
     }
 
+    /// LOAD-8: execute a `<link rel=preconnect>`/`<link rel=dns-prefetch>` hint
+    /// — warm the pooled connection the next real request to `url`'s origin
+    /// will use. `dns_only` resolves the name and stops there; otherwise
+    /// DNS+TCP+TLS run and the connection is parked under the pool key that
+    /// request looks up (again with no bytes sent), or, when the origin
+    /// negotiates HTTP/2, installed as a ready multiplexer.
+    ///
+    /// A hint is advisory: nothing is warmed behind an HTTP proxy (the pooled
+    /// key would name the proxy, not this origin), for an origin a filter
+    /// blocks, while offline, or when the origin already has a connection or
+    /// a handshake in flight — that last case is what keeps a page with ten
+    /// hints from opening ten sockets. The caller drops any error.
+    pub fn preconnect(&self, url: &Url, dns_only: bool) -> Result<()> {
+        let (host, port, is_tls) = require_http_scheme(url)?;
+        if is_global_offline() || self.preconnect_blocked(url, &host) {
+            return Ok(());
+        }
+        let direct = no_proxy_for_host(Some(&host));
+        if !direct && self.proxy.is_some() {
+            return Ok(());
+        }
+        let socks5 = if direct { None } else { self.socks5_proxy.as_deref() };
+        if dns_only {
+            // Under SOCKS5 the proxy resolves the name; a local lookup would
+            // leak exactly what the tunnel exists to hide.
+            if socks5.is_none() {
+                dns::resolve_with_env_override(self.resolver.as_ref(), &host, port)?;
+            }
+            return Ok(());
+        }
+        let key = PoolKey { host, port, is_tls };
+        // The reservation is what makes the warm-up worth anything: a real
+        // request arriving during the handshake waits for it and shares the
+        // connection instead of opening a second one.
+        let Some(h2_pool) = self.h2_pool.as_deref() else { return Ok(()) };
+        let Some(reservation) = h2_pool.warm(&key) else { return Ok(()) };
+        let conn = connect(
+            &key.host,
+            port,
+            is_tls,
+            self.resolver.as_ref(),
+            self.tls_profile,
+            socks5,
+            Some(FETCH_READ_TIMEOUT),
+        )?;
+        if conn.is_h2 {
+            let cert_info = conn.cert_info.clone();
+            let h2conn =
+                h2::conn::H2Conn::connect_with_profile(conn.into_stream(), self.fingerprint_profile)?;
+            reservation.fulfill(h2::mux::H2Mux::spawn(h2conn, cert_info)?);
+        } else {
+            // The origin just proved it speaks HTTP/1.1: later requests skip
+            // the reservation wait (as after any real response on it).
+            reservation.mark_http1();
+            self.pool.release(key, conn);
+        }
+        Ok(())
+    }
+
+    /// The ad-block/Safe-Browsing verdict the fetch path would reach for a
+    /// subresource of this document (`fetch_with_redirect`). A warm-up must
+    /// not contact an origin the request itself would never reach: no HTTP
+    /// bytes are sent, but the handshake already tells the host the user is
+    /// here.
+    fn preconnect_blocked(&self, url: &Url, host: &str) -> bool {
+        let ctx = lumen_core::ext::RequestContext {
+            resource_type: None,
+            third_party: self.top_level_site.as_deref().map(|site| !host_in_site(host, site)),
+            is_top_level: false,
+            document_host: self.document_host.as_deref(),
+        };
+        let shields_on = !tab_shields_off(self.tab_id)
+            && shield_enabled_for_site(self.document_host.as_deref().or(self.top_level_site.as_deref()));
+        let global_ad = if shields_on { global_adblock_filter() } else { None };
+        let exempt = protection_exempt_for_site(self.top_level_site.as_deref());
+        let filter = if exempt { None } else { self.filter.as_deref().or(global_ad.as_deref()) };
+        filter.is_some_and(|f| f.should_block_ctx(url, &ctx).is_some())
+            || global_threat_filter().is_some_and(|f| f.should_block_ctx(url, &ctx).is_some())
+    }
+
     /// Подключить DNS-резолвер. По умолчанию — `SystemDnsResolver` (через
     /// `(host, port).to_socket_addrs()`); подменяется на `CachedDnsResolver`
     /// (lumen-storage) для TTL-кеша, или на DoH/DoT для приватности (§13).
@@ -8934,6 +9014,45 @@ ok".to_vec());
             1,
             "expected exactly 1 TCP accept (keep-alive reuse)"
         );
+    }
+
+    #[test]
+    fn preconnect_parks_the_connection_the_first_fetch_uses() {
+        // LOAD-8: `<link rel=preconnect>` opens the socket before any request;
+        // the pool key `(host, port, is_tls)` is the one the fetch path looks
+        // up, so the fetch finds it instead of paying a second accept.
+        // `localhost`, not `127.0.0.1`: the shields test elsewhere in this
+        // binary blocks that literal in the process-global ad filter for a
+        // moment, and a blocked preconnect is silent by contract.
+        let accept_counter = Arc::new(AtomicUsize::new(0));
+        let (port, server) = mock_keepalive_server(1, accept_counter.clone(), |_| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://localhost:{port}/")).unwrap();
+        client.preconnect(&url, false).expect("preconnect must not fail");
+        assert_eq!(
+            client.pool.idle_count("localhost", port, false),
+            1,
+            "the warmed connection is parked under the fetch path's pool key"
+        );
+        assert_eq!(client.fetch(&url).unwrap(), b"ok");
+
+        server.join().unwrap();
+        assert_eq!(accept_counter.load(Ordering::SeqCst), 1, "the fetch reused the warmed connection");
+    }
+
+    #[test]
+    fn dns_prefetch_resolves_without_connecting() {
+        let listener = bind_ephemeral_listener();
+        let port = listener.local_addr().unwrap().port();
+        let url = Url::parse(&format!("http://localhost:{port}/")).unwrap();
+        let client = HttpClient::new();
+        client.preconnect(&url, true).expect("dns-prefetch resolves");
+        assert_eq!(client.pool.idle_count("localhost", port, false), 0);
+        listener.set_nonblocking(true).unwrap();
+        assert!(listener.accept().is_err(), "dns-prefetch must not open a socket");
     }
 
     #[test]

@@ -1897,3 +1897,42 @@ fn warm_preload_cache_sends_no_request_forbidden_by_csp() {
     assert!(seen.iter().any(|p| p == "/i.png"), "the permitted hint must still warm: {seen:?}");
     assert!(!seen.iter().any(|p| p == "/s.js" || p == "/m.js"), "CSP-forbidden hint reached the server: {seen:?}");
 }
+
+/// LOAD-8: `<link rel=preconnect>` открывает TCP до того, как страница
+/// попросит с этого origin-а байты. Предмет проверки — сам accept: сервер не
+/// получает ни одной строки HTTP-запроса, только соединение.
+#[test]
+fn preconnect_hint_opens_a_connection_before_the_request() {
+    use lumen_html_parser::PreloadHint;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct NullSink;
+    impl EventSink for NullSink {
+        fn emit(&self, _event: &Event) {}
+    }
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&accepted);
+    std::thread::spawn(move || {
+        if let Ok((stream, _)) = listener.accept() {
+            counter.fetch_add(1, Ordering::SeqCst);
+            // Держим сокет открытым, пока тест не увидит accept.
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            drop(stream);
+        }
+    });
+
+    let origin = format!("http://127.0.0.1:{port}/");
+    let base = ResourceBase::url_base(origin.clone());
+    let sink: Arc<dyn EventSink> = Arc::new(NullSink);
+    let hints = vec![PreloadHint::Preconnect { url: origin, dns_only: false }];
+    crate::page_pipeline::warm_preconnect_hints(&hints, &base, &sink);
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while accepted.load(Ordering::SeqCst) == 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(accepted.load(Ordering::SeqCst), 1, "preconnect must open the connection up front");
+}

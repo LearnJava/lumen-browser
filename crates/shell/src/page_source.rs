@@ -613,9 +613,11 @@ fn initiator_site(referrer: Option<&str>) -> Option<String> {
 /// `parse_and_layout` accumulates across the HTML scan — `load_bytes`/
 /// `load_bytes_streaming` run before that set exists, and threading it
 /// through every call site (dump modes, omnibox, streaming navigation) for a
-/// dedup-only benefit is not worth the churn: the event is a stderr log line
-/// today (`Event::SubresourceHintFound`'s doc comment), not a fetch trigger,
-/// so a duplicate against the later HTML scan costs nothing but a log line.
+/// dedup-only benefit is not worth the churn: the event itself is a stderr
+/// log line (`Event::SubresourceHintFound`'s doc comment), and the connection
+/// warm-up below (LOAD-8) collapses a duplicate against the later HTML scan
+/// into "this origin is already connected" inside the pool, so a duplicate
+/// costs nothing but a log line.
 fn emit_early_hints(early_hint_links: &[String], final_url: &lumen_core::url::Url, sink: &Arc<dyn EventSink>) {
     let hints: Vec<lumen_html_parser::PreloadHint> = early_hint_links
         .iter()
@@ -626,6 +628,9 @@ fn emit_early_hints(early_hint_links: &[String], final_url: &lumen_core::url::Ur
     }
     let base = ResourceBase::url_base(final_url.to_string());
     crate::page_pipeline::dispatch_preload_hints(&hints, &base, sink, &mut std::collections::HashSet::new());
+    // LOAD-8: `rel=preconnect` is the hint 103 Early Hints exists for; unlike
+    // the byte cache there is no cookie-bearing content to poison.
+    crate::page_pipeline::warm_preconnect_hints(&hints, &base, sink);
 }
 
 /// Every `Link:` header value of the final document response (BUG-906).

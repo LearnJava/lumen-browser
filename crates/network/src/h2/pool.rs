@@ -174,6 +174,20 @@ impl H2Pool {
         }
     }
 
+    /// LOAD-8: the right to warm an origin nobody is talking to — the same
+    /// reservation [`Self::acquire`] hands out, but without the wait. A
+    /// preconnect hint must never queue behind a real request, and there is
+    /// nothing to warm when the origin already has a live connection, a
+    /// pending handshake, or is known HTTP/1.1.
+    pub(crate) fn warm(&self, key: &PoolKey) -> Option<Reservation<'_>> {
+        let mut slots = self.lock();
+        if slots.contains_key(key) {
+            return None;
+        }
+        slots.insert(key.clone(), Slot::Connecting);
+        Some(Reservation { pool: self, key: Some(key.clone()) })
+    }
+
     /// Offer a connection opened outside a reservation (the requester was
     /// told [`Acquire::Direct`] but the origin turned out to speak HTTP/2).
     /// Installed only if the origin has no live connection or pending
@@ -337,6 +351,25 @@ mod tests {
         }
         drop(r);
         assert!(waiter.join().unwrap_or(false), "waiter must bypass after a failed handshake");
+    }
+
+    #[test]
+    fn warm_reserves_a_free_origin_and_never_a_busy_one() {
+        let pool = H2Pool::new();
+        let key = make_key("example.com", 443, true);
+        let reservation = pool.warm(&key).expect("a free origin is reserved");
+        assert!(pool.warm(&key).is_none(), "a second hint must not queue behind the handshake");
+        drop(reservation);
+        assert!(pool.warm(&key).is_some(), "a failed handshake frees the origin again");
+    }
+
+    #[test]
+    fn warm_skips_a_known_http1_origin() {
+        let pool = H2Pool::new();
+        let key = make_key("h1.example", 443, true);
+        let Acquire::Connect(r) = pool.acquire(&key) else { panic!("expected a reservation") };
+        r.mark_http1();
+        assert!(pool.warm(&key).is_none());
     }
 
     #[test]

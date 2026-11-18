@@ -284,6 +284,8 @@ pub(crate) fn warm_preload_cache(
     use lumen_html_parser::PreloadHint;
     use lumen_network::RequestDestination;
 
+    warm_preconnect_hints(hints, base, sink);
+
     let self_origin = base.origin();
     for hint in hints {
         let (raw_url, destination) = match hint {
@@ -318,6 +320,52 @@ pub(crate) fn warm_preload_cache(
                 .fetch_subresource_with_content_type(&parsed, destination)
                 .map(|(body, content_type)| crate::prefetch::CachedResource { body, content_type })
                 .map_err(|e| e.to_string())
+        });
+    }
+}
+
+/// LOAD-8: `<link rel=preconnect>`/`rel=dns-prefetch` — открыть соединение
+/// (или только резолвить имя) до первого настоящего запроса к origin-у.
+/// Хинт советует, а не приказывает: страница с десятком preconnect не должна
+/// открывать десяток сокетов, поэтому одновременно греются не больше `MAX`
+/// origin-ов, а слоты сверх лимита, ошибки, HTTP-прокси и отфильтрованные
+/// origin-ы молча пропускаются (решётка решений — `HttpClient::preconnect`).
+pub(crate) fn warm_preconnect_hints(
+    hints: &[lumen_html_parser::PreloadHint],
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+) {
+    use lumen_html_parser::PreloadHint;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // Соединение кладётся в общий пул раздела `route#site`, который строит
+    // `ResourceBase`; у `file:`-базы раздела нет, и прогрев умер бы вместе с
+    // временным клиентом.
+    if base.url().is_none() {
+        return;
+    }
+    // Одновременно прогреваемых origin-ов на процесс.
+    const MAX: usize = 4;
+    static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+    let mut client: Option<Arc<lumen_network::HttpClient>> = None;
+    for hint in hints {
+        let PreloadHint::Preconnect { url, dns_only } = hint else { continue };
+        let Ok(parsed) = lumen_core::url::Url::parse(&base.resolve_str(url)) else { continue };
+        if IN_FLIGHT
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| (n < MAX).then_some(n + 1))
+            .is_err()
+        {
+            return;
+        }
+        // Куки для ключа пула не нужны: раздел — `route#site` документа, а
+        // не cookie-контекст; клиент нужен только ради общего пула.
+        let client = Arc::clone(client.get_or_insert_with(|| {
+            Arc::new(base.http_client_for_subresource(Arc::clone(sink), None))
+        }));
+        let dns_only = *dns_only;
+        std::thread::spawn(move || {
+            let _ = client.preconnect(&parsed, dns_only);
+            IN_FLIGHT.fetch_sub(1, Ordering::AcqRel);
         });
     }
 }
