@@ -1144,7 +1144,10 @@ impl HttpClient {
         // forbidden author-header list (`build_author_headers` already drops
         // them), so a page can never spoof either through `fetch()`/
         // `setRequestHeader`.
-        if let Some((referrer_url, policy)) = &self.document_context {
+        let document_url = self.document_url();
+        if let Some((_, policy)) = &self.document_context
+            && let Some(referrer_url) = &document_url
+        {
             if let Some(referer) = referrer_policy::compute_referrer(*policy, referrer_url, &url) {
                 author_headers.push_str("Referer: ");
                 author_headers.push_str(&referer);
@@ -1164,7 +1167,7 @@ impl HttpClient {
         // element loading itself through the shim (`@import`) names its own
         // `no-cors` mode and destination. A cross-origin `cors` GET/HEAD gets
         // `Origin` too; non-GET/HEAD already has it from the branch above.
-        let doc_url = self.document_context.as_ref().map(|(u, _)| u);
+        let doc_url = document_url.as_ref();
         let mode = fetch_metadata::RequestMode::from_fetch_mode(req.mode);
         if method_upper == "GET" || method_upper == "HEAD" {
             author_headers.push_str(&fetch_metadata::cors_origin_header(doc_url, &url, mode));
