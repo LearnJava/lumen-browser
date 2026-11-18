@@ -40,6 +40,23 @@
 - `cargo check -p lumen-network -p lumen-shell`; `cargo test -p lumen-network --lib proxy_tests` — 31/31,
   включая новый `loopback_hosts_bypass_proxy`.
 
+## Доработка (2026-11-18, вторая итерация)
+
+Ревизия влитого среза нашла три дефекта, закрытые отдельным патчем:
+
+- `ProxyOverride` подмешивался в `NO_PROXY_PATTERNS` безусловно — при `--tor`/`--proxy`/fingerprint-прокси
+  записи вроде `*.otr.ru` или `intranet` гнали запросы **напрямую мимо socks5-туннеля** (утечка реального IP).
+  Теперь `system_proxy::note_applied()` ставится в `cli_args` только когда системный прокси реально выбран
+  маршрутом, а `bypass_patterns()` отдаёт пустой список до этого флага.
+- Нормализация `ProxyOverride` отбрасывала `127.*`, `172.16.*`, `192.168.*` и `<local>` — на реальной машине
+  весь список private-сетей уходил бы через прокси, чего Windows не делает. Парсер теперь сохраняет
+  хвостовой `*` (префикс-диапазон) и `<local>`; матчер `no_proxy_for_host` в `lumen-network` понимает обе
+  формы (`<local>` — имя без точки; `prefix*` — starts_with).
+- Запись `socks=` в `ProxyServer` раньше отбрасывалась; теперь при отсутствии http(s)-записи становится
+  `FingerprintProfile::socks5_proxy` (`socks5://`, `socks5h://` нормализуется). При наличии http(s)-прокси
+  socks-запись игнорируется — WinINET не смешивает два системных прокси.
+- stderr-лог печатает URL через `redact_for_log` — userinfo (`user:pass@`) в лог не попадает.
+
 ## Остаток
 
 - PAC / автоопределение прокси (`AutoConfigURL`, `WinHttpGetProxyForUrl`) — отдельный срез: PAC-скрипт нужно

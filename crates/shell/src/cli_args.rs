@@ -760,9 +760,19 @@ pub(crate) fn run_cli() -> ExitCode {
         && startup_profile.http_profile != lumen_network::HttpProfile::TorBrowser
     {
         match crate::system_proxy::system_proxy() {
-            Some(url) => {
-                eprintln!("lumen: системный прокси Windows: {url}");
-                startup_profile.proxy = Some(url);
+            Some(sys) => {
+                if let Some(url) = sys.proxy {
+                    eprintln!(
+                        "lumen: системный прокси Windows: {}",
+                        crate::system_proxy::redact_for_log(&url)
+                    );
+                    startup_profile.proxy = Some(url);
+                }
+                if let Some(s5) = sys.socks5_proxy {
+                    eprintln!("lumen: системный SOCKS5-прокси Windows: {}", crate::system_proxy::redact_for_log(&s5));
+                    startup_profile.socks5_proxy = Some(s5);
+                }
+                crate::system_proxy::note_applied();
             }
             None => {
                 if let Some(note) = crate::system_proxy::describe_disabled() {
