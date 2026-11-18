@@ -350,7 +350,7 @@ function _idb_invoke(node, event, phase) {
     if (phase !== 1) {
         var handler = node['on' + type];
         if (typeof handler === 'function') {
-            try { handler.call(node, event); } catch (e) { _lumen_console_error('IDB on' + type + ': ' + e); }
+            try { handler.call(node, event); } catch (e) { _idb_listener_exception(event, e); }
         }
     }
     if (!snapshot) return;
@@ -359,12 +359,30 @@ function _idb_invoke(node, event, phase) {
         if (list.indexOf(entry) < 0) continue;
         if (phase === 1 ? !entry.capture : (phase === 3 && entry.capture)) continue;
         try {
-            if (typeof entry.callback === 'function') entry.callback.call(node, event);
-            else if (entry.callback && typeof entry.callback.handleEvent === 'function') entry.callback.handleEvent(event);
-        } catch (e) { _lumen_console_error('IDB ' + type + ' listener: ' + e); }
+            var cb = entry.callback;
+            if (typeof cb === 'function') cb.call(node, event);
+            else {
+                // DOM «get the current value of handleEvent»: the member lookup
+                // itself may throw, a non-callable value throws TypeError.
+                var fn = cb.handleEvent;
+                if (typeof fn === 'function') fn.call(cb, event);
+                else throw new TypeError('handleEvent is not a function');
+            }
+        } catch (e) { _idb_listener_exception(event, e); }
         if (entry.once) node.removeEventListener(type, entry.callback, entry.capture);
         if (event._stopImmediate) break;
     }
+}
+
+// A listener's exception never stops the dispatch — the remaining listeners
+// still run (Indexed DB §3.5.6) — but it is reported like a timer's (the old
+// console-only swallow hid errors from the page) and recorded on the event:
+// the fire-success/error/upgradeneeded procedures abort the owning transaction
+// with AbortError when they see the flag.
+function _idb_listener_exception(event, e) {
+    event._threw = true;
+    if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e);
+    else _lumen_console_error('IDB ' + event.type + ' listener: ' + e);
 }
 
 // Dispatches `event` along `path` (targets nearest-first, Indexed DB §3.5.6):
@@ -410,15 +428,27 @@ function _idb_dispatch_request(req) {
         });
         // The error's default action — abort the owning transaction — is
         // decided only after the whole path has run, so a preventDefault at
-        // any of its nodes suppresses the abort (§3.5.6).
-        if (req.transaction && !ev.defaultPrevented) {
-            req.transaction.error = req.error;
+        // any of its nodes suppresses the abort (§3.5.6). An exception from
+        // any listener aborts regardless, with AbortError (§fire an error
+        // event): the page's failure to handle the event is the more specific
+        // reason, but the spec fixes the transaction's error.
+        if (req.transaction && (ev._threw || !ev.defaultPrevented)) {
+            req.transaction.error = ev._threw
+                ? _idb_error('AbortError', 'an event listener threw an exception')
+                : req.error;
             req.transaction._aborted = true;
         }
     } else {
+        var sev = _idb_make_event('success', req);
         _idb_dispatch_active(req.transaction, function() {
-            _idb_dispatch(req, _idb_make_event('success', req), _idb_request_path(req));
+            _idb_dispatch(req, sev, _idb_request_path(req));
         });
+        // §fire a success event: an exception from a listener aborts the
+        // transaction with AbortError — complete never fires.
+        if (sev._threw && req.transaction) {
+            req.transaction.error = _idb_error('AbortError', 'an event listener threw an exception');
+            req.transaction._aborted = true;
+        }
     }
 }
 
@@ -1495,11 +1525,18 @@ function _idb_process_open(entry, budget) {
             // The upgrade transaction is the request's parent for this event
             // (Indexed DB §3.5.6), so capture listeners on it and on the
             // connection see `upgradeneeded` before onupgradeneeded runs.
+            var uev = _idb_make_event('upgradeneeded', req, { oldVersion: entry.oldVersion, newVersion: entry.newVersion });
             _idb_dispatch_active(txn, function() {
-                _idb_dispatch(req,
-                    _idb_make_event('upgradeneeded', req, { oldVersion: entry.oldVersion, newVersion: entry.newVersion }),
-                    [req, txn, db]);
+                _idb_dispatch(req, uev, [req, txn, db]);
             });
+            // §fire a version change event: an exception from a listener
+            // aborts the version change transaction with AbortError; the
+            // settlement below then fails the open request with the same
+            // error through its regular aborted-transaction branch.
+            if (uev._threw) {
+                txn.error = _idb_error('AbortError', 'an event listener threw an exception');
+                txn._aborted = true;
+            }
         }
         if (!entry._settle) {
             while (txn._queue.length > 0 && !txn._aborted && budget > 0) {
@@ -1541,6 +1578,16 @@ function _idb_process_open(entry, budget) {
             return budget;
         }
         _idb_fire_txn(txn, 'complete');
+        // §3.3.1: a close() during the upgrade (typically from inside
+        // onupgradeneeded) still commits the version change — the schema work
+        // is done — but the open request fails with AbortError instead of
+        // handing the page a connection it asked to go away.
+        if (entry.db._closed) {
+            req.result = undefined;
+            req.error = _idb_error('AbortError', 'the connection was closed during the version change');
+            _idb_dispatch_request(req);
+            return budget;
+        }
     }
     req.readyState = 'done';
     req.error = null;
