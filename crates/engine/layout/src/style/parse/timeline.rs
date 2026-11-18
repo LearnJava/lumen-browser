@@ -64,8 +64,10 @@ pub(in crate::style) fn parse_animation_timeline_list(val: &str) -> Vec<Animatio
         .map(|item| {
             let t = item.trim();
             let lower = t.to_ascii_lowercase();
-            if lower == "auto" || lower == "none" {
+            if lower == "auto" {
                 AnimationTimeline::Auto
+            } else if lower == "none" {
+                AnimationTimeline::None
             } else if lower.starts_with("scroll(") || lower == "scroll()" {
                 parse_scroll_fn(t)
             } else if lower.starts_with("view(") || lower == "view()" {

@@ -132,6 +132,8 @@ impl ScrollCtx<'_> {
     fn progress_for(&self, timeline: &AnimationTimeline, node: NodeId) -> Option<f32> {
         match timeline {
             AnimationTimeline::Auto => None,
+            // Неактивная шкала (`none`): процессор узла такие анимации пропускает.
+            AnimationTimeline::None => Some(0.0),
             AnimationTimeline::Scroll { axis, nearest } => {
                 let element = if *nearest {
                     find_nearest_scroll_container(self.root, node)
@@ -296,6 +298,11 @@ impl AnimationScheduler {
             let timeline = get_cyclic(&style.animation_timelines, i)
                 .cloned()
                 .unwrap_or_default();
+            // `animation-timeline: none` — анимация не привязана ни к какой шкале:
+            // не идёт и не шлёт событий (CSS Animations L2 §3.10).
+            if matches!(timeline, AnimationTimeline::None) {
+                continue;
+            }
 
             // Найти @keyframes по имени.
             let Some(kf_rule) = ss.keyframes.iter().find(|k| k.name == *name) else {

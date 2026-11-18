@@ -918,6 +918,18 @@ fn computed_map_animation_composition() {
     assert_eq!(m.get("animation-composition").map(String::as_str), Some("replace"));
 }
 
+/// CSSANIM-MODEL-2-S2: `CSSAnimation.timeline` reflects `animation-timeline`, so the computed
+/// value has to carry the property — including the `none` that detaches the animation.
+#[test]
+fn computed_map_animation_timeline() {
+    let m = div_computed_map("<div>x</div>", "");
+    assert_eq!(m.get("animation-timeline").map(String::as_str), Some("auto"));
+    let m = div_computed_map("<div>x</div>", "div { animation-timeline: none; }");
+    assert_eq!(m.get("animation-timeline").map(String::as_str), Some("none"));
+    let m = div_computed_map("<div>x</div>", "div { animation-timeline: scroll(y root); }");
+    assert_eq!(m.get("animation-timeline").map(String::as_str), Some("scroll(y root)"));
+}
+
 #[test]
 fn computed_map_transition_defaults_without_declaration() {
     let m = div_computed_map("<div>x</div>", "");

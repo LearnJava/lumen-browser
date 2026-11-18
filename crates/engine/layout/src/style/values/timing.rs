@@ -656,6 +656,9 @@ pub enum AnimationTimeline {
     /// Default: time-driven animation (normal `@keyframes` clock).
     #[default]
     Auto,
+    /// `none` — the animation is attached to no timeline, so it never runs
+    /// (CSS Animations L2 §3.10).
+    None,
     /// `scroll([<axis>] [nearest | root | self])` — scroll container progress.
     /// `nearest: true` = nearest scroll ancestor (default); `false` = root viewport.
     Scroll { axis: ScrollAxis, nearest: bool },
@@ -664,6 +667,34 @@ pub enum AnimationTimeline {
     /// `<custom-ident>` — matched against `scroll-timeline-name` / `view-timeline-name`
     /// at runtime.
     Named(String),
+}
+
+impl AnimationTimeline {
+    /// Computed-value serialisation for `getComputedStyle()`
+    /// (`auto | none | scroll(<axis> [root]) | view(<axis>) | <ident>`).
+    pub fn to_css(&self) -> String {
+        fn axis_css(axis: ScrollAxis) -> &'static str {
+            match axis {
+                ScrollAxis::Block => "block",
+                ScrollAxis::Inline => "inline",
+                ScrollAxis::X => "x",
+                ScrollAxis::Y => "y",
+            }
+        }
+        match self {
+            Self::Auto => "auto".into(),
+            Self::None => "none".into(),
+            Self::Scroll { axis, nearest } => {
+                if *nearest {
+                    format!("scroll({})", axis_css(*axis))
+                } else {
+                    format!("scroll({} root)", axis_css(*axis))
+                }
+            }
+            Self::View { axis } => format!("view({})", axis_css(*axis)),
+            Self::Named(name) => name.clone(),
+        }
+    }
 }
 
 /// CSS-wide keywords (CSS Cascade L4 §7) — применимы к любому свойству.
