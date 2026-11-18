@@ -235,6 +235,9 @@ mod v8_idb_active;
 mod v8_idb_listener_errors;
 
 #[cfg(feature = "v8-backend")]
+mod v8_idb_idl;
+
+#[cfg(feature = "v8-backend")]
 mod v8_formdata;
 
 #[cfg(feature = "v8-backend")]
