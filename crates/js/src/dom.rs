@@ -245,6 +245,8 @@ pub enum FullscreenRequest {
 /// A command a script's `CSSAnimation` sends to the frame loop's
 /// `AnimationScheduler` (CSSANIM-MODEL-2 срез S4): the painted frame follows the
 /// animation's own clock, so a `cancel()`/`play()`/seek has to reach it too.
+/// The `Transition*` variants do the same for `CSSTransition` and the loop's
+/// `TransitionScheduler` (срез S5).
 ///
 /// Captured in `css_motion_cmds` by `_lumen_css_motion_cmd` and drained by the
 /// shell right before its per-frame `AnimationScheduler::tick`.
@@ -258,6 +260,13 @@ pub enum CssMotionCmd {
     /// `startTime`/`currentTime` written, or `finish()`: the scheduler's
     /// current time becomes `current_time_ms`.
     Seek { node: u32, name: String, current_time_ms: f64 },
+    /// `CSSTransition.cancel()` on a transition the frame loop's `TransitionScheduler`
+    /// drives: it drops the `(node, property)` record, so the element paints its settled
+    /// value. The script's own `transitioncancel` is its (`_css_cancel`).
+    TransitionCancel { node: u32, property: String },
+    /// `currentTime`/`startTime` written on such a transition: the record's clock moves so
+    /// its local time becomes `current_time_ms`.
+    TransitionSeek { node: u32, property: String, current_time_ms: f64 },
 }
 
 // ─── primitive registrations ──────────────────────────────────────────────────

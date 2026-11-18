@@ -230,14 +230,28 @@ impl Lumen {
                 width: self.viewport_width_css(),
                 height: self.viewport_height_css(),
             };
-            // CSSANIM-MODEL-2 S4: a script's `cancel()`/`play()`/seek moves the frame the
-            // scheduler paints — drain its commands before the tick that uses them.
+            // CSSANIM-MODEL-2 S4/S5: a script's `cancel()`/`play()`/seek moves the frame the
+            // schedulers paint — drain its commands before the tick that uses them.
             let motion_cmds = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
                 j.take_css_motion_cmds()
             })
             .unwrap_or_default();
+            let now_s = (timestamp_ms / 1000.0) as f32;
             for cmd in motion_cmds {
-                self.animation_scheduler.apply_cmd(cmd);
+                match cmd {
+                    lumen_js::CssMotionCmd::TransitionCancel { node, property } => self
+                        .transition_scheduler
+                        .cancel(lumen_dom::NodeId::from_index(node as usize), &property),
+                    lumen_js::CssMotionCmd::TransitionSeek { node, property, current_time_ms } => {
+                        self.transition_scheduler.seek(
+                            lumen_dom::NodeId::from_index(node as usize),
+                            &property,
+                            now_s,
+                            (current_time_ms / 1000.0) as f32,
+                        );
+                    }
+                    other => self.animation_scheduler.apply_cmd(other),
+                }
             }
             let (mut frame, anim_events) = self.animation_scheduler.tick(
                 timestamp_ms,
@@ -248,7 +262,6 @@ impl Lumen {
                 vp,
             );
             self.animation_events.extend(anim_events);
-            let now_s = (timestamp_ms / 1000.0) as f32;
             let (trans_frame, trans_events) = self.transition_scheduler.tick(now_s);
             self.transition_events.extend(trans_events);
             frame.merge_from(trans_frame);

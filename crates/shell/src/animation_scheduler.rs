@@ -216,6 +216,9 @@ impl AnimationScheduler {
                 self.pending_seeks
                     .insert((NodeId::from_index(node as usize), name), current_time_ms.max(0.0));
             }
+            // Not this scheduler's: the shell hands `CSSTransition` commands to the
+            // `TransitionScheduler` (CSSANIM-MODEL-2 срез S5).
+            CssMotionCmd::TransitionCancel { .. } | CssMotionCmd::TransitionSeek { .. } => {}
         }
     }
 

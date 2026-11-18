@@ -1811,6 +1811,28 @@ impl TransitionScheduler {
         self.active.retain(|(n, _), _| *n != node);
     }
 
+    /// A script's `CSSTransition.cancel()`: drop the `(node, property)` transition, so the
+    /// element shows its settled style from the next tick on. The frame's value is not
+    /// handed back — the script's own `transitioncancel` has already said what it was.
+    ///
+    /// `sync()` only ever creates a transition on a value change, and a cancel changes no
+    /// value, so the record does not come back on its own.
+    ///
+    /// `shortcut:` the dropped `from`/`to` are gone, so a later `play()` of the same
+    /// `CSSTransition` moves its computed value (JS overlay) but no longer its painted frame;
+    /// rebuild the record from the still-pending value change when a test needs both.
+    pub fn cancel(&mut self, node: NodeId, property: &str) {
+        self.active.remove(&(node, property.to_string()));
+    }
+
+    /// `CSSTransition.currentTime`/`startTime` written: put the transition's local time at
+    /// `current_time_s` as of `now`, so the frame follows the script's clock.
+    pub fn seek(&mut self, node: NodeId, property: &str, now: f32, current_time_s: f32) {
+        if let Some(state) = self.active.get_mut(&(node, property.to_string())) {
+            state.start_time = now - current_time_s;
+        }
+    }
+
     /// Cancel and drop every active transition whose node is absent from
     /// `present` (GAP-CSSANIM срез 7) — CSS Transitions L1 §3 cancels a
     /// transition both when its element is removed from the document and
@@ -3373,6 +3395,48 @@ mod tests {
         sched.sync(node, &old, &new, 0.0);
         sched.remove_node(node);
         assert!(sched.active.is_empty());
+    }
+
+    /// CSSANIM-MODEL-2 S5: a script's `cancel()` drops the record, so the frame stops painting
+    /// the transition — the element shows its settled value — and a second cancel is harmless.
+    #[test]
+    fn transition_scheduler_cancel_drops_the_record_and_the_frame() {
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(15usize);
+        let other = lumen_dom::NodeId::from_index(19usize);
+        let old = make_opacity_transition_style(0.0, 1.0);
+        let new = make_opacity_transition_style(1.0, 1.0);
+        sched.sync(node, &old, &new, 0.0);
+        sched.sync(other, &old, &new, 0.0);
+
+        sched.cancel(node, "opacity");
+        let (frame, _events) = sched.tick(0.5);
+        assert!(!frame.overrides.contains_key(&node), "cancelled property must not paint");
+        assert!(frame.overrides.contains_key(&other), "another element keeps its transition");
+
+        sched.cancel(node, "opacity");
+        sched.cancel(node, "color");
+        assert!(sched.active.keys().all(|(n, _)| *n != node));
+    }
+
+    /// CSSANIM-MODEL-2 S5: `CSSTransition.currentTime = …` moves the record's clock, so the
+    /// painted frame reads the script's time rather than the one the frame loop counted.
+    #[test]
+    fn transition_scheduler_seek_moves_the_clock_the_frame_reads() {
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(21usize);
+        let old = make_opacity_transition_style(0.0, 4.0);
+        let new = make_opacity_transition_style(1.0, 4.0);
+        sched.sync(node, &old, &new, 0.0);
+
+        // Two seconds of frame time passed, but the script seeked the transition back to 1 s.
+        sched.seek(node, "opacity", 2.0, 1.0);
+        let (frame, _events) = sched.tick(2.0);
+        let op = frame.overrides[&node].opacity.unwrap();
+        assert!((op - 0.25).abs() < 0.01, "expected ~0.25, got {op}");
+
+        // A seek of a property with no record is a no-op, not a panic.
+        sched.seek(node, "color", 2.0, 1.0);
     }
 
     #[test]

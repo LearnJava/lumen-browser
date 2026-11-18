@@ -222,6 +222,42 @@ fn cancel_play_and_seek_queue_commands_for_the_frame_loop() {
     );
 }
 
+// CSSANIM-MODEL-2 срез S5: a transition the frame loop's `TransitionScheduler` drives is
+// cancelled and seeked through the same queue, keyed by its kebab-case property.
+#[test]
+fn a_scheduler_driven_transition_queues_its_seek_and_cancel() {
+    use crate::CssMotionCmd;
+    let rt = rt();
+    let script = format!(
+        "{PRELUDE}
+        __vals['transition-property'] = 'all'; __vals['transition-duration'] = '10s';
+        __vals['transition-delay'] = '0s'; __vals['transition-timing-function'] = 'linear';
+        var t = _css_tr_from_event(1, 'opacity'), r = [t instanceof CSSTransition];
+        t.currentTime = 5000;
+        t.cancel();
+        r.join(' ')"
+    );
+    assert_eq!(eval_str(&rt, &script), "true");
+    let cmds = rt.take_css_motion_cmds();
+    let shape: Vec<String> = cmds
+        .iter()
+        .map(|c| match c {
+            CssMotionCmd::TransitionSeek { node, property, current_time_ms }
+                if *node == 1 && property == "opacity" =>
+            {
+                format!("seek opacity {current_time_ms}")
+            }
+            CssMotionCmd::TransitionCancel { node, property }
+                if *node == 1 && property == "opacity" =>
+            {
+                "cancel opacity".to_string()
+            }
+            other => format!("unexpected {other:?}"),
+        })
+        .collect();
+    assert_eq!(shape.join(" | "), "seek opacity 5000 | cancel opacity");
+}
+
 #[test]
 fn a_script_change_of_the_play_state_stands_against_the_style() {
     let rt = rt();
