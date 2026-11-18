@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-11-17T23:29:20",
+  "timestamp": "2026-11-18T01:46:27",
   "git": {
-    "commit": "ed105a7e2",
-    "branch": "p6-load-4",
-    "subject": "Влить ветку p6-load-5: LOAD-5 — картинки со стримингового сканера, пул 8"
+    "commit": "efa9299fc",
+    "branch": "p6-load-9",
+    "subject": "Влить ветку p6-load-7: LOAD-7 - сетевой дедлайн load окна"
   },
   "crop_offset": [
     8,

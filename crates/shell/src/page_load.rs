@@ -822,6 +822,7 @@ impl Lumen {
                         });
                     }
                 }
+                self.load_marks.set_layout_passes(page.layout_passes);
                 self.load_marks.mark_final_applied(std::time::Instant::now());
                 click_log::log_load_ok(&self.source.describe(), title);
                 click_log::log_page_ready(&self.source.describe(), self.scroll_y);
@@ -926,6 +927,8 @@ impl Lumen {
             response_policies: Default::default(),
             // lumen-driver's headless pipeline has no parse-time snapshot pass.
             prescript_layout_rects: None,
+            // LOAD-9: driver's pipeline counts its own passes; nothing to report here.
+            layout_passes: 0,
         })
     }
 
@@ -1868,6 +1871,9 @@ impl Lumen {
     /// в будущем для других путей загрузки.
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn apply_loaded_page(&mut self, mut page: LoadedPage, new_layout_source: Option<LayoutSource>, new_js_ctx: Option<Arc<dyn PersistentJs>>) {
+        // LOAD-9: pipeline's full-layout passes for this navigation, reported in
+        // the `load_timing` health record next to the LOAD-0 marks.
+        self.load_marks.set_layout_passes(page.layout_passes);
         // Drop JS closures before layout_source to release Arc clones in QuickJS.
         self.set_js_ctx(None);
         self.layout_source = new_layout_source;
