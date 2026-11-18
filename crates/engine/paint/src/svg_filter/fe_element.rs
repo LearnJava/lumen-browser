@@ -17,7 +17,7 @@ pub(super) fn render(picture: &FeElementPicture, g: &Geometry, origin: (i32, i32
     let boxes = picture.positioned([g.sx, 0.0, 0.0, g.sy, origin.0 as f32, origin.1 as f32]);
     let commands = crate::display_list::boxes_commands(&boxes);
     let images = std::collections::HashMap::new();
-    let Ok(pixmap) = crate::cpu_raster::rasterize_cpu_pixmap(w as u32, h as u32, &commands, &images, None, None)
+    let Ok(pixmap) = crate::cpu_raster::rasterize_cpu_pixmap(w as u32, h as u32, &commands, &images, None, 0.0, 0.0, None)
     else {
         return out;
     };

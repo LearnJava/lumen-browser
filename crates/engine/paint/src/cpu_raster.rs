@@ -219,8 +219,8 @@ pub(crate) fn rasterize_cpu_with_fonts(
     height: u32,
     commands: &[DisplayCommand],
     images: &[(String, std::sync::Arc<Image>)],
-    _scroll_x: f32,
-    _scroll_y: f32,
+    scroll_x: f32,
+    scroll_y: f32,
     font_provider: Option<&dyn FontProvider>,
     canvas_background: Option<Color>,
 ) -> Result<Image, Box<dyn std::error::Error>> {
@@ -232,7 +232,7 @@ pub(crate) fn rasterize_cpu_with_fonts(
         images.iter().map(|(s, img)| (s.as_str(), img.as_ref())).collect();
 
     let clear = canvas_background.unwrap_or(Color::WHITE);
-    let pixmap = rasterize_cpu_pixmap(width, height, commands, &image_map, font_provider, Some(clear))?;
+    let pixmap = rasterize_cpu_pixmap(width, height, commands, &image_map, font_provider, scroll_x, scroll_y, Some(clear))?;
     let data = pixmap.data().to_vec();
     Ok(Image {
         width,
@@ -288,18 +288,28 @@ pub fn rasterize_cpu_element_image(
 /// Тело растеризатора: рисует `commands` на полотно `width`×`height` и отдаёт
 /// пиксели. `clear == None` — прозрачное полотно (слой группы `PushTransform`,
 /// BUG-1288), иначе заливка этим цветом.
-#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::expect_used, clippy::too_many_arguments)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn rasterize_cpu_pixmap(
     width: u32,
     height: u32,
     commands: &[DisplayCommand],
     image_map: &std::collections::HashMap<&str, &Image>,
     font_provider: Option<&dyn FontProvider>,
+    scroll_x: f32,
+    scroll_y: f32,
     clear: Option<Color>,
 ) -> Result<tiny_skia::Pixmap, Box<dyn std::error::Error>> {
     use tiny_skia::Pixmap;
     // `-webkit-text-stroke`: обводка глифов штрихуется как `DrawSvgStroke`.
-    let commands = &*crate::text_stroke::expand_all(commands, font_provider);
+    let expanded = crate::text_stroke::expand_all(commands, font_provider);
+    // CSS Positioning L3 §6.3 + root scroll: the page scroll is a render-time
+    // parameter (the display list is scroll-independent). Bake `(-scroll_x,
+    // -scroll_y)` into every command's geometry up front so the whole page is
+    // drawn in screen space — `BeginFixedLayer`/`BeginStickyLayer` below then
+    // re-apply `+scroll` / the clamped offset for their own subtrees.
+    let scrolled: Option<Vec<DisplayCommand>> = (scroll_x != 0.0 || scroll_y != 0.0)
+        .then(|| expanded.iter().map(|c| c.translated(-scroll_x, -scroll_y)).collect());
+    let commands: &[DisplayCommand] = scrolled.as_deref().unwrap_or(&expanded);
     let mut base = Pixmap::new(width, height)
         .ok_or("Failed to create pixmap")?;
 
@@ -346,6 +356,11 @@ pub(crate) fn rasterize_cpu_pixmap(
     let mut clip_saves: Vec<Vec<Rect>> = Vec::new();
     // One flag per open `PushScrollLayer`: did it open a translated layer (non-zero scroll).
     let mut scroll_layer_shifted: Vec<bool> = Vec::new();
+    // One flag per open `BeginStickyLayer`/`BeginFixedLayer`: did it open a
+    // translated layer (non-zero offset)? Zero offset = not sticking / scroll 0,
+    // so no transform layer is pushed and the matching close is a no-op.
+    let mut sticky_shifted: Vec<bool> = Vec::new();
+    let mut fixed_shifted: Vec<bool> = Vec::new();
     // BUG-1290: матрица `A`, действующая на прямых потомков открытой группы
     // `PushTransform`. Слой потомка композитится в слой родителя матрицей
     // `H(A)⁻¹·H(A·M)`, чтобы после композита родителя (`H(A)`) вышло
@@ -972,6 +987,69 @@ pub(crate) fn rasterize_cpu_pixmap(
             DisplayCommand::PopBackdropFilter => {
                 // No-op: the backdrop was filtered in place at the matching Push.
             }
+            // CSS Positioning L3 §6.3 — page-level `position:sticky`. The page
+            // scroll was already baked into the list; add the clamped correction
+            // so the subtree sticks to its inset instead of scrolling away.
+            // `(0, 0)` = not sticking → no layer, the close is a no-op.
+            DisplayCommand::BeginStickyLayer { flow_rect, top, bottom, left, right } => {
+                let (cdx, cdy) = sticky_correction(
+                    flow_rect, *top, *bottom, *left, *right, width as f32, height as f32,
+                );
+                let Some(end) = matching_pop_sticky(commands, cmd_idx) else {
+                    sticky_shifted.push(false);
+                    continue;
+                };
+                if cdx == 0.0 && cdy == 0.0 {
+                    sticky_shifted.push(false);
+                    continue;
+                }
+                let matrix = lumen_layout::Mat4::translation_2d(cdx, cdy);
+                if let Some(skip) = emit_translation_bracket(
+                    commands, cmd_idx, end, &matrix, width, height,
+                    &mut layers, &mut layer_ops, &mut clip_saves, &mut xf_acc,
+                    &mut clip_stack, &mut clip_rect, &mut clip_mask, image_map, font_provider,
+                )? {
+                    skip_until = skip;
+                } else {
+                    sticky_shifted.push(true);
+                }
+            }
+            DisplayCommand::EndStickyLayer if sticky_shifted.pop() == Some(true) => {
+                pop_translation_layer(
+                    &mut layers, &mut layer_ops, &mut clip_saves, &mut xf_acc,
+                    &mut clip_stack, &mut clip_rect, &mut clip_mask, width, height, image_map,
+                );
+            }
+            DisplayCommand::EndStickyLayer => {}
+            // CSS Positioning L3 §6.1 — `position:fixed` is already at viewport
+            // coords; undo the page scroll baked into the list so it stays put.
+            DisplayCommand::BeginFixedLayer => {
+                let Some(end) = matching_pop_fixed(commands, cmd_idx) else {
+                    fixed_shifted.push(false);
+                    continue;
+                };
+                if scroll_x == 0.0 && scroll_y == 0.0 {
+                    fixed_shifted.push(false);
+                    continue;
+                }
+                let matrix = lumen_layout::Mat4::translation_2d(scroll_x, scroll_y);
+                if let Some(skip) = emit_translation_bracket(
+                    commands, cmd_idx, end, &matrix, width, height,
+                    &mut layers, &mut layer_ops, &mut clip_saves, &mut xf_acc,
+                    &mut clip_stack, &mut clip_rect, &mut clip_mask, image_map, font_provider,
+                )? {
+                    skip_until = skip;
+                } else {
+                    fixed_shifted.push(true);
+                }
+            }
+            DisplayCommand::EndFixedLayer if fixed_shifted.pop() == Some(true) => {
+                pop_translation_layer(
+                    &mut layers, &mut layer_ops, &mut clip_saves, &mut xf_acc,
+                    &mut clip_stack, &mut clip_rect, &mut clip_mask, width, height, image_map,
+                );
+            }
+            DisplayCommand::EndFixedLayer => {}
             // Remaining commands not implemented for CPU rasterization yet.
             _ => {
                 // Skipped for now; will be implemented in later phases.
@@ -2304,6 +2382,169 @@ fn matching_pop_scroll(commands: &[DisplayCommand], start: usize) -> Option<usiz
     None
 }
 
+/// Индекс `EndStickyLayer`, закрывающего `BeginStickyLayer` в `commands[start]`.
+fn matching_pop_sticky(commands: &[DisplayCommand], start: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (i, cmd) in commands.iter().enumerate().skip(start) {
+        match cmd {
+            DisplayCommand::BeginStickyLayer { .. } => depth += 1,
+            DisplayCommand::EndStickyLayer => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Индекс `EndFixedLayer`, закрывающего `BeginFixedLayer` в `commands[start]`.
+fn matching_pop_fixed(commands: &[DisplayCommand], start: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (i, cmd) in commands.iter().enumerate().skip(start) {
+        match cmd {
+            DisplayCommand::BeginFixedLayer => depth += 1,
+            DisplayCommand::EndFixedLayer => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// CSS Positioning L3 §6.3 — clamp correction for a page-level `position:sticky`
+/// element in the CPU raster's already-scrolled (screen) space. `flow_rect` is
+/// the border box after `(-scroll_x, -scroll_y)` was baked into the list;
+/// `top`/`bottom`/`left`/`right` are the resolved insets; the scrollport is the
+/// full viewport `(width, height)`. `(0, 0)` means "not sticking" — no offset
+/// transform is emitted. Mirror of the femtovg backend's 0-baseline
+/// `sticky_offset_dy`/`dx` (`backends/femtovg_backend.rs`).
+fn sticky_correction(
+    flow_rect: &Rect,
+    top: Option<f32>,
+    bottom: Option<f32>,
+    left: Option<f32>,
+    right: Option<f32>,
+    width: f32,
+    height: f32,
+) -> (f32, f32) {
+    let mut dy = 0.0;
+    if let Some(t) = top
+        && flow_rect.y < t
+    {
+        dy += t - flow_rect.y;
+    }
+    if let Some(b) = bottom {
+        let max_y = height - b - flow_rect.height;
+        let actual = flow_rect.y + dy;
+        if actual > max_y {
+            dy -= actual - max_y;
+        }
+    }
+    let mut dx = 0.0;
+    if let Some(l) = left
+        && flow_rect.x < l
+    {
+        dx += l - flow_rect.x;
+    }
+    if let Some(r) = right {
+        let max_x = width - r - flow_rect.width;
+        let actual = flow_rect.x + dx;
+        if actual > max_x {
+            dx -= actual - max_x;
+        }
+    }
+    (dx, dy)
+}
+
+/// Render a balanced bracket (`commands[cmd_idx]`…`commands[end]`) through a 2D
+/// translation matrix — the affine path of `PushTransform`, shared by
+/// `BeginStickyLayer` (clamped offset) and `BeginFixedLayer` (undo page scroll).
+/// When the subtree's ink extends past the canvas it renders into an off-screen
+/// layer of its own extent and composites it here, returning `Some(end + 1)` so
+/// the caller skips to past the bracket; otherwise it pushes a plain full-size
+/// transform layer and returns `None` (the matching close pops it).
+#[allow(clippy::too_many_arguments)]
+fn emit_translation_bracket(
+    commands: &[DisplayCommand],
+    cmd_idx: usize,
+    end: usize,
+    matrix: &lumen_layout::Mat4,
+    width: u32,
+    height: u32,
+    layers: &mut Vec<CpuLayer>,
+    layer_ops: &mut Vec<LayerComposite>,
+    clip_saves: &mut Vec<Vec<Rect>>,
+    xf_acc: &mut Vec<lumen_layout::Mat4>,
+    clip_stack: &mut Vec<Rect>,
+    clip_rect: &mut Option<Rect>,
+    clip_mask: &mut Option<tiny_skia::Mask>,
+    image_map: &std::collections::HashMap<&str, &Image>,
+    font_provider: Option<&dyn FontProvider>,
+) -> Result<Option<usize>, Box<dyn std::error::Error>> {
+    if let GroupLayer::Rendered(group, group_t) = render_offcanvas_transform_group(
+        width, height, matrix, &commands[cmd_idx + 1..end], *clip_rect, image_map, font_provider,
+    )? {
+        if let Some(group) = group
+            && let Some(dst) = layers.last_mut()
+        {
+            let (gw, gh) = (group.width() as f32, group.height() as f32);
+            let src = CpuLayer { pm: group, dirty: Some((0.0, 0.0, gw, gh)) };
+            close_layer(dst, &src, &LayerComposite::Transform(group_t), image_map);
+        }
+        return Ok(Some(end + 1));
+    }
+    let [a, b, c, d, e, f] = mat4_to_2d_affine(matrix);
+    let t = tiny_skia::Transform::from_row(a, b, c, d, e, f);
+    let layer = tiny_skia::Pixmap::new(width, height).ok_or("Failed to create translation layer")?;
+    layers.push(CpuLayer::new(layer));
+    layer_ops.push(LayerComposite::Transform(t));
+    xf_acc.push(lumen_layout::Mat4::IDENTITY);
+    clip_saves.push(clip_stack.clone());
+    if let Some(active) = *clip_rect
+        && let Some(inv) = matrix.invert_2d_affine()
+    {
+        *clip_stack = vec![transform_rect_bbox(active, &inv)];
+        *clip_rect = clip_intersection(clip_stack);
+        *clip_mask = build_clip_mask(width, height, *clip_rect);
+    }
+    Ok(None)
+}
+
+/// Pop the transform layer a matching `emit_translation_bracket` pushed (mirror
+/// of the `PopTransform` arm), restoring the document-space clip.
+#[allow(clippy::too_many_arguments)]
+fn pop_translation_layer(
+    layers: &mut Vec<CpuLayer>,
+    layer_ops: &mut Vec<LayerComposite>,
+    clip_saves: &mut Vec<Vec<Rect>>,
+    xf_acc: &mut Vec<lumen_layout::Mat4>,
+    clip_stack: &mut Vec<Rect>,
+    clip_rect: &mut Option<Rect>,
+    clip_mask: &mut Option<tiny_skia::Mask>,
+    width: u32,
+    height: u32,
+    image_map: &std::collections::HashMap<&str, &Image>,
+) {
+    if let (Some(top), Some(op)) = (layers.pop(), layer_ops.pop()) {
+        if matches!(op, LayerComposite::Transform(_)) && let Some(saved) = clip_saves.pop() {
+            xf_acc.pop();
+            *clip_stack = saved;
+            *clip_rect = clip_intersection(clip_stack);
+            *clip_mask = build_clip_mask(width, height, *clip_rect);
+        }
+        if let Some(dst) = layers.last_mut() {
+            close_layer(dst, &top, &op, image_map);
+        }
+    }
+}
+
 /// Объединённый габарит рисуемой геометрии `body` в системе координат группы
 /// (вложенные `PushTransform` проецируются своей матрицей).
 fn group_ink_bbox(body: &[DisplayCommand]) -> Option<Rect> {
@@ -2393,7 +2634,7 @@ fn render_offcanvas_transform_group(
         cmds.push(DisplayCommand::PushClipRect { rect: Rect::new(local.x - x0, local.y - y0, local.width, local.height) });
     }
     cmds.extend(body.iter().map(|cmd| cmd.translated(-x0, -y0)));
-    let pm = rasterize_cpu_pixmap(gw, gh, &cmds, image_map, font_provider, None)?;
+    let pm = rasterize_cpu_pixmap(gw, gh, &cmds, image_map, font_provider, 0.0, 0.0, None)?;
     Ok(GroupLayer::Rendered(Some(pm), t.pre_translate(x0, y0)))
 }
 
