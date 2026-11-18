@@ -229,6 +229,9 @@ mod v8_idb;
 mod v8_idb_events;
 
 #[cfg(feature = "v8-backend")]
+mod v8_idb_active;
+
+#[cfg(feature = "v8-backend")]
 mod v8_formdata;
 
 #[cfg(feature = "v8-backend")]
