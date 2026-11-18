@@ -1261,3 +1261,57 @@ fn layout_measurer_width_equals_cpu_pen_advance() {
         assert!((measured - pen).abs() < 0.01, "{text:?}: измеритель {measured}, CPU-перо {pen}");
     }
 }
+
+/// BUG-1468 (срез 4): прокрутка страницы сдвигает контент вверх — `scroll_y`
+/// больше не игнорируется, а запекается в геометрию списка как `-scroll`.
+#[test]
+fn page_scroll_shifts_content_up() {
+    let red = Color { r: 255, g: 0, b: 0, a: 255 };
+    let cmds = vec![DisplayCommand::FillRect { rect: rect(0.0, 50.0, 100.0, 20.0), color: red }];
+    let img = rasterize_cpu_with_fonts(100, 100, &cmds, &[], 0.0, 50.0, None, None).expect("rasterize");
+    // Полоса y=50..70 после прокрутки на 50 встаёт в y=0..20.
+    assert_eq!(px(&img, 50, 10), (255, 0, 0, 255), "scrolled band visible at top");
+    assert_eq!(px(&img, 50, 60), (255, 255, 255, 255), "original band position now empty");
+}
+
+/// BUG-1468 (срез 4): страничный `position:sticky` прилипает к инсету `top` —
+/// `BeginStickyLayer` компенсирует прокрутку клампом, в т.ч. через off-screen
+/// группу, когда допрокруточная позиция бокса уходит выше полотна.
+#[test]
+fn page_level_sticky_sticks_at_top() {
+    let green = Color { r: 0, g: 255, b: 0, a: 255 };
+    let cmds = vec![
+        DisplayCommand::BeginStickyLayer {
+            flow_rect: rect(0.0, 80.0, 100.0, 20.0),
+            top: Some(10.0),
+            bottom: None,
+            left: None,
+            right: None,
+        },
+        DisplayCommand::FillRect { rect: rect(0.0, 80.0, 100.0, 20.0), color: green },
+        DisplayCommand::EndStickyLayer,
+    ];
+    // Прокрутка 100: допрокруточная позиция -20, кламп к top=10 даёт +30 → y=10..30.
+    let img = rasterize_cpu_with_fonts(100, 100, &cmds, &[], 0.0, 100.0, None, None).expect("rasterize");
+    assert_eq!(px(&img, 50, 15), (0, 255, 0, 255), "sticky box sticks at top inset");
+    assert_eq!(px(&img, 50, 5), (255, 255, 255, 255), "above the top inset stays white");
+    assert_eq!(px(&img, 50, 35), (255, 255, 255, 255), "below the sticky box stays white");
+}
+
+/// BUG-1468 (срез 4): `position:fixed` уже в координатах вьюпорта — прокрутка
+/// должна его не сдвигать (`BeginFixedLayer` отменяет запечённый `-scroll`).
+#[test]
+fn fixed_content_stays_put_under_scroll() {
+    let red = Color { r: 255, g: 0, b: 0, a: 255 };
+    let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+    let cmds = vec![
+        DisplayCommand::BeginFixedLayer,
+        DisplayCommand::FillRect { rect: rect(0.0, 0.0, 100.0, 20.0), color: red },
+        DisplayCommand::EndFixedLayer,
+        // Обычный контент далеко внизу — при прокрутке должен уехать за кадр.
+        DisplayCommand::FillRect { rect: rect(0.0, 200.0, 100.0, 20.0), color: blue },
+    ];
+    let img = rasterize_cpu_with_fonts(100, 100, &cmds, &[], 0.0, 50.0, None, None).expect("rasterize");
+    assert_eq!(px(&img, 50, 10), (255, 0, 0, 255), "fixed header stays at viewport top");
+    assert_eq!(px(&img, 50, 90), (255, 255, 255, 255), "scrolled page content left the viewport");
+}
