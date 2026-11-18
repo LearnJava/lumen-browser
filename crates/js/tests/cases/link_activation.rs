@@ -136,6 +136,98 @@ fn cross_document_link_activation_with_a_different_path_and_a_fragment() {
     }
 }
 
+// ─── BUG-1818: scripted `<a target=…>.click()` must name a browsing context ──
+
+#[test]
+fn scripted_anchor_click_with_named_target_emits_a_link_request() {
+    // A `target` naming a frame/tab is resolved by the shell, not navigated in
+    // place: the JS shim must carry the resolved `href` AND the target.
+    let rt = make_rt();
+    rt.eval(
+        "var _a = document.createElement('a'); \
+         _a.setAttribute('href', '/other'); \
+         _a.setAttribute('target', 'frame1'); \
+         _a.click();",
+    )
+    .unwrap();
+    match rt.take_navigate_request() {
+        Some(NavigateRequest::Link { url, target }) => {
+            assert_eq!(url, "https://example.com/other");
+            assert_eq!(target, "frame1");
+        }
+        other => panic!("expected a Link navigation, got {other:?}"),
+    }
+}
+
+#[test]
+fn scripted_anchor_click_with_blank_target_emits_a_link_request() {
+    let rt = make_rt();
+    rt.eval(
+        "var _a = document.createElement('a'); \
+         _a.setAttribute('href', '/other'); \
+         _a.setAttribute('target', '_blank'); \
+         _a.click();",
+    )
+    .unwrap();
+    match rt.take_navigate_request() {
+        Some(NavigateRequest::Link { url, target }) => {
+            assert_eq!(url, "https://example.com/other");
+            assert_eq!(target, "_blank");
+        }
+        other => panic!("expected a Link navigation, got {other:?}"),
+    }
+}
+
+#[test]
+fn scripted_anchor_click_with_named_iframe_target_sets_src() {
+    // A named target that names a child frame of the current document is
+    // navigated by setting its `src` in place (the `iframe.src =` path), not by
+    // a shell navigation — the frame scanner sees the URL in the same turn.
+    let rt = V8JsRuntime::new().unwrap();
+    let doc = Arc::new(Mutex::new(lumen_html_parser::parse(
+        "<!DOCTYPE html><html><head></head><body></body></html>",
+    )));
+    rt.install_dom(doc, "https://example.com/doc", None, None, None, None, None, None, None, None, None, false, None)
+        .unwrap();
+    rt.eval(
+        "var _f = document.createElement('iframe'); \
+         _f.setAttribute('name', 'frame1'); \
+         document.body.appendChild(_f); \
+         var _a = document.createElement('a'); \
+         _a.setAttribute('href', '/other'); \
+         _a.setAttribute('target', 'frame1'); \
+         document.body.appendChild(_a); \
+         _a.click();",
+    )
+    .unwrap();
+    assert_eq!(
+        str_eval(&rt, "_f.getAttribute('src')"),
+        "https://example.com/other"
+    );
+    assert!(
+        rt.take_navigate_request().is_none(),
+        "a named frame target must not ask the shell to navigate"
+    );
+}
+
+#[test]
+fn scripted_anchor_click_with_self_target_still_pushes() {
+    // `_self` (and, by the same branch, `_top`/`_parent`/empty) still navigate
+    // the current page — the plain `Push` the shim has always emitted.
+    let rt = make_rt();
+    rt.eval(
+        "var _a = document.createElement('a'); \
+         _a.setAttribute('href', '/other'); \
+         _a.setAttribute('target', '_self'); \
+         _a.click();",
+    )
+    .unwrap();
+    match rt.take_navigate_request() {
+        Some(NavigateRequest::Push(url)) => assert_eq!(url, "https://example.com/other"),
+        other => panic!("expected a Push navigation, got {other:?}"),
+    }
+}
+
 // ─── BUG-963: hyperlink auditing (`ping` attribute, HTML LS §4.6.9) ────────
 
 /// Records every request the ping mechanism issues through the one entry

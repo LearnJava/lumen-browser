@@ -49,6 +49,17 @@ pub enum NavigateRequest {
         /// Node index of the submitter control, or `-1` for none.
         submitter: i32,
     },
+    /// Scripted activation of a hyperlink (`<a>`/`<area>` `click()`) whose
+    /// `target` names another browsing context (BUG-1818). `url` is the
+    /// resolved `href`; the shell resolves `target` per HTML LS §7.3.2
+    /// (a live frame, then a named tab, then a fresh tab). The shim routes
+    /// `_self`/`_top`/`_parent`/empty to [`NavigateRequest::Push`] instead.
+    Link {
+        /// Resolved destination URL (the shim's `el.href`).
+        url: String,
+        /// Raw `target` attribute value (`_blank` or a name).
+        target: String,
+    },
 }
 
 // ─── history URL update ───────────────────────────────────────────────────────
