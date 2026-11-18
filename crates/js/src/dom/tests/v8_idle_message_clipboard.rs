@@ -429,17 +429,22 @@ fn navigator_permissions_local_fonts_denied() {
 
 /// The subscription path has to be wired to the shim's real
 /// `EventTarget`, not to an inert `onchange` field.
+///
+/// The status is held in a local `ps`, not in a global `status`: `Window.status`
+/// is a DOMString attribute (BUG-1801), so a global `var status = …` assigns
+/// through its setter and stringifies the object to "[object PermissionStatus]"
+/// (BUG-1824). Browsers behave the same way; only the test was wrong.
 #[test]
 fn navigator_permissions_status_is_a_real_event_target() {
     let rt = v8_runtime_with_dom(make_doc());
     rt.eval(
-        "var status = null; \
-                 navigator.permissions.query({ name: 'camera' }).then(function(ps) { status = ps; });",
+        "var ps = null; \
+                 navigator.permissions.query({ name: 'camera' }).then(function(s) { ps = s; });",
     )
     .unwrap();
-    assert!(bool_eval(&rt, "status instanceof EventTarget"));
-    assert!(bool_eval(&rt, "status instanceof PermissionStatus"));
-    assert!(bool_eval(&rt, "typeof status.addEventListener === 'function'"));
+    assert!(bool_eval(&rt, "ps instanceof EventTarget"));
+    assert!(bool_eval(&rt, "ps instanceof PermissionStatus"));
+    assert!(bool_eval(&rt, "typeof ps.addEventListener === 'function'"));
     assert!(bool_eval(&rt, "navigator.permissions instanceof Permissions"));
 }
 
