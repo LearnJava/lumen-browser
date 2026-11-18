@@ -689,6 +689,70 @@ fn finish_table(
         };
         super::multicol_abspos::lay_out_abs_children(&mut frame.b, &abs, measurer, viewport, my_pcb, hp);
     }
+
+    // BUG-1471: rows/groups never reach `finish_after_match` (the table trampoline places them
+    // itself), so their `position: relative` offset is applied here once every rect is final.
+    apply_row_group_relative(
+        &mut frame.b,
+        frame.init.content_width,
+        frame.init.available_height,
+        measurer,
+        viewport,
+        hp,
+    );
+}
+
+/// BUG-1471: CSS Positioned Layout L3 §3.1 — `position: relative` on a `<tr>`/`<tbody>`/
+/// `<thead>`/`<tfoot>` shifts the whole row (its cells travel with it). A positioned
+/// row/group also becomes the containing block of its absolute descendants (the
+/// `-absolute-child` reftests), so those are re-placed against its padding box first —
+/// while the rect is still unshifted — and `shift_tree` then carries them along with the
+/// rest of the subtree, exactly like `finish_after_match`'s order for a normal block.
+fn apply_row_group_relative(
+    b: &mut LayoutBox,
+    content_width: f32,
+    available_height: Option<f32>,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+) {
+    for child in &mut b.children {
+        let is_row = matches!(child.kind, BoxKind::TableRow);
+        let is_group = matches!(child.kind, BoxKind::TableRowGroup);
+        if !is_row && !is_group {
+            continue;
+        }
+        if matches!(child.style.position, Position::Relative) {
+            super::multicol_abspos::fix_out_of_flow_descendants(child, measurer, viewport, hp);
+            let (dx, dy) = super::layout_dispatch::relative_offset(
+                &child.style,
+                child.style.font_size,
+                content_width,
+                available_height,
+                viewport,
+            );
+            if dx != 0.0 || dy != 0.0 {
+                super::shift_tree(child, dx, dy);
+            }
+        }
+        if is_group {
+            for row in &mut child.children {
+                if matches!(row.kind, BoxKind::TableRow) && matches!(row.style.position, Position::Relative) {
+                    super::multicol_abspos::fix_out_of_flow_descendants(row, measurer, viewport, hp);
+                    let (dx, dy) = super::layout_dispatch::relative_offset(
+                        &row.style,
+                        row.style.font_size,
+                        content_width,
+                        available_height,
+                        viewport,
+                    );
+                    if dx != 0.0 || dy != 0.0 {
+                        super::shift_tree(row, dx, dy);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// CSS 2.1 §17.5.1 / Writing Modes L3 §7: у горизонтальной таблицы с `direction: rtl` колонки идут

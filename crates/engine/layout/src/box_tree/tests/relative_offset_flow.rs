@@ -70,3 +70,49 @@ fn relative_left_percent_still_uses_container_width() {
     let css = "#c{width:300px;height:100px}#a{position:relative;height:5px;width:5px;left:10%}";
     assert_eq!(rects(PCT_BOX, css, &["a"])[0].x, 30.0);
 }
+
+// ── BUG-1471: position: relative на <tr>/<tbody>/<thead>/<tfoot> ──
+
+const TABLE_CSS: &str = "table{border-collapse:collapse}td{padding:0}td>div{width:20px;height:20px}";
+
+fn cell_xy(rows: &str, css: &str, id: &str) -> (f32, f32) {
+    let r = rects(
+        &format!(r#"<table><tbody>{rows}</tbody></table>"#),
+        &format!("{TABLE_CSS}{css}"),
+        &[id],
+    );
+    (r[0].x, r[0].y)
+}
+
+#[test]
+fn relative_on_tr_shifts_its_cells() {
+    let (x, y) = cell_xy(
+        r#"<tr><td><div id="c"></div></td></tr>"#,
+        "tr{position:relative;top:30px}",
+        "c",
+    );
+    assert_eq!((x, y), (0.0, 30.0));
+}
+
+#[test]
+fn relative_on_tbody_shifts_its_cells() {
+    let (x, y) = cell_xy(
+        r#"<tr><td><div id="c"></div></td></tr>"#,
+        "tbody{position:relative;left:30px}",
+        "c",
+    );
+    assert_eq!((x, y), (30.0, 0.0));
+}
+
+#[test]
+fn relative_group_is_containing_block_for_abs_child() {
+    // tfoot sits at y=20 (after one 20px tbody row): the abs child's `top:20px` is
+    // measured from the tfoot padding box (y=20→40), then the group shifts down 30px.
+    let css = "tfoot{position:relative;top:30px}";
+    let r = rects(
+        r#"<table><tbody><tr><td><div></div></td></tr></tbody><tfoot><tr><td><div id="a" style="position:absolute;top:20px"></div></td></tr></tfoot></table>"#,
+        &format!("{TABLE_CSS}{css}"),
+        &["a"],
+    );
+    assert_eq!((r[0].x, r[0].y), (0.0, 70.0), "{:?}", r[0]);
+}
