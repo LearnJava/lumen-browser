@@ -929,22 +929,28 @@ pub const ANIMATED_STYLE_PROPERTIES: [&str; 5] =
 /// being dropped.
 pub fn settle_animated_style(map: &mut crate::StyleMap) {
     for prop in ANIMATED_STYLE_PROPERTIES {
-        let marker = animated_marker_key(prop);
-        if map.get(&marker).is_none() {
-            continue;
-        }
-        let settled = settled_animated_key(prop);
-        match map.get(&settled).cloned() {
-            Some(value) if !value.is_empty() => {
-                map.insert(prop, value);
-            }
-            _ => {
-                map.remove(prop);
-            }
-        }
-        map.remove(&settled);
-        map.remove(&marker);
+        settle_animated_property(map, prop);
     }
+}
+
+/// [`settle_animated_style`] for one property — `CSSTransition.cancel()` hands the element back
+/// the settled value of that property only, leaving a CSS animation of the same node painting.
+pub fn settle_animated_property(map: &mut crate::StyleMap, prop: &str) {
+    let marker = animated_marker_key(prop);
+    if map.get(&marker).is_none() {
+        return;
+    }
+    let settled = settled_animated_key(prop);
+    match map.get(&settled).cloned() {
+        Some(value) if !value.is_empty() => {
+            map.insert(prop.to_string(), value);
+        }
+        _ => {
+            map.remove(prop);
+        }
+    }
+    map.remove(&settled);
+    map.remove(&marker);
 }
 
 /// Key under which the snapshot keeps a box's `transform` as a function list

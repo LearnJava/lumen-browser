@@ -7469,7 +7469,17 @@ function _css_take_clock(a) {
 // and writes them into the computed-style snapshot; only it can stop doing so
 // (CSSANIM-MODEL-2 срез S4). Transitions are the `TransitionScheduler`'s own (S5).
 function _css_motion_cmd(kind, a, arg) {
-    if (a._ctype !== 'a' || !a._cname || typeof _lumen_css_motion_cmd !== 'function') return;
+    if (typeof _lumen_css_motion_cmd !== 'function') return;
+    // A transition only reaches the frame loop's `TransitionScheduler` when the scheduler made
+    // the object (`_css_tr_from_event`): it paints `opacity`/`transform`/colours/`height` itself.
+    // The overlay's own transitions are cancelled and seeked here in JS.
+    if (a._ctype === 't') {
+        if (!a._ev || !a._cprop) return;
+        if (kind === 'cancel') _lumen_css_motion_cmd('tcancel', a._nid, a._cprop, 0);
+        else if (kind === 'seek') _lumen_css_motion_cmd('tseek', a._nid, a._cprop, arg || 0);
+        return;
+    }
+    if (a._ctype !== 'a' || !a._cname) return;
     _lumen_css_motion_cmd(kind, a._nid, a._cname, arg || 0);
 }
 

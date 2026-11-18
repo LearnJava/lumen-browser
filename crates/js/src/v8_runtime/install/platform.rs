@@ -1371,7 +1371,10 @@ pub(crate) fn install_fullscreen(
 /// Shell drains the queue with `take_css_motion_cmds()` right before its per-frame
 /// tick. A `cancel` also settles the node's computed-style snapshot here, in the
 /// script's own task: WPT reads `getComputedStyle(el).transform` right after
-/// `cancel()`, before any frame could deliver the command.
+/// `cancel()`, before any frame could deliver the command. The `tcancel`/`tseek`
+/// kinds do the same for a `CSSTransition` and the `TransitionScheduler` (срез S5),
+/// keyed by the kebab-case property; `tcancel` settles that property alone, so an
+/// animation still running on the same node keeps its painted value.
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn install_css_motion(
     scope: &mut v8::PinScope<'_, '_>,
@@ -1392,6 +1395,18 @@ pub(crate) fn install_css_motion(
                 }
                 "restore" => crate::dom::CssMotionCmd::Restore { node: nid, name },
                 "seek" => crate::dom::CssMotionCmd::Seek { node: nid, name, current_time_ms },
+                "tcancel" => {
+                    let mut styles = computed_styles.lock().unwrap();
+                    if let Some(entry) = styles.get_mut(&nid) {
+                        lumen_layout::settle_animated_property(entry, &name);
+                    }
+                    crate::dom::CssMotionCmd::TransitionCancel { node: nid, property: name }
+                }
+                "tseek" => crate::dom::CssMotionCmd::TransitionSeek {
+                    node: nid,
+                    property: name,
+                    current_time_ms,
+                },
                 _ => return,
             };
             cmds.lock().unwrap().push(cmd);

@@ -119,8 +119,8 @@ pub use ruby::{
     resolve_level_sides,
 };
 pub use selector_query::{
-    ANIMATED_STYLE_PROPERTIES, TRANSFORM_LIST_KEY, animated_marker_key, settle_animated_style,
-    settled_animated_key,
+    ANIMATED_STYLE_PROPERTIES, TRANSFORM_LIST_KEY, animated_marker_key, settle_animated_property,
+    settle_animated_style, settled_animated_key,
 };
 pub use transform_interp::{interpolate_transform_value, resolve_transform_value};
 pub use animation::{
