@@ -297,8 +297,8 @@ fn a_transition_is_a_css_transition_with_its_property_and_leaves_the_list_when_o
         "{PRELUDE}
         __vals['transition-property'] = 'all'; __vals['transition-duration'] = '10s';
         __vals['transition-delay'] = '0s'; __vals['transition-timing-function'] = 'linear';
-        __vals['margin-left'] = '10px'; _wa_gap_tr_clock_ms = null; _wa_gap_tr_value(1, 'margin-left', '10px');
-        __vals['margin-left'] = '30px'; _wa_gap_tr_clock_ms = null; _wa_gap_tr_value(1, 'margin-left', '30px');
+        __vals['margin-left'] = '10px'; _wa_gap_tr_clock_ms = null; _wa_gap_tr_value(1, null, 'margin-left', '10px');
+        __vals['margin-left'] = '30px'; _wa_gap_tr_clock_ms = null; _wa_gap_tr_value(1, null, 'margin-left', '30px');
         var t = __sync(), r = [t.length];
         r.push(t[0] instanceof CSSTransition, t[0].transitionProperty, t[0].pending, t[0].id === '');
         r.push(t[0].effect.getKeyframes().map(function(k) {{ return k.marginLeft; }}).join('>'));
@@ -316,11 +316,11 @@ fn a_transition_is_cancelled_when_the_style_no_longer_asks_for_it() {
         "{PRELUDE}
         __vals['transition-property'] = 'all'; __vals['transition-duration'] = '10s';
         __vals['transition-delay'] = '0s'; __vals['transition-timing-function'] = 'linear';
-        __vals['margin-left'] = '10px'; _wa_gap_tr_clock_ms = null; _wa_gap_tr_value(1, 'margin-left', '10px');
-        __vals['margin-left'] = '30px'; _wa_gap_tr_clock_ms = null; _wa_gap_tr_value(1, 'margin-left', '30px');
+        __vals['margin-left'] = '10px'; _wa_gap_tr_clock_ms = null; _wa_gap_tr_value(1, null, 'margin-left', '10px');
+        __vals['margin-left'] = '30px'; _wa_gap_tr_clock_ms = null; _wa_gap_tr_value(1, null, 'margin-left', '30px');
         var t = __sync()[0], r = [t.playState];
         __vals['transition-property'] = 'none';
-        _wa_gap_tr_clock_ms = null; _wa_gap_tr_value(1, 'margin-left', '30px');
+        _wa_gap_tr_clock_ms = null; _wa_gap_tr_value(1, null, 'margin-left', '30px');
         r.push(t.playState, __sync().length);
         r.join(' ')"
     );
@@ -339,13 +339,13 @@ fn a_transition_is_cancelled_when_the_element_stops_generating_a_box() {
         "{PRELUDE}
         __vals['transition-property'] = 'all'; __vals['transition-duration'] = '10s';
         __vals['transition-delay'] = '0s'; __vals['transition-timing-function'] = 'linear';
-        __vals['margin-left'] = '10px'; _wa_gap_tr_clock_ms = null; _wa_gap_tr_value(1, 'margin-left', '10px');
-        __vals['margin-left'] = '30px'; _wa_gap_tr_clock_ms = null; _wa_gap_tr_value(1, 'margin-left', '30px');
+        __vals['margin-left'] = '10px'; _wa_gap_tr_clock_ms = null; _wa_gap_tr_value(1, null, 'margin-left', '10px');
+        __vals['margin-left'] = '30px'; _wa_gap_tr_clock_ms = null; _wa_gap_tr_value(1, null, 'margin-left', '30px');
         var t = __sync()[0], r = [t.playState];
         __tick(1000);
-        r.push(_wa_gap_tr_value(1, 'margin-left', '30px'));
+        r.push(_wa_gap_tr_value(1, null, 'margin-left', '30px'));
         _css_boxless = function() {{ return true; }};
-        r.push(t.playState, _wa_gap_tr_value(1, 'margin-left', '30px'), __sync().length);
+        r.push(t.playState, _wa_gap_tr_value(1, null, 'margin-left', '30px'), __sync().length);
         r.join(' ')"
     );
     assert_eq!(eval_str(&rt, &script), "running 12px idle 30px 0");
@@ -385,8 +385,8 @@ fn a_scripted_seek_dispatches_the_transition_events_it_crosses() {
         "{PRELUDE}
         __vals['transition-property'] = 'all'; __vals['transition-duration'] = '10s';
         __vals['transition-delay'] = '0s'; __vals['transition-timing-function'] = 'linear';
-        __vals['margin-left'] = '10px'; _wa_gap_tr_clock_ms = null; _wa_gap_tr_value(1, 'margin-left', '10px');
-        __vals['margin-left'] = '30px'; _wa_gap_tr_clock_ms = null; _wa_gap_tr_value(1, 'margin-left', '30px');
+        __vals['margin-left'] = '10px'; _wa_gap_tr_clock_ms = null; _wa_gap_tr_value(1, null, 'margin-left', '10px');
+        __vals['margin-left'] = '30px'; _wa_gap_tr_clock_ms = null; _wa_gap_tr_value(1, null, 'margin-left', '30px');
         var t = __sync()[0], got = [];
         _lumen_dispatch = function(nid, ev) {{ got.push(ev.type + ' ' + ev.propertyName + ' ' + ev.elapsedTime + ' ' + ev.cancelable); }};
         t.currentTime = 5000;
@@ -518,3 +518,61 @@ fn a_property_nobody_read_transitions_from_the_first_observed_style() {
         other => panic!("expected a string, got {other:?}"),
     }
 }
+
+/// CSSANIM-MODEL-3: `::marker` is one of the pseudo-elements the animation model looks at, and
+/// it sorts before `::before`/`::after` (CSS Pseudo-Elements L4; WPT `Document-getAnimations`
+/// «(::marker)» subtests). `document.getAnimations()` ranks a pseudo-element by the animation's
+/// *owning* one, not by `effect.target` — a script may move an effect elsewhere and the order
+/// must not follow it (WPT «pseudo element with replaced target does not affect animation
+/// ordering»).
+#[test]
+fn a_marker_sorts_between_the_element_and_the_other_pseudo_elements() {
+    let rt = rt();
+    let script = PRELUDE.to_string() + r#"
+        var mk = new Animation(new KeyframeEffect(__el, [], 10000), document.timeline);
+        var el = new Animation(new KeyframeEffect(__el, [], 10000), document.timeline);
+        var af = new Animation(new KeyframeEffect(__el, [], 10000), document.timeline);
+        mk.effect.pseudoElement = '::marker';
+        af.effect.pseudoElement = '::after';
+        mk.play(); el.play(); af.play();
+        [_wa_pseudo_targets(__el).join(','),
+         _wa_doc_get_animations().map(function(a) { return a.effect.pseudoElement || 'element'; }).join(',')].join(' ')"#;
+    assert_eq!(eval_str(&rt, &script), "::marker,::before,::after element,::marker,::after");
+}
+
+/// The two keys a transition can live under: the element's own stays `nid:property` (the shell's
+/// event lookups read that shape), a pseudo-element's carries the pseudo.
+#[test]
+fn a_pseudo_element_transition_has_its_own_key() {
+    let rt = rt();
+    let script = r#"[
+        _wa_tr_key(1, null, 'width'),
+        _wa_tr_key(1, '::before', 'width')
+    ].join(' ')"#
+    .to_string();
+    // Distinct records, and the element's key is still the prefix of the pseudo's, so the
+    // `nid:` scan that finds an element's live transitions keeps finding them.
+    assert_eq!(eval_str(&rt, &script), "1:width 1:::before:width");
+}
+
+/// CSS Color L4 §4.4: `border-top-color: currentcolor` follows `color` in the computed style,
+/// but its specified value did not change — one transition, on `color`, not nine (WPT
+/// `Document-getAnimations` «CSS Transitions targetting (pseudo-)elements …» counts them on a
+/// `::marker` with `transition: all`).
+#[test]
+fn a_property_that_follows_color_does_not_transition_with_it() {
+    let rt = rt();
+    let script = PRELUDE.to_string() + r#"
+        __vals['transition-property'] = 'all'; __vals['transition-duration'] = '10s';
+        __vals['transition-delay'] = '0s'; __vals['transition-timing-function'] = 'linear';
+        __vals['color'] = 'rgb(0, 128, 0)';
+        _wa_gap_tr['1:border-top-color'] = { seen: 'rgb(255, 0, 0)', run: null, boxless: false, cur: true };
+        _wa_gap_tr['1:color'] = { seen: 'rgb(255, 0, 0)', run: null, boxless: false, cur: false };
+        _wa_gap_tr_clock_ms = null;
+        var b = _wa_gap_tr_value(1, null, 'border-top-color', 'rgb(0, 128, 0)');
+        _wa_gap_tr_clock_ms = null;
+        _wa_gap_tr_value(1, null, 'color', 'rgb(0, 128, 0)');
+        [b, !!_css_tr_by_key['1:border-top-color'], !!_css_tr_by_key['1:color']].join(' ')"#;
+    assert_eq!(eval_str(&rt, &script), "rgb(0, 128, 0) false true");
+}
+
