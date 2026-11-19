@@ -1056,6 +1056,21 @@ use super::text_and_images::build;
     }
 
     #[test]
+    fn fit_cover_scale_down_picks_none_when_smaller() {
+        // BUG-1819 (CSS Images L4 §5.5): `cover scale-down` = min(none, cover);
+        // 50×50 меньше 100×100 — none меньше cover (который растянул бы до 100×100).
+        let placed = fit_image_rect(box100(), (50, 50), ObjectFit::CoverScaleDown, ObjectPosition::default());
+        assert!(approx_rect(placed, 25.0, 25.0, 50.0, 50.0));
+    }
+
+    #[test]
+    fn fit_cover_scale_down_picks_cover_when_larger() {
+        // 200×200 больше 100×100 — cover даёт меньшую площадь, чем none.
+        let placed = fit_image_rect(box100(), (200, 200), ObjectFit::CoverScaleDown, ObjectPosition::default());
+        assert!(approx_rect(placed, 0.0, 0.0, 100.0, 100.0));
+    }
+
+    #[test]
     fn fit_position_top_left_aligns_to_origin() {
         let pos = ObjectPosition {
             x: PositionComponent::Percent(0.0),

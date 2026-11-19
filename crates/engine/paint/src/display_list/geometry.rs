@@ -57,6 +57,7 @@ pub(crate) fn object_fit_name(f: ObjectFit) -> &'static str {
         ObjectFit::Cover => "cover",
         ObjectFit::None => "none",
         ObjectFit::ScaleDown => "scale-down",
+        ObjectFit::CoverScaleDown => "cover scale-down",
     }
 }
 
@@ -100,12 +101,9 @@ pub fn fit_image_rect(
         ObjectFit::None => (iw, ih),
         ObjectFit::Contain => fit_with_ratio(iw, ih, bw, bh, /*cover*/ false),
         ObjectFit::Cover => fit_with_ratio(iw, ih, bw, bh, /*cover*/ true),
-        ObjectFit::ScaleDown => {
-            // `min(none, contain)` — выбираем результат с меньшей площадью.
-            let (nw, nh) = (iw, ih);
-            let (kw, kh) = fit_with_ratio(iw, ih, bw, bh, false);
-            if nw * nh <= kw * kh { (nw, nh) } else { (kw, kh) }
-        }
+        ObjectFit::ScaleDown => scale_down_or(iw, ih, bw, bh, false),
+        // BUG-1819: `cover scale-down` = `min(none, cover)` (CSS Images L4 §5.5).
+        ObjectFit::CoverScaleDown => scale_down_or(iw, ih, bw, bh, true),
     };
 
     let free_x = bw - cw;
@@ -113,6 +111,13 @@ pub fn fit_image_rect(
     let off_x = position.x.resolve(free_x);
     let off_y = position.y.resolve(free_y);
     Rect::new(box_rect.x + off_x, box_rect.y + off_y, cw, ch)
+}
+
+/// `scale-down`-форма: `min(none, base)` — из intrinsic-размера и результата
+/// base-fit выбирается меньший по площади.
+fn scale_down_or(iw: f32, ih: f32, bw: f32, bh: f32, cover: bool) -> (f32, f32) {
+    let k = fit_with_ratio(iw, ih, bw, bh, cover);
+    if iw * ih <= k.0 * k.1 { (iw, ih) } else { k }
 }
 
 fn fit_with_ratio(iw: f32, ih: f32, bw: f32, bh: f32, cover: bool) -> (f32, f32) {

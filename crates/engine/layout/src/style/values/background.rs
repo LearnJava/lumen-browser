@@ -589,16 +589,30 @@ pub enum ObjectFit {
     /// `scale-down` — `min(none, contain)`: если intrinsic-размер меньше
     /// коробки, ведёт себя как `none`; иначе как `contain`.
     ScaleDown,
+    /// `cover scale-down` (CSS Images L4 §5.5, BUG-1819) — `min(none, cover)`.
+    /// `contain scale-down` сюда не попадает: это синоним `scale-down`.
+    CoverScaleDown,
 }
 
 impl ObjectFit {
     pub fn parse(s: &str) -> Option<Self> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "fill" => Some(Self::Fill),
-            "contain" => Some(Self::Contain),
-            "cover" => Some(Self::Cover),
-            "none" => Some(Self::None),
-            "scale-down" => Some(Self::ScaleDown),
+        let toks: Vec<String> = s.split_ascii_whitespace().map(str::to_ascii_lowercase).collect();
+        match toks.as_slice() {
+            [t] => match t.as_str() {
+                "fill" => Some(Self::Fill),
+                "contain" => Some(Self::Contain),
+                "cover" => Some(Self::Cover),
+                "none" => Some(Self::None),
+                "scale-down" => Some(Self::ScaleDown),
+                _ => None,
+            },
+            // CSS Images L4 §5.5: `[ contain | cover ] || scale-down`, порядок
+            // свободный; `contain scale-down` — синоним `scale-down` (BUG-1408 срез 19).
+            [a, b] if a != b => match (a.as_str(), b.as_str()) {
+                ("cover", "scale-down") | ("scale-down", "cover") => Some(Self::CoverScaleDown),
+                ("contain", "scale-down") | ("scale-down", "contain") => Some(Self::ScaleDown),
+                _ => None,
+            },
             _ => None,
         }
     }

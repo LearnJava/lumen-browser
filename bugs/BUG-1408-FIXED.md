@@ -287,7 +287,7 @@ keyword раздаётся каждой оси. JS-шим (`web_api_shim_mid.js`
 
 **Остаток среза 9** (не CSSOM, точечно здесь не чинится):
 `object-fit: cover scale-down` в computed style — `ComputedStyle.object_fit` одиночный
-enum, заведён [BUG-1819](BUG-1819-OPEN.md); round-trip `calc(100% - 20px) calc(100% - 10px)`
+enum, заведён [BUG-1819](BUG-1819-FIXED.md); round-trip `calc(100% - 20px) calc(100% - 10px)`
 в `object-position` — `parse_position_component` не разбирает `calc()`, остаток
 [BUG-495](BUG-495-OPEN.md). Плюс `*-computed.html` шрифтовых/масочных свойств (BUG-1407/1278).
 
@@ -319,5 +319,5 @@ invalid}` перепроверены (57/57, 19/19). Зелёный набор `
 
 **Остаток карточки (вне скоупа CSSOM):** `*-computed.html` — BUG-1407/1278;
 `shape()`/`path()` не раскладываются (раскладка, не CSSOM); `object-fit: cover
-scale-down` — [BUG-1819](BUG-1819-OPEN.md); round-trip `calc()` в
+scale-down` — [BUG-1819](BUG-1819-FIXED.md); round-trip `calc()` в
 `object-position` — [BUG-495](BUG-495-OPEN.md).
