@@ -198,23 +198,22 @@ unsafe extern "C" fn interrupt_cb(isolate: v8::UnsafeRawIsolatePtr, data: *mut c
         }
         // BUG-1826: счётчики preload-скрипта (BiDi `script.addPreloadScript`) —
         // какие API VM дёргает в реальном времени. Нет глобала — тихо.
-        let probe_name = v8::String::new(scope, "__lumenStallProbe").unwrap();
-        if let Some(val) = ctx.global(scope).get(scope, probe_name.into())
+        if let Some(probe_name) = v8::String::new(scope, "__lumenStallProbe")
+            && let Some(val) = ctx.global(scope).get(scope, probe_name.into())
             && let Ok(obj) = val.try_cast::<v8::Object>()
+            && let Some(keys) = obj.get_own_property_names(scope, Default::default())
         {
-            if let Some(keys) = obj.get_own_property_names(scope, Default::default()) {
-                for i in 0..keys.length() {
-                    let Some(key) = keys.get_index(scope, i) else { continue };
-                    let Some(key_str) = key.to_string(scope) else { continue };
-                    if let Some(v) = obj.get(scope, key.into())
-                        && let Ok(n) = v.try_cast::<v8::Number>()
-                    {
-                        out.push_str(&format!(
-                            "\n[js-stall]   {}={}",
-                            key_str.to_rust_string_lossy(scope),
-                            n.value() as u64
-                        ));
-                    }
+            for i in 0..keys.length() {
+                let Some(key) = keys.get_index(scope, i) else { continue };
+                let Some(key_str) = key.to_string(scope) else { continue };
+                if let Some(v) = obj.get(scope, key)
+                    && let Ok(n) = v.try_cast::<v8::Number>()
+                {
+                    out.push_str(&format!(
+                        "\n[js-stall]   {}={}",
+                        key_str.to_rust_string_lossy(scope),
+                        n.value() as u64
+                    ));
                 }
             }
         }
@@ -222,14 +221,15 @@ unsafe extern "C" fn interrupt_cb(isolate: v8::UnsafeRawIsolatePtr, data: *mut c
     // BUG-1826: снимок окружения — то, что читает фингерпринт challenge, снятый
     // изнутри зависшей задачи. Гейт `LUMEN_STALL_SNAPSHOT=1`; без него тишина.
     if snapshot_enabled() {
-        let src = v8::String::new(scope, SNAPSHOT_JS).unwrap();
-        if let Some(script) = v8::Script::compile(scope, src, None)
-            && let Some(v) = script.run(scope)
-            && let Some(s) = v.to_string(scope)
-        {
-            out.push_str(&format!("\n[js-stall]   env: {}", s.to_rust_string_lossy(scope)));
-        } else {
-            out.push_str("\n[js-stall]   env: <снимок не считался>");
+        let snapshot = v8::String::new(scope, SNAPSHOT_JS)
+            .and_then(|src| v8::Script::compile(scope, src, None))
+            .and_then(|script| script.run(scope))
+            .and_then(|v| v.to_string(scope));
+        match snapshot {
+            Some(s) => {
+                out.push_str(&format!("\n[js-stall]   env: {}", s.to_rust_string_lossy(scope)))
+            }
+            None => out.push_str("\n[js-stall]   env: <снимок не считался>"),
         }
     }
     eprintln!("{out}");
@@ -283,6 +283,27 @@ const SNAPSHOT_JS: &str = r#"(() => {
     ? performance.getEntries().map(e => (e.entryType || '?') + ':' + String(e.name || '').slice(-34)).slice(0, 12).join('|')
     : 'none';
   r.opt = window._cf_chl_opt ? Object.keys(window._cf_chl_opt).length : -1;
+  // BUG-1826 срез 4: буфер трасировщика офлайн-харнесса (harness_trace.js в
+  // payload) — sync XHR в занятом движке недоступен, события копятся здесь.
+  r.dbg = j(window.__h_dbg);
+  r.buf = window.__h_buf ? window.__h_buf.join('\n').slice(-6000) : '';
+  // BUG-1826 срез 4: во что упёрся спин — состояние фреймов/turnstile посреди
+  // зависшей задачи (это ровно то, что VM может опрашивать в своём цикле).
+  r.frames = (function () {
+    const out = [];
+    const fs = document.querySelectorAll('iframe');
+    for (let i = 0; i < fs.length && i < 5; i++) {
+      const f = fs[i];
+      let cw = false, cd = false, cwLen = -1;
+      try { cw = !!f.contentWindow; cwLen = cw ? f.contentWindow.length : -1; } catch (e) { cw = 'ERR'; }
+      try { cd = !!f.contentDocument; } catch (e2) { cd = 'ERR'; }
+      out.push({ src: (f.getAttribute('src') || '').slice(0, 50), cw, cd, cwLen,
+                 w: f.getAttribute('width') || '', sbx: f.getAttribute('sandbox') || '' });
+    }
+    return out;
+  })();
+  r.turn = typeof window.turnstile;
+  r.onloadcb = typeof window._ce1dc0c1663c982f624a9bda;
   return JSON.stringify(r);
 })()"#;
 

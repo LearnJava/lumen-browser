@@ -129,3 +129,58 @@ Lumen «отказ», Chrome для Testing 157 «пройдено» за ~15 c,
   (в Chrome `h2`/`h3`) — VM мог бы читать нулевой TTFB как фейк; (в) проверка XHR-поверхности
   (`getResponseHeader`, `onreadystatechange`, `loadend`, `timeout`) и `crypto.randomUUID` — в
   списке имён VM.
+
+## Срез 4 (2026-11-19, P6) — офлайн-харнесс: спин воспроизводится на localhost; deadlock отложенных загрузок; RTC-стаб продвигает VM
+
+Метод: дамп `stall-script-145.js` (nopecha-челлендж среза 1) + страница дампа с `cZone`,
+пропатченным под hostname харнесса (гейт `V4()`: `_cf_chl_opt.cZone === location.hostname` —
+патч payload не понадобился). Сервер-харнесс `.tmp/stall/harness_serve.py`: `/cdn-cgi/*` отдаёт
+payload с вклеенными трейсером и стабом, все прочие запросы логируются и отвечают 200 `{}`;
+трассировщик `.tmp/stall/harness_trace.js` оборачивает setTimeout/XHR/fetch/crypto/performance/
+DOM/RTC одинаково в обоих движках (toString-унификация), события — fetch-POST `/log` (sync XHR
+в Lumen «отправляет», но ответы не доходят при занятом потоке — сам по себе побочный дефект).
+Прогон: `.tmp/stall/run_offline.py` (CfT через CDP + Lumen через MCP + диф `analyze_trace.py`).
+
+Установлено:
+
+- **Спин воспроизводится офлайн** на localhost (без прокси и живого сайта): движковый поток
+  Lumen занят одной задачей от `SETTIMEOUT(Ww,0)` (boot-колбэк) через `_lumen_tick_timers`,
+  стек `_lumen_tick_timers → Ww → qrb → R → Xy → spb → CR → …` (VM-интерпретатор), горячие
+  кадры меняются — т.е. это вычислительный busy-wait внутри задачи, а не ожидание событий.
+  В Chrome тот же Ww завершается за ~200 мс.
+- **Точка расхождения трейсов**: в Chrome после вставки скрытого измерительного iframe
+  (`width=0 height=0 sandbox=allow-same-origin`, без src) VM **сразу читает
+  `contentWindow`/`contentDocument`** (t≈66–128 мс, initial about:blank синхронен) и пишет в
+  него; в Lumen обращений к content* нет вовсе — VM замирает между append и чтением.
+  В Lumen геттеры content* ставятся по-элементно из Rust (`iframe_element.rs`) и возвращают
+  фасад `frame_bridge` только после отложенного скана шелла (`web_api_shim_tail_b.js:2167`).
+- **Deadlock отложенных загрузок (механизм подтверждён кодом)**: fetch динамического
+  `<script src>` отложен в `setTimeout(0)` (`web_api_shim_mid.js:15878` — force-async, PERF-14),
+  динамический iframe вообще не имеет ветки в шиме — его находит только скан шелла
+  `poll_dynamic_frames` (`frame_dynamic.rs:51`), откладываемый при занятом документе
+  (`try_lock`, BUG-935 срез 87, `frame_dynamic.rs:95-99`) и спавнящий сеть ещё на тик позже.
+  Таймеры качает только свободный движковый поток (`about_to_wait.rs:315,339-349`). Итог:
+  VM busy-wait'ит ресурс, чья загрузка не может начаться, пока поток занят самим ожиданием.
+  Проба на свободном движке (`.tmp/stall/probe_dynscript.py`) показывает, что вне спина
+  динамический скрипт Lumen грузит и исполняет нормально.
+- **Отсутствие RTCPeerConnection — реальный гейт** (BUG-1829): одинаковый для обоих движков
+  минимальный стаб (`.tmp/stall/harness_stub.js`, перекрывает и натив Chrome) продвигает VM
+  Lumen существенно дальше — появляются `RTC.ctor` (`cfg` со `stun:stun.cloudflare.com`),
+  `createDataChannel`, `createOffer`, `AEL icecandidate`, `SETTIMEOUT(5000)`, второй iframe —
+  т.е. без стаба VM замирает раньше; с стабом затылок смещается к измерительному iframe (см.
+  предыдущий пункт). Прелоад локальной копии api.js (исполнение до старта Ww) на спин не
+  влияет — wait-условие VM не про готовность turnstile-глобала.
+- **Resource-Timing записи** (опция (б) среза 3) в офлайн-прогоне доступны VM в обоих
+  движках; у Lumen milestone-поля схлопнуты в `startTime`, `nextHopProtocol` пуст — остаётся
+  паритет-дефектом, но спин не про него (VM не доходит до чтения записей orchestrate).
+- Буфер трейсера из занятой задачи достаётся стлл-сэмплером: `SNAPSHOT_JS` дополнен дампом
+  `__h_buf`/`__h_dbg`, состояния iframe (contentWindow/contentDocument/атрибуты),
+  `window.turnstile` и onload-колбэка (эталон: `frames: []` — VM держит фреймы в отцеплённом
+  контейнере, в Chrome так же; `turn: undefined` посреди спина).
+
+Дальше: (а) движковая правка deferred-загрузок — стартовать сетевой fetch динамического
+скрипта (шим) и динамического iframe (шелл) вне очереди движкового потока, синхронный
+initial about:blank для вставленных iframe (contentDocument без ожидания скана);
+(б) честная поверхность RTCPeerConnection (BUG-1829) как отдельная задача; (в) повторить
+офлайн-прогон после (а): критерий — VM Lumen доходит до `XHR POST /cdn-cgi/…/fo` (отпечаток),
+как в Chrome. Инструмент: `.tmp/stall/run_offline.py` (SKIP_CHROME=1 — только Lumen-плечо).
