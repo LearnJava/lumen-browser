@@ -779,12 +779,19 @@ function _idb_clone_store(store) {
         recs[i] = { key: store.records[i].key, value: store.records[i].value };
     }
     var indexes = {};
+    var indexRefs = {}, indexFlags = {};
     for (var n in store.indexes) {
         var ix = store.indexes[n];
         indexes[n] = { name: ix.name, keyPath: ix.keyPath, unique: ix.unique, multiEntry: ix.multiEntry };
+        // Raw-ссылки и «удалён»-метки на момент снимка: откат обязан снять
+        // метку с индекса, удалённого прерванной транзакцией, даже если сама
+        // схема вернётся клонами (transaction-abort-index-metadata-revert).
+        indexRefs[n] = ix;
+        indexFlags[n] = !!ix._deleted;
     }
     return { records: recs, indexes: indexes, keyGenerator: store.keyGenerator,
-             name: store.name, keyPath: store.keyPath, autoIncrement: store.autoIncrement };
+             name: store.name, keyPath: store.keyPath, autoIncrement: store.autoIncrement,
+             deleted: !!store._deleted, indexRefs: indexRefs, indexFlags: indexFlags };
 }
 
 // Puts a snapshot back INTO THE SAME store object rather than replacing it in
@@ -798,6 +805,13 @@ function _idb_restore_store(store, snap) {
     store.name = snap.name;
     store.keyPath = snap.keyPath;
     store.autoIncrement = snap.autoIncrement;
+    // «Удалён»-метки откатываются к состоянию на момент снимка: прерванная
+    // транзакция снимает метку со стора и с сырых индексов, удалённых ею
+    // (обёртки снова рабочие), а созданные ею индексы остаются помечены — их
+    // raw-объекты в снимок не попали и осиротели.
+    store._deleted = !!snap.deleted;
+    var refs = snap.indexRefs;
+    for (var n in refs) refs[n]._deleted = !!snap.indexFlags[n];
     // Any createIndex/deleteIndex still queued when the transaction aborted was
     // dropped, unrun, by _idb_abort_txn_requests — its "effective schema" view
     // (BUG-916) must not keep predicting a mutation that will now never land.
@@ -836,12 +850,30 @@ function _idb_revert_txn(txn) {
         txn.db._version = snap.version;
         // A store created by this transaction has to go; one it deleted comes
         // back by its original reference, so the page's wrapper still works.
+        // Его сырые индексы осиротеют вместе с ним — помечаем их удалёнными:
+        // обёртки от createIndex обязаны бросать InvalidStateError
+        // (transaction-abort-index-metadata-revert, тест 1).
         for (var name in data.stores) {
-            if (!Object.prototype.hasOwnProperty.call(snap.stores, name)) delete data.stores[name];
+            if (!Object.prototype.hasOwnProperty.call(snap.stores, name)) {
+                var gone = data.stores[name];
+                // Сам стор тоже получает метку: обёртка от createObjectStore
+                // переживает откат, и её запросы обязаны бросать
+                // InvalidStateError (IDB-EVENTS-S6).
+                gone._deleted = true;
+                for (var gi in gone.indexes) gone.indexes[gi]._deleted = true;
+                delete data.stores[name];
+            }
         }
     }
     for (var n in snap.stores) {
         var entry = snap.stores[n];
+        // Индекс, созданный этой транзакцией, в снимок не попал: при откате он
+        // выходит из схемы, но остаётся в обёртке от createIndex — метка
+        // «удалён» ставится до подмены схемы снимком.
+        var cur = entry.ref.indexes;
+        for (var k in cur) {
+            if (entry.snap.indexRefs[k] !== cur[k]) cur[k]._deleted = true;
+        }
         _idb_restore_store(entry.ref, entry.snap);
         data.stores[n] = entry.ref;
     }
@@ -875,8 +907,20 @@ function _idb_abort_txn_requests(txn) {
 // Creates a request whose `fn` (data read/write) runs at dispatch time, in the
 // transaction's request order. Synchronous validation (key range, mode) must be
 // done by the caller before calling this, so it can throw to the caller.
+// «Транзакция не активна» (Indexed DB §3.4.3) — общий предикат порядка
+// проверок исключений: в запросах индекса он идёт после «источник удалён»,
+// в методах курсора — первым (IDB-EVENTS-S5).
+function _idb_txn_inactive(txn) {
+    return txn._finished || txn._committing || !txn._active;
+}
+// «Стор удалён» раньше «неактивна» (idbobjectstore-*-exception-order):
+// метка стоит на сыром сторе — deleteObjectStore и откат его создания.
+function _idb_store_gone(self) {
+    if (self._store._deleted) throw _idb_error('InvalidStateError', 'store has been deleted');
+    if (_idb_txn_inactive(self._transaction)) throw _idb_error('TransactionInactiveError', 'transaction is not active');
+}
 function _idb_make_request(source, txn, fn) {
-    if (txn._finished || txn._committing || !txn._active) throw _idb_error('TransactionInactiveError', 'transaction is not active');
+    if (_idb_txn_inactive(txn)) throw _idb_error('TransactionInactiveError', 'transaction is not active');
     // Cheapest correct place for the undo snapshot: every data mutation
     // (add/put/delete/clear, cursor update/delete) is a request, and it is
     // taken once per transaction. A readonly one is skipped inside.
@@ -1000,17 +1044,47 @@ function _idb_unpark(name) {
     _idb_schedule_flush();
     return true;
 }
+// «Valid key path» (Indexed DB §3.1.4): пустая строка валидна; строка —
+// идентификаторы через точки; массив — непустой, из строковых непустых
+// идентификаторов. ASCII-грамматика идентификатора — полная юникод-версия
+// и конверсия DOMString/sequence — BUG-1708.
+function _idb_is_valid_key_path(kp) {
+    var part = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+    if (typeof kp === 'string') {
+        if (kp === '') return true;
+        var parts = kp.split('.');
+        for (var i = 0; i < parts.length; i++) if (!part.test(parts[i])) return false;
+        return true;
+    }
+    if (Array.isArray(kp)) {
+        if (kp.length === 0) return false;
+        for (var i = 0; i < kp.length; i++) {
+            if (typeof kp[i] !== 'string' || !part.test(kp[i])) return false;
+        }
+        return true;
+    }
+    return false;
+}
 _idl_op(IDBDatabase.prototype, 'createObjectStore', function(name, options) {
     _idl_check(this, IDBDatabase);
     if (!this._upgradeTxn) throw _idb_error('InvalidStateError', 'createObjectStore allowed only during a versionchange transaction');
+    if (_idb_txn_inactive(this._upgradeTxn)) throw _idb_error('TransactionInactiveError', 'transaction is not active');
+    name = String(name);
+    options = options || {};
+    var keyPath = (options.keyPath === undefined || options.keyPath === null) ? null : options.keyPath;
+    // Порядок исключений (idbdatabase-createObjectStore-exception-order):
+    // неактивна → недопустимый keyPath (SyntaxError) → дубль имени
+    // (ConstraintError) → autoIncrement с пустым или массивным keyPath
+    // (InvalidAccessError).
+    if (keyPath !== null && !_idb_is_valid_key_path(keyPath)) throw _idb_error('SyntaxError', 'invalid key path');
+    if (this._data.stores[name]) throw _idb_error('ConstraintError', 'object store already exists: ' + name);
+    if (options.autoIncrement && (keyPath === '' || Array.isArray(keyPath))) {
+        throw _idb_error('InvalidAccessError', 'autoIncrement requires an out-of-line or non-empty string key path');
+    }
     // Schema mutations bypass the request queue, so they take the snapshot
     // themselves — an aborted upgrade has to lose its new stores and indexes
     // exactly as it loses its records.
     _idb_txn_snapshot(this._upgradeTxn);
-    name = String(name);
-    if (this._data.stores[name]) throw _idb_error('ConstraintError', 'object store already exists: ' + name);
-    options = options || {};
-    var keyPath = (options.keyPath === undefined || options.keyPath === null) ? null : options.keyPath;
     var store = {
         name: name,
         keyPath: keyPath,
@@ -1026,8 +1100,15 @@ _idl_op(IDBDatabase.prototype, 'createObjectStore', function(name, options) {
 _idl_op(IDBDatabase.prototype, 'deleteObjectStore', function(name) {
     _idl_check(this, IDBDatabase);
     if (!this._upgradeTxn) throw _idb_error('InvalidStateError', 'deleteObjectStore allowed only during a versionchange transaction');
+    if (_idb_txn_inactive(this._upgradeTxn)) throw _idb_error('TransactionInactiveError', 'transaction is not active');
     if (!this._data.stores[name]) throw _idb_error('NotFoundError', 'no object store named ' + name);
     _idb_txn_snapshot(this._upgradeTxn);
+    var st = this._data.stores[name];
+    // Метки «удалён» синхронны: стор и все его сырые индексы помечаются до
+    // возврата — запросы по обёрткам сразу бросают InvalidStateError, а откат
+    // транзакции снимет метки через снимок.
+    st._deleted = true;
+    for (var k in st.indexes) st.indexes[k]._deleted = true;
     delete this._data.stores[name];
 }, 1);
 _idl_op(IDBDatabase.prototype, 'transaction', function(storeNames, mode, options) {
@@ -1166,18 +1247,21 @@ IDBObjectStore.prototype._write = function(value, key, overwrite) {
 
 _idl_op(IDBObjectStore.prototype, 'add', function(value, key) {
     _idl_check(this, IDBObjectStore);
+    _idb_store_gone(this);
     if (this.transaction.mode === 'readonly') throw _idb_error('ReadOnlyError', 'transaction is read-only');
     var self = this;
     return _idb_make_request(this, this._transaction, function() { return self._write(value, key, false); });
 }, 1);
 _idl_op(IDBObjectStore.prototype, 'put', function(value, key) {
     _idl_check(this, IDBObjectStore);
+    _idb_store_gone(this);
     if (this.transaction.mode === 'readonly') throw _idb_error('ReadOnlyError', 'transaction is read-only');
     var self = this;
     return _idb_make_request(this, this._transaction, function() { return self._write(value, key, true); });
 }, 1);
 _idl_op(IDBObjectStore.prototype, 'get', function(query) {
     _idl_check(this, IDBObjectStore);
+    _idb_store_gone(this);
     var store = this._store, range = _idb_to_range(query);
     return _idb_make_request(this, this._transaction, function() {
         if (range === null) return undefined;
@@ -1187,6 +1271,7 @@ _idl_op(IDBObjectStore.prototype, 'get', function(query) {
 }, 1);
 _idl_op(IDBObjectStore.prototype, 'getKey', function(query) {
     _idl_check(this, IDBObjectStore);
+    _idb_store_gone(this);
     var store = this._store, range = _idb_to_range(query);
     return _idb_make_request(this, this._transaction, function() {
         if (range === null) return undefined;
@@ -1196,6 +1281,7 @@ _idl_op(IDBObjectStore.prototype, 'getKey', function(query) {
 }, 1);
 _idl_op(IDBObjectStore.prototype, 'getAll', function(query, count) {
     _idl_check(this, IDBObjectStore);
+    _idb_store_gone(this);
     var store = this._store, range = _idb_to_range(query);
     return _idb_make_request(this, this._transaction, function() {
         var out = [];
@@ -1210,6 +1296,7 @@ _idl_op(IDBObjectStore.prototype, 'getAll', function(query, count) {
 }, 0);
 _idl_op(IDBObjectStore.prototype, 'getAllKeys', function(query, count) {
     _idl_check(this, IDBObjectStore);
+    _idb_store_gone(this);
     var store = this._store, range = _idb_to_range(query);
     return _idb_make_request(this, this._transaction, function() {
         var out = [];
@@ -1224,6 +1311,7 @@ _idl_op(IDBObjectStore.prototype, 'getAllKeys', function(query, count) {
 }, 0);
 _idl_op(IDBObjectStore.prototype, 'count', function(query) {
     _idl_check(this, IDBObjectStore);
+    _idb_store_gone(this);
     var store = this._store, range = _idb_to_range(query);
     return _idb_make_request(this, this._transaction, function() {
         if (range === null) return store.records.length;
@@ -1234,6 +1322,7 @@ _idl_op(IDBObjectStore.prototype, 'count', function(query) {
 }, 0);
 _idl_op(IDBObjectStore.prototype, 'delete', function(query) {
     _idl_check(this, IDBObjectStore);
+    _idb_store_gone(this);
     if (this.transaction.mode === 'readonly') throw _idb_error('ReadOnlyError', 'transaction is read-only');
     var store = this._store, range = _idb_to_range(query);
     if (range === null) throw _idb_error('DataError', 'a key or key range is required');
@@ -1244,6 +1333,7 @@ _idl_op(IDBObjectStore.prototype, 'delete', function(query) {
 }, 1);
 _idl_op(IDBObjectStore.prototype, 'clear', function() {
     _idl_check(this, IDBObjectStore);
+    _idb_store_gone(this);
     if (this.transaction.mode === 'readonly') throw _idb_error('ReadOnlyError', 'transaction is read-only');
     var store = this._store;
     return _idb_make_request(this, this._transaction, function() { store.records = []; return undefined; });
@@ -1315,9 +1405,17 @@ _idl_op(IDBObjectStore.prototype, 'createIndex', function(name, keyPath, options
 _idl_op(IDBObjectStore.prototype, 'deleteIndex', function(name) {
     _idl_check(this, IDBObjectStore);
     if (!this.transaction._isUpgrade) throw _idb_error('InvalidStateError', 'deleteIndex allowed only during a versionchange transaction');
+    // Порядок (idbobjectstore-deleteIndex-exception-order): upgrade-проверка,
+    // «стор удалён», «неактивна», и только потом NotFoundError.
+    if (this._store._deleted) throw _idb_error('InvalidStateError', 'store has been deleted');
+    if (_idb_txn_inactive(this.transaction)) throw _idb_error('TransactionInactiveError', 'transaction is not active');
     var store = this._store;
-    if (!_idb_effective_index(store, name)) throw _idb_error('NotFoundError', 'no index named ' + name);
+    var idx = _idb_effective_index(store, name);
+    if (!idx) throw _idb_error('NotFoundError', 'no index named ' + name);
     _idb_txn_snapshot(this.transaction);
+    // Метка синхронна: обёртки этого сырого индекса сразу бросают
+    // InvalidStateError; откат снимет её через снимок (BUG-916 overlay).
+    idx._deleted = true;
     if (!store._pendingIndexOps) store._pendingIndexOps = [];
     var pendingEntry = { name: name, idx: undefined };
     store._pendingIndexOps.push(pendingEntry);
@@ -1336,11 +1434,13 @@ _idl_op(IDBObjectStore.prototype, 'index', function(name) {
 }, 1);
 _idl_op(IDBObjectStore.prototype, 'openCursor', function(query, direction) {
     _idl_check(this, IDBObjectStore);
+    _idb_store_gone(this);
     var range = _idb_to_range(query), store = this._store, dir = direction || 'next';
     return _idb_open_cursor(this, this._transaction, store, function() { return _idb_cursor_list_store(store, range, dir); }, true, dir);
 }, 0);
 _idl_op(IDBObjectStore.prototype, 'openKeyCursor', function(query, direction) {
     _idl_check(this, IDBObjectStore);
+    _idb_store_gone(this);
     var range = _idb_to_range(query), store = this._store, dir = direction || 'next';
     return _idb_open_cursor(this, this._transaction, store, function() { return _idb_cursor_list_store(store, range, dir); }, false, dir);
 }, 0);
@@ -1388,8 +1488,16 @@ function _idb_index_entries(store, index) {
     });
     return out;
 }
+// «Удалён» раньше «неактивна» (idbindex-query-exception-order): метка стоит
+// на сыром индексе — её ставят deleteIndex, deleteObjectStore и откат
+// createIndex; проверка неактивности — общий предикат транзакции обёртки.
+function _idb_index_query_gone(self) {
+    if (self._index._deleted) throw _idb_error('InvalidStateError', 'index has been deleted');
+    if (_idb_txn_inactive(self._transaction)) throw _idb_error('TransactionInactiveError', 'transaction is not active');
+}
 _idl_op(IDBIndex.prototype, 'get', function(query) {
     _idl_check(this, IDBIndex);
+    _idb_index_query_gone(this);
     var store = this._store, index = this._index, range = _idb_to_range(query);
     return _idb_make_request(this, this._transaction, function() {
         if (range === null) return undefined;
@@ -1400,6 +1508,7 @@ _idl_op(IDBIndex.prototype, 'get', function(query) {
 }, 1);
 _idl_op(IDBIndex.prototype, 'getKey', function(query) {
     _idl_check(this, IDBIndex);
+    _idb_index_query_gone(this);
     var store = this._store, index = this._index, range = _idb_to_range(query);
     return _idb_make_request(this, this._transaction, function() {
         if (range === null) return undefined;
@@ -1410,6 +1519,7 @@ _idl_op(IDBIndex.prototype, 'getKey', function(query) {
 }, 1);
 _idl_op(IDBIndex.prototype, 'getAll', function(query, count) {
     _idl_check(this, IDBIndex);
+    _idb_index_query_gone(this);
     var store = this._store, index = this._index, range = _idb_to_range(query);
     return _idb_make_request(this, this._transaction, function() {
         var entries = _idb_index_entries(store, index);
@@ -1425,6 +1535,7 @@ _idl_op(IDBIndex.prototype, 'getAll', function(query, count) {
 }, 0);
 _idl_op(IDBIndex.prototype, 'getAllKeys', function(query, count) {
     _idl_check(this, IDBIndex);
+    _idb_index_query_gone(this);
     var store = this._store, index = this._index, range = _idb_to_range(query);
     return _idb_make_request(this, this._transaction, function() {
         var entries = _idb_index_entries(store, index);
@@ -1440,6 +1551,7 @@ _idl_op(IDBIndex.prototype, 'getAllKeys', function(query, count) {
 }, 0);
 _idl_op(IDBIndex.prototype, 'count', function(query) {
     _idl_check(this, IDBIndex);
+    _idb_index_query_gone(this);
     var store = this._store, index = this._index, range = _idb_to_range(query);
     return _idb_make_request(this, this._transaction, function() {
         var entries = _idb_index_entries(store, index);
@@ -1451,11 +1563,13 @@ _idl_op(IDBIndex.prototype, 'count', function(query) {
 }, 0);
 _idl_op(IDBIndex.prototype, 'openCursor', function(query, direction) {
     _idl_check(this, IDBIndex);
+    _idb_index_query_gone(this);
     var range = _idb_to_range(query), store = this._store, index = this._index, dir = direction || 'next';
     return _idb_open_cursor(this, this._transaction, store, function() { return _idb_cursor_list_index(store, index, range, dir); }, true, dir);
 }, 0);
 _idl_op(IDBIndex.prototype, 'openKeyCursor', function(query, direction) {
     _idl_check(this, IDBIndex);
+    _idb_index_query_gone(this);
     var range = _idb_to_range(query), store = this._store, index = this._index, dir = direction || 'next';
     return _idb_open_cursor(this, this._transaction, store, function() { return _idb_cursor_list_index(store, index, range, dir); }, false, dir);
 }, 0);
@@ -1501,6 +1615,7 @@ function _idb_new_cursor(req, source, txn, store, withValue, direction) {
     self._store = store;
     self._list = null;       // materialised at first dispatch (deferred)
     self._pos = -1;
+    self._gotValue = false;  // «значение получено» — сбрасывается continue/advance
     self._withValue = withValue;
     self._direction = direction;
     self._key = undefined;
@@ -1519,6 +1634,7 @@ IDBCursor.prototype._step = function() {
     if (this._pos >= this._list.length) {
         this._key = undefined; this._primaryKey = undefined;
         if (this._withValue) this._value = undefined;
+        this._gotValue = false;
         this._req._result = null;
         return false;
     }
@@ -1526,12 +1642,25 @@ IDBCursor.prototype._step = function() {
     this._key = item.key;
     this._primaryKey = item.primaryKey;
     if (this._withValue) this._value = item.value;
+    this._gotValue = true;
     this._req._result = this;
     return true;
 };
+// «Источник удалён» (Indexed DB §3.2.6.1): у стор-курсора метка на сыром
+// сторе (deleteObjectStore), у индексного — на сыром индексе (deleteIndex,
+// deleteObjectStore родителя, откат createIndex).
+function _idb_cursor_source_gone(self) {
+    return (self._source instanceof IDBIndex)
+        ? !!self._source._index._deleted
+        : !!self._store._deleted;
+}
 _idl_op(IDBCursor.prototype, 'continue', function(key) {
     _idl_check(this, IDBCursor);
+    if (_idb_txn_inactive(this._txn)) throw _idb_error('TransactionInactiveError', 'transaction is not active');
+    if (_idb_cursor_source_gone(this)) throw _idb_error('InvalidStateError', 'cursor source has been deleted');
+    if (!this._gotValue) throw _idb_error('InvalidStateError', 'cursor has no value to continue from');
     if (key !== undefined && !_idb_is_valid_key(key)) throw _idb_error('DataError', 'invalid cursor key');
+    this._gotValue = false;
     var self = this;
     this._req._action = function() {
         if (key !== undefined) {
@@ -1552,6 +1681,10 @@ _idl_op(IDBCursor.prototype, 'advance', function(count) {
     _idl_check(this, IDBCursor);
     count = count >>> 0;
     if (count === 0) throw new TypeError('advance count must be > 0');
+    if (_idb_txn_inactive(this._txn)) throw _idb_error('TransactionInactiveError', 'transaction is not active');
+    if (_idb_cursor_source_gone(this)) throw _idb_error('InvalidStateError', 'cursor source has been deleted');
+    if (!this._gotValue) throw _idb_error('InvalidStateError', 'cursor has no value to advance from');
+    this._gotValue = false;
     var self = this;
     this._req._action = function() {
         for (var i = 0; i < count; i++) if (!self._step()) break;
@@ -1562,8 +1695,11 @@ _idl_op(IDBCursor.prototype, 'advance', function(count) {
 }, 1);
 _idl_op(IDBCursor.prototype, 'update', function(value) {
     _idl_check(this, IDBCursor);
+    if (_idb_txn_inactive(this._txn)) throw _idb_error('TransactionInactiveError', 'transaction is not active');
     if (this._txn.mode === 'readonly') throw _idb_error('ReadOnlyError', 'transaction is read-only');
-    if (this._pos < 0 || this._pos >= this._list.length) throw _idb_error('InvalidStateError', 'cursor is not positioned on a record');
+    if (_idb_cursor_source_gone(this)) throw _idb_error('InvalidStateError', 'cursor source has been deleted');
+    if (!this._gotValue) throw _idb_error('InvalidStateError', 'cursor is not positioned on a record');
+    if (!this._withValue) throw _idb_error('InvalidStateError', 'key-only cursor cannot update');
     var store = this._store, pk = this._primaryKey;
     return _idb_make_request(this._source, this._txn, function() {
         if (store.keyPath !== null) {
@@ -1579,8 +1715,11 @@ _idl_op(IDBCursor.prototype, 'update', function(value) {
 }, 1);
 _idl_op(IDBCursor.prototype, 'delete', function() {
     _idl_check(this, IDBCursor);
+    if (_idb_txn_inactive(this._txn)) throw _idb_error('TransactionInactiveError', 'transaction is not active');
     if (this._txn.mode === 'readonly') throw _idb_error('ReadOnlyError', 'transaction is read-only');
-    if (this._pos < 0 || this._pos >= this._list.length) throw _idb_error('InvalidStateError', 'cursor is not positioned on a record');
+    if (_idb_cursor_source_gone(this)) throw _idb_error('InvalidStateError', 'cursor source has been deleted');
+    if (!this._gotValue) throw _idb_error('InvalidStateError', 'cursor is not positioned on a record');
+    if (!this._withValue) throw _idb_error('InvalidStateError', 'key-only cursor cannot delete');
     var store = this._store, pk = this._primaryKey;
     return _idb_make_request(this._source, this._txn, function() {
         var pos = _idb_find_record(store.records, pk);
@@ -1590,7 +1729,7 @@ _idl_op(IDBCursor.prototype, 'delete', function() {
 }, 0);
 
 function _idb_open_cursor(source, txn, store, buildList, withValue, direction) {
-    if (txn._finished || txn._committing || !txn._active) throw _idb_error('TransactionInactiveError', 'transaction is not active');
+    if (_idb_txn_inactive(txn)) throw _idb_error('TransactionInactiveError', 'transaction is not active');
     var req = _idb_new_request(source, txn);
     var cursor = _idb_new_cursor(req, source, txn, store, withValue, direction);
     req._action = function() {
