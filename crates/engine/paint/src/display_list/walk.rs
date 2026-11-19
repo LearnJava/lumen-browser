@@ -1183,7 +1183,10 @@ fn dispatch<'a>(
     // render as no-ops — they are partition metadata only.
     // A `fixed` box under a transformed/filtered ancestor scrolls with it
     // (css-transforms-1 §2) — it is page content, not a viewport overlay.
-    let is_fixed = matches!(b.style.position, Position::Fixed) && !in_fixed_cb;
+    // ANCHOR-SCROLL-3-S3: the same for a fixed box whose anchor is page content (`page`).
+    let is_fixed = matches!(b.style.position, Position::Fixed)
+        && !in_fixed_cb
+        && !b.anchor_scroll.as_ref().is_some_and(|a| a.page);
     let child_in_fixed_cb = in_fixed_cb || contains_fixed_descendants(&b.style);
     if is_fixed {
         out.push(DisplayCommand::BeginFixedLayer);

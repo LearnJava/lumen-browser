@@ -1231,6 +1231,25 @@ use super::text_and_images::Fixed8;
         assert!(scroll_push_summary(&dl).is_empty());
     }
 
+    /// ANCHOR-SCROLL-3-S3: a `position: fixed` target whose anchor is page content paints
+    /// without the `BeginFixedLayer` bracket (it scrolls with the page); when the anchor is
+    /// itself fixed (`anchor-scroll-fixedpos-002`) both stay viewport overlays.
+    #[test]
+    fn fixed_target_bracket_follows_the_anchors_fixedness() {
+        let css = "body { margin: 0; } \
+            .a { anchor-name: --a; width: 50px; height: 50px; margin-top: 50px; } \
+            .f { position: fixed; } \
+            .t { position: fixed; width: 20px; height: 20px; position-anchor: --a; left: anchor(right); top: anchor(top); }";
+        let brackets = |html: &str| {
+            build_display_list(&layout_for(html, css))
+                .iter()
+                .filter(|c| matches!(c, DisplayCommand::BeginFixedLayer))
+                .count()
+        };
+        assert_eq!(brackets("<div class='a'></div><div class='t'>x</div>"), 0, "flow anchor: the target is page content");
+        assert_eq!(brackets("<div class='a f'></div><div class='t'>x</div>"), 2, "fixed anchor: both stay overlays");
+    }
+
     /// Scrolling by patching a built list (the wheel fast path) moves the follower with the
     /// container and equals a full rebuild.
     #[test]

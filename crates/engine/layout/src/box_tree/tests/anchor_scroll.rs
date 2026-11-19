@@ -217,3 +217,69 @@ fn the_followed_containers_are_listed_per_target() {
     assert_eq!(map.get(&(t.index() as u32)), Some(&vec![(find(&root, &doc, "s").node.raw(), true, true)]));
     assert_eq!(map.len(), 1, "{map:?}");
 }
+
+// ─── ANCHOR-SCROLL-3-S3: position:fixed follows the page scroll ──────────────
+
+/// `anchor_scroll` of `#t`: `(page, scroller count)`.
+fn page_of(root: &LayoutBox, doc: &lumen_dom::Document, id: &str) -> (bool, usize) {
+    find(root, doc, id)
+        .anchor_scroll
+        .as_ref()
+        .map_or((false, 0), |a| (a.page, a.scrollers.len()))
+}
+
+/// anchor-scroll-fixedpos.html: the anchor is in the document flow, so the fixed
+/// target paints as page content — it scrolls with the page (empty scroller list:
+/// the page scroll is the renderer's own, no container is listed).
+#[test]
+fn fixed_target_of_a_flow_anchor_is_page_content() {
+    let (root, doc) = build(
+        r#"<div id="a"></div><div id="t"></div>"#,
+        "#a{anchor-name:--a;margin:300px 0 0 300px;width:100px;height:100px}\
+         #t{position:fixed;width:100px;height:100px;position-anchor:--a;left:anchor(right);top:anchor(top)}",
+    );
+    // Layout is the at-scroll-0 document position; the paint-side `page` flag makes
+    // the renderer scroll it (anchor-scroll-fixedpos-ref.html expects (400,100) at scroll 200).
+    assert_eq!(find(&root, &doc, "t").rect, Rect::new(400.0, 300.0, 100.0, 100.0));
+    assert_eq!(page_of(&root, &doc, "t"), (true, 0));
+}
+
+/// anchor-scroll-fixedpos-002.html: the anchor itself is viewport-pinned, the target
+/// stays a viewport overlay — no `anchor_scroll` at all.
+#[test]
+fn fixed_target_of_a_fixed_anchor_stays_a_viewport_overlay() {
+    let (root, doc) = build(
+        r#"<div id="a"></div><div id="t"></div>"#,
+        "#a{position:fixed;anchor-name:--a;margin:300px 0 0 300px;width:100px;height:100px}\
+         #t{position:fixed;width:100px;height:100px;position-anchor:--a;left:anchor(right);top:anchor(top)}",
+    );
+    assert!(find(&root, &doc, "t").anchor_scroll.is_none());
+}
+
+/// A fixed box under a transformed ancestor has that ancestor as its containing
+/// block — it scrolls with the ancestor already (LAYOUT-FIXED-CB-2), the page flag
+/// would double-compensate.
+#[test]
+fn fixed_target_in_a_transformed_subtree_is_not_page_content() {
+    let (root, doc) = build(
+        r#"<div id="w"><div id="a"></div><div id="t"></div></div>"#,
+        "#w{transform:scale(1)}\
+         #a{anchor-name:--a;width:50px;height:50px}\
+         #t{position:fixed;width:20px;height:20px;position-anchor:--a;left:anchor(right);top:anchor(top)}",
+    );
+    assert!(find(&root, &doc, "t").anchor_scroll.is_none());
+}
+
+/// A fixed target chained behind a page-content target is page content too
+/// (`anchor-scroll-fixedpos-nested-001.html`: `f2`/`f3` inside `f1`).
+#[test]
+fn the_page_flag_chains_through_intermediate_targets() {
+    let (root, doc) = build(
+        r#"<div id="a"></div><div id="f1"><div id="f2"></div></div>"#,
+        "#a{anchor-name:--a;width:50px;height:50px}\
+         #f1{position:fixed;width:50px;height:50px;position-anchor:--a;left:anchor(right);top:anchor(top);anchor-name:--b}\
+         #f2{position:fixed;width:20px;height:20px;position-anchor:--b;left:anchor(right);top:anchor(top)}",
+    );
+    assert_eq!(page_of(&root, &doc, "f1"), (true, 0));
+    assert_eq!(page_of(&root, &doc, "f2"), (true, 0));
+}
