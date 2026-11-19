@@ -2850,6 +2850,10 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     var cached = docs[bid];
     if (cached) return cached;
     var d = {};
+    // BUG-1826 срез 5: Chrome печатает под-документ как '[object HTMLDocument]'
+    // (WebIDL @@toStringTag); голый объект давал '[object Object]' — challenge-VM
+    // именно на этом различии уходила в вечный перепроб.
+    Object.defineProperty(d, Symbol.toStringTag, { value: 'HTMLDocument', configurable: true });
     // Same binding marker the element facades carry (frameElem): lets
     // same-realm APIs that take a Document — IntersectionObserver's `root`
     // (BUG-626) — recognise this facade. Non-enumerable, so the facade's
@@ -2913,6 +2917,9 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     var cached = wins[bid];
     if (cached) return cached;
     var w = {};
+    // BUG-1826 срез 5: '[object Window]', как у настоящего окна Chrome —
+    // см. docFacade выше.
+    Object.defineProperty(w, Symbol.toStringTag, { value: 'Window', configurable: true });
     var hostNid = _lumen_f_accessible(bid) ? _lumen_f_host(bid) : null;
     Object.defineProperty(w, 'document', {
       get: function() { return _lumen_f_accessible(bid) ? docFacade(bid) : null; },
@@ -2988,6 +2995,9 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     // cross-origin Location (§7.2.3.3); href на запись и assign/replace
     // остаются доступны — навигация чужого фрейма разрешена.
     var loc = {};
+    // BUG-1826 срез 5: '[object Location]' при Object.prototype.toString.call —
+    // сам String(loc) в обоих движках даёт href (toString переопределён ниже).
+    Object.defineProperty(loc, Symbol.toStringTag, { value: 'Location', configurable: true });
     Object.defineProperty(loc, 'href', {
       get: function() { return _lumen_f_url(bid); },
       set: function(v) { navigateFrameHost(bid, hostNid, String(v)); },
@@ -3143,7 +3153,7 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
         }
         if (r.kind === 'value') { return r.value; }
         if (r.kind === 'function') {
-          return function() {
+          var f = function() {
             var args = Array.prototype.slice.call(arguments);
             // BUG-1099: `new w.Ctor(...)` — объект пира через границу
             // изолятов не передать (возвращается только сериализованное
@@ -3159,6 +3169,18 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
             if (cr.kind === 'error') { throw new Error(cr.message); }
             return cr.value;
           };
+          // BUG-1826 срез 5: глобал чужого realm в Chrome — нативная функция,
+          // toString даёт '[native code]'; кловер моста печатал исходник и
+          // выдавал подмену (challenge-VM читала cw.eval и стопорилась на
+          // его печати). Имя — как у оригинала, печать — через маркировку.
+          // Хук читается через globalThis: после глобального seal (BUG-378)
+          // динамический лукап голого имени поздние свойства не видит.
+          try {
+            Object.defineProperty(f, 'name', { value: String(prop), configurable: true });
+          } catch (e2) {}
+          var mk = typeof globalThis !== 'undefined' ? globalThis._lumen_tostring_mark : undefined;
+          if (typeof mk === 'function') mk(f);
+          return f;
         }
         return undefined;
       },

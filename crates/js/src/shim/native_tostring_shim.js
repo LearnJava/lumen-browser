@@ -74,4 +74,18 @@
     return origToString.call(this);
   };
   facade.set(Function.prototype.toString, 'function toString() { [native code] }');
+
+  // BUG-1826 срез 5: функции, создаваемые ПОСЛЕ установки шима, — кадровые
+  // фасады (eval и прочие глобалы чужого изолята, frame_bridge.rs) — помечают
+  // себя этим хуком; без него toString отдаёт исходник кловера, и проверка
+  // «нативности» у challenge-VM видит подмену. Читается лениво, поэтому
+  // порядок склейки не важен.
+  try {
+    Object.defineProperty(globalThis, '_lumen_tostring_mark', {
+      value: function (fn) { mark(fn, facadeFor(fn)); },
+      writable: true,
+      configurable: true,
+      enumerable: false,
+    });
+  } catch (e) { /* минимальные рантаймы без defineProperty на globalThis */ }
 })();

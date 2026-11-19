@@ -115,3 +115,28 @@ fn worker_scope_shim_functions_print_as_native() {
     };
     assert!(s.contains("[native code]"), "worker toString: {s}");
 }
+
+/// BUG-1826 срез 5: начальный about:blank-кадр (первое чтение `contentWindow`)
+/// в Chrome отвечает '[object Window]'/'[object HTMLDocument]', а его `eval` —
+/// нативная функция чужого realm: `function eval() { [native code] }`.
+/// До среза фасад печатался '[object Object]', кловер моста — своим исходником;
+/// challenge-VM на этих двух чтениях уходила в вечный перепроб.
+#[test]
+fn initial_frame_facade_prints_like_chrome() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var f = document.createElement('iframe');\
+             document.body.appendChild(f);\
+             var w = f.contentWindow;\
+             var ev = w.eval;\
+             var out = [];\
+             out.push(Object.prototype.toString.call(w) === '[object Window]');\
+             out.push(Object.prototype.toString.call(f.contentDocument) === '[object HTMLDocument]');\
+             out.push(typeof ev === 'function');\
+             out.push(ev.toString() === 'function eval() { [native code] }');\
+             out.join(',')",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("true,true,true,true".into()));
+}

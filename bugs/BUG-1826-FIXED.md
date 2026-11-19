@@ -1,6 +1,6 @@
 # BUG-1826 — claude.ai: управляемый челлендж Cloudflare вешает движковый поток >4 мин (PoW-скрипт не завершается)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-11-19 (P6, срез 5): спин устранён — toString-фасад кадровых мостов (`Symbol.toStringTag` + native-печать глобалов чужого realm); живой claude.ai проходит челлендж, движковый поток свободен. Остаток отпечатков — [BUG-1829](BUG-1829-OPEN.md).
 **Заведён:** 2026-11-18 (Devin, при проверке BUG-1803 — системный прокси; маршрут уже исправлен, остался дефект движка)
 **Компонент:** js/engine (выполнение обфусцированного скрипта `cdn-cgi/challenge-platform/.../chl_page`); семья BUG-935/BUG-1778/BUG-1800 (engine thread busy)
 
@@ -184,3 +184,43 @@ initial about:blank для вставленных iframe (contentDocument без
 (б) честная поверхность RTCPeerConnection (BUG-1829) как отдельная задача; (в) повторить
 офлайн-прогон после (а): критерий — VM Lumen доходит до `XHR POST /cdn-cgi/…/fo` (отпечаток),
 как в Chrome. Инструмент: `.tmp/stall/run_offline.py` (SKIP_CHROME=1 — только Lumen-плечо).
+
+## Срез 5 (2026-11-19, P6) — FIXED: печать кадровых фасадов; живой claude.ai проходит челлендж
+
+Гипотеза (а) среза 4 не подтвердилась: синхронный initial about:blank уже есть
+(`initial_frames` BUG-1790), и трейс офлайн-прогона показывает, что VM читает
+`contentWindow` синхронно в обоих движках. Реальный гейт — ПЕЧАТЬ фасада:
+
+- **Инструмент**: Proxy-дневник `recordFacade` в трейсере харнесса (`.tmp`, не в
+  коммите) — каждое чтение свойства на возвращённом content*-объекте логируется
+  (`CWGET`), непронатные результаты `Function.prototype.toString` — (`TOSTR`).
+- **Дивергенция 1**: `String(contentWindow)` — Chrome `[object Window]`, фасад
+  Lumen `[object Object]` (то же для `contentDocument`). После чтения VM уходила
+  в вечный перепроб (canvas+crypto+getEntries раз в секунду). **Фикс**:
+  `Symbol.toStringTag` `'Window'`/`'HTMLDocument'`/`'Location'` на фасадах
+  `frame_bridge.rs` (WebIDL @@toStringTag; прецеденты — credentials.rs, battery_bindings.rs).
+- **Дивергенция 2** (следующий шаг VM): чтение `contentWindow.eval` и его
+  `toString` — кловер моста печатал свой JS-исходник, Chrome —
+  `function eval() { [native code] }`. **Фикс**: кловеры глобалов чужого realm
+  получают имя оригинала и маркируются через хук `_lumen_tostring_mark`,
+  экспортированный из `native_tostring_shim.js` (WeakMap замыкания шима
+  недоступна снаружи). Ловушка: после глобального seal (BUG-378) динамический
+  лукап ГОЛОГО имени поздние свойства не видит — хук читается как
+  `globalThis._lumen_tostring_mark`; тест
+  `initial_frame_facade_prints_like_chrome` держит оба фикса
+  (`crates/js/src/dom/tests/v8_native_tostring.rs`).
+- **Результат офлайн** (`run_offline.py`, полный прогон): спин исчез — VM
+  проходит оба прежних гейта, доходит до `XHR POST /eb` (фингерпринт, ~600 мс
+  после orchestrate) и встаёт в тот же 550-мс retry-цикл, что Chrome
+  (интерактивное ожидание); движковый поток свободен с 10-й секунды.
+  Остаток офлайна: реальный turnstile `api.js` (харнесс ходит за ним в интернет)
+  не находит свой onload-колбэк (`Unable to find onload callback
+  _ce1dc0c1663c982f624a9bda`), `POST /fo` не уходит — в синтетике отпечаток
+  всё равно не проходит (RTC-стаб, фейковый сервер, cores/mem реальные).
+- **Живой прогон claude.ai** (release, `--mcp-live-port`, `.tmp/stall/live_check.py`):
+  спина нет — `eval` отвечает каждые 15 c на протяжении 130 c, титул
+  «Sign in or create an account | Claude.ai» — челлендж пройден, страница
+  загрузилась. Дефект (одна JS-задача >135 c, «Страница не отвечает») устранён.
+- Гейт: `cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings`
+  чисто; `v8_native_tostring` 6/6, `frame` 155, `tostring` 8, `content_document` 2 —
+  зелёные (один флак параллельного прогона, соло зелёный — известные BUG-1677/BUG-1789).
