@@ -1364,6 +1364,14 @@ impl V8JsRuntime {
         // now; move them onto `Navigator.prototype` in one pass. Before the
         // BUG-378 seal, which must stay last.
         install_v8!(navigator_bindings::finalize_navigator_interface_v8);
+        // BUG-1826 срез 3: страничная программа замаскировала поверхность
+        // большого шима, но каждый модуль выше поставил свои JS-шимы ПОСЛЕ
+        // неё (Worker, SharedWorker, WebCodecs, WebGPU…). Повторный проход —
+        // идемпотентный (свежая WeakMap, цепочка toString растёт на звено) —
+        // покрывает их всех до BiDi-preload и seal BUG-378.
+        if let Err(e) = self.eval(crate::dom::NATIVE_TO_STRING_SHIM) {
+            eprintln!("v8: native toString mask failed: {e}");
+        }
         // BUG-1811: WebDriver BiDi preload scripts (`script.addPreloadScript`)
         // run once per new document — after every shim that registered above
         // (so the script may use any API), but still before the caller runs

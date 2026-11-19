@@ -77,3 +77,55 @@ Lumen «отказ», Chrome для Testing 157 «пройдено» за ~15 c,
 дальше только полная деобфускация VM-программы либо побайтовый diff состояния с Chrome.
 Скрипты среза: `.tmp/stall/` (`stall_run.py`, `bidi_probe.py`, `chrome_snapshot.py`,
 `chrome_offline.py`, `chrome_net.py`, `chrome_html.py`, `local_repro.py`, `decode_a0.py`).
+
+## Срез 2 (2026-11-19, P6) — «медленный compute» опровергнут; toString-проба нашла 71 не-нативную функцию
+
+- **Скорость вычислений одинакова**: синтетический бенчмарк паттерна VM (16-битные хеш-раунды по
+  `Uint8Array` внутри switch-диспетчера + BigInt-хвост, `bench_pow.html`) — стационар 1.3–1.5 мс/батч
+  на обоих движках, BigInt 2.0 против 1.8 мс; Lumen даже греется быстрее (шагов tier-up хватает).
+  Значит зависание — **поведенческая дивергенция** (VM уходит в вечную ветку), не скорость.
+- **toString-проба** (`probe_native.py`, 80 платформенных API, Lumen против CfT 157 на одной машине):
+  в Lumen **71 функция** отдают через `Function.prototype.toString` свой JS-исходник (fetch, XHR,
+  createElement, setTimeout, ReadableStream.pipeTo, crypto.getRandomValues, PerformanceObserver,
+  Worker — весь API), в Chrome все — `[native code]`. В таблице декодированных строк VM есть и
+  `'toString'`, и `'[native code]'`, и имена проверяемых API (`setTimeout`, `open`, `send`, `now`,
+  `createElement`, `encode`, `getRandomValues`, `PerformanceObserver`, `observe`, `Blob`, `Worker`,
+  `pipeTo`, `ReadableStream`) — классическая проверка «нативности», помечающая Lumen как подменённый
+  браузер. Батарея среза 1 проверяла только `typeof`, не печать функций.
+- **Диф globalThis** (`probe_globals.py`): 378 имён только в Chrome (XR*/USB/Bluetooth/WebGL-классы,
+  `clientInformation`, `external`, `moveBy`…), 58 только в Lumen (среди них чужие `_wc*`-хелперы
+  WebCodecs, `SVG_NAMESPACE`/`MATHML_NAMESPACE`, глобальные `InvalidStateError`-классы,
+  `SharedArrayBuffer`). **Пересечение таблицы строк VM с этим диффом — ноль**: VM не называет ни
+  одного отсутствующего глобала, все 221 его идентификатор — методы/поля. Структурные дивергенты
+  (SAB без crossOriginIsolated, методы WebGL/Crypto на инстансах без прототипов, нет
+  RTCPeerConnection) выделены в BUG-1829.
+- Прогон сходимости без фасада не доведён до 60 мин — закрыт результатом среза 3 (см. ниже).
+
+## Срез 3 (2026-11-19, P6) — фасад `toString` (71 → 2), спин он не снимает
+
+- **Реализация**: `shim/native_tostring_shim.js` — последний кусок и страничной склейки
+  (`web_api_shim()`), и воркерной (`worker_exposed_shim()`): обход `globalThis` (+ прототип window,
+  статики конструкторов, результаты геттеров — `document` и т.п.) в WeakMap фасадов формата Chrome
+  (`function f() { [native code] }`, геттеры `function get x() { … }`) + патч
+  `Function.prototype.toString` (чужие функции печатаются исходником как раньше — детект в обратную
+  сторону исключён; не-функция бросает `TypeError`). Идемпотентен — повторный eval из
+  `install_dom` (после `finalize_navigator_interface_v8`, до BiDi-preload и seal BUG-378) покрывает
+  JS-шимы пост-программных модулей (Worker, SharedWorker, WebCodecs…). Живой бинарник: 71 → 2
+  (остатки: `URL.createObjectURL` починен статиками в обходе уже после живого прогона,
+  `navigator.mediaDevices.enumerateDevices` — ленивый модуль). Тесты `v8_native_tostring` (5),
+  порядок склейки закреплён маркером; ловушка «шим после маски» — `subsystems/js.md`.
+  267 тестов web_audio+worker+dom-подмножества зелёные; красные в полном параллельном прогоне —
+  известные флаки BUG-1677/BUG-1789 (соло зелёные и с фасадом).
+- **Живой прогон challenge с фасадом** (release, стенд nopecha, `converge_run.py`): **спин
+  сохраняется** — сэмплы непрерывны 15→600 c, окно снято по таймауту. toString-чек — не единственный
+  (или не тот) гейт: либо VM сверяет что-то ещё, либо тот же `[native code]`-чек но по объектам,
+  которых фасад не касается (геттеры `Function.prototype.toString.call` покрыты; остаются V8-нативы
+  Lumen с нестандартной печатью — не видно из пробы), либо условие выхода вообще не про
+  нативность.
+- Дальше: (а) честный оффлайн-харнесс — патч origin-гейта `bq()` в дампе + реплей записанной сети,
+  инструментировка диспетчера VM, диф исполнения Lumen/Chrome до первой расходящейся ветки;
+  (б) диф полей Resource-Timing orchestrate-записи Chrome/Lumen — у Lumen все milestone-таймстампы
+  схлопнуты в `startTime` (`requestStart === responseStart === fetchStart`), `nextHopProtocol` пуст
+  (в Chrome `h2`/`h3`) — VM мог бы читать нулевой TTFB как фейк; (в) проверка XHR-поверхности
+  (`getResponseHeader`, `onreadystatechange`, `loadend`, `timeout`) и `crypto.randomUUID` — в
+  списке имён VM.

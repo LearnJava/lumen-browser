@@ -2592,6 +2592,13 @@ runtime or the shim. Read them before a JS/Web-API change.
   `broadcast_channel.rs`, … each install their own JS. The same defect has been fixed three times in
   different modules for exactly this reason (relative-URL resolution in `fetch`, then XHR, then
   `sendBeacon`). Before assuming a fix landed everywhere, grep the other shims for the same shape.
+- **A JS shim function installed after `install_dom`'s toString-mask pass prints its source, not
+  `[native code]`.** The mask (`shim/native_tostring_shim.js`, BUG-1826 срез 3) snapshots the platform
+  surface at mask time; anything installed later (lazy feature shims, a new module) is invisible to
+  it, and a challenge reading `fn.toString()` sees shim JS where Chrome prints a native. If the new
+  install adds function-valued platform members, re-eval `dom::NATIVE_TO_STRING_SHIM` after it
+  (idempotent — fresh WeakMap, the toString chain grows by one link); that is what `install_dom` does
+  for the post-program module installs.
 - **`_LUMEN_WRAPPER_MEMBERS` (`crates/js/src/dom.rs`) sits on a prototype BELOW the interface
   prototypes**, so anything declared there outranks every `_lumen_install_reflection` row and every
   hand-written `HTML*Element.prototype` accessor. A tag-specific member in that shared table silently
