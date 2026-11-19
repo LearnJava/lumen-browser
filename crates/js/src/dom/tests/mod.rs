@@ -60,7 +60,7 @@ fn web_api_shim_splices_its_parts_in_source_order() {
         // сервис-воркера): в собранном шиме она обязана стоять между
         // хвостом и его продолжением, ровно один раз.
         "function _idb_schedule_flush()",
-        "globalThis.indexedDB",
+        "_idl_define(globalThis, 'indexedDB'",
         // Web Crypto — своя часть (BUG-1688; её исполняет и воркер) между IDB и хвостом.
         "function getRandomValues(typedArray)",
         "g._lumen_crypto_expose_secure = exposeSecure",
