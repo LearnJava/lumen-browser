@@ -1,6 +1,6 @@
 # BUG-1826 — claude.ai: управляемый челлендж Cloudflare вешает движковый поток >4 мин (PoW-скрипт не завершается)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-11-19 (Devin, worktree devin-proxy)
 **Заведён:** 2026-11-18 (Devin, при проверке BUG-1803 — системный прокси; маршрут уже исправлен, остался дефект движка)
 **Компонент:** js/engine (выполнение обфусцированного скрипта `cdn-cgi/challenge-platform/.../chl_page`); семья BUG-935/BUG-1778/BUG-1800 (engine thread busy)
 
@@ -89,3 +89,19 @@ lumen.exe --maximized --mcp-live-port <N> https://claude.ai   # Windows, сис�
 - **Итоговая картина:** сталл — чистый JS-цикл байткод-VM Cloudflare без единого нативного вызова (call-stats), при паритетной скорости движка. Наиболее вероятная причина — **серверная сторона**: CF назначает Lumen челлендж, не завершающийся за разумное время (аномально высокая сложность PoW или soft-ban через незавершимый челлендж для клиента с недоверенным фингерпринтом: TLS-стек `rustls`, не-Chromium сигналы). Косвенное подтверждение: на «чистых» exit-нодах прокси Lumen получает `/login` 200 без челленджа вообще (скриншот пользователя 18.11 — логин-форма отрисовалась).
 - **Направление исправления** — сетевой слой/фингерпринт (JA3/TLS, HTTP/2 fingerprint), не JS-движок. В рамках js-крейта дефектов, блокирующих челлендж, не найдено.
 - `LUMEN_V8_FLAGS="--always-turbofan --no-maglev"` не применился: `--always-turbofan` удалён из V8 150 (`unrecognized flag`).
+
+### РЕШЕНО 2026-11-19 — HTTP/2 SETTINGS фингерпринт (корень найден и устранён)
+
+**Эксперимент, давший ответ:** прямые TLS/HTTP-клиенты через тот же системный прокси (`127.0.0.1:12334`) на `claude.ai` — Go `crypto/tls`, utls `HelloChrome_Auto`, utls `HelloRandomized` — все получали чистый `302 → /login` без челленджа, пока Lumen на том же exit-IP получал `403` + `chl_page`. Значит триггер — не TLS ClientHello и не exit-IP, а то, что отличает Lumen на уровне HTTP/2.
+
+**Замер фингерпринтов** (`tls.peet.ws/api/all`, живой Lumen vs Chrome 157):
+
+- TLS JA3/JA4 различаются (rustls vs BoringSSL: нет GREASE, MLKEM, boringssl-расширений) — **но не являются триггером**: Go-клиент с generic TLS прошёл.
+- **Akamai HTTP/2 fingerprint — был неверным.** Lumen слал `1:65536;2:1;3:1000;4:6291456;5:16384` (ENABLE_PUSH=1, MAX_CONCURRENT_STREAMS=1000, MAX_FRAME_SIZE=16384, без MAX_HEADER_LIST_SIZE) — «Chrome-профиль» в `h2_settings.rs` содержал устаревшие значения. Реальный Chrome 157 шлёт `1:65536;2:0;4:6291456;6:262144` (ENABLE_PUSH=0, без MAX_CONCURRENT_STREAMS/MAX_FRAME_SIZE, с MAX_HEADER_LIST_SIZE=262144).
+- Заголовки тоже отличаются (cache-control, sec-ch-ua без Google Chrome, accept-encoding `br, gzip, deflate` без zstd, нет upgrade-insecure-requests/sec-fetch-user) — но их подмена в Go-клиенте челлендж не вызывала и не снимала: триггер был именно в SETTINGS.
+
+**Фикс:** `crates/network/src/http/h2_settings.rs` — Chrome/Strict/Edge профили приведены к измеренным значениям Chrome 157 (`enable_push=false`, `max_concurrent_streams=None`, `max_frame_size=None`, `max_header_list_size=Some(262144)`); `crates/network/src/h2/conn.rs` — SETTINGS frame теперь эмитит опциональные поля по профилю.
+
+**Проверка:** akamai fingerprint Lumen после фикса байт-в-байт совпал с Chrome 157; `claude.ai` — 4/4 живых прогона `--maximized` + `LUMEN_NO_ADBLOCK=1`: `GET /login → 200`, страница логина (шрифты, hero, edge-api bootstrap) грузится без единого челленджа. До фикса на том же прокси — стабильный 403/chl_page.
+
+**Остаточные отличия фингерпринта** (не блокеры на текущем exit-IP, кандидаты на follow-up при рецидивах): TLS ClientHello rustls vs BoringSSL, порядок/состав HTTP-заголовков, sec-ch-ua brands (нет "Google Chrome"), accept-encoding без zstd.

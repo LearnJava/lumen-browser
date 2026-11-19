@@ -193,13 +193,24 @@ impl<S: Read + Write> H2Conn<S> {
         let mut preface = CLIENT_PREFACE_MAGIC.to_vec();
 
         // Build SETTINGS frame with profile-matching parameters.
-        let settings_params = vec![
-            (0x0001, settings.header_table_size),      // HEADER_TABLE_SIZE
-            (0x0002, if settings.enable_push { 1 } else { 0 }), // ENABLE_PUSH
-            (0x0003, settings.max_concurrent_streams.unwrap_or(0)), // MAX_CONCURRENT_STREAMS
-            (0x0004, settings.initial_window_size),    // INITIAL_WINDOW_SIZE
-            (0x0005, settings.max_frame_size),         // MAX_FRAME_SIZE
+        // Опциональные поля не шлём, если профиль их не задал: Chrome 157
+        // не отправляет MAX_CONCURRENT_STREAMS и MAX_FRAME_SIZE, а шлёт
+        // MAX_HEADER_LIST_SIZE — это часть akamai HTTP/2-фингерпринта
+        // (BUG-1826, замер tls.peet.ws).
+        let mut settings_params = vec![
+            (0x0001, settings.header_table_size),                    // HEADER_TABLE_SIZE
+            (0x0002, if settings.enable_push { 1 } else { 0 }),      // ENABLE_PUSH
         ];
+        if let Some(v) = settings.max_concurrent_streams {
+            settings_params.push((0x0003, v));                      // MAX_CONCURRENT_STREAMS
+        }
+        settings_params.push((0x0004, settings.initial_window_size)); // INITIAL_WINDOW_SIZE
+        if let Some(v) = settings.max_frame_size {
+            settings_params.push((0x0005, v));                      // MAX_FRAME_SIZE
+        }
+        if let Some(v) = settings.max_header_list_size {
+            settings_params.push((0x0006, v));                      // MAX_HEADER_LIST_SIZE
+        }
 
         Frame::Settings {
             ack: false,
@@ -1399,21 +1410,22 @@ mod tests {
         let (frame, _) = Frame::parse(after_magic, MAX_FRAME_PAYLOAD_DEFAULT)
             .unwrap()
             .unwrap();
-        // Verify Chrome-matching SETTINGS: [header_table_size, enable_push, max_concurrent, initial_window, max_frame]
+        // Chrome 157 SETTINGS (tls.peet.ws, BUG-1826): header_table_size,
+        // enable_push=0, initial_window, max_header_list_size — без
+        // MAX_CONCURRENT_STREAMS и MAX_FRAME_SIZE.
         match frame {
             Frame::Settings { ack: false, params } => {
-                assert_eq!(params.len(), 5, "Chrome SETTINGS should have 5 parameters");
+                assert_eq!(params.len(), 4, "Chrome SETTINGS should have 4 parameters");
                 assert_eq!(params[0], (1, 65536), "HEADER_TABLE_SIZE should be 65536");
-                assert_eq!(params[1], (2, 1), "ENABLE_PUSH should be 1");
-                assert_eq!(params[2], (3, 1000), "MAX_CONCURRENT_STREAMS should be 1000");
-                assert_eq!(params[3], (4, 6291456), "INITIAL_WINDOW_SIZE should be 6291456");
-                assert_eq!(params[4], (5, 16384), "MAX_FRAME_SIZE should be 16384");
+                assert_eq!(params[1], (2, 0), "ENABLE_PUSH should be 0");
+                assert_eq!(params[2], (4, 6291456), "INITIAL_WINDOW_SIZE should be 6291456");
+                assert_eq!(params[3], (6, 262144), "MAX_HEADER_LIST_SIZE should be 262144");
             }
             _ => panic!("Expected Settings frame with Chrome parameters"),
         }
-        // Chrome SETTINGS frame: 9-byte header + (5 params * 6 bytes) = 9 + 30 = 39 bytes,
+        // Chrome SETTINGS frame: 9-byte header + (4 params * 6 bytes) = 9 + 24 = 33 bytes,
         // followed by Chrome's connection-window WINDOW_UPDATE (PERF-13).
-        let offset = CLIENT_PREFACE_MAGIC.len() + 39;
+        let offset = CLIENT_PREFACE_MAGIC.len() + 33;
         let (window_frame, used) = Frame::parse(&written[offset..], MAX_FRAME_PAYLOAD_DEFAULT)
             .unwrap()
             .unwrap();
@@ -1719,8 +1731,8 @@ mod tests {
         result
     }
 
-    /// Chrome-profile preface SETTINGS frame: 9-byte header + 5 params × 6 bytes.
-    const PREFACE_SETTINGS_LEN: usize = 39;
+    /// Chrome-profile preface SETTINGS frame: 9-byte header + 4 params × 6 bytes.
+    const PREFACE_SETTINGS_LEN: usize = 33;
 
     #[test]
     fn fetch_with_body_sends_window_update_for_data() {
@@ -1849,9 +1861,9 @@ mod tests {
 
         // Check that a HEADERS frame was written.
         let written = conn.stream.written();
-        // Skip the preface (24 bytes) + SETTINGS (9+30 bytes) + connection
+        // Skip the preface (24 bytes) + SETTINGS (9+24 bytes) + connection
         // WINDOW_UPDATE (9+4 bytes) + SETTINGS ACK (9 bytes).
-        let expected_offset = 24 + 39 + 13 + 9;
+        let expected_offset = 24 + 33 + 13 + 9;
         let frame = Frame::parse(&written[expected_offset..], MAX_FRAME_PAYLOAD_DEFAULT)
             .unwrap()
             .unwrap();

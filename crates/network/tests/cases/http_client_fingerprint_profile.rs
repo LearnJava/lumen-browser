@@ -205,10 +205,14 @@ mod tests {
     #[test]
     fn h2_settings_chrome_matches_expected() {
         let s = H2Settings::for_profile(HttpProfile::Chrome);
+        // Chrome 157 (tls.peet.ws, BUG-1826): ENABLE_PUSH=0, без
+        // MAX_CONCURRENT_STREAMS/MAX_FRAME_SIZE, с MAX_HEADER_LIST_SIZE=256K.
         assert_eq!(s.header_table_size, 65536, "Chrome SETTINGS_HEADER_TABLE_SIZE");
-        assert_eq!(s.max_concurrent_streams, Some(1000), "Chrome MAX_CONCURRENT_STREAMS");
+        assert!(!s.enable_push, "Chrome ENABLE_PUSH=0");
+        assert_eq!(s.max_concurrent_streams, None, "Chrome sends no MAX_CONCURRENT_STREAMS");
         assert_eq!(s.initial_window_size, 6_291_456, "Chrome INITIAL_WINDOW_SIZE = 6MB");
-        assert_eq!(s.max_frame_size, 16384, "Chrome MAX_FRAME_SIZE");
+        assert_eq!(s.max_frame_size, None, "Chrome sends no MAX_FRAME_SIZE");
+        assert_eq!(s.max_header_list_size, Some(262144), "Chrome MAX_HEADER_LIST_SIZE");
     }
 
     #[test]
@@ -229,8 +233,9 @@ mod tests {
     fn h2_settings_wire_format_chrome_6_params_without_compression_limit() {
         let s = H2Settings::for_profile(HttpProfile::Chrome);
         let wire = s.to_wire_format();
-        // 5 params × 6 bytes = 30 bytes (no header_compression_size_limit for Chrome)
-        assert_eq!(wire.len(), 30, "Chrome wire format: 5 params × 6 bytes");
+        // Chrome 157: 4 params × 6 bytes = 24 bytes
+        // (HEADER_TABLE_SIZE, ENABLE_PUSH, INITIAL_WINDOW_SIZE, MAX_HEADER_LIST_SIZE)
+        assert_eq!(wire.len(), 24, "Chrome wire format: 4 params × 6 bytes");
         // First param: HEADER_TABLE_SIZE (0x0001) = 65536
         assert_eq!(&wire[0..2], &[0x00, 0x01]);
         assert_eq!(&wire[2..6], &65536u32.to_be_bytes());

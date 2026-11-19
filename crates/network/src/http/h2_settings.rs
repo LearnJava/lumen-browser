@@ -17,8 +17,12 @@ pub struct H2Settings {
     pub max_concurrent_streams: Option<u32>,
     /// SETTINGS_INITIAL_WINDOW_SIZE (default 65535, Chrome uses 6291456).
     pub initial_window_size: u32,
-    /// SETTINGS_MAX_FRAME_SIZE (default 16384, Chrome uses 16384).
-    pub max_frame_size: u32,
+    /// SETTINGS_MAX_FRAME_SIZE (default 16384). `None` — не отправлять:
+    /// Chrome 157 его не шлёт (замер tls.peet.ws/api/all, BUG-1826).
+    pub max_frame_size: Option<u32>,
+    /// SETTINGS_MAX_HEADER_LIST_SIZE (id 6). Chrome 157 шлёт 262144;
+    /// `None` — не отправлять.
+    pub max_header_list_size: Option<u32>,
     /// SETTINGS_HEADER_COMPRESSION_SIZE_LIMIT (HTTP/2 extension, optional).
     pub header_compression_size_limit: Option<u32>,
     /// Increment of the stream-0 WINDOW_UPDATE sent right after the preface
@@ -39,13 +43,17 @@ impl H2Settings {
     pub fn for_profile(profile: HttpProfile) -> Self {
         match profile {
             HttpProfile::Chrome | HttpProfile::Strict => {
-                // Chrome 130+ HTTP/2 SETTINGS
+                // Chrome 157+ HTTP/2 SETTINGS — измерено tls.peet.ws/api/all
+                // (akamai `1:65536;2:0;4:6291456;6:262144`): Chrome больше не
+                // шлёт ENABLE_PUSH=1, MAX_CONCURRENT_STREAMS и MAX_FRAME_SIZE,
+                // зато добавил MAX_HEADER_LIST_SIZE=256 KiB (BUG-1826).
                 Self {
                     header_table_size: 65536,
-                    enable_push: true,
-                    max_concurrent_streams: Some(1000),
+                    enable_push: false,
+                    max_concurrent_streams: None,
                     initial_window_size: 6291456,   // 6 MB
-                    max_frame_size: 16384,
+                    max_frame_size: None,
+                    max_header_list_size: Some(262144),
                     header_compression_size_limit: None,
                     connection_window_increment: 15_663_105,  // 15 MB connection window
                 }
@@ -57,7 +65,8 @@ impl H2Settings {
                     enable_push: true,
                     max_concurrent_streams: Some(1000),
                     initial_window_size: 2147483647,  // Very large window (max i32)
-                    max_frame_size: 16384,
+                    max_frame_size: Some(16384),
+                    max_header_list_size: None,
                     header_compression_size_limit: None,
                     connection_window_increment: 12_517_377,  // 12 MB connection window
                 }
@@ -69,7 +78,8 @@ impl H2Settings {
                     enable_push: true,
                     max_concurrent_streams: Some(500),
                     initial_window_size: 65535,    // RFC default
-                    max_frame_size: 16384,
+                    max_frame_size: Some(16384),
+                    max_header_list_size: None,
                     header_compression_size_limit: None,
                     connection_window_increment: 10_420_225,  // 10 MB connection window
                 }
@@ -78,10 +88,11 @@ impl H2Settings {
                 // Edge 130+ HTTP/2 SETTINGS (same as Chrome)
                 Self {
                     header_table_size: 65536,
-                    enable_push: true,
-                    max_concurrent_streams: Some(1000),
+                    enable_push: false,
+                    max_concurrent_streams: None,
                     initial_window_size: 6291456,   // 6 MB (same as Chrome)
-                    max_frame_size: 16384,
+                    max_frame_size: None,
+                    max_header_list_size: Some(262144),
                     header_compression_size_limit: None,
                     connection_window_increment: 15_663_105,  // 15 MB connection window
                 }
@@ -93,7 +104,8 @@ impl H2Settings {
                     enable_push: true,
                     max_concurrent_streams: Some(100),  // Conservative
                     initial_window_size: 65535,    // RFC default
-                    max_frame_size: 16384,         // RFC default
+                    max_frame_size: Some(16384),   // RFC default
+                    max_header_list_size: None,
                     header_compression_size_limit: None,
                     connection_window_increment: 12_517_377,  // 12 MB connection window
                 }
@@ -105,7 +117,8 @@ impl H2Settings {
                     enable_push: true,
                     max_concurrent_streams: Some(500),
                     initial_window_size: 1048576,   // 1 MB — RAM optimization
-                    max_frame_size: 16384,
+                    max_frame_size: Some(16384),
+                    max_header_list_size: None,
                     header_compression_size_limit: None,
                     connection_window_increment: 15_663_105,  // 15 MB connection window
                 }
@@ -138,13 +151,21 @@ impl H2Settings {
         buf.extend_from_slice(&0x0004u16.to_be_bytes());
         buf.extend_from_slice(&self.initial_window_size.to_be_bytes());
 
-        // SETTINGS_MAX_FRAME_SIZE (0x0005)
-        buf.extend_from_slice(&0x0005u16.to_be_bytes());
-        buf.extend_from_slice(&self.max_frame_size.to_be_bytes());
+        // SETTINGS_MAX_FRAME_SIZE (0x0005, optional — Chrome его не шлёт)
+        if let Some(max_frame) = self.max_frame_size {
+            buf.extend_from_slice(&0x0005u16.to_be_bytes());
+            buf.extend_from_slice(&max_frame.to_be_bytes());
+        }
 
-        // SETTINGS_HEADER_COMPRESSION_SIZE_LIMIT (0x0006, optional, HTTP/2 extension)
-        if let Some(limit) = self.header_compression_size_limit {
+        // SETTINGS_MAX_HEADER_LIST_SIZE (0x0006, optional)
+        if let Some(limit) = self.max_header_list_size {
             buf.extend_from_slice(&0x0006u16.to_be_bytes());
+            buf.extend_from_slice(&limit.to_be_bytes());
+        }
+
+        // SETTINGS_HEADER_COMPRESSION_SIZE_LIMIT (HTTP/2 extension, optional)
+        if let Some(limit) = self.header_compression_size_limit {
+            buf.extend_from_slice(&u16::MAX.to_be_bytes());
             buf.extend_from_slice(&limit.to_be_bytes());
         }
 
@@ -199,8 +220,10 @@ mod tests {
     fn test_h2_settings_chrome_profile() {
         let settings = H2Settings::for_profile(HttpProfile::Chrome);
         assert_eq!(settings.header_table_size, 65536);
-        assert_eq!(settings.max_concurrent_streams, Some(1000));
+        assert!(!settings.enable_push);
+        assert_eq!(settings.max_concurrent_streams, None);
         assert_eq!(settings.initial_window_size, 6291456);
+        assert_eq!(settings.max_header_list_size, Some(262144));
     }
 
     #[test]
@@ -241,8 +264,10 @@ mod tests {
         let settings = H2Settings::for_profile(HttpProfile::Edge);
         // Edge matches Chrome
         assert_eq!(settings.header_table_size, 65536);
-        assert_eq!(settings.max_concurrent_streams, Some(1000));
+        assert!(!settings.enable_push);
+        assert_eq!(settings.max_concurrent_streams, None);
         assert_eq!(settings.initial_window_size, 6291456);
+        assert_eq!(settings.max_header_list_size, Some(262144));
     }
 
     #[test]
@@ -250,8 +275,8 @@ mod tests {
         let settings = H2Settings::for_profile(HttpProfile::Chrome);
         let wire = settings.to_wire_format();
         assert!(!wire.is_empty());
-        // Should contain at least: HEADER_TABLE_SIZE + ENABLE_PUSH + MAX_CONCURRENT + WINDOW_SIZE + MAX_FRAME
-        assert!(wire.len() >= 6 * 5);
+        // Chrome шлёт 4 SETTINGS: HEADER_TABLE_SIZE + ENABLE_PUSH + INITIAL_WINDOW + MAX_HEADER_LIST_SIZE
+        assert_eq!(wire.len(), 6 * 4);
     }
 
     #[test]
