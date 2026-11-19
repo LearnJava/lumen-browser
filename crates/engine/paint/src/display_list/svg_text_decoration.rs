@@ -1180,8 +1180,10 @@ pub(crate) fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, 
             right:  s.right.to_px_opt(),
         });
     }
-    // CSS Positioning L3 §6.1 — position:fixed (same as in walk).
-    let is_fixed = matches!(b.style.position, Position::Fixed);
+    // CSS Positioning L3 §6.1 — position:fixed (same as in walk; ANCHOR-SCROLL-3-S3:
+    // a fixed box with `anchor_scroll.page` is page content, not a viewport overlay).
+    let is_fixed = matches!(b.style.position, Position::Fixed)
+        && !b.anchor_scroll.as_ref().is_some_and(|a| a.page);
     if is_fixed {
         out.push(DisplayCommand::BeginFixedLayer);
     }

@@ -300,6 +300,9 @@ struct AnchorLink {
     ancestors: Vec<lumen_dom::NodeId>,
     /// Scroll containers of the anchor and the axes followed on each (see [`anchor_scroll_for`]).
     scrollers: Vec<Followed>,
+    /// ANCHOR-SCROLL-3-S3: the box is `position: fixed` whose anchor is page content — it
+    /// scrolls with the page instead of being a viewport overlay.
+    page: bool,
 }
 
 /// CSS Anchor Positioning L1 §4.3: a box positioned against an anchor that is itself positioned
@@ -310,13 +313,16 @@ fn chain_anchor_scroll(root: &mut LayoutBox, links: &[AnchorLink]) {
     if !links.iter().any(|l| by_node.contains_key(&l.anchor)) {
         return;
     }
-    let mut chained: HashMap<lumen_dom::NodeId, Vec<Followed>> = HashMap::new();
+    let mut chained: HashMap<lumen_dom::NodeId, (Vec<Followed>, bool)> = HashMap::new();
     for l in links {
         let mut all = l.scrollers.clone();
+        let mut page = l.page;
         let mut hop = l.anchor;
         // A cycle (`a` against `b` against `a`) ends at the hop bound, not by luck.
         for _ in 0..links.len() {
             let Some(&i) = by_node.get(&hop) else { break };
+            // A target that follows a page-content anchor is page content too.
+            page |= links[i].page;
             for &(n, fx, fy) in &links[i].scrollers {
                 match all.iter_mut().find(|(m, _, _)| *m == n) {
                     Some((_, x, y)) => {
@@ -329,8 +335,8 @@ fn chain_anchor_scroll(root: &mut LayoutBox, links: &[AnchorLink]) {
             hop = links[i].anchor;
         }
         all.retain(|(n, _, _)| !l.ancestors.contains(n));
-        if all != l.scrollers {
-            chained.insert(l.node, all);
+        if all != l.scrollers || page != l.page {
+            chained.insert(l.node, (all, page));
         }
     }
     if chained.is_empty() {
@@ -339,8 +345,8 @@ fn chain_anchor_scroll(root: &mut LayoutBox, links: &[AnchorLink]) {
     let mut stack: Vec<&mut LayoutBox> = vec![root];
     while let Some(b) = stack.pop() {
         // The principal box of the node only (first in pre-order).
-        if let Some(all) = chained.remove(&b.node) {
-            b.anchor_scroll = scroll_of(&all);
+        if let Some((all, page)) = chained.remove(&b.node) {
+            b.anchor_scroll = scroll_of(&all, page);
         }
         stack.extend(b.children.iter_mut().rev());
     }
@@ -352,12 +358,15 @@ fn chain_anchor_scroll(root: &mut LayoutBox, links: &[AnchorLink]) {
 /// one, else the first one named in an `anchor()`/`anchor-size()`. An axis follows the scrolling of
 /// the anchor its insets name (`anchor-scroll-006`: an inset on another anchor leaves the axis
 /// alone); a box with no `anchor()` inset or `position-area` follows both axes. `None` — not an
-/// anchor-positioned box.
+/// anchor-positioned box. `page_candidate` — the box is `position: fixed` with the viewport as
+/// its containing block (ANCHOR-SCROLL-3-S3): `page` comes back true unless the anchor is itself
+/// fixed, in which case the box stays a viewport overlay.
 fn anchor_scroll_for(
     lb: &LayoutBox,
     registry: &crate::anchor::AnchorRegistry,
     ancestors: &[lumen_dom::NodeId],
-) -> Option<(lumen_dom::NodeId, Vec<Followed>)> {
+    page_candidate: bool,
+) -> Option<(lumen_dom::NodeId, Vec<Followed>, bool)> {
     if !matches!(lb.style.position, Position::Absolute | Position::Fixed) {
         return None;
     }
@@ -401,12 +410,13 @@ fn anchor_scroll_for(
             }
         }
     }
-    Some((anchor, scrollers))
+    Some((anchor, scrollers, page_candidate && !registry.fixed_anchors.contains(&anchor)))
 }
 
-fn scroll_of(nodes: &[Followed]) -> Option<Box<AnchorScroll>> {
-    (!nodes.is_empty()).then(|| {
+fn scroll_of(nodes: &[Followed], page: bool) -> Option<Box<AnchorScroll>> {
+    (page || !nodes.is_empty()).then(|| {
         Box::new(AnchorScroll {
+            page,
             scrollers: nodes
                 .iter()
                 .map(|&(node, follow_x, follow_y)| AnchorScroller { node, x: 0.0, y: 0.0, follow_x, follow_y })
@@ -622,10 +632,17 @@ fn apply_anchor_positions_rec(
 
     // CSS Anchor Positioning L1 §4.3 — the scroll containers the anchor sits in that this
     // box is not inside of: their offsets move the anchor, so they move this box too.
+    // ANCHOR-SCROLL-3-S3: a `position: fixed` box whose containing block is the viewport
+    // (`fixed_cb == None`) whose anchor is page content scrolls with the page itself.
     lb.anchor_scroll = None;
-    if let Some((anchor, scrollers)) = anchor_scroll_for(lb, registry, ancestors) {
-        lb.anchor_scroll = scroll_of(&scrollers);
-        links.push(AnchorLink { node: lb.node, anchor, ancestors: ancestors.to_vec(), scrollers });
+    if let Some((anchor, scrollers, page)) = anchor_scroll_for(
+        lb,
+        registry,
+        ancestors,
+        matches!(lb.style.position, Position::Fixed) && fixed_cb.is_none(),
+    ) {
+        lb.anchor_scroll = scroll_of(&scrollers, page);
+        links.push(AnchorLink { node: lb.node, anchor, ancestors: ancestors.to_vec(), scrollers, page });
     }
 
     // Compute the containing blocks for absolute- and fixed-positioned children of this element.

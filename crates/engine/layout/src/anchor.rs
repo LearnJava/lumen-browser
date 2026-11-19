@@ -29,13 +29,13 @@
 //! # CSS specification
 //! <https://drafts.csswg.org/css-anchor-position-1/>
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use lumen_core::geom::{Rect, Size};
 use lumen_dom::NodeId;
 
 use crate::box_tree::{BoxKind, LayoutBox};
-use crate::style::{Length, LengthOrAuto};
+use crate::style::{Length, LengthOrAuto, Position};
 
 // ─── AnchorSide ──────────────────────────────────────────────────────────────
 
@@ -212,6 +212,9 @@ pub struct AnchorRegistry {
     /// Maps an anchor element to the scroll containers it sits in, outermost first
     /// (CSS Anchor Positioning L1 §4.3). Absent — the anchor is in no scroll container.
     pub scroll_chains: HashMap<NodeId, Vec<NodeId>>,
+    /// Anchors inside a `position: fixed` subtree (or fixed themselves): a fixed box
+    /// positioned against one of them stays a viewport overlay (ANCHOR-SCROLL-3-S3).
+    pub fixed_anchors: HashSet<NodeId>,
 }
 
 /// One registered anchor element.
@@ -241,7 +244,12 @@ impl AnchorRegistry {
         if target_seq > self.max_seq {
             return Cow::Borrowed(self);
         }
-        let mut view = AnchorRegistry { scroll_chains: self.scroll_chains.clone(), ..Default::default() };
+        let mut view = AnchorRegistry {
+            scroll_chains: self.scroll_chains.clone(),
+            // Membership does not depend on tree order — carry it over whole.
+            fixed_anchors: self.fixed_anchors.clone(),
+            ..Default::default()
+        };
         for (name, all) in &self.history {
             let kept: Vec<AnchorEntry> = all.iter().filter(|e| e.seq < target_seq).copied().collect();
             if let Some(last) = kept.last() {
@@ -352,13 +360,16 @@ fn collect_anchors_rec(
     // to what the box's parent saw (the push-before-children / pop-after discipline the
     // recursion gave for free, as in `apply_anchor_positions_rec`).
     let mut scrollers: Vec<NodeId> = Vec::new();
-    let mut stack: Vec<(&LayoutBox, Option<NodeId>, usize)> = vec![(root, scope_root, 0)];
+    // The frame's `bool`: the box is inside a `position: fixed` subtree (or fixed itself) —
+    // ANCHOR-SCROLL-3-S3.
+    let mut stack: Vec<(&LayoutBox, Option<NodeId>, usize, bool)> = vec![(root, scope_root, 0, false)];
     // Pre-order index of the popped box: what `AnchorEntry::seq` records.
     let mut seq: u32 = 0;
-    while let Some((lb, scope_root, depth)) = stack.pop() {
+    while let Some((lb, scope_root, depth, in_fixed)) = stack.pop() {
         scrollers.truncate(depth);
         seq += 1;
         let box_seq = seq - 1;
+        let self_in_fixed = in_fixed || matches!(lb.style.position, Position::Fixed);
         // Determine the scope root for this element's descendants.
         let next_scope = match &lb.style.anchor_scope {
             AnchorScope::All | AnchorScope::Named(_) => Some(lb.node),
@@ -381,6 +392,9 @@ fn collect_anchors_rec(
                 Some(m) => crate::transformed_aabb(&lb.rect, &m),
                 None => lb.rect,
             };
+            if self_in_fixed {
+                registry.fixed_anchors.insert(lb.node);
+            }
             register(registry, name, lb.node, rect);
         }
         if let Some(inline) = inline {
@@ -396,6 +410,9 @@ fn collect_anchors_rec(
                 }
             });
             for (anc, [x1, y1, x2, y2]) in unions {
+                if self_in_fixed {
+                    registry.fixed_anchors.insert(anc);
+                }
                 register(registry, &inline.names[&anc], anc, Rect::new(x1, y1, x2 - x1, y2 - y1));
             }
         }
@@ -404,7 +421,7 @@ fn collect_anchors_rec(
         }
         let child_depth = scrollers.len();
         for child in lb.children.iter().rev() {
-            stack.push((child, next_scope, child_depth));
+            stack.push((child, next_scope, child_depth, self_in_fixed));
         }
     }
 }

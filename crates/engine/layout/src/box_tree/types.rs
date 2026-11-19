@@ -33,6 +33,10 @@ pub struct AnchorScroller {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AnchorScroll {
     pub scrollers: Vec<AnchorScroller>,
+    /// ANCHOR-SCROLL-3-S3: a `position: fixed` box whose anchor is page content (not itself
+    /// fixed) paints as part of the page and scrolls with it instead of being a viewport
+    /// overlay — `scrollers` may be empty, the page scroll is the renderer's own.
+    pub page: bool,
 }
 
 impl AnchorScroll {
