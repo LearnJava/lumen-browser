@@ -1,0 +1,56 @@
+{
+ "arm": "lumen",
+ "label": "main-6187a9e86-nopecha1",
+ "route": "proxy-12334",
+ "build": {
+  "exe": ".tmp\\eval1826\\profiles\\main-nopecha1\\lumen.exe",
+  "exe_mtime": "2026-11-19T12:24"
+ },
+ "env": {
+  "LUMEN_JS_STALL_SAMPLE_MS": "2000"
+ },
+ "started": "2026-11-19-1245",
+ "summary": {
+  "pages": 1,
+  "passed": 1,
+  "gpr": 1.0,
+  "verdicts": {
+   "пройдено": 1,
+   "петля": 0,
+   "не_отрисован": 0,
+   "отказ": 0,
+   "завис": 0
+  },
+  "by_vendor": {
+   "cf": "1/1"
+  },
+  "v3_scores": []
+ },
+ "results": [
+  {
+   "observed_s": 17.8,
+   "loads": 3,
+   "probe_errors": 0,
+   "final_url": "https://nopecha.com/demo/cloudflare",
+   "title": "Защита сайта (Cloudflare) не пропускает Lumen",
+   "text_len": 462,
+   "text_head": "Защита сайта (Cloudflare) не пропускает Lumen\n\nСайт nopecha.com несколько раз подряд показал проверку, которую Lumen не проходит. Дело не в вашей сети, повторы не помогут.\n\nОткройте страницу в другом браузере: там проверка может пройти.\nЕсли сайт нужен вам постоянно, сообщите о проблеме и приложите ID проверки.\n\nОткрыть в другом браузере\n\nID проверки: DD6D-4E9E\nВ нём нет IP-адреса и адреса страницы: только сайт, название защиты и время с точностью до минуты.",
+   "api": {
+    "turnstile": "undefined",
+    "grecaptcha": "undefined",
+    "hcaptcha": "undefined"
+   },
+   "vendor_cookies": [],
+   "frames": [],
+   "verdict": "пройдено",
+   "reason": "оракул выполнен",
+   "stderr_errors": 40,
+   "stderr_log": "live.stderr.cf-managed-challenge.0.log",
+   "id": "cf-managed-challenge",
+   "vendor": "cf",
+   "oracle": "unblocked",
+   "url": "https://nopecha.com/demo/cloudflare",
+   "wall_s": 26.5
+  }
+ ]
+}

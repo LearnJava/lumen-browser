@@ -1,0 +1,56 @@
+{
+ "arm": "lumen",
+ "label": "devin-424621f0-nopecha1",
+ "route": "proxy-12334",
+ "build": {
+  "exe": ".tmp\\eval1826\\profiles\\devin-nopecha1\\lumen.exe",
+  "exe_mtime": "2026-11-19T12:35"
+ },
+ "env": {
+  "LUMEN_JS_STALL_SAMPLE_MS": "2000"
+ },
+ "started": "2026-11-19-1245",
+ "summary": {
+  "pages": 1,
+  "passed": 0,
+  "gpr": 0.0,
+  "verdicts": {
+   "пройдено": 0,
+   "петля": 0,
+   "не_отрисован": 0,
+   "отказ": 0,
+   "завис": 1
+  },
+  "by_vendor": {
+   "cf": "0/1"
+  },
+  "v3_scores": []
+ },
+ "results": [
+  {
+   "observed_s": 151.8,
+   "loads": 2,
+   "probe_errors": 20,
+   "final_url": "https://nopecha.com/demo/cloudflare",
+   "title": "Just a moment...",
+   "text_len": 0,
+   "text_head": "",
+   "api": {
+    "turnstile": "undefined",
+    "grecaptcha": "undefined",
+    "hcaptcha": "undefined"
+   },
+   "vendor_cookies": [],
+   "frames": [],
+   "verdict": "завис",
+   "reason": "страница-проверка не завершилась за окно наблюдения",
+   "stderr_errors": 6,
+   "stderr_log": "live.stderr.cf-managed-challenge.0.log",
+   "id": "cf-managed-challenge",
+   "vendor": "cf",
+   "oracle": "unblocked",
+   "url": "https://nopecha.com/demo/cloudflare",
+   "wall_s": 159.5
+  }
+ ]
+}

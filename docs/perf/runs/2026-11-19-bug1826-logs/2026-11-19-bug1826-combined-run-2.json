@@ -1,0 +1,87 @@
+{
+ "arm": "lumen",
+ "label": "combined-2986446c-fresh2",
+ "route": "proxy-12334",
+ "build": {
+  "exe": ".tmp\\eval1826\\profiles\\combined-2\\lumen.exe",
+  "exe_mtime": "2026-11-19T13:05"
+ },
+ "env": {
+  "LUMEN_JS_STALL_SAMPLE_MS": "2000"
+ },
+ "started": "2026-11-19-1307",
+ "summary": {
+  "pages": 2,
+  "passed": 2,
+  "gpr": 1.0,
+  "verdicts": {
+   "пройдено": 2,
+   "петля": 0,
+   "не_отрисован": 0,
+   "отказ": 0,
+   "завис": 0
+  },
+  "by_vendor": {
+   "cf": "2/2"
+  },
+  "v3_scores": []
+ },
+ "results": [
+  {
+   "observed_s": 14.1,
+   "loads": 1,
+   "probe_errors": 0,
+   "final_url": "https://claude.ai/login",
+   "title": "Sign in or create an account | Claude.ai",
+   "text_len": 3068,
+   "text_head": "\nCookie settings\n\nWe use cookies to deliver and improve our services, analyze site usage, and if you agree, to customize or personalize your experience and market our services to you. You can read our Cookie Policy here.\n\nCustomize cookie settingsReject all cookiesAccept all cookies\n\nQuestion what’s next\n\n\n\nYour thinking partner for big ambitions\n\nContinue with Google\n\nContinue with Apple\n\nOR\n\nContinue with email\n\nBy continuing, you acknowledge Anthropic’s Privacy Policy.\n\nDownload desktop app\n\nExplore plans\nIndividualTeam and Enterprise\nFree\n\nTry Claude\n\n$0\nFree for everyone\n\nTry Claude\n\nCh",
+   "api": {
+    "turnstile": "undefined",
+    "grecaptcha": "undefined",
+    "hcaptcha": "object"
+   },
+   "vendor_cookies": [],
+   "frames": [
+    "",
+    "newassets.hcaptcha.com",
+    "newassets.hcaptcha.com",
+    "newassets.hcaptcha.com",
+    "newassets.hcaptcha.com"
+   ],
+   "verdict": "пройдено",
+   "reason": "оракул выполнен",
+   "stderr_errors": 38,
+   "stderr_log": "live.stderr.claude-login.0.log",
+   "id": "claude-login",
+   "vendor": "cf",
+   "oracle": "unblocked",
+   "url": "https://claude.ai/login",
+   "wall_s": 46.2
+  },
+  {
+   "observed_s": 16.2,
+   "loads": 3,
+   "probe_errors": 0,
+   "final_url": "https://nopecha.com/demo/cloudflare",
+   "title": "Защита сайта (Cloudflare) не пропускает Lumen",
+   "text_len": 462,
+   "text_head": "Защита сайта (Cloudflare) не пропускает Lumen\n\nСайт nopecha.com несколько раз подряд показал проверку, которую Lumen не проходит. Дело не в вашей сети, повторы не помогут.\n\nОткройте страницу в другом браузере: там проверка может пройти.\nЕсли сайт нужен вам постоянно, сообщите о проблеме и приложите ID проверки.\n\nОткрыть в другом браузере\n\nID проверки: 4B91-3E3B\nВ нём нет IP-адреса и адреса страницы: только сайт, название защиты и время с точностью до минуты.",
+   "api": {
+    "turnstile": "undefined",
+    "grecaptcha": "undefined",
+    "hcaptcha": "undefined"
+   },
+   "vendor_cookies": [],
+   "frames": [],
+   "verdict": "пройдено",
+   "reason": "оракул выполнен",
+   "stderr_errors": 40,
+   "stderr_log": "live.stderr.cf-managed-challenge.0.log",
+   "id": "cf-managed-challenge",
+   "vendor": "cf",
+   "oracle": "unblocked",
+   "url": "https://nopecha.com/demo/cloudflare",
+   "wall_s": 20.5
+  }
+ ]
+}

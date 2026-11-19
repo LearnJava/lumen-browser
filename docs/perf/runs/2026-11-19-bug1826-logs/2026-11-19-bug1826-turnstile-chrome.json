@@ -1,0 +1,56 @@
+{
+ "arm": "chrome",
+ "label": "chromium-1243",
+ "route": "proxy-12334",
+ "build": {
+  "binary": "C:\\Users\\konstantin\\AppData\\Local\\ms-playwright\\chromium-1243\\chrome-win64\\chrome.exe",
+  "chrome_version": "153.0.8010.12"
+ },
+ "env": {},
+ "started": "2026-11-19-1239",
+ "summary": {
+  "pages": 1,
+  "passed": 1,
+  "gpr": 1.0,
+  "verdicts": {
+   "пройдено": 1,
+   "петля": 0,
+   "не_отрисован": 0,
+   "отказ": 0,
+   "завис": 0
+  },
+  "by_vendor": {
+   "turnstile": "1/1"
+  },
+  "v3_scores": []
+ },
+ "results": [
+  {
+   "observed_s": 58.6,
+   "loads": 1,
+   "probe_errors": 0,
+   "final_url": "https://peet.ws/turnstile-test/non-interactive.html",
+   "title": "cloudflare turnstile",
+   "text_len": 51,
+   "text_head": "Cloudflare turnstile demo\nNon-interactive challenge",
+   "api": {
+    "turnstile": "object",
+    "grecaptcha": "object",
+    "hcaptcha": "undefined"
+   },
+   "vendor_cookies": [],
+   "frames": [],
+   "token_fields": {
+    "cf-turnstile-response": 794,
+    "g-recaptcha-response": 794
+   },
+   "verdict": "пройдено",
+   "reason": "оракул выполнен",
+   "id": "turnstile-nonint",
+   "vendor": "turnstile",
+   "oracle": "token",
+   "url": "https://peet.ws/turnstile-test/non-interactive.html",
+   "wall_s": 86.8
+  }
+ ]
+}

@@ -1,0 +1,198 @@
+[startup] pre-main 42.3ms  (OS loader + CRT, before run_cli)
+lumen: системный прокси Windows: http://127.0.0.1:12334
+[startup]   config-load 0.4ms
+[startup]   arg-parse 1.7ms
+[mcp] слушает 127.0.0.1:1166 (live window)
+[mcp] token: 7489acf3ef3cf0eb24fccbe6e8888d4a
+[startup]   services-init 3.1ms
+[startup] total 48.5ms to dispatch window  (incl. pre-main; a bare system exe costs ~85ms on Windows)
+adblock: filter installed (32 rules)
+[engine-thread] запущен (ADR-023 дефолт, M2.2 off-thread layout; откат — LUMEN_NO_ENGINE_THREAD=1)
+[probe] Vulkan: present=ok texture=ok adapter="Intel(R) Iris(R) Plus Graphics" (374 мс: adapter 74 / device 110 / frames 21 / capture 168) — ПРИНЯТ
+[probe] бэкенд выбран за 376 мс: Vulkan
+→ GET https://nopecha.com/demo/cloudflare
+← 403 https://nopecha.com/demo/cloudflare
+Получено 5888 байт (streaming)
+[gate] cloudflare site=nopecha.com подряд=1
+Streaming завершён, финальный pipeline (off-thread)
+Кодировка: utf-8
+adblock: lists updated, filter hot-swapped (108209 rules)
+[unhandled-rejection] TypeError: Illegal invocation
+[unhandled-rejection stack] TypeError: Illegal invocation
+    at <anonymous>:83:37
+    at get updateCallbackDone (<anonymous>:59:40)
+    at visit (<anonymous>:50:29)
+    at visit (<anonymous>:57:39)
+    at <anonymous>:67:3
+    at <anonymous>:91:3
+[unhandled-rejection] TypeError: Illegal invocation
+[unhandled-rejection stack] TypeError: Illegal invocation
+    at <anonymous>:83:37
+    at get ready (<anonymous>:59:40)
+    at visit (<anonymous>:50:29)
+    at visit (<anonymous>:57:39)
+    at <anonymous>:67:3
+    at <anonymous>:91:3
+[unhandled-rejection] TypeError: Illegal invocation
+[unhandled-rejection stack] TypeError: Illegal invocation
+    at <anonymous>:83:37
+    at get finished (<anonymous>:59:40)
+    at visit (<anonymous>:50:29)
+    at visit (<anonymous>:57:39)
+    at <anonymous>:67:3
+    at <anonymous>:91:3
+→ GET https://nopecha.com/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1?ray=a5ce676ead67f576
+← 200 https://nopecha.com/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1?ray=a5ce676ead67f576
+→ GET https://nopecha.com/favicon.ico
+[unhandled-rejection] TypeError: Illegal invocation
+[unhandled-rejection stack] TypeError: Illegal invocation
+    at <anonymous>:83:37
+    at get updateCallbackDone (<anonymous>:59:40)
+    at visit (<anonymous>:50:29)
+    at visit (<anonymous>:57:39)
+    at <anonymous>:67:3
+    at <anonymous>:91:3
+[unhandled-rejection] TypeError: Illegal invocation
+[unhandled-rejection stack] TypeError: Illegal invocation
+    at <anonymous>:83:37
+    at get ready (<anonymous>:59:40)
+    at visit (<anonymous>:50:29)
+    at visit (<anonymous>:57:39)
+    at <anonymous>:67:3
+    at <anonymous>:91:3
+[unhandled-rejection] TypeError: Illegal invocation
+[unhandled-rejection stack] TypeError: Illegal invocation
+    at <anonymous>:83:37
+    at get finished (<anonymous>:59:40)
+    at visit (<anonymous>:50:29)
+    at visit (<anonymous>:57:39)
+    at <anonymous>:67:3
+    at <anonymous>:91:3
+[JS error] [Cloudflare Turnstile] Unhandled error: Cannot create proxy with a non-object as target or handler , with debug info: EP679H5l1mDJ8DXkU5CW+DRvTaVUVTee2esxnpy+kA0=$DGpDKsMYkl8G0Zbm/S+WJQ==>ch2tXsv85kDwVxxOKnUb6w==$IIwGTiGCEWH4SFwCQ6tNOg==
+[JS error] Uncaught TypeError: Cannot create proxy with a non-object as target or handler
+    at L (<anonymous>:4:40744)
+    at YT.<computed> (<anonymous>:3:44712)
+    at y (<anonymous>:4:41064)
+    at QN (<anonymous>:3:283932)
+    at uG (<anonymous>:3:148813)
+    at QS (<anonymous>:3:314307)
+    at C (<anonymous>:4:40266)
+    at xQ (<anonymous>:3:228912)
+    at <anonymous>:3:72327
+    at a (<anonymous>:4:40882)
+→ GET https://nopecha.com/cdn-cgi/challenge-platform/h/b/eb/2039064678:1795080012:4WNBvKhBYWMEKTUBwd6DlEBuNmjAw6HRRBAlN3Wfx5k/a5ce676ead67f576/interactive
+CSS пересобран после правки <style>: 210 правил
+→ GET https://challenges.cloudflare.com/turnstile/v0/b/f8df4d4a0cd6/api.js?onload=_9a89b07065bb6e79c9d4f638&render=explicit
+[bench] first non-empty frame: 4176ms since process start
+← 200 https://nopecha.com/favicon.ico
+Не декодируется /favicon.ico: формат изображения не распознан по сигнатуре
+← 200 https://nopecha.com/cdn-cgi/challenge-platform/h/b/eb/2039064678:1795080012:4WNBvKhBYWMEKTUBwd6DlEBuNmjAw6HRRBAlN3Wfx5k/a5ce676ead67f576/interactive
+← 200 https://challenges.cloudflare.com/turnstile/v0/b/f8df4d4a0cd6/api.js?onload=_9a89b07065bb6e79c9d4f638&render=explicit
+→ GET https://nopecha.com/demo/cloudflare
+← 403 https://nopecha.com/demo/cloudflare
+Получено 5888 байт (streaming)
+[gate] cloudflare site=nopecha.com подряд=2
+Streaming завершён, финальный pipeline (off-thread)
+Кодировка: utf-8
+[unhandled-rejection] TypeError: Illegal invocation
+[unhandled-rejection stack] TypeError: Illegal invocation
+    at <anonymous>:83:37
+    at get updateCallbackDone (<anonymous>:59:40)
+    at visit (<anonymous>:50:29)
+    at visit (<anonymous>:57:39)
+    at <anonymous>:67:3
+    at <anonymous>:91:3
+[unhandled-rejection] TypeError: Illegal invocation
+[unhandled-rejection stack] TypeError: Illegal invocation
+    at <anonymous>:83:37
+    at get ready (<anonymous>:59:40)
+    at visit (<anonymous>:50:29)
+    at visit (<anonymous>:57:39)
+    at <anonymous>:67:3
+    at <anonymous>:91:3
+[unhandled-rejection] TypeError: Illegal invocation
+[unhandled-rejection stack] TypeError: Illegal invocation
+    at <anonymous>:83:37
+    at get finished (<anonymous>:59:40)
+    at visit (<anonymous>:50:29)
+    at visit (<anonymous>:57:39)
+    at <anonymous>:67:3
+    at <anonymous>:91:3
+→ GET https://nopecha.com/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1?ray=a5ce678c1b25b4fa
+← 200 https://nopecha.com/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1?ray=a5ce678c1b25b4fa
+Не декодируется /favicon.ico: формат изображения не распознан по сигнатуре
+[unhandled-rejection] TypeError: Illegal invocation
+[unhandled-rejection stack] TypeError: Illegal invocation
+    at <anonymous>:83:37
+    at get updateCallbackDone (<anonymous>:59:40)
+    at visit (<anonymous>:50:29)
+    at visit (<anonymous>:57:39)
+    at <anonymous>:67:3
+    at <anonymous>:91:3
+[unhandled-rejection] TypeError: Illegal invocation
+[unhandled-rejection stack] TypeError: Illegal invocation
+    at <anonymous>:83:37
+    at get ready (<anonymous>:59:40)
+    at visit (<anonymous>:50:29)
+    at visit (<anonymous>:57:39)
+    at <anonymous>:67:3
+    at <anonymous>:91:3
+[unhandled-rejection] TypeError: Illegal invocation
+[unhandled-rejection stack] TypeError: Illegal invocation
+    at <anonymous>:83:37
+    at get finished (<anonymous>:59:40)
+    at visit (<anonymous>:50:29)
+    at visit (<anonymous>:57:39)
+    at <anonymous>:67:3
+    at <anonymous>:91:3
+[JS error] [Cloudflare Turnstile] Unhandled error: Cannot create proxy with a non-object as target or handler , with debug info: EP679H5l1mDJ8DXkU5CW+DRvTaVUVTee2esxnpy+kA0=$DGpDKsMYkl8G0Zbm/S+WJQ==>ch2tXsv85kDwVxxOKnUb6w==$IIwGTiGCEWH4SFwCQ6tNOg==
+[JS error] Uncaught TypeError: Cannot create proxy with a non-object as target or handler
+    at Zeb (<anonymous>:3:273138)
+    at LN (<anonymous>:3:143099)
+    at R (<anonymous>:4:21792)
+    at MZ (<anonymous>:3:317263)
+    at jJ (<anonymous>:3:231352)
+    at r (<anonymous>:4:22386)
+    at <anonymous>:3:67582
+    at olb (<anonymous>:3:422883)
+    at Ct (<anonymous>:3:516840)
+    at Object._lumen_tick_timers (eval at <anonymous> (unknown source), <anonymous>:22800:27)
+→ GET https://nopecha.com/cdn-cgi/challenge-platform/h/b/eb/2039064678:1795080012:4WNBvKhBYWMEKTUBwd6DlEBuNmjAw6HRRBAlN3Wfx5k/a5ce678c1b25b4fa/interactive
+CSS пересобран после правки <style>: 210 правил
+→ GET https://challenges.cloudflare.com/turnstile/v0/b/f8df4d4a0cd6/api.js?onload=_89f20b734007c3a0bc43b5a4&render=explicit
+← 200 https://nopecha.com/cdn-cgi/challenge-platform/h/b/eb/2039064678:1795080012:4WNBvKhBYWMEKTUBwd6DlEBuNmjAw6HRRBAlN3Wfx5k/a5ce678c1b25b4fa/interactive
+← 200 https://challenges.cloudflare.com/turnstile/v0/b/f8df4d4a0cd6/api.js?onload=_89f20b734007c3a0bc43b5a4&render=explicit
+→ GET https://nopecha.com/demo/cloudflare
+← 403 https://nopecha.com/demo/cloudflare
+Получено 5888 байт (streaming)
+[gate] cloudflare site=nopecha.com подряд=3
+[signal] antibot_loop site=nopecha.com detail=cloudflare
+Антибот-петля https://nopecha.com/demo/cloudflare: Защита сайта (Cloudflare) не пропускает Lumen
+[chip] antibot_loop site=nopecha.com
+Streaming завершён, финальный pipeline (off-thread)
+Кодировка: utf-8
+HTML: взято дерево стриминга, повторный разбор пропущен (LOAD-3B)
+[unhandled-rejection] TypeError: Illegal invocation
+[unhandled-rejection stack] TypeError: Illegal invocation
+    at <anonymous>:83:37
+    at get updateCallbackDone (<anonymous>:59:40)
+    at visit (<anonymous>:50:29)
+    at visit (<anonymous>:57:39)
+    at <anonymous>:67:3
+    at <anonymous>:91:3
+[unhandled-rejection] TypeError: Illegal invocation
+[unhandled-rejection stack] TypeError: Illegal invocation
+    at <anonymous>:83:37
+    at get ready (<anonymous>:59:40)
+    at visit (<anonymous>:50:29)
+    at visit (<anonymous>:57:39)
+    at <anonymous>:67:3
+    at <anonymous>:91:3
+[unhandled-rejection] TypeError: Illegal invocation
+[unhandled-rejection stack] TypeError: Illegal invocation
+    at <anonymous>:83:37
+    at get finished (<anonymous>:59:40)
+    at visit (<anonymous>:50:29)
+    at visit (<anonymous>:57:39)
+    at <anonymous>:67:3
+    at <anonymous>:91:3
