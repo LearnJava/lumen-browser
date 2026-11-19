@@ -1,7 +1,7 @@
 //! ANCHOR-SCROLL: CSS Anchor Positioning L1 §4.3 — a box positioned against an anchor that sits
 //! in a scroll container follows that container's scroll offset.
 
-use lumen_core::geom::Size;
+use lumen_core::geom::{Rect, Size};
 
 use super::super::{layout, LayoutBox};
 use crate::set_scroll_position;
@@ -133,6 +133,52 @@ fn anchored_to_each_other_does_not_loop() {
          #t2{position:absolute;width:10px;height:10px;position-anchor:--a;left:anchor(left);top:anchor(top);anchor-name:--b}",
     );
     assert!(followed(&root, &doc, "t1").is_empty());
+}
+
+// ─── ANCHOR-SCROLL-3-S2: position-area in a scrollable containing block ──────
+
+/// `position-area-scrolling-001.tentative.html` without the scripts: scroller 500×500,
+/// overflowing content 1000×1000, anchor at (200,200,100,100), `.pos` abs target.
+/// Expected rects are relative to the scroller's padding box (it sits at the origin).
+#[test]
+fn position_area_grid_stretches_to_the_scrollable_overflow() {
+    // WPT e1/e3/e9 (border-box percentages): the grid covers the scrollable
+    // overflow (1000×1000), not the padding box (500×500); left/top band is 200
+    // wide, right/bottom 700, so 50% → 100 and 350, edges hugged toward the anchor.
+    let (root, doc) = build(
+        r#"<div id="s"><div style="width:1000px;height:1000px"><div style="height:200px"></div><div id="a"></div><div id="e1" class="pos" style="position-area:top left"></div><div id="e3" class="pos" style="position-area:top right"></div><div id="e9" class="pos" style="position-area:bottom right"></div></div></div>"#,
+        "#s{position:relative;overflow:hidden;width:500px;height:500px}\
+         #a{anchor-name:--a;margin-left:200px;width:100px;height:100px}\
+         .pos{position:absolute;box-sizing:border-box;position-anchor:--a;width:50%;height:50%}",
+    );
+    assert_eq!(find(&root, &doc, "e1").rect, Rect::new(100.0, 100.0, 100.0, 100.0));
+    assert_eq!(find(&root, &doc, "e3").rect, Rect::new(300.0, 100.0, 350.0, 100.0));
+    assert_eq!(find(&root, &doc, "e9").rect, Rect::new(300.0, 300.0, 350.0, 350.0));
+}
+
+#[test]
+fn content_box_percentage_adds_padding_and_border_to_the_band_share() {
+    let (root, doc) = build(
+        r#"<div id="s"><div style="width:1000px;height:1000px"><div style="height:200px"></div><div id="a"></div><div id="e" class="pos" style="position-area:top left"></div></div></div>"#,
+        "#s{position:relative;overflow:hidden;width:500px;height:500px}\
+         #a{anchor-name:--a;margin-left:200px;width:100px;height:100px}\
+         .pos{position:absolute;box-sizing:content-box;position-anchor:--a;width:50%;height:50%;padding:10px;border:5px solid}",
+    );
+    // 50% of the 200-wide top-left band → 100 content + 30 padding+border = 130
+    // border-box, end-aligned toward the anchor.
+    assert_eq!(find(&root, &doc, "e").rect, Rect::new(70.0, 70.0, 130.0, 130.0));
+}
+
+#[test]
+fn auto_axes_fill_their_band_in_a_scroll_container() {
+    let (root, doc) = build(
+        r#"<div id="s"><div style="width:1000px;height:1000px"><div style="height:200px"></div><div id="a"></div><div id="e" class="pos" style="position-area:bottom right"></div></div></div>"#,
+        "#s{position:relative;overflow:hidden;width:500px;height:500px}\
+         #a{anchor-name:--a;margin-left:200px;width:100px;height:100px}\
+         .pos{position:absolute;position-anchor:--a}",
+    );
+    // width/height auto stretch to the whole bottom-right band of the 1000×1000 grid.
+    assert_eq!(find(&root, &doc, "e").rect, Rect::new(300.0, 300.0, 700.0, 700.0));
 }
 
 #[test]

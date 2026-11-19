@@ -435,11 +435,14 @@ fn apply_anchor_positions_rec(
 ) {
     // `fixed_cb` — padding box of the nearest ancestor that captures `position: fixed`
     // (transform/filter/contain, css-transforms-1 §2); `None` — the viewport.
-    let mut stack: Vec<(&mut LayoutBox, Rect, Option<Rect>, usize)> = vec![(lb, pcb, None, ancestors.len())];
+    // `area_cb` — the rect a position-area grid stretches over (equals `pcb`
+    // except under a scroll-container abs-cb, see the child push below).
+    let mut stack: Vec<(&mut LayoutBox, Rect, Rect, Option<Rect>, usize)> =
+        vec![(lb, pcb, pcb, None, ancestors.len())];
     // Pre-order index of the popped box — the numbering `collect_anchors_rec` gave the anchors
     // (children are pushed in reverse so the pop order is document order).
     let mut seq: u32 = 0;
-    while let Some((lb, pcb, fixed_cb, depth)) = stack.pop() {
+    while let Some((lb, pcb, area_cb, fixed_cb, depth)) = stack.pop() {
     ancestors.truncate(depth);
     seq += 1;
     // §2.2: an anchor must precede its positioned element in tree order.
@@ -489,28 +492,55 @@ fn apply_anchor_positions_rec(
         let col = lb.style.inset_area_col;
         if row != InsetAreaKeyword::None || col != InsetAreaKeyword::None {
             positioned_by_inset_area = true;
+            // CSS Anchor Positioning L1 §5.1: when the abs-cb is a scroll container the
+            // position-area grid stretches to its scrollable overflow, not its padding box.
             let cb = if matches!(lb.style.position, Position::Fixed) {
                 fixed_cb.unwrap_or(viewport_rect)
             } else {
-                pcb
-            };
-            // A definite-size axis keeps its size and aligns toward the anchor;
-            // an `auto` axis stretches to fill its position-area band.
-            let elem_w = if lb.style.width.is_some() {
-                crate::anchor::AxisSize::Fixed(lb.rect.width)
-            } else {
-                crate::anchor::AxisSize::Auto
-            };
-            let elem_h = if lb.style.height.is_some() {
-                crate::anchor::AxisSize::Fixed(lb.rect.height)
-            } else {
-                crate::anchor::AxisSize::Auto
+                area_cb
             };
             // Use scope-aware lookup so anchors behind anchor-scope barriers are
             // invisible to positioned elements outside their subtree.
-            if let Some(pos) = crate::anchor::resolve_inset_area_scoped(
-                registry, anchor_name, row, col, cb, elem_w, elem_h, ancestors,
-            ) {
+            if let Some(entry) = registry.get_scoped(anchor_name, ancestors) {
+                let ((bx0, bx1), (by0, by1)) = crate::anchor::inset_area_bands(row, col, entry.rect, cb);
+                let [pad_t, pad_r, pad_b, pad_l] = crate::box_padding(lb);
+                // Percentage width/height resolve against the element's position-area
+                // band extent, not the containing block (§5.1); content-box adds its
+                // padding+border to reach the border-box rect the layout stores.
+                let content_box = matches!(lb.style.box_sizing, crate::style::BoxSizing::ContentBox);
+                let extra_x = if content_box {
+                    pad_l + pad_r + lb.style.border_left_width + lb.style.border_right_width
+                } else {
+                    0.0
+                };
+                let extra_y = if content_box {
+                    pad_t + pad_b + lb.style.border_top_width + lb.style.border_bottom_width
+                } else {
+                    0.0
+                };
+                // A definite-size axis keeps its size and aligns toward the anchor;
+                // an `auto` axis stretches to fill its position-area band.
+                let elem_w = match lb.style.width.as_ref() {
+                    Some(crate::style::Length::Percent(p)) => crate::anchor::AxisSize::Fixed({
+                        let w = (*p / 100.0 * (bx1 - bx0).max(0.0) + extra_x).max(0.0);
+                        lb.rect.width = w;
+                        w
+                    }),
+                    Some(_) => crate::anchor::AxisSize::Fixed(lb.rect.width),
+                    None => crate::anchor::AxisSize::Auto,
+                };
+                let elem_h = match lb.style.height.as_ref() {
+                    Some(crate::style::Length::Percent(p)) => crate::anchor::AxisSize::Fixed({
+                        let h = (*p / 100.0 * (by1 - by0).max(0.0) + extra_y).max(0.0);
+                        lb.rect.height = h;
+                        h
+                    }),
+                    Some(_) => crate::anchor::AxisSize::Fixed(lb.rect.height),
+                    None => crate::anchor::AxisSize::Auto,
+                };
+                if let Some(pos) = crate::anchor::resolve_inset_area_from_entry(
+                    entry, row, col, cb, elem_w, elem_h,
+                ) {
                 let new_x = cb.x + pos.left;
                 let new_y = cb.y + pos.top;
                 let dx = new_x - lb.rect.x;
@@ -521,6 +551,7 @@ fn apply_anchor_positions_rec(
                 }
                 if let Some(h) = pos.height {
                     lb.rect.height = h;
+                }
                 }
             }
         }
@@ -604,7 +635,26 @@ fn apply_anchor_positions_rec(
         (lb.rect.width - lb.style.border_left_width - lb.style.border_right_width).max(0.0),
         (lb.rect.height - lb.style.border_top_width - lb.style.border_bottom_width).max(0.0),
     );
-    let my_pcb = if super::multicol_abspos::establishes_abs_cb(&lb.style) { padding_box } else { pcb };
+    let establishes_abs_cb = super::multicol_abspos::establishes_abs_cb(&lb.style);
+    let my_pcb = if establishes_abs_cb { padding_box } else { pcb };
+    // CSS Anchor Positioning L1 §5.1 — the position-area grid of abs children of a
+    // scroll-container abs-cb covers the padding box unioned with its scrollable
+    // overflow (`scrollable_extent_*` are relative to the padding edge, and `min_*`
+    // never rises above 0 / `max_*` never falls below the padding-box extent).
+    let my_area_cb = if !establishes_abs_cb {
+        area_cb
+    } else if crate::anchor::is_scroll_container(lb) {
+        let (min_x, max_x) = crate::scrollable_extent_x(lb);
+        let (min_y, max_y) = crate::scrollable_extent_y(lb);
+        Rect::new(
+            padding_box.x + min_x,
+            padding_box.y + min_y,
+            (max_x - min_x).max(0.0),
+            (max_y - min_y).max(0.0),
+        )
+    } else {
+        padding_box
+    };
     let my_fixed_cb = if crate::resolved_geometry::contains_fixed_descendants(&lb.style) {
         Some(padding_box)
     } else {
@@ -614,7 +664,7 @@ fn apply_anchor_positions_rec(
     ancestors.push(lb.node);
     let child_depth = ancestors.len();
     for child in lb.children.iter_mut().rev() {
-        stack.push((child, my_pcb, my_fixed_cb, child_depth));
+        stack.push((child, my_pcb, my_area_cb, my_fixed_cb, child_depth));
     }
     }
 }

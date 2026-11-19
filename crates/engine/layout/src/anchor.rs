@@ -812,7 +812,7 @@ pub fn resolve_inset_area_scoped(
     resolve_inset_area_from_entry(entry, row, col, containing_rect, elem_w, elem_h)
 }
 
-fn resolve_inset_area_from_entry(
+pub(crate) fn resolve_inset_area_from_entry(
     entry: &AnchorEntry,
     row: InsetAreaKeyword,
     col: InsetAreaKeyword,
@@ -868,6 +868,36 @@ fn band_region(
         InsetAreaKeyword::SpanEnd => (anchor_start, cb_end),
         InsetAreaKeyword::SpanAll => (cb_start, cb_end),
     }
+}
+
+/// The `[start, end]` bands an `inset-area` value selects on each axis — the
+/// same regions [`place_axis`] places the element in, `(x_band, y_band)`.
+///
+/// A percentage `width`/`height` on a position-area element resolves against
+/// its band's extent, not the containing block (CSS Anchor Positioning L1
+/// §5.1), so callers size the element from these extents.
+pub(crate) fn inset_area_bands(
+    row: InsetAreaKeyword,
+    col: InsetAreaKeyword,
+    anchor: Rect,
+    containing_rect: Rect,
+) -> ((f32, f32), (f32, f32)) {
+    (
+        band_region(
+            col,
+            anchor.x,
+            anchor.x + anchor.width,
+            containing_rect.x,
+            containing_rect.x + containing_rect.width,
+        ),
+        band_region(
+            row,
+            anchor.y,
+            anchor.y + anchor.height,
+            containing_rect.y,
+            containing_rect.y + containing_rect.height,
+        ),
+    )
 }
 
 /// Place the element on one axis within its `inset-area` band.
