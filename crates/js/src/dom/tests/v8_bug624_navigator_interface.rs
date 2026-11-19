@@ -110,7 +110,7 @@ fn java_enabled_is_an_operation_returning_false() {
 #[test]
 fn user_agent_override_renames_every_identity_field() {
     let rt = v8_runtime_with_dom(make_doc());
-    assert!(is_true(&rt, "navigator.userAgentData.brands.length === 2 && navigator.vendor === 'Google Inc.'"));
+    assert!(is_true(&rt, "navigator.userAgentData.brands.length === 3 && navigator.vendor === 'Google Inc.'"));
     rt.eval(&crate::v8_runtime::user_agent_override_script(
         "Mozilla/5.0 (Windows NT 10.0; rv:128.0) Gecko/20100101 Firefox/128.0",
     ))

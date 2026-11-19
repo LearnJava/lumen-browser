@@ -618,6 +618,13 @@ const WEB_API_SHIM_TAIL_B: &str = include_str!("shim/web_api_shim_tail_b.js");
 #[cfg(feature = "v8-backend")]
 pub(crate) const NATIVE_TO_STRING_SHIM: &str = include_str!("shim/native_tostring_shim.js");
 
+/// BUG-1826: masks Web API functions as `[native code]` under
+/// `Function.prototype.toString`. Evaluated once at the end of `install_dom`
+/// (after every interface install, before preload/page scripts) — see the
+/// file's own doc comment for why the snapshot timing matters.
+#[cfg(feature = "v8-backend")]
+pub(crate) const NATIVE_MASK_SHIM: &str = include_str!("shim/native_mask_shim.js");
+
 /// `WorkerLocation` (HTML LS §10.2.4) and `WorkerNavigator` (§10.2.5) — the two
 /// `[Exposed=Worker]` interfaces every `WorkerGlobalScope` has and the page does
 /// not, so unlike its neighbours this piece is spliced **only** into

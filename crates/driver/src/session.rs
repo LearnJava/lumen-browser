@@ -277,9 +277,10 @@ impl InProcessSession {
         let profile = self.context.fingerprint_profile();
         let mut client = lumen_network::HttpClient::new()
             .with_sink(Arc::new(NoopEventSink))
-            .with_content_decoder(Arc::new(lumen_network::BrotliContentDecoder::new()))
             .with_content_decoder(Arc::new(lumen_network::GzipContentDecoder::new()))
             .with_content_decoder(Arc::new(lumen_network::DeflateContentDecoder::new()))
+            .with_content_decoder(Arc::new(lumen_network::BrotliContentDecoder::new()))
+            .with_content_decoder(Arc::new(lumen_network::ZstdContentDecoder::new()))
             .with_fingerprint_profile(profile.to_http_profile());
         client = crate::types::with_shared_hsts(client, profile);
         if let Some(hook) = &self.http_client_hook {

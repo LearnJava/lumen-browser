@@ -268,15 +268,16 @@ impl PageSource {
             PageSource::Url { url, body, upgrade_insecure_requests, referrer } => {
                 use lumen_core::url::Url;
                 use lumen_network::{
-                    BrotliContentDecoder, DeflateContentDecoder, GzipContentDecoder, HttpClient,
+                    BrotliContentDecoder, DeflateContentDecoder, GzipContentDecoder, HttpClient, ZstdContentDecoder,
                 };
 
                 let lumen_url = Url::parse(url)?;
                 let mut builder = HttpClient::new()
                     .with_sink(Arc::clone(&sink))
-                    .with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new()))
                     .with_content_decoder(std::sync::Arc::new(GzipContentDecoder::new()))
-                    .with_content_decoder(std::sync::Arc::new(DeflateContentDecoder::new()));
+                    .with_content_decoder(std::sync::Arc::new(DeflateContentDecoder::new()))
+                    .with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new()))
+                    .with_content_decoder(std::sync::Arc::new(ZstdContentDecoder::new()));
                 let warm_jar = cookie_jar.clone();
                 if let Some(jar) = cookie_jar {
                     builder = builder.with_cookie_jar(
@@ -423,15 +424,16 @@ impl PageSource {
         };
         use lumen_core::url::Url;
         use lumen_network::{
-            BrotliContentDecoder, DeflateContentDecoder, GzipContentDecoder, HttpClient,
+            BrotliContentDecoder, DeflateContentDecoder, GzipContentDecoder, HttpClient, ZstdContentDecoder,
         };
 
         let lumen_url = Url::parse(url)?;
         let mut builder = HttpClient::new()
             .with_sink(Arc::clone(&sink))
-            .with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new()))
             .with_content_decoder(std::sync::Arc::new(GzipContentDecoder::new()))
-            .with_content_decoder(std::sync::Arc::new(DeflateContentDecoder::new()));
+            .with_content_decoder(std::sync::Arc::new(DeflateContentDecoder::new()))
+            .with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new()))
+            .with_content_decoder(std::sync::Arc::new(ZstdContentDecoder::new()));
         let warm_jar = cookie_jar.clone();
         if let Some(jar) = cookie_jar {
             builder = builder.with_cookie_jar(

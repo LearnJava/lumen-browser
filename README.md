@@ -62,7 +62,7 @@ JS-код ──► V8 ──► DOM / CSSOM / fetch / Canvas / Storage / Worker
 - **Paint/рендер** — два независимых бэкенда: GPU через `wgpu` (Vulkan/DX12/GL — живое окно) и детерминированный CPU-растеризатор (для тестов и headless-скриншотов). Градиенты, тени, фильтры, backdrop-filter, `clip-path`, 3D-трансформации, маски, стэкинг-контексты, wide-gamut (DisplayP3/Rec2020) вывод.
 - **Шрифты и текст** — собственный TrueType/OpenType-парсер, шейпинг, перенос строк по Unicode UAX #14/#29, hyphenation (11 локалей), bidi по UAX #9, COLR/CPAL цветные глифы, вертикальные режимы письма (`writing-mode`).
 - **JavaScript и Web API** — **V8**, единственный JS-движок в проекте (миграция с QuickJS завершена в августе 2026, `rquickjs` полностью удалён из workspace). DOM API, fetch/XHR/WebSocket/EventSource, Web Workers/Shared Workers, Service Workers + Cache Storage, IndexedDB, Web Storage, Web Animations, WebAuthn/passkeys, SubtleCrypto, Canvas 2D, software WebGL 1.0. Покрытие Web Platform Tests неполное — часть API размечена частично (🟡) в `CAPABILITIES.md`.
-- **Сеть** — HTTP/1.1, HTTP/2, HTTPS (rustls), брoтли/gzip/deflate, куки, CORS, HSTS, DNS-over-HTTPS/TLS, SOCKS5-прокси, блокировка рекламы на уровне фильтров (EasyList-совместимые правила, по умолчанию выключена). HTTP/3 (QUIC) — в разработке.
+- **Сеть** — HTTP/1.1, HTTP/2, HTTPS (TLS-транспорт на BoringSSL — Chrome-grade ClientHello; rustls остаётся для HTTP/3/QUIC и DNS-over-TLS), брoтли/gzip/deflate/zstd, куки, CORS, HSTS, DNS-over-HTTPS/TLS, SOCKS5-прокси, блокировка рекламы на уровне фильтров (EasyList-совместимые правила, по умолчанию выключена). HTTP/3 (QUIC) — в разработке.
 - **Хранилища** — всё на SQLite: история, закладки, заметки, read-later, куки, IndexedDB, Service Worker store, загрузки, разрешения по сайтам, workspaces, вкладочные сессии. Профильное хранилище шифруется (AES-256-GCM + PBKDF2).
 - **Интерфейс браузера** — вкладки (вертикальные/горизонтальные, группы), адресная строка с подсказками, командная палитра, настройки, менеджер закладок/истории/загрузок, панель приватности (shields), сертификатный вьюер, DevTools (консоль, DOM-инспектор, сеть), Picture-in-Picture, печать в PDF.
 - **Самообновление** — фоновая проверка подписанного манифеста (ed25519, GitHub Releases), ≤1 раз/24ч, без cookies и идентификаторов на проводе, включена по умолчанию с честным отключением в настройках. Это единственное штатное исключение из принципа «никакой телеметрии и облачных сервисов по умолчанию» (см. выше) — политика канала/подписи/данных/частоты задокументирована в [ADR-031](docs/decisions/ADR-031-self-update-channel-policy.md).
@@ -84,6 +84,8 @@ JS-код ──► V8 ──► DOM / CSSOM / fetch / Canvas / Storage / Worker
 - **Linux:** GCC/Clang, X11/Wayland dev-пакеты (для `winit`).
 - **macOS:** Xcode Command Line Tools.
 - **sccache ≥ 0.17.0** — обязателен, репозиторный `.cargo/config.toml` включает его как `RUSTC_WRAPPER`; более старая версия падает с `0xc0000409` на каждом вызове `rustc`/`clippy-driver`.
+
+TLS-транспорт H1/H2 собран на BoringSSL ([BUG-1826](bugs/BUG-1826-FIXED.md)) — его build-скрипт `boring-sys` требует **cmake**, **nasm** (x86-ассемблер BoringSSL) и **libclang** (bindgen). На Windows: `winget install Kitware.CMake NASM.NASM LLVM.LLVM`. Без них `cargo check`/`build` падает на `boring-sys`.
 
 ### Установка Rust
 

@@ -282,6 +282,9 @@ mod v8_webcrypto;
 mod v8_url_abort_clone_blob;
 
 #[cfg(feature = "v8-backend")]
+mod v8_native_mask;
+
+#[cfg(feature = "v8-backend")]
 mod v8_page_visibility_beacon;
 #[cfg(feature = "v8-backend")]
 mod v8_bug568_document_write;

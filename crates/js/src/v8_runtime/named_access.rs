@@ -24,6 +24,7 @@ pub fn ensure_v8_platform() {
         v8::V8::initialize_platform(platform);
         apply_v8_profile_flag();
         apply_v8_test_gc_flag();
+        apply_v8_flags_env();
         v8::V8::initialize();
     });
 }
@@ -111,6 +112,18 @@ fn apply_v8_trace_gc_flag() {
 fn apply_v8_test_gc_flag() {
     if cfg!(test) {
         v8::V8::set_flags_from_string("--expose-gc");
+    }
+}
+
+/// Pass-through for arbitrary V8 flags via `LUMEN_V8_FLAGS` (BUG-1826
+/// diagnostics: `--trace-opt`/`--trace-deopt`/`--trace-gc` on a live hang).
+/// Flags must be set before `v8::V8::initialize()` — same constraint as the
+/// profile/GC flags above.
+fn apply_v8_flags_env() {
+    if let Ok(flags) = std::env::var("LUMEN_V8_FLAGS")
+        && !flags.trim().is_empty()
+    {
+        v8::V8::set_flags_from_string(&flags);
     }
 }
 

@@ -130,6 +130,11 @@ impl Drop for StallSampler {
 /// Колбэк прерывания: исполняется на JS-потоке внутри работающего скрипта.
 unsafe extern "C" fn interrupt_cb(isolate: v8::UnsafeRawIsolatePtr, data: *mut c_void) {
     let running_ms = data as usize;
+    eprintln!(
+        "[js-stall] sample on thread {:?} isolate {:?}",
+        std::thread::current().name().unwrap_or("?"),
+        isolate
+    );
     let mut isolate = isolate;
     // SAFETY: V8 зовёт колбэк на потоке, владеющем изолятом, пока тот жив.
     let isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(&mut isolate) };
@@ -161,6 +166,13 @@ unsafe extern "C" fn interrupt_cb(isolate: v8::UnsafeRawIsolatePtr, data: *mut c
         heap.external_memory(),
         heap.malloced_memory(),
     );
+    // BUG-1826: with `LUMEN_NATIVE_CALL_STATS=1` also dump the hottest
+    // `_lumen_*` natives so a stall shows *which* API the script burns time in.
+    if crate::v8_compat::call_stats::enabled() {
+        for (name, count) in crate::v8_compat::call_stats::top(15) {
+            out.push_str(&format!("\n[js-stall]   native {name} ×{count}"));
+        }
+    }
     for i in 0..trace.get_frame_count() {
         let Some(frame) = trace.get_frame(scope, i) else { continue };
         let func = frame

@@ -692,6 +692,72 @@ impl Drop for OwnedNativeFnScoped {
     }
 }
 
+// ── Native call statistics (BUG-1826 debug) ─────────────────────────────────
+//
+// `LUMEN_NATIVE_CALL_STATS=1` counts calls per registered native, keyed by the
+// `v8::External` pointer both trampolines already extract. The map is
+// thread-local: each isolate's JS thread registers and calls its own natives,
+// so worker isolates get their own counters for free. The stall sampler prints
+// the top entries on every stack sample — that is the only read site, and it
+// runs on the JS thread itself.
+//
+// Disabled = one `OnceLock` read per call; the `Option` stays `None` and no
+// map is ever allocated.
+pub(crate) mod call_stats {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    thread_local! {
+        static CALLS: RefCell<Option<HashMap<usize, (String, u64)>>> =
+            const { RefCell::new(None) };
+    }
+
+    pub(crate) fn enabled() -> bool {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ON.get_or_init(|| std::env::var_os("LUMEN_NATIVE_CALL_STATS").is_some())
+    }
+
+    /// Called from `register_v8_native*` on the JS thread.
+    pub(crate) fn record(ptr: usize, name: &str) {
+        if !enabled() {
+            return;
+        }
+        CALLS.with(|c| {
+            c.borrow_mut()
+                .get_or_insert_with(HashMap::new)
+                .insert(ptr, (name.to_string(), 0));
+        });
+    }
+
+    /// Called from the trampolines on the JS thread.
+    pub(crate) fn bump(ptr: usize) {
+        if !enabled() {
+            return;
+        }
+        CALLS.with(|c| {
+            if let Some(map) = c.borrow_mut().as_mut()
+                && let Some(entry) = map.get_mut(&ptr)
+            {
+                entry.1 += 1;
+            }
+        });
+    }
+
+    /// Top `limit` natives by call count, for the stall sampler's report.
+    pub(crate) fn top(limit: usize) -> Vec<(String, u64)> {
+        CALLS.with(|c| {
+            let mut v: Vec<(String, u64)> = c
+                .borrow()
+                .as_ref()
+                .map(|m| m.values().map(|(n, c)| (n.clone(), *c)).collect())
+                .unwrap_or_default();
+            v.sort_by_key(|e| std::cmp::Reverse(e.1));
+            v.truncate(limit);
+            v
+        })
+    }
+}
+
 /// Universal V8 trampoline for scoped natives — mirrors [`native_fn_trampoline`]
 /// but hands the closure the live scope/arguments/return-value directly instead
 /// of pre-converting arguments to `JsValue`.
@@ -705,6 +771,7 @@ pub(crate) fn native_fn_trampoline_scoped(
         Ok(e) => e,
         Err(_) => return, // should never happen
     };
+    call_stats::bump(ext.value() as usize);
     // SAFETY: pointer was stored by `register_v8_native_scoped` from a
     // `Box::into_raw` call. It is kept alive in `V8Inner::native_fn_store_scoped`
     // for the lifetime of the isolate.
@@ -729,6 +796,7 @@ pub(crate) fn register_v8_native_scoped(
     store.push(OwnedNativeFnScoped(thin_ptr));
 
     let ext = v8::External::new(scope, thin_ptr as *mut c_void);
+    call_stats::record(thin_ptr as usize, name);
     let func = v8::Function::builder(native_fn_trampoline_scoped)
         .data(ext.into())
         .build(scope)
@@ -923,6 +991,7 @@ pub(crate) fn native_fn_trampoline(
         Ok(e) => e,
         Err(_) => return, // should never happen
     };
+    call_stats::bump(ext.value() as usize);
     // SAFETY: pointer was stored by `register_v8_native` from a `Box::into_raw`
     // call.  It is kept alive in `V8Inner::native_fn_store` for the lifetime of
     // the isolate.
@@ -1004,6 +1073,7 @@ pub(crate) fn register_v8_native(
     store.push(OwnedNativeFn(thin_ptr));
 
     let ext = v8::External::new(scope, thin_ptr as *mut c_void);
+    call_stats::record(thin_ptr as usize, name);
     let func = v8::Function::builder(native_fn_trampoline)
         .data(ext.into())
         .build(scope)

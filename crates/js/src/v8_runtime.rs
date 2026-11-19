@@ -846,6 +846,26 @@ impl V8JsRuntime {
                 Box::new(classic_script::run_classic_script),
             )?;
 
+            // BUG-1826: page-side `atob`/`btoa` were pure-JS shims (~8x slower
+            // than native on hot loops — the Cloudflare challenge calls them
+            // in its VM). The same Rust natives worker scopes already use are
+            // registered here; `WORKER_ATOB_BTOA_SHIM` (evaluated after
+            // WEB_API_SHIM below) rebinds `globalThis.atob`/`btoa` to them.
+            crate::v8_compat::register_v8_native_scoped(
+                scope,
+                ctx,
+                store_scoped,
+                "_lumen_atob_impl",
+                Box::new(crate::worker::atob_native_v8),
+            )?;
+            crate::v8_compat::register_v8_native_scoped(
+                scope,
+                ctx,
+                store_scoped,
+                "_lumen_btoa_impl",
+                Box::new(crate::worker::btoa_native_v8),
+            )?;
+
             // Polyfill `DOMException`: quickjs-ng provides it as a built-in (part of
             // `Context::full()`'s bundled extras), V8 has no web-platform globals at
             // all. `WEB_API_SHIM` and dozens of `install_*` module shims (Ph3 V8
@@ -942,6 +962,39 @@ impl V8JsRuntime {
                     })?;
                 let recv = v8::undefined(tc).into();
                 let result = wrapper.call(tc, recv, &[src.into(), container.into()]);
+                if tc.has_caught() {
+                    let exc = tc.exception().unwrap();
+                    return Err(v8_err(tc, exc));
+                }
+                let _ = result;
+            }
+
+            // BUG-1826: rebind `atob`/`btoa` to the Rust natives registered
+            // above — must run after WEB_API_SHIM (its tail assigns the JS
+            // shim versions to `window`) and after DOM_EXCEPTION_POLYFILL
+            // (the wrapper throws `DOMException`).
+            {
+                // Page shims resolve `_lumen_*` natives through the internal
+                // container (`with (container)`), not as globals — without
+                // `wrap_for_container` the wrapper sees bare undefined names.
+                let wrap = crate::internal_globals::wrap_for_container(
+                    scope,
+                    ctx,
+                    crate::worker::WORKER_ATOB_BTOA_SHIM,
+                )
+                .unwrap_or_else(|| crate::worker::WORKER_ATOB_BTOA_SHIM.to_owned());
+                v8::tc_scope!(tc, scope);
+                let src = v8::String::new(tc, &wrap)
+                    .ok_or_else(|| JsError::Runtime("OOM: ATB_BTOA wrapper source".into()))?;
+                let compiled = v8::Script::compile(tc, src, None);
+                if tc.has_caught() {
+                    let exc = tc.exception().unwrap();
+                    return Err(v8_err(tc, exc));
+                }
+                let compiled = compiled.ok_or_else(|| {
+                    JsError::Runtime("ATB_BTOA wrapper compile returned None".into())
+                })?;
+                let result = compiled.run(tc);
                 if tc.has_caught() {
                     let exc = tc.exception().unwrap();
                     return Err(v8_err(tc, exc));
@@ -1371,6 +1424,15 @@ impl V8JsRuntime {
         // покрывает их всех до BiDi-preload и seal BUG-378.
         if let Err(e) = self.eval(crate::dom::NATIVE_TO_STRING_SHIM) {
             eprintln!("v8: native toString mask failed: {e}");
+        }
+        // BUG-1826: Web API functions are JS shims, so `Function.prototype.
+        // toString` leaks their source where a real browser reports `[native
+        // code]` — anti-bot fingerprinting (Cloudflare) treats that as a fake
+        // browser. The mask snapshots every reachable function as native; it
+        // must run after all interface installs above and before preload/page
+        // scripts, which is exactly this point.
+        if let Err(e) = self.eval(crate::dom::NATIVE_MASK_SHIM) {
+            eprintln!("v8: native_mask_shim eval failed: {e}");
         }
         // BUG-1811: WebDriver BiDi preload scripts (`script.addPreloadScript`)
         // run once per new document — after every shim that registered above

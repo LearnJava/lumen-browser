@@ -195,8 +195,15 @@ pub fn fetch_metadata_headers(
     if mode == RequestMode::Navigate || !sends_fetch_metadata(profile) {
         return String::new();
     }
+    // Sec-Fetch-User — заголовок только навигации: Chrome шлёт его
+    // на document-запросах и никогда на fetch/XHR/ресурсах (BUG-1826).
+    // Профиль добавляет его в navigation-блок, поэтому здесь он снимается
+    // через X-Lumen-Drop — тот же механизм, что у cache-control в fetch().
+    // Upgrade-Insecure-Requests, наоборот, Chrome шлёт на всех запросах —
+    // профильный дефолт на сабресурсах остаётся.
     format!(
-        "Sec-Fetch-Site: {}\r\nSec-Fetch-Mode: {}\r\nSec-Fetch-Dest: {dest}\r\n",
+        "Sec-Fetch-Site: {}\r\nSec-Fetch-Mode: {}\r\nSec-Fetch-Dest: {dest}\r\n\
+         X-Lumen-Drop: sec-fetch-user\r\nX-Lumen-Drop: priority\r\n",
         sec_fetch_site(initiator, target),
         mode.as_header_value(),
     )
@@ -258,7 +265,8 @@ mod tests {
         );
         assert_eq!(
             h,
-            "Sec-Fetch-Site: same-origin\r\nSec-Fetch-Mode: cors\r\nSec-Fetch-Dest: font\r\n"
+            "Sec-Fetch-Site: same-origin\r\nSec-Fetch-Mode: cors\r\nSec-Fetch-Dest: font\r\n\
+             X-Lumen-Drop: sec-fetch-user\r\nX-Lumen-Drop: priority\r\n"
         );
     }
 
@@ -288,7 +296,11 @@ mod tests {
             RequestDestination::Image,
             RequestMode::NoCors,
         );
-        assert_eq!(h, "Sec-Fetch-Site: same-site\r\nSec-Fetch-Mode: no-cors\r\nSec-Fetch-Dest: image\r\n");
+        assert_eq!(
+            h,
+            "Sec-Fetch-Site: same-site\r\nSec-Fetch-Mode: no-cors\r\nSec-Fetch-Dest: image\r\n\
+             X-Lumen-Drop: sec-fetch-user\r\nX-Lumen-Drop: priority\r\n"
+        );
         let other = url("http://img.example.com/a.png");
         let h = subresource_request_headers(
             HttpProfile::Chrome,
