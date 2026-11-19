@@ -1,6 +1,8 @@
 //! Тесты `v8_idb_exception_order` — порядок проверок исключений курсора и
 //! индекса: advance(0) раньше неактивности, readonly раньше «значение
-//! получено», «удалён» раньше «неактивна» у запросов индекса (IDB-EVENTS-S5).
+//! получено», «удалён» раньше «неактивна» у запросов индекса (IDB-EVENTS-S5);
+//! у стора «удалён» раньше «неактивна» и порядок проверок createObjectStore с
+//! валидацией keyPath (IDB-EVENTS-S6).
 
 use super::*;
 use crate::v8_runtime::V8JsRuntime;
@@ -98,5 +100,76 @@ fn idb_exc_order_index_query_deleted_before_inactive() {
     assert_eq!(
         rt.eval("log.join(',')").unwrap(),
         lumen_core::JsValue::String("InvalidStateError".into())
+    );
+}
+
+// (4) IDB-EVENTS-S6: add/get по стору, удалённому deleteObjectStore, на
+// неактивной транзакции — InvalidStateError («стор удалён»), а не
+// TransactionInactiveError: у методов стора «удалён» раньше «неактивна».
+#[test]
+fn idb_exc_order_store_deleted_before_inactive() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(r#"
+                var log = [];
+                var open = indexedDB.open('eo-store-del', 1);
+                open.onupgradeneeded = function(e) {
+                    var db = e.target.result;
+                    db.createObjectStore('s');
+                    var s2 = db.createObjectStore('s2');
+                    db.deleteObjectStore('s2');
+                    setTimeout(function() {
+                        try { s2.add('v', 'k'); log.push('no-throw'); }
+                        catch (err) { log.push('add:' + err.name); }
+                        try { s2.get('k'); log.push('no-throw'); }
+                        catch (err) { log.push('get:' + err.name); }
+                    }, 0);
+                };
+            "#).unwrap();
+    rt.eval("0").unwrap();
+    rt.eval("_lumen_tick_timers()").unwrap();
+    assert_eq!(
+        rt.eval("log.join(',')").unwrap(),
+        lumen_core::JsValue::String("add:InvalidStateError,get:InvalidStateError".into())
+    );
+}
+
+// (5) IDB-EVENTS-S6: порядок проверок createObjectStore — неактивна,
+// недопустимый keyPath (SyntaxError), дубль имени (ConstraintError),
+// autoIncrement с пустым или массивным keyPath (InvalidAccessError).
+#[test]
+fn idb_exc_order_create_object_store() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(r#"
+                var log = [];
+                var open = indexedDB.open('eo-cos', 1);
+                open.onupgradeneeded = function(e) {
+                    var db = e.target.result;
+                    db.createObjectStore('s');
+                    function probe(name, options) {
+                        try { db.createObjectStore(name, options); log.push('ok'); }
+                        catch (err) { log.push(err.name); }
+                    }
+                    // keyPath раньше дубля имени:
+                    probe('s', {keyPath: 'not a valid key path'});
+                    // дубль имени раньше autoIncrement-vs-keyPath:
+                    probe('s', {autoIncrement: true, keyPath: ''});
+                    // валидатор keyPath: пустой массив недопустим, '.'-пути — тоже:
+                    probe('a', {autoIncrement: true, keyPath: []});
+                    probe('b', {keyPath: 'a..b'});
+                    probe('c', {keyPath: '-invalid-'});
+                    // валидные: пустая строка, точечный путь, массив строк:
+                    probe('d', {keyPath: ''});
+                    probe('e', {keyPath: 'a.b'});
+                    probe('f', {keyPath: ['h', 'j']});
+                    // autoIncrement с массивным keyPath — InvalidAccessError:
+                    probe('g', {autoIncrement: true, keyPath: ['hey']});
+                };
+            "#).unwrap();
+    rt.eval("0").unwrap();
+    assert_eq!(
+        rt.eval("log.join(',')").unwrap(),
+        lumen_core::JsValue::String(
+            "SyntaxError,ConstraintError,SyntaxError,SyntaxError,SyntaxError,ok,ok,ok,InvalidAccessError".into()
+        )
     );
 }

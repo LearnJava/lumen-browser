@@ -60,6 +60,20 @@ Third full test category, added 2026-07-22 by the WPT-VENDOR backlog (`ROADMAP.m
 | I | [BUG-1709](../../bugs/BUG-1709-OPEN.md) |
 | P | [BUG-1710](../../bugs/BUG-1710-OPEN.md) |
 | F, H, J, K, L, M | `IDB-EVENTS` (P1, `ROADMAP.md`); K — также [BUG-914](../../bugs/BUG-914-FIXED.md) (дописана микротаск-находка) |
+
+## Итог IDB-EVENTS (2026-11-19)
+
+Задача закрыта срезами 1–6 (ветки `p1-idb-events-s1…s6`, шим `crates/js/src/shim/idb_shim.js`). Финальный прогон `run_corpus.py --prefixes IndexedDB --processes 7` (`dev-release`, срез 6): 813 id, **32.05 %** (261/813), harness OK 725, сабтесты 1682/5015, статусы ERROR 48 / TIMEOUT 40. База разведки — 12.02 %; прирост **+20.03 п.п.** (срез 1: → 24.66, срез 2: → 25.78, срезы 3–6 добрали остальное). Данные: `.tmp/wpt-idb-s6/` (9 файлов exception-order), `.tmp/wpt-idb-s6-full/` (категория).
+
+Дельта по кластерам разведки:
+
+- **D, K, L, M — исчезли из триажа.** Маркер «Expected success event, but got upgradeneeded event» в сыром логе не встречается ни разу; события — настоящие `Event` на `EventTarget` с клонированием списка слушателей (BUG-1706) и всплытием `error`/`abort` по цепочке запрос → транзакция → база (BUG-914); флаг активности транзакции с микрозадачами обработчика; исключение в слушателе откатывает транзакцию с `AbortError`; `close()` в `upgradeneeded` даёт `open`-запросу `AbortError`; атрибуты — аксессоры прототипа.
+- **H — почти весь.** `idlharness.any.html` window 182/207 PASS; остаток — отсутствующие члены (`getAllRecords` и пр.), не IDL-форма.
+- **J (порядок проверок) — весь скоуп задачи.** Все 14 файлов `*-exception-order` в скоупе (5 среза 5: курсор/индекс; 9 среза 6: стор/база/транзакция) зелёные целиком — 37/37 подтестов среза 6. Вне скоупа остался `continuePrimaryKey` (`idbcursor-continuePrimaryKey-exception-order/exceptions`, свой BUG).
+- **F — большая часть.** Проверки состояния после `abort()`/удаления стора/индекса; осиротевшие после отката обёртки бросают `InvalidStateError`; остатки сидят внутри курсорных тестов с другими причинами.
+- **G — частично.** `createObjectStore` теперь валидирует keyPath (`SyntaxError`: пробелы, `-`-начало, `'a..b'`, `'.a'`, пустой/не-строковый массив), порядок — до `ConstraintError`, потом `InvalidAccessError` для `autoIncrement` с пустым/массивным keyPath. Сторона **вычисления** keyPath (геттеры, инъекция) — не тронута: `keypath-exceptions.any.html` 0/6, остаётся [BUG-1708](../../bugs/BUG-1708-OPEN.md).
+- **Осталось в окне (119 id):** E — `getAllRecords`/`getAll(options)` (`idbobjectstore_getAllRecords` 0/25, BUG-1707); I — бинарные ключи (`idbfactory_cmp`, `idb-binary-key-*`, BUG-1709); P — structured-clone hang (BUG-1710); O — opaque-origin/partitioned/cross-realm; Q — разнородное (keygenerator 53 бита, rename-тесты, enforcerange, tombstones, `idb-explicit-commit*`, name-scopes).
+- **Воркерные близнецы не трогались (490 из 609 неудач):** A 213, B 182, C 95 — [BUG-1705](../../bugs/BUG-1705-OPEN.md) / [BUG-1226](../../bugs/BUG-1226-OPEN.md).
 | N | `WPT-IDB-RUNNER` (P2, сделано 2026-10-27, см. ниже) — serial lane и чистка `data/idb`; остаток — [BUG-1753](../../bugs/BUG-1753-OPEN.md) |
 | O, Q | не заведены: разнородный хвост по одному-двум id; брать после `IDB-EVENTS` повторной разведкой |
 

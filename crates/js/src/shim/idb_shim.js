@@ -856,6 +856,10 @@ function _idb_revert_txn(txn) {
         for (var name in data.stores) {
             if (!Object.prototype.hasOwnProperty.call(snap.stores, name)) {
                 var gone = data.stores[name];
+                // Сам стор тоже получает метку: обёртка от createObjectStore
+                // переживает откат, и её запросы обязаны бросать
+                // InvalidStateError (IDB-EVENTS-S6).
+                gone._deleted = true;
                 for (var gi in gone.indexes) gone.indexes[gi]._deleted = true;
                 delete data.stores[name];
             }
@@ -908,6 +912,12 @@ function _idb_abort_txn_requests(txn) {
 // в методах курсора — первым (IDB-EVENTS-S5).
 function _idb_txn_inactive(txn) {
     return txn._finished || txn._committing || !txn._active;
+}
+// «Стор удалён» раньше «неактивна» (idbobjectstore-*-exception-order):
+// метка стоит на сыром сторе — deleteObjectStore и откат его создания.
+function _idb_store_gone(self) {
+    if (self._store._deleted) throw _idb_error('InvalidStateError', 'store has been deleted');
+    if (_idb_txn_inactive(self._transaction)) throw _idb_error('TransactionInactiveError', 'transaction is not active');
 }
 function _idb_make_request(source, txn, fn) {
     if (_idb_txn_inactive(txn)) throw _idb_error('TransactionInactiveError', 'transaction is not active');
@@ -1034,17 +1044,47 @@ function _idb_unpark(name) {
     _idb_schedule_flush();
     return true;
 }
+// «Valid key path» (Indexed DB §3.1.4): пустая строка валидна; строка —
+// идентификаторы через точки; массив — непустой, из строковых непустых
+// идентификаторов. ASCII-грамматика идентификатора — полная юникод-версия
+// и конверсия DOMString/sequence — BUG-1708.
+function _idb_is_valid_key_path(kp) {
+    var part = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+    if (typeof kp === 'string') {
+        if (kp === '') return true;
+        var parts = kp.split('.');
+        for (var i = 0; i < parts.length; i++) if (!part.test(parts[i])) return false;
+        return true;
+    }
+    if (Array.isArray(kp)) {
+        if (kp.length === 0) return false;
+        for (var i = 0; i < kp.length; i++) {
+            if (typeof kp[i] !== 'string' || !part.test(kp[i])) return false;
+        }
+        return true;
+    }
+    return false;
+}
 _idl_op(IDBDatabase.prototype, 'createObjectStore', function(name, options) {
     _idl_check(this, IDBDatabase);
     if (!this._upgradeTxn) throw _idb_error('InvalidStateError', 'createObjectStore allowed only during a versionchange transaction');
+    if (_idb_txn_inactive(this._upgradeTxn)) throw _idb_error('TransactionInactiveError', 'transaction is not active');
+    name = String(name);
+    options = options || {};
+    var keyPath = (options.keyPath === undefined || options.keyPath === null) ? null : options.keyPath;
+    // Порядок исключений (idbdatabase-createObjectStore-exception-order):
+    // неактивна → недопустимый keyPath (SyntaxError) → дубль имени
+    // (ConstraintError) → autoIncrement с пустым или массивным keyPath
+    // (InvalidAccessError).
+    if (keyPath !== null && !_idb_is_valid_key_path(keyPath)) throw _idb_error('SyntaxError', 'invalid key path');
+    if (this._data.stores[name]) throw _idb_error('ConstraintError', 'object store already exists: ' + name);
+    if (options.autoIncrement && (keyPath === '' || Array.isArray(keyPath))) {
+        throw _idb_error('InvalidAccessError', 'autoIncrement requires an out-of-line or non-empty string key path');
+    }
     // Schema mutations bypass the request queue, so they take the snapshot
     // themselves — an aborted upgrade has to lose its new stores and indexes
     // exactly as it loses its records.
     _idb_txn_snapshot(this._upgradeTxn);
-    name = String(name);
-    if (this._data.stores[name]) throw _idb_error('ConstraintError', 'object store already exists: ' + name);
-    options = options || {};
-    var keyPath = (options.keyPath === undefined || options.keyPath === null) ? null : options.keyPath;
     var store = {
         name: name,
         keyPath: keyPath,
@@ -1060,6 +1100,7 @@ _idl_op(IDBDatabase.prototype, 'createObjectStore', function(name, options) {
 _idl_op(IDBDatabase.prototype, 'deleteObjectStore', function(name) {
     _idl_check(this, IDBDatabase);
     if (!this._upgradeTxn) throw _idb_error('InvalidStateError', 'deleteObjectStore allowed only during a versionchange transaction');
+    if (_idb_txn_inactive(this._upgradeTxn)) throw _idb_error('TransactionInactiveError', 'transaction is not active');
     if (!this._data.stores[name]) throw _idb_error('NotFoundError', 'no object store named ' + name);
     _idb_txn_snapshot(this._upgradeTxn);
     var st = this._data.stores[name];
@@ -1206,18 +1247,21 @@ IDBObjectStore.prototype._write = function(value, key, overwrite) {
 
 _idl_op(IDBObjectStore.prototype, 'add', function(value, key) {
     _idl_check(this, IDBObjectStore);
+    _idb_store_gone(this);
     if (this.transaction.mode === 'readonly') throw _idb_error('ReadOnlyError', 'transaction is read-only');
     var self = this;
     return _idb_make_request(this, this._transaction, function() { return self._write(value, key, false); });
 }, 1);
 _idl_op(IDBObjectStore.prototype, 'put', function(value, key) {
     _idl_check(this, IDBObjectStore);
+    _idb_store_gone(this);
     if (this.transaction.mode === 'readonly') throw _idb_error('ReadOnlyError', 'transaction is read-only');
     var self = this;
     return _idb_make_request(this, this._transaction, function() { return self._write(value, key, true); });
 }, 1);
 _idl_op(IDBObjectStore.prototype, 'get', function(query) {
     _idl_check(this, IDBObjectStore);
+    _idb_store_gone(this);
     var store = this._store, range = _idb_to_range(query);
     return _idb_make_request(this, this._transaction, function() {
         if (range === null) return undefined;
@@ -1227,6 +1271,7 @@ _idl_op(IDBObjectStore.prototype, 'get', function(query) {
 }, 1);
 _idl_op(IDBObjectStore.prototype, 'getKey', function(query) {
     _idl_check(this, IDBObjectStore);
+    _idb_store_gone(this);
     var store = this._store, range = _idb_to_range(query);
     return _idb_make_request(this, this._transaction, function() {
         if (range === null) return undefined;
@@ -1236,6 +1281,7 @@ _idl_op(IDBObjectStore.prototype, 'getKey', function(query) {
 }, 1);
 _idl_op(IDBObjectStore.prototype, 'getAll', function(query, count) {
     _idl_check(this, IDBObjectStore);
+    _idb_store_gone(this);
     var store = this._store, range = _idb_to_range(query);
     return _idb_make_request(this, this._transaction, function() {
         var out = [];
@@ -1250,6 +1296,7 @@ _idl_op(IDBObjectStore.prototype, 'getAll', function(query, count) {
 }, 0);
 _idl_op(IDBObjectStore.prototype, 'getAllKeys', function(query, count) {
     _idl_check(this, IDBObjectStore);
+    _idb_store_gone(this);
     var store = this._store, range = _idb_to_range(query);
     return _idb_make_request(this, this._transaction, function() {
         var out = [];
@@ -1264,6 +1311,7 @@ _idl_op(IDBObjectStore.prototype, 'getAllKeys', function(query, count) {
 }, 0);
 _idl_op(IDBObjectStore.prototype, 'count', function(query) {
     _idl_check(this, IDBObjectStore);
+    _idb_store_gone(this);
     var store = this._store, range = _idb_to_range(query);
     return _idb_make_request(this, this._transaction, function() {
         if (range === null) return store.records.length;
@@ -1274,6 +1322,7 @@ _idl_op(IDBObjectStore.prototype, 'count', function(query) {
 }, 0);
 _idl_op(IDBObjectStore.prototype, 'delete', function(query) {
     _idl_check(this, IDBObjectStore);
+    _idb_store_gone(this);
     if (this.transaction.mode === 'readonly') throw _idb_error('ReadOnlyError', 'transaction is read-only');
     var store = this._store, range = _idb_to_range(query);
     if (range === null) throw _idb_error('DataError', 'a key or key range is required');
@@ -1284,6 +1333,7 @@ _idl_op(IDBObjectStore.prototype, 'delete', function(query) {
 }, 1);
 _idl_op(IDBObjectStore.prototype, 'clear', function() {
     _idl_check(this, IDBObjectStore);
+    _idb_store_gone(this);
     if (this.transaction.mode === 'readonly') throw _idb_error('ReadOnlyError', 'transaction is read-only');
     var store = this._store;
     return _idb_make_request(this, this._transaction, function() { store.records = []; return undefined; });
@@ -1355,6 +1405,10 @@ _idl_op(IDBObjectStore.prototype, 'createIndex', function(name, keyPath, options
 _idl_op(IDBObjectStore.prototype, 'deleteIndex', function(name) {
     _idl_check(this, IDBObjectStore);
     if (!this.transaction._isUpgrade) throw _idb_error('InvalidStateError', 'deleteIndex allowed only during a versionchange transaction');
+    // Порядок (idbobjectstore-deleteIndex-exception-order): upgrade-проверка,
+    // «стор удалён», «неактивна», и только потом NotFoundError.
+    if (this._store._deleted) throw _idb_error('InvalidStateError', 'store has been deleted');
+    if (_idb_txn_inactive(this.transaction)) throw _idb_error('TransactionInactiveError', 'transaction is not active');
     var store = this._store;
     var idx = _idb_effective_index(store, name);
     if (!idx) throw _idb_error('NotFoundError', 'no index named ' + name);
@@ -1380,11 +1434,13 @@ _idl_op(IDBObjectStore.prototype, 'index', function(name) {
 }, 1);
 _idl_op(IDBObjectStore.prototype, 'openCursor', function(query, direction) {
     _idl_check(this, IDBObjectStore);
+    _idb_store_gone(this);
     var range = _idb_to_range(query), store = this._store, dir = direction || 'next';
     return _idb_open_cursor(this, this._transaction, store, function() { return _idb_cursor_list_store(store, range, dir); }, true, dir);
 }, 0);
 _idl_op(IDBObjectStore.prototype, 'openKeyCursor', function(query, direction) {
     _idl_check(this, IDBObjectStore);
+    _idb_store_gone(this);
     var range = _idb_to_range(query), store = this._store, dir = direction || 'next';
     return _idb_open_cursor(this, this._transaction, store, function() { return _idb_cursor_list_store(store, range, dir); }, false, dir);
 }, 0);

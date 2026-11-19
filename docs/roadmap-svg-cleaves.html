@@ -55,14 +55,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-11-18",
+ "generated": "2026-11-19",
  "counts": {
-  "open": 301,
-  "fixed": 1453,
+  "open": 298,
+  "fixed": 1457,
   "inprogress": 0,
-  "wontfix": 7
+  "wontfix": 8
  },
- "total_bugs": 1761,
+ "total_bugs": 1763,
  "phases": [
   {
    "id": "P0",
@@ -10149,13 +10149,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-914": {
-   "status": "open",
-   "title": "IndexedDB: события `error`/`abort` не всплывают по пути `request → transaction → database` (§3.5.6). `db.onabort`/`db.onerror` не вызываются никогда (`IDBDataba…",
-   "component": "js (`crates/js/src/dom.rs` — `_idb_dispatch_request` стреляет `error` только по самому `IDBRequest`; `_idb_fire_txn` — только по самой `IDBTransaction`; `IDBDatabase.onabort`/`onerror` объявлены в конструкторе и не зовутся ниоткуда)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-922": {
    "status": "open",
    "title": "Ни одной из тринадцати констант типов узла нет ни на интерфейсе `Node`, ни на самих узлах: `Node.ELEMENT_NODE`/`Node.TEXT_NODE`/`el.ELEMENT_NODE` — `undefined`,…",
@@ -11423,13 +11416,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1706": {
-   "status": "open",
-   "title": "Слушатель, добавленный внутри обработчика события IndexedDB, получает то же событие (диспетч обходит живой массив, а не копию): `EventWatcher` в `onupgradeneede…",
-   "component": "js (`idb_shim.js`/`dom.rs` — `_idb_dispatch_request`, `_idb_fire_txn`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1707": {
    "status": "open",
    "title": "Нет `getAllRecords()`, `getAll()`/`getAllKeys()` не принимают словарь `{query, count, direction}` (`DataError: invalid key or range`). WPT `IndexedDB`: 9 id, 17…",
@@ -11878,20 +11864,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1820": {
-   "status": "open",
-   "title": "`clippy -p lumen-js --all-targets` красный на чистом main `14a917d79`: `mod v8_bug935_s101_stand` (cd454631c, BUG-935 с101) и `mod v8_bug1408_font_cssom` (da0f0…",
-   "component": "js (`crates/js/src/dom/tests/mod.rs:335,388`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1821": {
-   "status": "open",
-   "title": "`lumen --dump-layout <url> --trace-nav <out.json>` молча читает out.json как источник `--trace-nav` («os error 2» в предупреждении) — режимы с позиционными аргу…",
-   "component": "shell (`crates/shell/src/cli_args.rs` — позиционные аргументы двух режимов)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1823": {
    "status": "open",
    "title": "WPT-тесты SW с инъекцией `%HEADERS%` (`test-request-mode-worker.py` и одноклассники: `update-module-request-mode`, `update-no-cache-request-headers`, `worker-cl…",
@@ -11900,9 +11872,9 @@
    "debtor": false
   },
   "BUG-1822": {
-   "status": "open",
-   "title": "rutube-ru: тихий флап «полный рендер ↔ text=0» — 3 из 4 попыток `wait timeout: DocumentReady` за 40–45 с без JS-ошибок; в удачной попытке OK text 17112/17999 у…",
-   "component": "не локализовано (живое окно — стадия готовности; SW-шим исключён — BUG-1805 закрыт)",
+   "status": "wontfix",
+   "title": "rutube-ru: «флап» = `readyState=complete` на 45–96 с против таймаута краула 40 с (полный текст уже к 15–18 с, DCL 11–15 с); движковый поток занят каскадом (сэмп…",
+   "component": "js/layout (same-tick flush, `style_flush.rs`; `load` окна — `page_load.rs::maybe_fire_window_load`)",
    "date": null,
    "debtor": false
   },
@@ -11917,6 +11889,20 @@
    "status": "open",
    "title": "claude.ai: после 403+«Just a moment» челлендж `chl_page` уходит в одну JS-задачу >135 с на движковом потоке без ошибок — страница висит, `eval` → `engine thread…",
    "component": "js/engine (выполнение `cdn-cgi/challenge-platform` PoW-скрипта; семья BUG-935/1778/1800)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1827": {
+   "status": "open",
+   "title": "Голый `cargo clippy -p lumen-js --all-targets -- -D warnings` (без `v8-backend`) красный на чистом main `e0f8aff95` уже в таргете `lib` — 85 ошибок never-used/u…",
+   "component": "js (`crates/js/src` — хелперы, живущие только v8-глеймом: `compression.rs`, `noise_key.rs`, текстовые метрики `canvas2d.rs`, шимы/нативы `dom.rs`, `worker.rs`, `push_api.rs`, `offscreen_canvas`, `lib.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1828": {
+   "status": "open",
+   "title": "С системным прокси Windows (`ProxyEnable=1`, здесь `127.0.0.1:12334`) каждый WPT-прогон красный: браузер ходит за `http://web-platform.test:18300/...` через сис…",
+   "component": "shell/network ↔ wpt-runner (`crates/shell/src/cli_args.rs` — установка системного прокси; `tests/wpt/run_corpus.py`/`tools/wptrunner/wptrunner/browsers/lumen.py` — окружение браузера)",
    "date": null,
    "debtor": false
   },
@@ -22063,6 +22049,20 @@
    "date": "2026-11-18",
    "debtor": false
   },
+  "BUG-914": {
+   "status": "fixed",
+   "title": "`IDBRequest`/`IDBTransaction`/`IDBDatabase` — настоящие `EventTarget`, события — настоящие `Event`; `error` всплывает по пути `request → transaction → database`…",
+   "component": "js (`crates/js/src/shim/idb_shim.js` — общий диспетчер `_idb_dispatch`/`_idb_invoke`)",
+   "date": "2026-11-18",
+   "debtor": false
+  },
+  "BUG-1706": {
+   "status": "fixed",
+   "title": "Список слушателей узла клонируется (`slice()`) до вызова `onX`-обработчика и обхода: слушатель, добавленный внутри обработчика события — включая `onX` того же о…",
+   "component": "js (`crates/js/src/shim/idb_shim.js` — `_idb_invoke`)",
+   "date": "2026-11-18",
+   "debtor": false
+  },
   "BUG-1817": {
    "status": "fixed",
    "title": "`referrer-policy/4K` 2026-11-15: 172 из 224 красных сабтестов ровно этой формы (`fetch` 24, `script-tag` 24, `xhr` 24, `iframe-tag` 64, `worker-classic`/`worker…",
@@ -22116,6 +22116,20 @@
    "status": "fixed",
    "title": "Lumen игнорировал системный прокси Windows: у пользователя с `ProxyEnable=1` Lumen всегда ходил напрямую, маршрут отличался от Chrome (ebay: Chrome через прокси…",
    "component": "network/shell (`system_proxy.rs` — чтение HKCU Internet Settings через windows-sys; `cli_args` — дефолт до `init_global`; `lumen-network::fetch_single` — loopback минует прокси всегда)",
+   "date": "2026-11-18",
+   "debtor": false
+  },
+  "BUG-1820": {
+   "status": "fixed",
+   "title": "`clippy -p lumen-js --all-targets` красный на чистом main `14a917d79`: оба модуля без cfg тянули cfg-нутые зависимости (`unresolved import`). Повтор семьи BUG-1…",
+   "component": "js (`crates/js/src/dom/tests/mod.rs:335,388`)",
+   "date": "2026-11-18",
+   "debtor": false
+  },
+  "BUG-1821": {
+   "status": "fixed",
+   "title": "`lumen --dump-layout <url> --trace-nav <out.json>` молча читала чужой позиционный как источник страницы (остаток после extract_trace_nav шёл в диспетч, где `res…",
+   "component": "shell (`crates/shell/src/cli_args.rs`)",
    "date": "2026-11-18",
    "debtor": false
   }
@@ -22724,9 +22738,6 @@
   "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`: `queueMicrotask`, конструктор `PromiseRejectionEvent`)": [
    "BUG-702"
   ],
-  "js (`crates/js/src/dom.rs` — `_idb_dispatch_request` стреляет `error` только по самому `IDBRequest`; `_idb_fire_txn` — только по самой `IDBTransaction`; `IDBDatabase.onabort`/`onerror` объявлены в конструкторе и не зовутся ниоткуда)": [
-   "BUG-914"
-  ],
   "js (`crates/js/src/dom.rs` — `_idb_flush_txn`, ветка `_aborted`: гасит очередь и стреляет `abort`, но не трогает данные; `IDBObjectStore.prototype._write` и соседние мутирующие действия пишут в `store.records` без журнала отмены)": [
    "BUG-913"
   ],
@@ -22936,8 +22947,14 @@
   "js (`crates/js/src/shim/idb_shim.js` — `_idb_error(name, message)`)": [
    "BUG-915"
   ],
+  "js (`crates/js/src/shim/idb_shim.js` — `_idb_invoke`)": [
+   "BUG-1706"
+  ],
   "js (`crates/js/src/shim/idb_shim.js` — `_idb_persist_if_dirty`/`_idb_serialize`/`_idb_persist_schema`)": [
    "BUG-917"
+  ],
+  "js (`crates/js/src/shim/idb_shim.js` — общий диспетчер `_idb_dispatch`/`_idb_invoke`)": [
+   "BUG-914"
   ],
   "js (`crates/js/src/shim/idb_shim.js` — откат прерванного первого upgrade, `databases()`)": [
    "BUG-1753"
@@ -23437,6 +23454,9 @@
   "js (`crates/js/src/xhr.rs` `deliver`: последнее `progress` при `readyState` 3 до `_setReadyState(4)`; было: после)": [
    "BUG-1141"
   ],
+  "js (`crates/js/src` — хелперы, живущие только v8-глеймом: `compression.rs`, `noise_key.rs`, текстовые метрики `canvas2d.rs`, шимы/нативы `dom.rs`, `worker.rs`, `push_api.rs`, `offscreen_canvas`, `lib.rs`)": [
+   "BUG-1827"
+  ],
   "js (`crypto_shim.js` `encrypt`/`decrypt`/`sign`/`verify`/`deriveBits`; `subtle_crypto.rs` `aes_gcm_*`, `rsa_verify`, `aes_ctr_crypt`)": [
    "BUG-1739"
   ],
@@ -23475,9 +23495,6 @@
   ],
   "js (`idb_shim.js` — проверка `keyPath`)": [
    "BUG-1708"
-  ],
-  "js (`idb_shim.js`/`dom.rs` — `_idb_dispatch_request`, `_idb_fire_txn`)": [
-   "BUG-1706"
   ],
   "js (`named_access.rs` — `lock_document_bounded`: `sleep(100 мкс)` поллинг против системного тика 15,6 мс)": [
    "BUG-1788"
@@ -23694,6 +23711,9 @@
   ],
   "js/layout (same-tick flush, `style_flush.rs`; DOM-читалки шима)": [
    "BUG-1800"
+  ],
+  "js/layout (same-tick flush, `style_flush.rs`; `load` окна — `page_load.rs::maybe_fire_window_load`)": [
+   "BUG-1822"
   ],
   "js/layout (события Scroll Snap 2; `scroll_initial_target.rs`)": [
    "BUG-1576"
@@ -25247,7 +25267,7 @@
   "shell (`crates/shell/src/cli_args.rs` — `init_global` до `extract_proxy`/`extract_tor_mode`; `config.rs:49` — результат `OnceLock::set` игнорировался)": [
    "BUG-1210"
   ],
-  "shell (`crates/shell/src/cli_args.rs` — позиционные аргументы двух режимов)": [
+  "shell (`crates/shell/src/cli_args.rs`)": [
    "BUG-1821"
   ],
   "shell (`crates/shell/src/download.rs:1781` — тест поверх `start_download`, который поднимает настоящий поток загрузки)": [
@@ -25533,6 +25553,9 @@
   "shell/network (`page_source.rs:266`, `resource_base.rs:206`, `network/src/lib.rs:2802`, `storage/src/cookies.rs:678`)": [
    "BUG-1616"
   ],
+  "shell/network ↔ wpt-runner (`crates/shell/src/cli_args.rs` — установка системного прокси; `tests/wpt/run_corpus.py`/`tools/wptrunner/wptrunner/browsers/lumen.py` — окружение браузера)": [
+   "BUG-1828"
+  ],
   "shell/paint": [
    "BUG-163"
   ],
@@ -25615,9 +25638,6 @@
   ],
   "не локализован до конкретного фикса (механизм сужен — см. срез 22; сами файлы флака — `svg-embedded-sizing/svg-in-iframe-{auto,fixed,percentage}.html`)": [
    "BUG-1011"
-  ],
-  "не локализовано (живое окно — стадия готовности; SW-шим исключён — BUG-1805 закрыт)": [
-   "BUG-1822"
   ],
   "не локализовано (путь вставки классического скрипта: `_lumen_resource_after_insert` → `_lumen_script_prepare` → `_lumen_script_execute_classic`, `crates/js/src/shim/web_api_shim_mid.js`)": [
    "BUG-1158"
