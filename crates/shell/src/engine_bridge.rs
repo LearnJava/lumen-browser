@@ -281,3 +281,27 @@ pub(crate) fn spawn_engine_thread_if_enabled()
         }
     }
 }
+
+/// PERF-INPUT-1: отдельный поток только для layout-заданий (`Run`/`Readback`).
+/// Раньше `Run` и JS-`Task` делили один FIFO: 5-секундный layout-джоб
+/// блокировал вводные JS-события (клики, pointermove) на то же время.
+/// Layout-джоб самодостаточен — ему нужны лишь immutable Arc-снимки
+/// (`make_relayout_job`), состояние `EngineJsState` не требуется, поэтому
+/// достаточно stateless-потока `S = ()`. Коммиты по-прежнему единственные —
+/// с этого потока, generation-guard в `poll_engine_commit` не меняется.
+pub(crate) fn spawn_layout_thread_if_enabled()
+-> Option<engine_thread::EngineThread<EngineCommit>> {
+    if !engine_thread_enabled() {
+        return None;
+    }
+    match engine_thread::EngineThread::<EngineCommit>::spawn() {
+        Ok(engine) => {
+            eprintln!("[layout-thread] запущен (PERF-INPUT-1: layout jobs off the JS engine thread)");
+            Some(engine)
+        }
+        Err(e) => {
+            eprintln!("[layout-thread] не удалось запустить: {e}; продолжаем без него");
+            None
+        }
+    }
+}

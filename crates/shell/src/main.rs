@@ -266,7 +266,7 @@ use crate::chrome_float::{
 };
 use crate::engine_bridge::{
     EngineCommit, EngineJsState, route_eval_js, route_query_js, route_task_js,
-    spawn_engine_thread_if_enabled,
+    spawn_engine_thread_if_enabled, spawn_layout_thread_if_enabled,
 };
 // Only `tests/` calls the pure decision behind `engine_thread_enabled` directly,
 // so an unconditional re-export would be an unused import in the ordinary build.

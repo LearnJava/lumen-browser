@@ -9,6 +9,14 @@ use crate::page_load::{stream_css_outstanding, stream_css_pending, stream_css_pe
 use crate::page_pipeline::is_xml_flavoured_document;
 use crate::*;
 
+/// Deadline for coalescing `FontLoaded` relayouts into a single pass
+/// (FONT-COALESCE).
+///
+/// Fonts arrive in parallel batches; a relayout per event is a full-page
+/// layout each time. 120 ms is an imperceptible FOUT-swap delay, yet wide
+/// enough to cover a typical arrival batch.
+const FONT_RELAYOUT_DEBOUNCE_MS: u64 = 120;
+
 impl Lumen {
     pub(crate) fn on_user_event(&mut self, event: LoadEvent) {
         match event {
@@ -263,7 +271,19 @@ impl Lumen {
                 // font is captured by `submit_relayout_job`'s `web_fonts` snapshot,
                 // so the off-thread reflow sees it. Route it off-thread when the
                 // engine thread is enabled.
-                self.relayout_chrome();
+                //
+                // FONT-COALESCE: fonts arrive by the dozen — a relayout per
+                // `FontLoaded` is a full layout pass of the page each time.
+                // The FIRST font of a batch arms the deadline and later ones
+                // do not extend it: one pass picks up every font registered
+                // in `web_fonts` by the time it fires; stragglers arm the next
+                // deadline in `about_to_wait`.
+                if self.pending_font_relayout.is_none() {
+                    self.pending_font_relayout = Some(
+                        std::time::Instant::now()
+                            + std::time::Duration::from_millis(FONT_RELAYOUT_DEBOUNCE_MS),
+                    );
+                }
                 if let Some(w) = self.window.as_ref() {
                     w.request_redraw();
                 }

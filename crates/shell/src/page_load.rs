@@ -573,6 +573,7 @@ impl Lumen {
             self.stream_image_errors.clear();
             self.stream_image_events_fired.clear();
             self.pending_window_load = None;
+            self.pending_font_relayout = None;
             self.stream_sheet = lumen_css_parser::Stylesheet::default();
             self.stream_layout_seeded = false;
             self.stream_builder = None;
@@ -2226,6 +2227,9 @@ impl Lumen {
         self.requested_web_fonts.clear();
         self.deferred_web_fonts.clear();
         self.web_font_fetches.clear();
+        // FONT-COALESCE: a deadline armed by the previous page's fonts must
+        // not retrigger a relayout on the new document.
+        self.pending_font_relayout = None;
 
         // PH3-19: spawn one background thread per pending @font-face url() source.
         // Each thread fetch+decodes the font and sends FontLoaded; the handler

@@ -1035,9 +1035,14 @@ impl Lumen {
         if m4_swap_override() {
             if m4_swap_mode() == M4Swap::Guarded {
                 let busy = self
-                    .engine_thread
+                    .layout_thread
                     .as_ref()
                     .and_then(|e| e.busy())
+                    .or_else(|| {
+                        self.engine_thread
+                            .as_ref()
+                            .and_then(|e| e.busy())
+                    })
                     .filter(|(_, since)| m4_busy_blocks_tick(*since));
                 let backoff = self.m4_swap_backoff > 0;
                 if (busy.is_some() || backoff) && self.submit_relayout_job() {
