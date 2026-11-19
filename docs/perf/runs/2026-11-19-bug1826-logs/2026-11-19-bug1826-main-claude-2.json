@@ -1,0 +1,62 @@
+{
+ "arm": "lumen",
+ "label": "main-6187a9e86-fresh2",
+ "route": "proxy-12334",
+ "build": {
+  "exe": ".tmp\\eval1826\\profiles\\main-claude2\\lumen.exe",
+  "exe_mtime": "2026-11-19T12:24"
+ },
+ "env": {
+  "LUMEN_JS_STALL_SAMPLE_MS": "2000"
+ },
+ "started": "2026-11-19-1249",
+ "summary": {
+  "pages": 1,
+  "passed": 1,
+  "gpr": 1.0,
+  "verdicts": {
+   "пройдено": 1,
+   "петля": 0,
+   "не_отрисован": 0,
+   "отказ": 0,
+   "завис": 0
+  },
+  "by_vendor": {
+   "cf": "1/1"
+  },
+  "v3_scores": []
+ },
+ "results": [
+  {
+   "observed_s": 120.0,
+   "loads": 2,
+   "probe_errors": 1,
+   "final_url": "https://claude.ai/login",
+   "title": "Sign in or create an account | Claude.ai",
+   "text_len": 3068,
+   "text_head": "\nCookie settings\n\nWe use cookies to deliver and improve our services, analyze site usage, and if you agree, to customize or personalize your experience and market our services to you. You can read our Cookie Policy here.\n\nCustomize cookie settingsReject all cookiesAccept all cookies\n\nQuestion what’s next\n\n\n\nYour thinking partner for big ambitions\n\nContinue with Google\n\nContinue with Apple\n\nOR\n\nContinue with email\n\nBy continuing, you acknowledge Anthropic’s Privacy Policy.\n\nDownload desktop app\n\nExplore plans\nIndividualTeam and Enterprise\nFree\n\nTry Claude\n\n$0\nFree for everyone\n\nTry Claude\n\nCh",
+   "api": {
+    "turnstile": "undefined",
+    "grecaptcha": "undefined",
+    "hcaptcha": "object"
+   },
+   "vendor_cookies": [],
+   "frames": [
+    "",
+    "newassets.hcaptcha.com",
+    "newassets.hcaptcha.com",
+    "newassets.hcaptcha.com",
+    "newassets.hcaptcha.com"
+   ],
+   "verdict": "пройдено",
+   "reason": "оракул выполнен",
+   "stderr_errors": 55,
+   "stderr_log": "live.stderr.claude-login.0.log",
+   "id": "claude-login",
+   "vendor": "cf",
+   "oracle": "unblocked",
+   "url": "https://claude.ai/login",
+   "wall_s": 131.1
+  }
+ ]
+}

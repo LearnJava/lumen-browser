@@ -1,0 +1,54 @@
+{
+ "arm": "lumen",
+ "label": "devin-424621f0",
+ "route": "proxy-12334",
+ "build": {
+  "exe": ".claude\\perf-baseline\\424621f01f00\\lumen.exe",
+  "exe_mtime": "2026-11-19T12:35"
+ },
+ "env": {},
+ "started": "2026-11-19-1236",
+ "summary": {
+  "pages": 1,
+  "passed": 0,
+  "gpr": 0.0,
+  "verdicts": {
+   "пройдено": 0,
+   "петля": 0,
+   "не_отрисован": 1,
+   "отказ": 0,
+   "завис": 0
+  },
+  "by_vendor": {
+   "turnstile": "0/1"
+  },
+  "v3_scores": []
+ },
+ "results": [
+  {
+   "observed_s": 69.0,
+   "loads": 1,
+   "probe_errors": 1,
+   "final_url": "https://peet.ws/turnstile-test/non-interactive.html",
+   "title": "cloudflare turnstile",
+   "text_len": 55,
+   "text_head": "\nCloudflare turnstile demo\n\nNon-interactive challenge\n\n",
+   "api": {
+    "turnstile": "object",
+    "grecaptcha": "object",
+    "hcaptcha": "undefined"
+   },
+   "vendor_cookies": [],
+   "frames": [],
+   "verdict": "не_отрисован",
+   "reason": "токена нет",
+   "stderr_errors": 0,
+   "stderr_log": "live.stderr.turnstile-nonint.0.log",
+   "id": "turnstile-nonint",
+   "vendor": "turnstile",
+   "oracle": "token",
+   "url": "https://peet.ws/turnstile-test/non-interactive.html",
+   "wall_s": 73.8
+  }
+ ]
+}

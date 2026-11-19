@@ -1,0 +1,53 @@
+{
+ "measured": "2026-11-19, live Lumen --dump-source https://tls.peet.ws/api/all via system proxy 127.0.0.1:12334",
+ "main": {
+  "commit": "6187a9e86f97d7cb2dcf308e374cbaa7feed2af8",
+  "http_version": "h2",
+  "settings": [
+   "1:65536",
+   "2:1",
+   "3:1000",
+   "4:6291456",
+   "5:16384"
+  ],
+  "akamai": "1:65536;2:1;3:1000;4:6291456;5:16384",
+  "settings_frame_len": 30,
+  "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36",
+  "ja3_hash": "06de3ac2bef12c495ea8be85146fec97",
+  "ja4": "t13d1011h2_61a7ad8aa9b6_f9531d972513"
+ },
+ "devin": {
+  "commit": "424621f01f00bc910c7dd35c21fd850776be288d",
+  "http_version": "h2",
+  "settings": [
+   "1:65536",
+   "2:0",
+   "4:6291456",
+   "6:262144"
+  ],
+  "akamai": "1:65536;2:0;4:6291456;6:262144",
+  "settings_frame_len": 24,
+  "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36",
+  "ja3_hash": "43148fca14469bc0d0c68180cf183e4a",
+  "ja4": "t13d1011h2_61a7ad8aa9b6_f9531d972513"
+ },
+ "combined": {
+  "commit": "2986446c1450546064276daf11b025474327f1d8",
+  "http_version": "h2",
+  "settings": [
+   "1:65536",
+   "2:0",
+   "4:6291456",
+   "6:262144"
+  ],
+  "akamai": "1:65536;2:0;4:6291456;6:262144",
+  "settings_frame_len": 24,
+  "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36",
+  "ja3_hash": "df64f2bb2026e686bf3475283d783042",
+  "ja4": "t13d1011h2_61a7ad8aa9b6_f9531d972513"
+ },
+ "chrome_157_reference": {
+  "akamai": "1:65536;2:0;4:6291456;6:262144",
+  "note": "эталон из карточки BUG-1826 (tls.peet.ws, Chrome 157); в этом прогоне не перемерялся"
+ }
+}

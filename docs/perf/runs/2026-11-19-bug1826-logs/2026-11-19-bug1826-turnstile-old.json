@@ -1,0 +1,54 @@
+{
+ "arm": "lumen",
+ "label": "old-588a605",
+ "route": "proxy-12334",
+ "build": {
+  "exe": "target\\dev-release\\lumen.exe",
+  "exe_mtime": "2026-11-18T15:39"
+ },
+ "env": {},
+ "started": "2026-11-19-1238",
+ "summary": {
+  "pages": 1,
+  "passed": 0,
+  "gpr": 0.0,
+  "verdicts": {
+   "пройдено": 0,
+   "петля": 0,
+   "не_отрисован": 1,
+   "отказ": 0,
+   "завис": 0
+  },
+  "by_vendor": {
+   "turnstile": "0/1"
+  },
+  "v3_scores": []
+ },
+ "results": [
+  {
+   "observed_s": 60.4,
+   "loads": 1,
+   "probe_errors": 0,
+   "final_url": "https://peet.ws/turnstile-test/non-interactive.html",
+   "title": "cloudflare turnstile",
+   "text_len": 55,
+   "text_head": "\nCloudflare turnstile demo\n\nNon-interactive challenge\n\n",
+   "api": {
+    "turnstile": "object",
+    "grecaptcha": "object",
+    "hcaptcha": "undefined"
+   },
+   "vendor_cookies": [],
+   "frames": [],
+   "verdict": "не_отрисован",
+   "reason": "токена нет",
+   "stderr_errors": 10,
+   "stderr_log": "live.stderr.turnstile-nonint.0.log",
+   "id": "turnstile-nonint",
+   "vendor": "turnstile",
+   "oracle": "token",
+   "url": "https://peet.ws/turnstile-test/non-interactive.html",
+   "wall_s": 68.6
+  }
+ ]
+}
