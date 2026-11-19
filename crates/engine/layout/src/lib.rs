@@ -837,7 +837,7 @@ fn box_clips_own_overflow(b: &LayoutBox) -> bool {
 /// "blocks wholly outside padding edges [do] not contribute to overflow"
 /// (BUG-504). [`set_scroll_position`] clamps against this range directly;
 /// [`content_width`] reduces it to the single-number `scrollWidth` magnitude.
-fn scrollable_extent_x(b: &LayoutBox) -> (f32, f32) {
+pub(crate) fn scrollable_extent_x(b: &LayoutBox) -> (f32, f32) {
     let pb = padding_box(b);
     let (mut min_x, mut max_x) = (0.0_f32, pb.width);
     let u = UnreachableSides::of(&b.style);
@@ -956,7 +956,7 @@ fn scrollable_extent_x_rec(
 
 /// The vertical counterpart of [`scrollable_extent_x`] — `(min_y, max_y)`
 /// relative to the padding edge (`pb.y` = 0).
-fn scrollable_extent_y(b: &LayoutBox) -> (f32, f32) {
+pub(crate) fn scrollable_extent_y(b: &LayoutBox) -> (f32, f32) {
     let pb = padding_box(b);
     let (mut min_y, mut max_y) = (0.0_f32, pb.height);
     let u = UnreachableSides::of(&b.style);
