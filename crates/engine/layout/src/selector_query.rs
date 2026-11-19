@@ -1665,6 +1665,7 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         ObjectFit::Cover => "cover",
         ObjectFit::None => "none",
         ObjectFit::ScaleDown => "scale-down",
+        ObjectFit::CoverScaleDown => "cover scale-down",
     }.into());
     m.insert("object-position".into(), format!(
         "{} {}",

@@ -1,0 +1,31 @@
+{
+  "timestamp": "2026-11-19T09:19:46",
+  "git": {
+    "commit": "3b19b6a60",
+    "branch": "p6-bug-1819",
+    "subject": "Влить ветку p6-bug-1826: BUG-1826 toString-фасад кадровых мостов, спин challenge-VM устранен"
+  },
+  "crop_offset": null,
+  "halted_at": "00",
+  "summary": {
+    "total": 173,
+    "passed": 0,
+    "failed": 0,
+    "errors": 1,
+    "debtors": 0,
+    "skipped": 172
+  },
+  "tests": [
+    {
+      "id": "00",
+      "stem": "00-calibration",
+      "label": "calibration",
+      "html": "00-calibration.html",
+      "threshold": 0.5,
+      "status": "ERROR",
+      "diff_pct": -1.0,
+      "diff_region": null,
+      "capture": "gdigrab"
+    }
+  ]
+}

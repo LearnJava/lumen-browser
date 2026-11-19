@@ -259,6 +259,12 @@ use super::*;
             ("cover", ObjectFit::Cover),
             ("none", ObjectFit::None),
             ("scale-down", ObjectFit::ScaleDown),
+            // CSS Images L4 §5.5: `[ contain | cover ] || scale-down` (BUG-1819);
+            // `contain scale-down` — синоним `scale-down`.
+            ("contain scale-down", ObjectFit::ScaleDown),
+            ("scale-down contain", ObjectFit::ScaleDown),
+            ("cover scale-down", ObjectFit::CoverScaleDown),
+            ("scale-down cover", ObjectFit::CoverScaleDown),
         ] {
             let s = cascade_at(
                 "<img>",
@@ -266,6 +272,15 @@ use super::*;
                 &[0],
             );
             assert_eq!(s.object_fit, expected, "for value {val}");
+        }
+    }
+
+    #[test]
+    fn object_fit_invalid_pair_ignored() {
+        // Дубликат ключа и пара без scale-down — невалидны (BUG-1819).
+        for val in ["cover cover", "scale-down scale-down", "contain cover"] {
+            let s = cascade_at("<img>", &format!("img {{ object-fit: {val}; }}"), &[0]);
+            assert_eq!(s.object_fit, ObjectFit::Fill, "for value {val}");
         }
     }
 

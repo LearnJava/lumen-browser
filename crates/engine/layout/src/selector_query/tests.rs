@@ -1506,6 +1506,16 @@ fn computed_map_object_fit_and_position_set() {
 }
 
 #[test]
+fn computed_map_object_fit_pair_cover_scale_down() {
+    // BUG-1819 (CSS Images L4 §5.5): computed сохраняет пару;
+    // `contain scale-down` канонизируется в синоним `scale-down`.
+    let m = div_computed_map("<div>x</div>", "div { object-fit: cover scale-down; }");
+    assert_eq!(m.get("object-fit").map(String::as_str), Some("cover scale-down"));
+    let m = div_computed_map("<div>x</div>", "div { object-fit: contain scale-down; }");
+    assert_eq!(m.get("object-fit").map(String::as_str), Some("scale-down"));
+}
+
+#[test]
 fn computed_map_aspect_ratio_default_and_set() {
     let m = div_computed_map("<div>x</div>", "");
     assert_eq!(m.get("aspect-ratio").map(String::as_str), Some("auto"));
