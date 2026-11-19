@@ -424,6 +424,32 @@ use super::*;
         assert_eq!(style.get("margin-left").map(String::as_str), Some("10%"));
     }
 
+    /// BUG-1809: whitespace text nodes around `display: contents` elements turn
+    /// the enclosing block into an `InlineRun` whose segments are sourced at the
+    /// elements (the whitespace a wrapper appends to an element's BUG-1558
+    /// marker makes `is_empty_inline_marker()` false, so the BUG-1784 skip
+    /// missed it). The three-property text map under the element's key claimed
+    /// the slot the boxless backfill fills, and the element answered
+    /// `display: ""`. The collector must key text entries by text nodes only.
+    #[test]
+    fn contents_element_between_whitespace_texts_reports_its_own_display() {
+        let doc = lumen_html_parser::parse(
+            "<html><head><style>html, .contents { display: contents }</style></head>\n<body>\n<div id=\"t1\" class=\"contents\"></div>\n<div id=\"t4\" class=\"contents\"></div>\n</body></html>",
+        );
+        let sheet = lumen_css_parser::parse("html, .contents { display: contents }");
+        let (root, counters) =
+            layout_measured_with_counters(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
+        let styles = collect_computed_styles(&root, &doc, Some(&counters), Size::new(800.0, 600.0));
+        for id in ["#t1", "#t4"] {
+            let nid = find_first_dom_node_by_selector(&doc, id).expect(id).index() as u32;
+            let style = styles
+                .get(&nid)
+                .unwrap_or_else(|| panic!("{id} must have a computed-style entry"));
+            assert_eq!(style.get("display").map(String::as_str), Some("contents"));
+            assert_eq!(style.get("color").map(String::as_str), Some("rgb(0, 0, 0)"), "{id}: full cascade, not the three-property text map");
+        }
+    }
+
     /// BUG-489: the document's own root element cannot have its box eliminated
     /// (nothing sits above it to splice its children into), so CSS Display L3
     /// §2.7 blockifies a `display: contents` root to `block` at the cascade

@@ -1217,12 +1217,15 @@ fn collect_computed_styles_parts(
             if seg.source_node.index() == 0 {
                 continue;
             }
-            // BUG-1784: a phantom empty-inline marker (BUG-1558) exists only so
-            // `getBoundingClientRect` can answer, and that path reads the run's
-            // segments straight from the box tree. Publishing the three-property
-            // text map under its element's key would claim the slot the BUG-1191
-            // boxless backfill needs — the element answered `display: ""`.
-            if seg.is_empty_inline_marker() {
+            // The three-property map is a TEXT-node entry (INLINE_SEGMENT_PROPERTIES —
+            // what `innerText` consults). An element-sourced segment must never claim
+            // the slot: the boxless backfill (BUG-1191/BUG-489) publishes the element's
+            // real cascade into it, and a text map under an element's key left that
+            // element answering `display: ""` (BUG-1809: the whitespace a wrapper
+            // appends to a `display: contents` element's marker —
+            // `last.text.push(' ')` — makes `is_empty_inline_marker()` false, so the
+            // BUG-1784 marker-only skip missed the shape; the check below subsumes it).
+            if !matches!(doc.get(seg.source_node).data, lumen_dom::NodeData::Text(_)) {
                 continue;
             }
             out.entry(seg.source_node.index() as u32)
