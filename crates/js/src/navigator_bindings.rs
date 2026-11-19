@@ -871,7 +871,9 @@ mod tests {
     fn chrome_identity_is_the_same_in_page_worker_and_client_hints() {
         use std::sync::{Arc, Mutex};
 
-        let id = lumen_core::Identity::from_user_agent(lumen_core::CHROME_USER_AGENT);
+        // BUG-1832: the default identity is `chrome_lumen` — derive the
+        // expectation from the same process-wide UA the page/worker see.
+        let id = lumen_core::Identity::from_user_agent(lumen_core::chrome_user_agent());
         let hints = id.low_entropy_client_hints();
 
         let page = V8JsRuntime::new().unwrap();

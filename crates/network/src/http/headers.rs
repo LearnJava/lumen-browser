@@ -564,7 +564,7 @@ mod tests {
         // Field names are lowercase (RFC 9113 §8.2.1).
         assert!(hdrs.iter().all(|(k, _)| k.chars().all(|c| !c.is_ascii_uppercase())));
         // The bot-relevant fingerprint headers are present.
-        assert_eq!(get("user-agent"), Some(super::super::CHROME_USER_AGENT));
+        assert_eq!(get("user-agent"), Some(lumen_core::CHROME_LUMEN_USER_AGENT));
         assert_eq!(get("accept"), Some(super::super::CHROME_NAVIGATE_ACCEPT));
         assert_eq!(get("accept-language"), Some(super::super::DEFAULT_ACCEPT_LANGUAGE));
         assert_eq!(get("accept-encoding"), Some("gzip, deflate, br"));
@@ -592,15 +592,22 @@ mod tests {
     #[test]
     fn test_chrome_sends_sec_ch_ua_on_h1_and_h2() {
         // BUG-1614: Chrome UA without Sec-CH-UA is an Akamai signal.
-        for profile in [HttpProfile::Chrome, HttpProfile::Strict, HttpProfile::Edge] {
+        // The default identity is `chrome_lumen` (ADR-034 amendment 2026-11-19):
+        // the UA and the brand list carry the `Lumen` token together.
+        for profile in [HttpProfile::Chrome, HttpProfile::Strict] {
             let h1 = build_request_headers("example.com", "", "", profile);
             assert!(h1.contains("Sec-CH-UA: "), "{profile:?}");
             assert!(h1.contains("Sec-CH-UA-Mobile: ?0"), "{profile:?}");
             assert!(h1.contains("Sec-CH-UA-Platform: \"Windows\""), "{profile:?}");
-            assert!(!h1.contains("Lumen"), "{profile:?}");
+            assert!(h1.contains(&format!("Lumen/{}", env!("CARGO_PKG_VERSION"))), "{profile:?}");
+            assert!(h1.contains("\"Lumen\";v=\""), "{profile:?}");
             let h2 = h2_fingerprint_headers(profile, "");
             assert!(h2.iter().any(|(k, _)| k == "sec-ch-ua"), "{profile:?}");
         }
+        // Edge keeps its own UA and never carries the Lumen token.
+        let edge = build_request_headers("example.com", "", "", HttpProfile::Edge);
+        assert!(edge.contains("Sec-CH-UA: "));
+        assert!(!edge.contains("Lumen"));
         for profile in [HttpProfile::Firefox, HttpProfile::Safari, HttpProfile::TorBrowser, HttpProfile::Lumen] {
             let h1 = build_request_headers("example.com", "", "", profile);
             assert!(!h1.contains("Sec-CH-UA"), "{profile:?}");

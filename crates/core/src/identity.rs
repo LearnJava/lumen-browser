@@ -23,8 +23,8 @@ macro_rules! chrome_major {
 /// [`chrome_major!`] as a value.
 pub const CHROME_MAJOR: &str = chrome_major!();
 
-/// Chrome User-Agent on Windows — what the `Chrome`/`Strict` HTTP profiles send
-/// and what the JS layer reports by default.
+/// Chrome User-Agent on Windows — what the `chrome_unbranded` identity sends;
+/// the JS layer reports [`CHROME_LUMEN_USER_AGENT`] by default (BUG-1832).
 pub const CHROME_USER_AGENT: &str = concat!(
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/",
     chrome_major!(),
@@ -62,10 +62,10 @@ pub const EDGE_USER_AGENT: &str = concat!(
 /// token and nothing else.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum IdentityVariant {
-    /// Plain Chrome grammar, no Lumen token — the default.
-    #[default]
+    /// Plain Chrome grammar, no Lumen token.
     ChromeUnbranded,
-    /// Chrome grammar plus a trailing `Lumen/x.y` and a `Lumen` Client Hints brand.
+    /// Chrome grammar plus a trailing `Lumen/x.y` and a `Lumen` Client Hints brand — the default.
+    #[default]
     ChromeLumen,
 }
 
@@ -129,17 +129,17 @@ impl IdentityProfile {
     }
 }
 
-/// Process-global active variant: `false` = unbranded. Set once at startup by the
-/// shell (`config::init_global`) before any request is built, read by the HTTP
-/// header builders and the JS identity so they cannot disagree.
-static LUMEN_TOKEN: AtomicBool = AtomicBool::new(false);
+/// Process-global active variant: `true` = the `Lumen` token is on by default.
+/// Set once at startup by the shell (`config::init_global`) before any request
+/// is built, read by the HTTP header builders and the JS identity so they cannot disagree.
+static LUMEN_TOKEN: AtomicBool = AtomicBool::new(true);
 
 /// Select the process-global identity variant.
 pub fn set_identity_variant(variant: IdentityVariant) {
     LUMEN_TOKEN.store(variant == IdentityVariant::ChromeLumen, Ordering::Relaxed);
 }
 
-/// The process-global identity variant ([`IdentityVariant::ChromeUnbranded`] until set).
+/// The process-global identity variant ([`IdentityVariant::default`] until set).
 #[must_use]
 pub fn identity_variant() -> IdentityVariant {
     if LUMEN_TOKEN.load(Ordering::Relaxed) {
@@ -438,7 +438,7 @@ mod tests {
         assert_eq!(IdentityVariant::parse("chrome_lumen"), Some(IdentityVariant::ChromeLumen));
         assert_eq!(IdentityVariant::parse(" Chrome-Unbranded "), Some(IdentityVariant::ChromeUnbranded));
         assert_eq!(IdentityVariant::parse("firefox_win"), None);
-        assert_eq!(IdentityVariant::default(), IdentityVariant::ChromeUnbranded);
+        assert_eq!(IdentityVariant::default(), IdentityVariant::ChromeLumen);
     }
 
     #[test]
