@@ -232,7 +232,7 @@ impl Lumen {
             };
             // CSSANIM-MODEL-2 S4/S5: a script's `cancel()`/`play()`/seek moves the frame the
             // schedulers paint — drain its commands before the tick that uses them.
-            let motion_cmds = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+            let motion_cmds = route_poll_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
                 j.take_css_motion_cmds()
             })
             .unwrap_or_default();
@@ -429,13 +429,13 @@ impl Lumen {
         } else {
             // Flag off (default): byte-identical synchronous path.
             if raf_due
-                && route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                && route_poll_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
                     j.has_raf_pending()
                 })
                 .unwrap_or(false)
             {
                 // Consume the flag and fire the batch (former direct call).
-                route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                route_poll_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
                     j.take_raf_pending()
                 });
                 self.last_raf_batch_ms = timestamp_ms;
@@ -457,7 +457,7 @@ impl Lumen {
             // Step 5 below reads `display_list.is_empty()` synchronously
             // (PerformancePaintTiming), so this reflow is the synchronous
             // `relayout` (no engine thread to defer to).
-            let dom_dirty = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+            let dom_dirty = route_poll_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
                 j.take_dom_dirty()
             })
             .unwrap_or(false);

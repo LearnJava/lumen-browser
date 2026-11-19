@@ -1433,3 +1433,29 @@ fallback медленнее шейпинга, значит стоимость mt
 
 Рычаги: (а) draft-layout на layout-thread / viewport-only; (б) раньше снимать
 CSS-гейт или рисовать unstyled мгновенно; (в) инкрементальный CSS-парсер (backlog).
+
+## PERF-INPUT-1b: UI-столлы за QUERY_TIMEOUT (market.yandex, FRAME_LOG)
+
+Замер `LUMEN_FRAME_LOG=1` на market.yandex (post-split):
+- `[frame] total 5006ms / 3055ms`, разбивка `anim ~5000ms` — весь шаг
+  CSS-animations/.transitions кадра.
+- Причина: `route_query_js` → `EngineThread::query` блокирует UI-поток до
+  `QUERY_TIMEOUT = 5s` (engine_thread.rs:64), когда движковый поток занят
+  (в логе рядом `[engine] task 3232ms`). Опрошенный сайт делает частые
+  DOM-мутации → кадры регулярно попадали в 5-секундный таймаут → окно
+  визуально «мёртвое», кнопки не нажимаются.
+- `first non-empty frame: 34007ms` — подтверждено: прогрессивные кадры
+  фактически не появляются до ~34 с (JS-driven контент + редкие draft-кадры).
+
+Срез: `route_poll_js` (engine_bridge.rs) — неблокирующий опрос для
+по-кадровых drain'ов: при `engine.busy()` возвращает None БЕЗ постановки
+в очередь (drain'ы повторятся следующим кадром — состояние остаётся в JS).
+Применён к: `take_css_motion_cmds`, `has/take_raf_pending`, `take_dom_dirty`
+в redraw_requested. `drain_query_js` (relayout.rs) — добавлена проверка
+`engine.busy()` поверх `should_defer_query`: закрывает ~15 value-drain
+сайтов about_to_wait (canvas/history/nav/notifications/fullscreen/print/
+focus/view-transition) одним местом.
+
+НЕ тронуто намеренно: `route_query_js` для effectful-чтений
+(`eval_js_value` в click/form_submit, `take_nav_intercept_result`) —
+пропуск там терял бы выполнение скрипта или рассинхронизировал drain.

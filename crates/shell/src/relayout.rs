@@ -1185,7 +1185,11 @@ impl Lumen {
             self.raf_turn_inflight(),
             self.engine_job_generation,
             self.engine_applied_generation,
-        ) {
+        ) || self
+            .engine_thread
+            .as_ref()
+            .is_some_and(|e| e.busy().is_some())
+        {
             return None;
         }
         route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), read)
