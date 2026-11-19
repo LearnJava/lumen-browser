@@ -9,7 +9,7 @@
 - DNS-prefetch — выключен по умолчанию.
 
 **TLS:**
-- `rustls` only, никакого OpenSSL.
+- TLS-транспорт H1/H2 — `boring` (BoringSSL, Chrome-grade ClientHello, с 2026-11-19 [BUG-1826](../../bugs/BUG-1826-FIXED.md)); rustls остаётся для HTTP/3/QUIC и DoT; OpenSSL не используется.
 - Минимум TLS 1.2, по умолчанию 1.3.
 - ECH (Encrypted Client Hello) — поддерживаем, когда доступно.
 - TLS ClientHello fingerprint — нормализованный (uTLS-style), чтобы не выделяться.
@@ -67,9 +67,9 @@ Anti-detection покрывает **шесть слоёв**, потому что
 
 #### Слой 2 — TLS fingerprint (default + per-profile)
 
-- `rustls` сконфигурирован с **cipher suite ordering, extension list и supported groups, совпадающими с current stable Chrome** (default profile). ALPN: `h2`, `http/1.1` — порядок Chrome-овский.
-- Цель: сайт не должен мочь выделить юзера Lumen только потому, что мы выбрали другую Rust-TLS библиотеку, — мы конфигурируем `rustls` так, как `rustls` уже умеет конфигурироваться.
-- **Per-profile**: privacy-strict профиль использует `rustls`-defaults, корпоративный — pinned JA3, Tor-profile — JA3 Tor Browser.
+- TLS ClientHello (H1/H2) формирует **BoringSSL** (`crates/network/src/tls/boring.rs`): cipher list, supported groups (`X25519MLKEM768:X25519:P-256:P-384`), signature algorithms и ALPN (`h2`, `http/1.1`) выверены по current stable Chrome; GREASE и перестановку расширений добавляет сам BoringSSL — JA3/JA4 совпадают с Chrome-классом (rustls этого принципиально не умел, и Cloudflare edge ветвил managed challenge именно по нему — BUG-1826).
+- Цель: сайт не должен мочь выделить юзера Lumen по TLS-фингерпринту — hello собран в Chrome-профиле.
+- **Per-profile**: privacy-strict — минимальный набор/только TLS 1.3, корпоративный — pinned набор, Tor-profile — JA3-класс Tor Browser (ALPN `http/1.1`).
 - **Что мы не делаем:** не патчим криптографию, не имитируем «быть» Chrome поверх собственной идентичности (UA остаётся `Lumen/0.x`).
 
 #### Слой 3 — HTTP layer (default + per-profile)

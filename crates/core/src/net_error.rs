@@ -50,7 +50,7 @@ pub enum NetErrorCode {
     Http2ProtocolError,
     /// Прокси не открыл туннель `CONNECT` (ответ не 2xx).
     TunnelConnectionFailed,
-    /// Тело ответа не разжалось по `Content-Encoding` (gzip, deflate, br).
+    /// Тело ответа не разжалось по `Content-Encoding` (gzip, deflate, br, zstd).
     ContentDecodingFailed,
     /// Сервер ответил 5xx и не прислал тела: показывать нечего, кроме самого статуса.
     HttpStatus(u16),

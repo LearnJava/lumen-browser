@@ -49,6 +49,8 @@ verification requires.
 
 ## Current state
 
+> **Update 2026-11-19:** TLS-транспорт H1/H2 переведён с rustls на BoringSSL (`crates/network/src/tls/boring.rs`, [BUG-1826](../../bugs/BUG-1826-FIXED.md)); rustls остаётся для h3/QUIC и DoT. Описанные ниже rustls-интерфейсы (`WebPkiServerVerifier`, `ResolvesClientCert`, `with_client_cert_resolver`) актуальны для оставшихся путей и для `LumenVerifier`, который теперь вызывается post-handshake на DER-цепочке BoringSSL.
+
 ### Cert verification (today)
 
 - TLS is rustls 0.23 (`crates/network/Cargo.toml:19`), aws-lc-rs provider.

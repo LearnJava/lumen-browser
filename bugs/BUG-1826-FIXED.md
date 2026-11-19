@@ -105,3 +105,30 @@ lumen.exe --maximized --mcp-live-port <N> https://claude.ai   # Windows, сис�
 **Проверка:** akamai fingerprint Lumen после фикса байт-в-байт совпал с Chrome 157; `claude.ai` — 4/4 живых прогона `--maximized` + `LUMEN_NO_ADBLOCK=1`: `GET /login → 200`, страница логина (шрифты, hero, edge-api bootstrap) грузится без единого челленджа. До фикса на том же прокси — стабильный 403/chl_page.
 
 **Остаточные отличия фингерпринта** (не блокеры на текущем exit-IP, кандидаты на follow-up при рецидивах): TLS ClientHello rustls vs BoringSSL, порядок/состав HTTP-заголовков, sec-ch-ua brands (нет "Google Chrome"), accept-encoding без zstd.
+
+### Follow-up 2026-11-19 — HTTP-заголовки доведены до набора Chrome 157 (задача B)
+
+Цель — снять остаточные отличия заголовочного фингерпринта, чтобы не ловить челлендж на «плохих» exit-IP. Всё выверено по замеру `tls.peet.ws/api/all` на реальном Chrome 157.
+
+- **Порядок и состав H1/H2-заголовков навигации** ([crates/network/src/http/headers.rs](../crates/network/src/http/headers.rs)): `Host, Connection, Sec-CH-UA/-Mobile/-Platform, Upgrade-Insecure-Requests: 1, User-Agent, Accept, Sec-Fetch-Site/-Mode/-User: ?1/-Dest, Accept-Encoding, Accept-Language` (+ DNT/Sec-GPC только у Strict). Убраны `Cache-Control: max-age=0` (Chrome шлёт его только на reload — reload-путь и так добавляет `Cache-Control: no-cache` через `cache_bypass_headers`) и перенос Sec-Fetch-* с конца блока на позицию после Accept. Edge — тот же набор.
+- **`Sec-Fetch-User: ?1`** добавлен в navigation-блок; на сабресурсах/fetch/XHR он снимается через `X-Lumen-Drop` в [crates/network/src/fetch_metadata.rs](../crates/network/src/fetch_metadata.rs) — Chrome его на не-навигациях не шлёт. `Upgrade-Insecure-Requests` наоборот оставлен на всех запросах: Chrome шлёт его и на сабресурсах.
+- **Client Hints brands** ([crates/core/src/identity.rs](../crates/core/src/identity.rs)): Chrome-профиль теперь отдаёт реальный порядок Chrome 157 — `GREASE, "Google Chrome", "Chromium"` (раньше "Google Chrome" отсутствовал, а GREASE вставлялся формулой не на ту позицию). `ChromeBrandGoogle` совпадает с `ChromeUnbranded` по построению. `navigator.userAgentData.brands` и `Sec-CH-UA` берутся из одного `Identity`, противоречий нет.
+- **`Accept-Encoding` + zstd**: добавлен `ZstdContentDecoder` ([crates/network/src/zstd.rs](../crates/network/src/zstd.rs)) на pure-Rust `ruzstd 0.9.1` (только декомпрессия; тест на эталонном фрейме, сжатом системным zstd). Порядок регистрации декодеров в driver — `gzip, deflate, br, zstd`, как у Chrome (было `br, gzip, deflate`). Рекламировать zstd без декодера было нельзя — сервер мог бы отдать неснимаемое сжатие.
+
+Тесты: `http_client_fingerprint_profile` (новый `chrome_headers_match_measured_chrome_157_order` + обновлённые), unit-тесты `headers.rs`/`fetch_metadata.rs`/`identity.rs`, JS-тесты `ua_client_hints`/`v8_bug624` (brands.length 2→3). `cargo clippy -p lumen-network -p lumen-core -p lumen-driver --all-targets -D warnings` чист.
+
+### Follow-up 2026-11-19 — TLS-транспорт переведён на BoringSSL (задача A, решающая)
+
+Последнее крупное расхождение фингерпринта — TLS ClientHello: rustls не умеет GREASE, перестановку расширений, X25519MLKEM768 и полный набор Chrome-расширений (JA3 `8b54b221…`/JA4 `t13d1011h2` против Chrome `760fc7ae…`/`t13d1517h2`).
+
+**Решающий A/B-эксперимент** (один exit-IP `85.208.119.27`, одна минута): spike на crate `boring` (BoringSSL) → `claude.ai/login` **200 без челленджа**; Lumen на rustls в то же время → `403 → chl_page`; настоящий Chrome → 200. Вывод: CF edge ветвит именно по TLS-фингерпринту — с Chrome-grade hello челлендж не выдаётся вообще.
+
+**Реализация** — [crates/network/src/tls/boring.rs](../crates/network/src/tls/boring.rs) + точка подключения в [crates/network/src/lib.rs](../crates/network/src/lib.rs) (`connect_inner` и HTTP-CONNECT-туннель):
+
+- `RawStream::Tls` теперь `boring::ssl::SslStream<TcpStream>` — Read/Write-совместим, h1/h2-mux/websocket работают без изменений.
+- ClientHello: cipher list Chrome, `signature_algorithms` без PQ/`rsa_pkcs1_sha1`, groups `X25519MLKEM768:X25519:P-256:P-384`, ALPN `h2,http/1.1` (Tor/h1-фолбэк — `http/1.1`), TLS 1.2+1.3 для Standard / 1.3-only для Strict/Tor. BoringSSL сам добавляет GREASE и перестановку расширений.
+- **Верификация сертификатов не портирована, а переиспользована**: handshake идёт с `SslVerifyMode::NONE`, затем `LumenVerifier::verify_server_cert` прогоняется на DER-цепочке post-handshake — webpki path validation, AIA, NUC, stapled-OCSP (`Revoked` hard-fail + `record_stapled`), CT и bypass работают без изменений. Запрос OCSP-staple — `set_status_type(StatusType::OCSP)` до handshake.
+- h3/QUIC и DNS-over-TLS остаются на rustls (QUIC-бэкенда у BoringSSL здесь нет; DoT не виден edge сайта).
+- Новая зависимость `boring = "5.5.1"` (boring-sys собирает BoringSSL: нужны cmake + nasm + MSVC).
+
+**Проверка** (тот же «плохой» exit-IP, `--maximized` + `LUMEN_NO_ADBLOCK=1`): `claude.ai` — 3/3 прогона `302 → /login → 200` + вся страница логина (шрифты, hero, edge-api bootstrap) **без единого челленджа**; `whatismyipaddress.com` — `200` сразу, весь сайт с ресурсами, челленджа не было вообще (до фикса — `Cf-Mitigated: challenge`/403). Сертификатная политика проверена живьём: `expired.badssl.com` → interstitial «certificate expired» (`Error::CertInvalid`), ретрай после транзиентного EOF отработал.

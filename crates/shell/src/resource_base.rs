@@ -261,7 +261,7 @@ impl ResourceBase {
         referrer_policy: lumen_network::ReferrerPolicy,
     ) -> lumen_network::HttpClient {
         use lumen_network::{
-            BrotliContentDecoder, DeflateContentDecoder, GzipContentDecoder, HttpClient,
+            BrotliContentDecoder, DeflateContentDecoder, GzipContentDecoder, HttpClient, ZstdContentDecoder,
             MixedContentMode,
         };
         let mut builder = HttpClient::new()
@@ -270,9 +270,10 @@ impl ResourceBase {
             // per-tab one-off «без защит» mode applies to this tab's requests
             // (and only them).
             .with_tab(self.tab)
-            .with_content_decoder(Arc::new(BrotliContentDecoder::new()))
             .with_content_decoder(Arc::new(GzipContentDecoder::new()))
             .with_content_decoder(Arc::new(DeflateContentDecoder::new()))
+            .with_content_decoder(Arc::new(BrotliContentDecoder::new()))
+            .with_content_decoder(Arc::new(ZstdContentDecoder::new()))
             // GAP-CANVASORIGIN срез 2: `fetch_cors` (real `Origin`-header +
             // ACAO validation for `<img crossorigin>`) refuses to run without
             // a cache attached. One cache per built client — this function is

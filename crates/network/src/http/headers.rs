@@ -35,21 +35,20 @@ pub enum HttpProfile {
 /// is a fingerprinting vector — non-Chrome libraries often use different
 /// orders. Matching Chrome's order reduces false-positive detection.
 ///
-/// Order (Standard profile):
+/// Order (Standard profile, measured Chrome 157 — BUG-1826):
 /// 1. Host (automatic, always first after request line)
 /// 2. Connection
-/// 3. Cache-Control
-/// 4. User-Agent
-/// 5. Accept
-/// 6. Accept-Encoding
-/// 7. Accept-Language
-/// 8. DNT (Strict only)
-/// 9. Sec-Fetch-Site
-/// 10. Sec-Fetch-Mode
-/// 11. Sec-Fetch-Dest
-/// 12. Authorization (if present)
-/// 13. Range (if present)
-/// 14. Custom headers (author-provided)
+/// 3. Sec-CH-UA / -Mobile / -Platform
+/// 4. Upgrade-Insecure-Requests
+/// 5. User-Agent
+/// 6. Accept
+/// 7. Sec-Fetch-Site / -Mode / -User / -Dest
+/// 8. Accept-Encoding
+/// 9. Accept-Language
+/// 10. DNT / Sec-GPC (Strict only)
+/// 11. Authorization (if present)
+/// 12. Range (if present)
+/// 13. Custom headers (author-provided)
 #[derive(Debug)]
 pub struct HeaderOrder {
     headers: VecDeque<(String, String)>,
@@ -213,21 +212,36 @@ pub fn build_request_headers_with_identity(
 
     match profile {
         HttpProfile::Chrome | HttpProfile::Strict => {
-            // Chrome HTTP/1.1 header order
+            // Chrome HTTP/1.1 header order — измерено tls.peet.ws/api/all
+            // на Chrome 157 (BUG-1826). `Cache-Control: max-age=0` реальный
+            // Chrome шлёт только на reload; на обычной навигации его
+            // отсутствие — часть фингерпринта.
             headers.add("Host", host);
             headers.add("Connection", "keep-alive");
-            headers.add("Cache-Control", "max-age=0");
             add_low_entropy_hints(&mut headers, profile, identity);
+            headers.add("Upgrade-Insecure-Requests", "1");
             headers.add("User-Agent", &identity.user_agent);
             // Real Chrome sends the full document `Accept` on a navigation,
             // not `*/*` (RP-7: `*/*` is a cheap anti-bot tell).
             headers.add("Accept", super::CHROME_NAVIGATE_ACCEPT);
+
+            // Sec-Fetch-* headers (Chromium 76+) — sent by default in Chrome
+            headers.add("Sec-Fetch-Site", "none");
+            headers.add("Sec-Fetch-Mode", "navigate");
+            headers.add("Sec-Fetch-User", "?1");
+            headers.add("Sec-Fetch-Dest", "document");
 
             if !accept_encoding.is_empty() {
                 headers.add("Accept-Encoding", accept_encoding);
             }
 
             headers.add("Accept-Language", &accept_language);
+
+            // RFC 9218 Priority — Chrome шлёт `u=0, i` на document-навигации
+            // (замер tls.peet.ws на Chrome 157, BUG-1826); на сабресурсах
+            // значение другое, поэтому fetch_metadata снимает его через
+            // X-Lumen-Drop вместе с Sec-Fetch-User.
+            headers.add("Priority", "u=0, i");
 
             // DNT (Do Not Track) — Strict only. Stock Chrome does not send it;
             // `DNT: 1` next to a Chrome UA is an impossible combination that
@@ -243,11 +257,6 @@ pub fn build_request_headers_with_identity(
             if sends_global_privacy_control(profile) {
                 headers.add("Sec-GPC", "1");
             }
-
-            // Sec-Fetch-* headers (Chromium 76+) — sent by default in Chrome
-            headers.add("Sec-Fetch-Site", "none");
-            headers.add("Sec-Fetch-Mode", "navigate");
-            headers.add("Sec-Fetch-Dest", "document");
         }
         HttpProfile::Firefox => {
             // Firefox 130+ HTTP/1.1 header order (minimal, no Sec-Fetch-*, no DNT)
@@ -277,25 +286,28 @@ pub fn build_request_headers_with_identity(
             headers.add("Connection", "keep-alive");
         }
         HttpProfile::Edge => {
-            // Edge HTTP/1.1 header order (similar to Chrome with minor differences)
+            // Edge HTTP/1.1 header order — тот же, что у Chrome 157
+            // (BUG-1826): без Cache-Control на обычной навигации.
             headers.add("Host", host);
             headers.add("Connection", "keep-alive");
-            headers.add("Cache-Control", "max-age=0");
             add_low_entropy_hints(&mut headers, profile, identity);
+            headers.add("Upgrade-Insecure-Requests", "1");
             headers.add("User-Agent", super::EDGE_USER_AGENT);
             // Edge (Chromium) sends the same document `Accept` as Chrome (RP-7).
             headers.add("Accept", super::CHROME_NAVIGATE_ACCEPT);
+
+            // Edge includes Sec-Fetch-* like Chrome
+            headers.add("Sec-Fetch-Site", "none");
+            headers.add("Sec-Fetch-Mode", "navigate");
+            headers.add("Sec-Fetch-User", "?1");
+            headers.add("Sec-Fetch-Dest", "document");
 
             if !accept_encoding.is_empty() {
                 headers.add("Accept-Encoding", accept_encoding);
             }
 
             headers.add("Accept-Language", &accept_language);
-
-            // Edge includes Sec-Fetch-* like Chrome
-            headers.add("Sec-Fetch-Site", "none");
-            headers.add("Sec-Fetch-Mode", "navigate");
-            headers.add("Sec-Fetch-Dest", "document");
+            headers.add("Priority", "u=0, i");
         }
         HttpProfile::TorBrowser => {
             // Tor Browser request signature, matching current Tor Browser
@@ -393,9 +405,10 @@ pub fn build_request_headers_with_identity(
 }
 
 /// Pseudo request line telling the header builders to drop the profile
-/// default named in its value (`X-Lumen-Drop: cache-control`) instead of
-/// replacing it. The profile sends `Cache-Control: max-age=0` as a navigation
-/// reload signal; a page `fetch()` with the default cache mode must not carry it.
+/// default named in its value (`X-Lumen-Drop: <name>`) instead of
+/// replacing it. Used for navigation-only headers a subresource request
+/// must not carry (`cache-control`, `upgrade-insecure-requests`,
+/// `sec-fetch-user`) and for `fetch()` cache modes (FETCH-HTTP-CACHE).
 pub(crate) const DROP_DEFAULT_HEADER: &str = "x-lumen-drop";
 
 /// Names listed by the `X-Lumen-Drop` lines of an extra-headers block.
@@ -764,8 +777,10 @@ mod tests {
         let headers = build_request_headers("example.com", "", "", HttpProfile::Strict);
         let dnt = headers.find("DNT: 1").expect("Strict sends DNT");
         let gpc = headers.find("Sec-GPC: 1").expect("Strict sends GPC");
-        let fetch = headers.find("Sec-Fetch-Site").expect("Strict keeps Sec-Fetch-*");
-        assert!(dnt < gpc && gpc < fetch, "Sec-GPC must sit between DNT and Sec-Fetch-*");
+        let al = headers.find("Accept-Language:").expect("Strict sends Accept-Language");
+        // BUG-1826: порядок Chrome 157 — Sec-Fetch-* идут до Accept-Encoding /
+        // Accept-Language, а приватные сигналы DNT/Sec-GPC замыкают блок.
+        assert!(al < dnt && dnt < gpc, "Accept-Language < DNT < Sec-GPC");
     }
 
     #[test]

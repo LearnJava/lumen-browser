@@ -232,16 +232,18 @@ fn a_successful_unsafe_request_invalidates_the_stored_response() {
 
 #[test]
 fn drop_marker_strips_the_profile_cache_control_on_both_wire_formats() {
+    // Firefox-профиль: Chrome/Edge с BUG-1826 больше не шлют Cache-Control
+    // на обычной навигации, а Firefox — шлёт, поэтому маркер проверяется на нём.
     let extra = "x-lumen-drop: cache-control\r\nfoo: bar\r\n";
-    let h1 = http::headers::build_request_headers("e.test", "", extra, HttpProfile::Chrome);
+    let h1 = http::headers::build_request_headers("e.test", "", extra, HttpProfile::Firefox);
     assert!(!h1.to_ascii_lowercase().contains("cache-control"), "{h1}");
     assert!(!h1.to_ascii_lowercase().contains("x-lumen-drop"), "{h1}");
     assert!(h1.contains("foo: bar"));
-    let with_default = http::headers::build_request_headers("e.test", "", "foo: bar\r\n", HttpProfile::Chrome);
+    let with_default = http::headers::build_request_headers("e.test", "", "foo: bar\r\n", HttpProfile::Firefox);
     assert!(with_default.contains("Cache-Control: max-age=0"), "control: the default is there");
 
-    let identity = lumen_core::IdentityProfile::from_variant(lumen_core::identity_variant()).identity();
-    let h2 = build_h2_headers_with_identity(HttpProfile::Chrome, &identity, None, extra);
+    let identity = lumen_core::Identity::from_user_agent("Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0");
+    let h2 = build_h2_headers_with_identity(HttpProfile::Firefox, &identity, None, extra);
     assert!(h2.iter().all(|(k, _)| k != b"cache-control" && k != b"x-lumen-drop"));
     assert!(h2.iter().any(|(k, v)| k == b"foo" && v == b"bar"));
 }

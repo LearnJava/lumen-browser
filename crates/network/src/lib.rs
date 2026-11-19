@@ -29,7 +29,9 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::sync::Arc;
 
+#[cfg(test)]
 use rustls::ClientConnection;
+#[cfg(test)]
 use rustls::pki_types::ServerName;
 
 use lumen_core::error::{Error, Result};
@@ -102,6 +104,7 @@ pub mod tls;
 pub mod ctap2;
 pub mod webauthn;
 pub(crate) mod websocket;
+mod zstd;
 pub mod remote;
 pub use remote::RemoteNetworkTransport;
 pub use nav_body::NavigationBody;
@@ -112,6 +115,7 @@ pub use socks5::Socks5Proxy;
 pub use webauthn::VirtualAuthenticator;
 pub use brotli::BrotliContentDecoder;
 pub use flate::{DeflateContentDecoder, GzipContentDecoder};
+pub use zstd::ZstdContentDecoder;
 pub use filter::{DefaultFilterList, EasyListFilter, HostsFilter, CompositeFilter};
 
 // Реэкспорт HTTP/1.1-ядра (SPLIT-NW0), чтобы `do_request` в этом файле
@@ -696,7 +700,11 @@ fn build_origin(url: &Url) -> String {
 /// буферизации; буфера живут на уровень выше в `Connection`.
 pub(crate) enum RawStream {
     Plain(TcpStream),
-    Tls(Box<rustls::StreamOwned<ClientConnection, TcpStream>>),
+    /// BUG-1826: BoringSSL stream — Chrome-grade ClientHello (GREASE,
+    /// permuted extensions, X25519MLKEM768) that rustls cannot emit; CF edge
+    /// fingerprinting escalates rustls clients to managed challenges.
+    /// Certificate policy is enforced post-handshake by `tls::boring::connect`.
+    Tls(Box<boring::ssl::SslStream<TcpStream>>),
 }
 
 impl Read for RawStream {
@@ -1142,7 +1150,7 @@ impl RawStream {
     pub(crate) fn try_clone_tcp(&self) -> Option<TcpStream> {
         match self {
             RawStream::Plain(s) => s.try_clone().ok(),
-            RawStream::Tls(s) => s.sock.try_clone().ok(),
+            RawStream::Tls(s) => s.get_ref().try_clone().ok(),
         }
     }
 
@@ -1155,7 +1163,7 @@ impl RawStream {
     pub(crate) fn set_read_timeout(&self, dur: Option<std::time::Duration>) -> std::io::Result<()> {
         match self {
             RawStream::Plain(s) => s.set_read_timeout(dur),
-            RawStream::Tls(s) => s.sock.set_read_timeout(dur),
+            RawStream::Tls(s) => s.get_ref().set_read_timeout(dur),
         }
     }
 }
@@ -1592,20 +1600,9 @@ fn connect_inner(
         return Ok(Connection::new(RawStream::Plain(tcp)));
     }
 
-    let server_name = ServerName::try_from(host.to_owned())
-        .map_err(|e| net_failure(NetErrorCode::InvalidUrl, format!("invalid hostname '{host}': {e}")))?;
-
-    let config = if force_h1 {
-        tls_config_h1_for_profile(tls_profile)
-    } else {
-        tls_config_for_profile(tls_profile)
-    };
-    let mut conn = ClientConnection::new(config, server_name)
-        .map_err(|e| net_failure(NetErrorCode::SslProtocolError, format!("TLS handshake: {e}")))?;
-
     // BUG-935 (S9): callers that want an unbounded post-connect read (WS/SSE,
     // which pass `read_timeout: None` so the long-lived body can idle
-    // forever) left `complete_io` below with no bound either — a peer that
+    // forever) left the handshake below with no bound either — a peer that
     // accepts the TCP connect (passes `CONNECT_TIMEOUT`) and then stalls
     // mid-handshake (no ServerHello, or hangs after the ClientHello) blocked
     // this ordered `EngineThread` task forever. Same FIFO-deadlock class as
@@ -1617,69 +1614,27 @@ fn connect_inner(
         let _ = tcp.set_read_timeout(Some(FETCH_READ_TIMEOUT));
     }
 
-    // Завершаем handshake до отправки данных — иначе ALPN protocol неизвестен,
-    // а нам нужно знать версию (HTTP/1.1 vs HTTP/2) до формирования request bytes.
-    let mut tcp = tcp;
-    conn.complete_io(&mut tcp)
-        .map_err(|e| handshake_io_error("TLS handshake", e))?;
+    // BUG-1826: BoringSSL transport — `connect` performs the handshake and
+    // runs the full certificate policy (`LumenVerifier`) on the peer chain.
+    let stream = tls::boring::connect(host, tcp, tls_profile, force_h1)?;
 
     if read_timeout.is_none() {
-        let _ = tcp.set_read_timeout(None);
+        let _ = stream.get_ref().set_read_timeout(None);
     }
-    let is_h2 = check_negotiated_alpn(conn.alpn_protocol())?;
-    let cert_info = cert_info_from_completed_handshake(&conn, host);
+    let alpn = tls::boring::negotiated_alpn(&stream);
+    let is_h2 = check_negotiated_alpn(alpn.as_deref())?;
+    let cert_info = tls::boring::cert_info(&stream, host);
 
-    let mut c = Connection::new(RawStream::Tls(Box::new(rustls::StreamOwned::new(conn, tcp))));
+    let mut c = Connection::new(RawStream::Tls(Box::new(stream)));
     c.is_h2 = is_h2;
     c.cert_info = cert_info;
     Ok(c)
 }
 
-/// Build a real [`tls::CertInfo`] from a `ClientConnection` right after its
-/// handshake completed (ph3-tls-hardening, live-wiring slice — A2-A5 built
-/// `LumenVerifier`/`CertInfo::from_peer_cert`/`ct::evaluate_ct` but nothing
-/// called them yet).
-///
-/// CT (A4) is a pure function of the leaf and issuer cert bytes, so it's safely
-/// recomputable here. OCSP (A3) is not: the stapled response is only ever
-/// handed to [`tls::verifier::LumenVerifier::verify_server_cert`], and
-/// per that module's docs a shared, cached `ClientConfig`/verifier must stay
-/// side-effect-free per call (a "last seen" `Mutex<Option<_>>` slot would
-/// race across concurrent connections on the same profile). The verifier
-/// therefore leaves the verdict in a host-keyed table
-/// ([`tls::ocsp::record_stapled`]) and this reads it back. A resumed session
-/// skips certificate verification, so a host with no entry keeps the previous
-/// full handshake's line when there is one and otherwise reports "not
-/// checked" rather than guessing. A `Revoked` staple hard-fails the handshake
-/// before this function runs.
-fn cert_info_from_completed_handshake(conn: &ClientConnection, host: &str) -> Option<tls::CertInfo> {
-    let chain = conn.peer_certificates()?;
-    let cert_der = chain.first()?;
-    let tls_version = protocol_version_label(conn.protocol_version());
-    let ct_verdict = tls::ct::evaluate_ct(cert_der.as_ref(), chain.get(1).map(AsRef::as_ref));
-    let stapled = tls::ocsp::stapled_verdict(host);
-    let mut info = tls::CertInfo::from_peer_cert(
-        cert_der.as_ref(),
-        &tls_version,
-        stapled.unwrap_or(tls::ocsp::OcspVerdict::Unknown),
-        ct_verdict,
-    );
-    if stapled.is_none() {
-        info.revocation_status = String::from("Not checked (no certificate verification in this session)");
-    }
-    info.local_root = tls::os_roots::local_root_name(chain).unwrap_or_default();
-    // COMPAT-TRUST-NUC: a chain issued by the national CA that got through only because the user
-    // consented for this host and Certificate Transparency vouched for it.
-    if tls::nuc::chain_names_root(chain) && tls::nuc::has_consent(host) {
-        info.gov_ca_scts = Some(ct_verdict.operators());
-    }
-    Some(info)
-}
-
-/// Render a negotiated [`rustls::ProtocolVersion`] for `CertInfo::tls_version`
-/// (e.g. `"TLS 1.3"`). Falls back to `"TLS"` when the handshake hasn't
-/// settled on a version yet — unreachable after a successful `complete_io`,
-/// kept only so this stays a total function.
+/// Render a negotiated protocol version for `CertInfo::tls_version`
+/// (e.g. `"TLS 1.3"`). Kept for the unit tests below — production TLS info
+/// now comes from `tls::boring::cert_info` (BUG-1826).
+#[cfg(test)]
 fn protocol_version_label(version: Option<rustls::ProtocolVersion>) -> String {
     match version {
         Some(rustls::ProtocolVersion::SSLv2) => "SSL 2.0".to_owned(),
@@ -1693,38 +1648,9 @@ fn protocol_version_label(version: Option<rustls::ProtocolVersion>) -> String {
 }
 
 
-/// TLS-конфиг профиля с ALPN, урезанным до `http/1.1`.
-///
-/// Отдельный кэш, а не правка `alpn_protocols` на месте: `ClientConfig` живёт
-/// за `Arc` и разделяется всеми соединениями профиля — мутировать его ради
-/// одного запроса значило бы переключить на H1 весь браузер.
-pub(crate) fn tls_config_h1_for_profile(profile: tls::TlsProfile) -> Arc<rustls::ClientConfig> {
-    use std::collections::HashMap;
-    use std::sync::OnceLock;
-
-    static CONFIGS: OnceLock<HashMap<tls::TlsProfile, Arc<rustls::ClientConfig>>> = OnceLock::new();
-
-    let configs = CONFIGS.get_or_init(|| {
-        let root_store = tls::trusted_root_store();
-
-        let mut map = HashMap::new();
-        for prof in &[tls::TlsProfile::Standard, tls::TlsProfile::Strict, tls::TlsProfile::Tor] {
-            let mut cfg = tls::build_client_config(*prof, root_store.clone());
-            cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
-            map.insert(*prof, Arc::new(cfg));
-        }
-        map
-    });
-
-    configs.get(&profile).cloned().unwrap_or_else(|| {
-        let mut cfg = tls::build_client_config(profile, tls::trusted_root_store());
-        cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
-        Arc::new(cfg)
-    })
-}
-
 /// Получить TLS конфиг для указанного профиля. Конфиги кэшируются
 /// отдельно для каждого профиля.
+#[cfg(test)]
 pub(crate) fn tls_config_for_profile(profile: tls::TlsProfile) -> Arc<rustls::ClientConfig> {
     use std::sync::OnceLock;
     use std::collections::HashMap;
@@ -2122,21 +2048,13 @@ fn fetch_single(
                     _ => return Err(Error::Network("unexpected tunnel stream type".to_owned())),
                 };
 
-                let server_name = ServerName::try_from(host.to_owned())
-                    .map_err(|e| net_failure(NetErrorCode::InvalidUrl, format!("invalid hostname '{host}': {e}")))?;
+                // BUG-1826: BoringSSL transport, как и в `connect_inner`.
+                let stream = tls::boring::connect(host, tcp, tls_profile, false)?;
+                let alpn = tls::boring::negotiated_alpn(&stream);
+                let is_h2 = check_negotiated_alpn(alpn.as_deref())?;
+                let cert_info = tls::boring::cert_info(&stream, host);
 
-                let tls_config = tls_config_for_profile(tls_profile);
-                let mut tls_conn = ClientConnection::new(tls_config, server_name)
-                    .map_err(|e| net_failure(NetErrorCode::SslProtocolError, format!("TLS handshake: {e}")))?;
-
-                let mut tcp_copy = tcp;
-                tls_conn.complete_io(&mut tcp_copy)
-                    .map_err(|e| handshake_io_error("TLS handshake over tunnel", e))?;
-
-                let is_h2 = check_negotiated_alpn(tls_conn.alpn_protocol())?;
-                let cert_info = cert_info_from_completed_handshake(&tls_conn, host);
-
-                conn = Connection::new(RawStream::Tls(Box::new(rustls::StreamOwned::new(tls_conn, tcp_copy))));
+                conn = Connection::new(RawStream::Tls(Box::new(stream)));
                 conn.is_h2 = is_h2;
                 conn.cert_info = cert_info;
             }

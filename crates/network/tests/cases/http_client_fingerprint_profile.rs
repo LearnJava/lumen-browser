@@ -75,16 +75,27 @@ mod tests {
     // ── 9C.1 Chrome HTTP/1.1 header order ────────────────────────────────
 
     #[test]
-    fn chrome_headers_start_with_host_connection_cache_control() {
-        let h = build_request_headers("example.com", "gzip, deflate, br", "", HttpProfile::Chrome);
-        // Chrome order: Host, Connection, Cache-Control, Sec-CH-UA x3, User-Agent, Accept, ...
+    fn chrome_headers_match_measured_chrome_157_order() {
+        // Порядок измерен tls.peet.ws/api/all на Chrome 157 (BUG-1826):
+        // Host, Connection, Sec-CH-UA x3, Upgrade-Insecure-Requests, User-Agent,
+        // Accept, Sec-Fetch-*, Accept-Encoding, Accept-Language. Cache-Control
+        // на обычной навигации Chrome не шлёт (только на reload).
+        let h = build_request_headers("example.com", "gzip, deflate, br, zstd", "", HttpProfile::Chrome);
         let lines: Vec<&str> = h.lines().collect();
         assert!(lines[0].starts_with("Host:"), "Host must be first: {:?}", lines[0]);
         assert!(lines[1].starts_with("Connection:"), "Connection must be second: {:?}", lines[1]);
-        assert!(lines[2].starts_with("Cache-Control:"), "Cache-Control must be third: {:?}", lines[2]);
-        assert!(lines[3].starts_with("Sec-CH-UA:"), "Sec-CH-UA must be fourth: {:?}", lines[3]);
-        assert!(lines[6].starts_with("User-Agent:"), "User-Agent must be seventh: {:?}", lines[6]);
-        assert!(lines[7].starts_with("Accept:"), "Accept must be eighth: {:?}", lines[7]);
+        assert!(lines[2].starts_with("Sec-CH-UA:"), "Sec-CH-UA must be third: {:?}", lines[2]);
+        assert!(lines[5].starts_with("Upgrade-Insecure-Requests: 1"), "UIR must follow Client Hints: {:?}", lines[5]);
+        assert!(lines[6].starts_with("User-Agent:"), "User-Agent must follow UIR: {:?}", lines[6]);
+        assert!(lines[7].starts_with("Accept:"), "Accept must follow User-Agent: {:?}", lines[7]);
+        assert!(lines[8].starts_with("Sec-Fetch-Site:"), "Sec-Fetch-* follow Accept: {:?}", lines[8]);
+        assert!(lines[9].starts_with("Sec-Fetch-Mode:"), "{:?}", lines[9]);
+        assert!(lines[10].starts_with("Sec-Fetch-User: ?1"), "Chrome nav sends Sec-Fetch-User: {:?}", lines[10]);
+        assert!(lines[11].starts_with("Sec-Fetch-Dest:"), "{:?}", lines[11]);
+        assert!(lines[12].starts_with("Accept-Encoding:"), "Accept-Encoding after Sec-Fetch-*: {:?}", lines[12]);
+        assert!(lines[13].starts_with("Accept-Language:"), "Accept-Language before Priority: {:?}", lines[13]);
+        assert!(lines[14].starts_with("Priority: u=0, i"), "Chrome nav sends RFC 9218 Priority: {:?}", lines.get(14));
+        assert!(!h.contains("Cache-Control:"), "Chrome sends no Cache-Control on a plain navigation");
     }
 
     #[test]
@@ -96,12 +107,15 @@ mod tests {
     }
 
     #[test]
-    fn chrome_headers_sec_fetch_at_end_of_fingerprint_block() {
-        let h = build_request_headers("example.com", "", "", HttpProfile::Chrome);
-        // Sec-Fetch-Site must come after Accept-Language
-        let al_pos = h.find("Accept-Language:").unwrap();
+    fn chrome_headers_sec_fetch_before_accept_encoding() {
+        // Chrome 157: Sec-Fetch-* идут между Accept и Accept-Encoding
+        // (BUG-1826, замер tls.peet.ws).
+        let h = build_request_headers("example.com", "gzip, deflate, br, zstd", "", HttpProfile::Chrome);
         let sf_pos = h.find("Sec-Fetch-Site:").unwrap();
-        assert!(sf_pos > al_pos, "Sec-Fetch-Site must follow Accept-Language");
+        let ae_pos = h.find("Accept-Encoding:").unwrap();
+        assert!(sf_pos < ae_pos, "Sec-Fetch-* must precede Accept-Encoding");
+        assert!(h.contains("Upgrade-Insecure-Requests: 1"), "Chrome sends UIR");
+        assert!(h.contains("Sec-Fetch-User: ?1"), "Chrome sends Sec-Fetch-User on navigation");
     }
 
     // ── 9C.4 Accept-Language default ──────────────────────────────────────

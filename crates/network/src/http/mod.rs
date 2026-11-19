@@ -85,7 +85,7 @@ pub const DEFAULT_ACCEPT_LANGUAGE: &str = "en-US,en;q=0.9";
 /// this module currently treats every request as a document navigation
 /// (`Sec-Fetch-Dest: document`).
 pub const CHROME_NAVIGATE_ACCEPT: &str =
-    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7";
+    "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7";
 
 /// Tor Browser User-Agent — pinned uniformly across **all** host platforms
 /// (Windows NT 10.0, no `Win64`/architecture token), based on the current

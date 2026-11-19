@@ -122,17 +122,10 @@ impl IdentityProfile {
             Self::ChromeUnbranded | Self::ChromeBrandGoogle => CHROME_USER_AGENT,
             Self::FirefoxWin => FIREFOX_WIN_USER_AGENT,
         };
-        let mut identity = Identity::from_user_agent(ua);
-        if self == Self::ChromeBrandGoogle
-            && let Some(data) = identity.ua_data.as_mut()
-        {
-            for (brand, _) in data.brands.iter_mut().chain(data.full_version_list.iter_mut()) {
-                if brand == "Chromium" {
-                    *brand = "Google Chrome".to_owned();
-                }
-            }
-        }
-        identity
+        // ChromeUnbranded уже несёт полный набор брендов реального Chrome
+        // (GREASE, "Google Chrome", "Chromium" — BUG-1826), поэтому
+        // ChromeBrandGoogle совпадает с ним по построению.
+        Identity::from_user_agent(ua)
     }
 }
 
@@ -218,14 +211,23 @@ const GREASE_VERSIONS: [&str; 3] = ["8", "99", "24"];
 /// plus one `Not?A_Brand` entry whose spelling, version and position are a
 /// function of the major. `grease_suffix` is appended to the GREASE version
 /// in the full-version list.
+/// GREASE-элемент Client Hints: бренд и версия — функции major'а
+/// (Chromium `GenerateBrandVersionList`).
+fn grease_pair(major: u32, grease_suffix: &str) -> (String, String) {
+    let seed = major as usize;
+    (
+        format!(
+            "Not{}A{}Brand",
+            GREASE_CHARS[seed % GREASE_CHARS.len()],
+            GREASE_CHARS[(seed + 1) % GREASE_CHARS.len()]
+        ),
+        format!("{}{grease_suffix}", GREASE_VERSIONS[seed % GREASE_VERSIONS.len()]),
+    )
+}
+
 fn grease_list(major: u32, real: &[(&str, String)], grease_suffix: &str) -> Vec<(String, String)> {
     let seed = major as usize;
-    let grease_brand = format!(
-        "Not{}A{}Brand",
-        GREASE_CHARS[seed % GREASE_CHARS.len()],
-        GREASE_CHARS[(seed + 1) % GREASE_CHARS.len()]
-    );
-    let grease_version = format!("{}{grease_suffix}", GREASE_VERSIONS[seed % GREASE_VERSIONS.len()]);
+    let (grease_brand, grease_version) = grease_pair(major, grease_suffix);
     let mut out: Vec<(String, String)> =
         real.iter().map(|(b, v)| ((*b).to_string(), v.clone())).collect();
     out.insert(seed % (real.len() + 1), (grease_brand, grease_version));
@@ -291,20 +293,47 @@ impl Identity {
         };
         let app_version = ua.strip_prefix("Mozilla/").unwrap_or(ua).to_string();
         let ua_data = major.map(|m| {
-            let mut real = vec![("Chromium", m.to_string())];
-            let mut real_full = vec![("Chromium", format!("{m}.0.0.0"))];
-            if family == UaFamily::Edge {
-                real.push(("Microsoft Edge", m.to_string()));
-                real_full.push(("Microsoft Edge", format!("{m}.0.0.0")));
-            }
-            // Brands always follow the UA (ADR-034): the token brings its brand.
-            if let Some(v) = lumen_token_version(ua) {
-                real.push(("Lumen", v.split('.').next().unwrap_or(&v).to_string()));
-                real_full.push(("Lumen", v));
-            }
+            // Chrome: реальный порядок брендов Chrome 157, измеренный
+            // tls.peet.ws (BUG-1826): GREASE первым, затем "Google Chrome",
+            // затем "Chromium". Формула grease_list не воспроизводит
+            // позицию 0 для major=157, поэтому список собирается напрямую;
+            // Edge идёт общим путём (его порядок брендов не измерен).
+            let (brands, full_version_list) = if family == UaFamily::Chrome {
+                let lumen = lumen_token_version(ua);
+                let lumen_major = lumen.as_deref().map(|v| v.split('.').next().unwrap_or(v).to_string());
+                let mut b = vec![
+                    grease_pair(m, ""),
+                    ("Google Chrome".to_string(), m.to_string()),
+                    ("Chromium".to_string(), m.to_string()),
+                ];
+                let mut f = vec![
+                    grease_pair(m, ".0.0.0"),
+                    ("Google Chrome".to_string(), format!("{m}.0.0.0")),
+                    ("Chromium".to_string(), format!("{m}.0.0.0")),
+                ];
+                // Brands always follow the UA (ADR-034): the token brings its brand.
+                if let (Some(v), Some(vm)) = (lumen, lumen_major) {
+                    b.push(("Lumen".to_string(), vm));
+                    f.push(("Lumen".to_string(), v));
+                }
+                (b, f)
+            } else {
+                let mut real = vec![("Chromium", m.to_string())];
+                let mut real_full = vec![("Chromium", format!("{m}.0.0.0"))];
+                if family == UaFamily::Edge {
+                    real.push(("Microsoft Edge", m.to_string()));
+                    real_full.push(("Microsoft Edge", format!("{m}.0.0.0")));
+                }
+                // Brands always follow the UA (ADR-034): the token brings its brand.
+                if let Some(v) = lumen_token_version(ua) {
+                    real.push(("Lumen", v.split('.').next().unwrap_or(&v).to_string()));
+                    real_full.push(("Lumen", v));
+                }
+                (grease_list(m, &real, ""), grease_list(m, &real_full, ".0.0.0"))
+            };
             UaData {
-                brands: grease_list(m, &real, ""),
-                full_version_list: grease_list(m, &real_full, ".0.0.0"),
+                brands,
+                full_version_list,
                 platform: ch_platform.to_string(),
                 platform_version: if ch_platform == "Windows" { "10.0.0" } else { "0.0.0" }.to_string(),
                 full_version: format!("{m}.0.0.0"),
@@ -352,9 +381,10 @@ mod tests {
         assert!(id.app_version.contains(&format!("Chrome/{CHROME_MAJOR}")));
         assert_eq!(id.platform, "Win32");
         let d = id.ua_data.unwrap();
-        assert!(d.brands.contains(&("Chromium".into(), CHROME_MAJOR.into())));
+        assert!(d.brands.iter().any(|(b,v)| b=="Chromium" && v==CHROME_MAJOR));
+        assert!(d.brands.iter().any(|(b,v)| b=="Google Chrome" && v==CHROME_MAJOR));
         assert_eq!(d.full_version, format!("{CHROME_MAJOR}.0.0.0"));
-        assert_eq!(d.brands.len(), 2);
+        assert_eq!(d.brands.len(), 3);
     }
 
     #[test]
@@ -425,9 +455,10 @@ mod tests {
         let lumen = Identity::from_user_agent(CHROME_LUMEN_USER_AGENT);
         let major = env!("CARGO_PKG_VERSION").split('.').next().unwrap();
         let d = lumen.ua_data.as_ref().unwrap();
-        assert!(d.brands.contains(&("Chromium".into(), CHROME_MAJOR.into())));
+        assert!(d.brands.iter().any(|(b,v)| b=="Chromium" && v==CHROME_MAJOR));
+        assert!(d.brands.iter().any(|(b,v)| b=="Google Chrome" && v==CHROME_MAJOR));
         assert!(d.brands.contains(&("Lumen".into(), major.into())));
-        assert_eq!(d.brands.len(), 3);
+        assert_eq!(d.brands.len(), 4);
         assert!(d.full_version_list.contains(&("Lumen".into(), env!("CARGO_PKG_VERSION").into())));
         assert_eq!(lumen.family, UaFamily::Chrome);
         assert!(lumen.user_agent.ends_with(&format!("Lumen/{}", env!("CARGO_PKG_VERSION"))));

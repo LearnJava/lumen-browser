@@ -17,6 +17,15 @@ lumen-core = { workspace = true }
 lumen-ipc = { workspace = true }
 # Exception #3 (§5): TLS / X.509 / crypto. Своя реализация — security antipattern.
 rustls = { version = "0.23", features = ["std"] }
+# Permanent (§5): BoringSSL-байндинги для TCP-TLS транспорта (BUG-1826).
+# Trait-anchor — `tls::boring`, заменяет rustls ClientHello на Chrome-grade
+# (GREASE, permuted extensions, X25519MLKEM768): Cloudflare edge эскалирует
+# rustls-фингерпринт в managed challenge, который страница не завершает.
+# Верификация сертификатов остаётся на rustls/webpki (`LumenVerifier`) —
+# boring здесь только транспорт; h3/QUIC и DoT остаются на rustls.
+# Graduation criterion: не планируется — это и есть TLS-стек Chrome.
+# Требует cmake + nasm + MSVC на машине сборки (boring-sys собирает BoringSSL).
+boring = "5.5.1"
 webpki-roots = "0.26"
 # Exception #3 (§5): X.509 PEM decode. Partner-crate to rustls (same org) for
 # parsing the extra-CA PEM file (BUG-785) — hand-rolling base64/PEM parsing of
@@ -26,6 +35,10 @@ rustls-pemfile = "2"
 # Trait-anchor — `ContentDecoder` в lumen-core::ext. Graduation criterion: edge-case
 # в формате (RFC 7932 стабилен, реалистично — никогда). Pure-Rust, без unsafe-в-логике.
 brotli-decompressor = "5"
+# Provisional accelerator (§5): zstd-декодер для HTTP `Content-Encoding: zstd` —
+# Chrome 157 рекламирует его в Accept-Encoding (BUG-1826). Pure-Rust ruzstd,
+# только декомпрессия. Trait-anchor `ContentDecoder` в lumen-core::ext.
+ruzstd = "0.9"
 # Exception #3 (§5): crypto. ECDSA P-256 (COSE ES256, alg -7) для WebAuthn passkey
 # подписей в VirtualAuthenticator (trait-anchor: lumen-core::ext::CredentialProvider).
 # Pure-Rust RustCrypto, детерминированные RFC 6979 подписи (RNG не нужен для sign).

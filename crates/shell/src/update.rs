@@ -270,12 +270,13 @@ pub fn check_for_update_now(
 /// (GitHub serves release assets compressed on some mirrors).
 #[must_use]
 pub fn update_http_client() -> HttpClient {
-    use lumen_network::{BrotliContentDecoder, DeflateContentDecoder, GzipContentDecoder};
+    use lumen_network::{BrotliContentDecoder, DeflateContentDecoder, GzipContentDecoder, ZstdContentDecoder};
     crate::config::global().apply_http(
         HttpClient::new()
-            .with_content_decoder(Arc::new(BrotliContentDecoder::new()))
             .with_content_decoder(Arc::new(GzipContentDecoder::new()))
-            .with_content_decoder(Arc::new(DeflateContentDecoder::new())),
+            .with_content_decoder(Arc::new(DeflateContentDecoder::new()))
+            .with_content_decoder(Arc::new(BrotliContentDecoder::new()))
+            .with_content_decoder(Arc::new(ZstdContentDecoder::new())),
     )
 }
 

@@ -180,7 +180,7 @@ mod tests {
                 .eval(
                     r#"
                     var d = navigator.userAgentData;
-                    d.brands.length === 2 &&
+                    d.brands.length === 3 &&
                     d.mobile === false &&
                     d.platform === "Windows"
                     "#,

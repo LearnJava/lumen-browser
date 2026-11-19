@@ -380,6 +380,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "boring"
+version = "5.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a03220c5209cb3feb5cb0516b5fd9d121fc3a6d1b9ac07f13c2a9ca5d9df4e4"
+dependencies = [
+ "bitflags 2.11.1",
+ "boring-sys",
+ "foreign-types",
+ "libc",
+ "openssl-macros",
+]
+
+[[package]]
+name = "boring-sys"
+version = "5.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34694a68abe0d6600d51f0790e463cff05c18e8274992bdbd0839bbb5b86ec55"
+dependencies = [
+ "bindgen",
+ "cmake",
+ "fs_extra",
+ "fslock",
+]
+
+[[package]]
 name = "brotli-decompressor"
 version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2643,6 +2668,7 @@ version = "0.5.0"
 dependencies = [
  "aes",
  "aes-gcm",
+ "boring",
  "brotli-decompressor",
  "ed25519-dalek",
  "flate2",
@@ -2659,6 +2685,7 @@ dependencies = [
  "rusqlite",
  "rustls",
  "rustls-pemfile",
+ "ruzstd",
  "sha2",
  "webpki-roots 0.26.11",
  "windows-sys 0.52.0",
@@ -3370,6 +3397,17 @@ name = "opaque-debug"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
+
+[[package]]
+name = "openssl-macros"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a948666b637a0f465e8564c73e89d4dde00d72d4d473cc972f390fc3dcee7d9c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "orbclient"
@@ -4144,6 +4182,15 @@ dependencies = [
  "unicode-ccc",
  "unicode-properties",
  "unicode-script",
+]
+
+[[package]]
+name = "ruzstd"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69e4ce4a039f42bf25920b95667e4d789e98749ab11bbb8d2c2936f788421bb5"
+dependencies = [
+ "twox-hash",
 ]
 
 [[package]]
