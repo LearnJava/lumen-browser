@@ -1,5 +1,16 @@
 {
   "format": 1,
-  "revision": 0,
-  "entries": []
+  "revision": 1,
+  "entries": [
+    {
+      "id": "fiverr-com-identity-unbranded",
+      "root_cause": "gate-antibot-ua-token",
+      "matches": ["fiverr.com"],
+      "site_class": "general",
+      "action": { "kind": "identity", "profile": "chrome_unbranded" },
+      "bug": "BUG-1832",
+      "review_by": "2027-02-19",
+      "tests": ["crates/update-manifest/src/compat_pack/tests.rs"]
+    }
+  ]
 }

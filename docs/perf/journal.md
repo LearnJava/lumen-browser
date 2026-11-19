@@ -1347,3 +1347,35 @@ BUG-935/1778/1800 → `WONTFIX (Phase 3+)`. Общий усилитель обо
 
 
 
+
+## 2026-11-19 — WS-C fingerprint-unification: дефолт `chrome_lumen` + запись fiverr.com (BUG-1832) — Windows 10, dev-release ветки fingerprint-identity-switch, маршрут home-direct
+
+Перевод дефолтной идентичности на Chrome-грамматику + `Lumen/x.y` по санкции ADR-034 §1
+(амендмент 2026-11-19): `IdentityVariant::default()`/`LUMEN_TOKEN` → `ChromeLumen`,
+первая запись compat-пакета `fiverr-com-identity-unbranded` → `chrome_unbranded`.
+
+**Wire echo** (`header_echo_server.py` + `--dump-source`, свежий dev-release):
+`chrome_lumen` — UA `… Chrome/157.0.0.0 Safari/537.36 Lumen/0.5.0`,
+`Sec-CH-UA` с `"Lumen";v="0"`; `chrome_unbranded` — тот же блок без токена и бренда,
+остальные заголовки и порядок байт-в-байт те же. Артефакты:
+`runs/2026-11-19-ws-c-headers-chrome_lumen.json`, `…-chrome_unbranded.json`.
+
+**JS-паритет** (живое окно, MCP eval): `navigator.userAgent`, `userAgentData.brands`
+(бренд `Lumen`), `WorkerNavigator.userAgent` и `iframe.contentWindow.eval('navigator.userAgent')`
+— одна и та же строка с токеном; workers/iframes согласованы.
+
+**Живые проверки:** claude.ai (`--maximized`, свежий профиль) — челлендж пройден,
+`document.title` = «Sign in or create an account | Claude.ai» на всех 8 опросах,
+engine thread свободен (дефект BUG-1826 не воспроизвёлся с включённым токеном);
+fiverr.com — главная маркетплейса без стены PerimeterX 403 (запись пака работает
+на живом сайте). Логи: `runs/2026-11-19-ws-c-claude-ai.log`, `…-ws-c-fiverr.log`.
+
+**A/B `captcha_stand.py`, корпус-captcha.tsv, 20 страниц, по одному прогону на плечо:**
+`identity=chrome_lumen` (дефолт) — GPR 9/20 = 0,45; `identity=chrome_unbranded` —
+GPR 10/20 = 0,50. Дельта — одна страница (datadome-leboncoin). Контрольный перепрогон
+расходящихся страниц (`--only datadome-leboncoin,imperva-incapsula,turnstile-2captcha`)
+показал двусторонний шум: дефолт 1/3, без токена 0/3 — те же страницы флапают
+в обе стороны (сетевые отказы/пробник), привязки к токену нет. Вердикт: деградации
+дефолтного плеча сверх шума не зафиксировано; порог «не хуже 0,5 %» по существу
+выполнен (отличие — артефакт n=20). Артефакты:
+`runs/2026-11-19-captcha-lumen-chrome_lumen.json`, `…-chrome_unbranded.json`.

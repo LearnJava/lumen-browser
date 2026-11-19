@@ -290,6 +290,20 @@ fn embedded_base_copy_is_valid() {
     let raw = include_str!("../../assets/compat_pack.json");
     let base = CompatPack::parse_unsigned(raw.as_bytes(), &TestPsl).expect("base copy must validate");
     assert_eq!(CompatPack::base(&TestPsl), base);
+    // BUG-1832: the fiverr.com PerimeterX record switches the site to the
+    // tokenless `chrome_unbranded` identity; every other host keeps the
+    // process default (`None` — no record).
+    let policy = CompatPolicy::default();
+    for host in ["fiverr.com", "www.fiverr.com"] {
+        assert_eq!(
+            base.identity_for_host(host, &policy),
+            Some(lumen_core::IdentityProfile::ChromeUnbranded),
+            "{host}"
+        );
+    }
+    for host in ["example.com", "fiverr.com.evil.org", "notfiverr.com"] {
+        assert_eq!(base.identity_for_host(host, &policy), None, "{host}");
+    }
 }
 
 #[test]

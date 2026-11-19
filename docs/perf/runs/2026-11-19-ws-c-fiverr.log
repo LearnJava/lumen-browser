@@ -1,0 +1,12 @@
+WS-C live check: `lumen.exe --maximized --mcp-live-port <N> https://fiverr.com`
+(binary: target/dev-release/lumen.exe, branch fingerprint-identity-switch, 2026-11-19;
+compat pack revision 1 активен — запись `fiverr-com-identity-unbranded` → chrome_unbranded)
+Probe: MCP `eval` → `document.title` + `document.body.innerText.slice(0,300)`, settle 25 s, шаг 15 с.
+
+Все опросы success=true:
+
+  title: "Fiverr | Freelance services marketplace | Find top global talent"
+  body : навигация маркетплейса (Become a Seller / Sign in / Join / Trending …)
+
+Стены PerimeterX 403 нет — сайт отдаёт обычную главную. Это live-подтверждение
+записи BUG-1832: для fiverr.com токен `Lumen/x.y` снят (chrome_unbranded).

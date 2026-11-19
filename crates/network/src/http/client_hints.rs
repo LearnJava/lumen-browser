@@ -127,7 +127,9 @@ mod tests {
         assert_eq!(hints.len(), 3);
         let ua = hints.iter().find(|(k, _)| k == "Sec-CH-UA").unwrap();
         assert!(ua.1.contains(&format!("\"Chromium\";v=\"{}\"", lumen_core::CHROME_MAJOR)));
-        assert!(!ua.1.contains("Lumen"));
+        // The default `chrome_lumen` identity (ADR-034 amendment 2026-11-19):
+        // the brand list follows the UA, which carries the Lumen token.
+        assert!(ua.1.contains("\"Lumen\";v=\""));
         assert!(hints.iter().any(|(k, v)| k == "Sec-CH-UA-Mobile" && v == "?0"));
         assert!(hints.iter().any(|(k, v)| k == "Sec-CH-UA-Platform" && v == "\"Windows\""));
     }

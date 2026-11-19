@@ -7,6 +7,11 @@ string, Client Hints and the `Accept-Language` / time-zone defaults of the Stand
 red lines (no CAPTCHA solving, no IP rotation, no anti-fraud circumvention) are unchanged and binding
 here too.
 
+**Amendment 2026-11-19 ([BUG-1832](../../bugs/BUG-1832-FIXED.md)):** the §1 «Default now» is
+superseded — the A/B matrix of 2026-10-15 met the ≤ 0.5 % threshold, so the process default is now
+Chrome grammar + trailing `Lumen/x.y` (`chrome_lumen`); `chrome_unbranded` remains as the knob and as
+the per-site record for fiverr.com (first real compat-pack entry).
+
 ## Date
 
 2026-10-12

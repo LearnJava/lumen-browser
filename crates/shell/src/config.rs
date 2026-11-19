@@ -24,12 +24,14 @@
 //! languages           = "en-US,en"      # comma-separated; first entry = navigator.language; also the Accept-Language list. Absent = OS language list (Anonymous and Tor: en-US,en)
 //! doh_url             = "https://cloudflare-dns.com/dns-query"  # DNS over HTTPS resolver (optional)
 //! http3               = true            # HTTP/3 (QUIC) via Alt-Svc discovery (default: false)
-//! identity            = "chrome_unbranded"  # chrome_unbranded|chrome_lumen (env LUMEN_IDENTITY wins)
+//! identity            = "chrome_lumen"   # chrome_lumen|chrome_unbranded (env LUMEN_IDENTITY wins; default chrome_lumen)
 //! ```
 //!
-//! `identity = "chrome_lumen"` appends the `Lumen/x.y` token to the User-Agent of
-//! the `chrome`/`strict` profiles in every layer (HTTP, `navigator.*`, Client
-//! Hints brand) and changes nothing else — the A/B knob of ADR-034 §1.
+//! `identity = "chrome_lumen"` (the default) appends the `Lumen/x.y` token to
+//! the User-Agent of the `chrome`/`strict` profiles in every layer (HTTP,
+//! `navigator.*`, Client Hints brand) and changes nothing else;
+//! `chrome_unbranded` removes both the token and the brand — the A/B knob of
+//! ADR-034 §1.
 //!
 //! Applied at startup: [`FingerprintProfile::install_navigator`] pushes the
 //! navigator/screen/timezone values into the process-global JS profile, and
@@ -973,17 +975,17 @@ mod tests {
 
     #[test]
     fn identity_key_parses_and_env_wins() {
-        assert_eq!(FingerprintProfile::default().identity, IdentityVariant::ChromeUnbranded);
-        let mut p = parse("identity = \"chrome_lumen\"\n");
-        assert_eq!(p.identity, IdentityVariant::ChromeLumen);
+        assert_eq!(FingerprintProfile::default().identity, IdentityVariant::ChromeLumen);
+        let mut p = parse("identity = \"chrome_unbranded\"\n");
+        assert_eq!(p.identity, IdentityVariant::ChromeUnbranded);
         // Unknown key values and unknown / empty env values leave it alone.
-        assert_eq!(parse("identity = \"firefox_win\"\n").identity, IdentityVariant::ChromeUnbranded);
+        assert_eq!(parse("identity = \"firefox_win\"\n").identity, IdentityVariant::ChromeLumen);
         p.apply_identity_env(Some(""));
         p.apply_identity_env(Some("bogus"));
         p.apply_identity_env(None);
-        assert_eq!(p.identity, IdentityVariant::ChromeLumen);
-        p.apply_identity_env(Some("chrome_unbranded"));
         assert_eq!(p.identity, IdentityVariant::ChromeUnbranded);
+        p.apply_identity_env(Some("chrome_lumen"));
+        assert_eq!(p.identity, IdentityVariant::ChromeLumen);
     }
 
     #[test]

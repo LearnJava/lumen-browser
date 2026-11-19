@@ -1,6 +1,7 @@
 # Plan: fingerprint unification — one JS native registry, one Chrome 157 manifest, honest identity
 
-**Status:** proposed, not started · **Date:** 2026-11-19
+**Status:** C done 2026-11-19 ([BUG-1832](../../bugs/BUG-1832-FIXED.md), branch
+`fingerprint-identity-switch`); A and B not started · **Date:** 2026-11-19
 **Owner:** next session (role/slot assigned by the manager; claim tasks before coding)
 **Evidence:** [ADR-034 §1](../decisions/ADR-034-site-compatibility-strategy.md), A/B matrix
 [2026-10-15](../perf/runs/2026-10-15-ab-matrix.md) (533 sites, token refusals 0.19 %, no must-work),

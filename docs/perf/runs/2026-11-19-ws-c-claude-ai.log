@@ -1,0 +1,11 @@
+WS-C live check: `lumen.exe --maximized --mcp-live-port <N> https://claude.ai`
+(binary: target/dev-release/lumen.exe, branch fingerprint-identity-switch, 2026-11-19)
+Probe: MCP `eval` → `document.title`, settle 20 s, then 8 опросов с шагом 15 с.
+
+Every poll returned success=true (движковый поток свободен — eval отвечает сразу,
+никакого `engine thread busy` / сталла >135 c из BUG-1826):
+
+  "Sign in or create an account | Claude.ai"   ×8
+
+Челлендж Cloudflare пройден, страница логина загрузилась. Дефект BUG-1826
+не воспроизвёлся и с включённым по умолчанию токеном `Lumen/x.y` (chrome_lumen).

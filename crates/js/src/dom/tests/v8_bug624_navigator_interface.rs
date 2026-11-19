@@ -110,7 +110,9 @@ fn java_enabled_is_an_operation_returning_false() {
 #[test]
 fn user_agent_override_renames_every_identity_field() {
     let rt = v8_runtime_with_dom(make_doc());
-    assert!(is_true(&rt, "navigator.userAgentData.brands.length === 3 && navigator.vendor === 'Google Inc.'"));
+    // BUG-1832: the default `chrome_lumen` identity adds the `Lumen` brand —
+    // 4 brands, and the token/brand pair stays consistent (ADR-034).
+    assert!(is_true(&rt, "navigator.userAgentData.brands.length === 4 && navigator.userAgentData.brands.some(function(b) { return b.brand === 'Lumen'; }) && navigator.vendor === 'Google Inc.'"));
     rt.eval(&crate::v8_runtime::user_agent_override_script(
         "Mozilla/5.0 (Windows NT 10.0; rv:128.0) Gecko/20100101 Firefox/128.0",
     ))
