@@ -227,43 +227,96 @@ function _idb_string_list(names) {
     return list;
 }
 
+// --- WebIDL shape helpers (IDB-EVENTS-S4) -------------------------------------
+// Prototype accessors carry a brand check: reading an attribute off the
+// prototype itself (or any wrong receiver) is a TypeError, exactly as the
+// WebIDL binding requires; operations refuse wrong receivers the same way.
+
+function _idl_check(self, C) {
+    if (!(self instanceof C)) throw new TypeError('Illegal invocation');
+}
+// operation: WebIDL `.length`/`.name`, enumerable on the prototype
+function _idl_op(proto, name, fn, length) {
+    Object.defineProperty(fn, 'name', { value: name, configurable: true });
+    if (fn.length !== length) Object.defineProperty(fn, 'length', { value: length, configurable: true });
+    proto[name] = fn;
+}
+// the accessor function names WebIDL requires (`get x` / `set x`) — set
+// explicitly: inference fires only on syntactic assignments, not here
+function _idl_named(fn, name) {
+    Object.defineProperty(fn, 'name', { value: name, configurable: true });
+    return fn;
+}
+// readonly attribute: getter over the hidden `field`
+function _idl_get(proto, C, name, field) {
+    Object.defineProperty(proto, name, {
+        get: _idl_named(function() { _idl_check(this, C); return this[field]; }, 'get ' + name),
+        enumerable: true, configurable: true
+    });
+}
+// readonly attribute with a computed getter
+function _idl_get_fn(proto, C, name, fn) {
+    Object.defineProperty(proto, name, {
+        get: _idl_named(function() { _idl_check(this, C); return fn.call(this); }, 'get ' + name),
+        enumerable: true, configurable: true
+    });
+}
+// read-write attribute (event handlers, `name`)
+function _idl_rw(proto, C, name) {
+    var field = '_' + name;
+    Object.defineProperty(proto, name, {
+        get: _idl_named(function() { _idl_check(this, C); return this[field]; }, 'get ' + name),
+        set: _idl_named(function(v) { _idl_check(this, C); this[field] = v; }, 'set ' + name),
+        enumerable: true, configurable: true
+    });
+}
+
 // --- IDBKeyRange (Indexed DB §3.1.5) -----------------------------------------
 
-function IDBKeyRange(lower, upper, lowerOpen, upperOpen) {
-    this.lower = lower;
-    this.upper = upper;
-    this.lowerOpen = !!lowerOpen;
-    this.upperOpen = !!upperOpen;
+function IDBKeyRange() { throw new TypeError('Illegal constructor'); }
+function _idb_new_range(lower, upper, lowerOpen, upperOpen) {
+    var self = Object.create(IDBKeyRange.prototype);
+    self._lower = lower;
+    self._upper = upper;
+    self._lowerOpen = !!lowerOpen;
+    self._upperOpen = !!upperOpen;
+    return self;
 }
-IDBKeyRange.prototype.includes = function(key) {
+_idl_get(IDBKeyRange.prototype, IDBKeyRange, 'lower', '_lower');
+_idl_get(IDBKeyRange.prototype, IDBKeyRange, 'upper', '_upper');
+_idl_get(IDBKeyRange.prototype, IDBKeyRange, 'lowerOpen', '_lowerOpen');
+_idl_get(IDBKeyRange.prototype, IDBKeyRange, 'upperOpen', '_upperOpen');
+_idl_op(IDBKeyRange.prototype, 'includes', function(key) {
+    _idl_check(this, IDBKeyRange);
+    if (arguments.length === 0) throw new TypeError('key is required');
     if (!_idb_is_valid_key(key)) throw _idb_error('DataError', 'invalid key');
-    if (this.lower !== undefined) {
-        var c = _idb_cmp(key, this.lower);
-        if (c < 0 || (c === 0 && this.lowerOpen)) return false;
+    if (this._lower !== undefined) {
+        var c = _idb_cmp(key, this._lower);
+        if (c < 0 || (c === 0 && this._lowerOpen)) return false;
     }
-    if (this.upper !== undefined) {
-        var c2 = _idb_cmp(key, this.upper);
-        if (c2 > 0 || (c2 === 0 && this.upperOpen)) return false;
+    if (this._upper !== undefined) {
+        var c2 = _idb_cmp(key, this._upper);
+        if (c2 > 0 || (c2 === 0 && this._upperOpen)) return false;
     }
     return true;
-};
-IDBKeyRange.only = function(value) {
+}, 1);
+_idl_op(IDBKeyRange, 'only', function(value) {
     if (!_idb_is_valid_key(value)) throw _idb_error('DataError', 'invalid key');
-    return new IDBKeyRange(value, value, false, false);
-};
-IDBKeyRange.lowerBound = function(lower, open) {
+    return _idb_new_range(value, value, false, false);
+}, 1);
+_idl_op(IDBKeyRange, 'lowerBound', function(lower, open) {
     if (!_idb_is_valid_key(lower)) throw _idb_error('DataError', 'invalid key');
-    return new IDBKeyRange(lower, undefined, !!open, false);
-};
-IDBKeyRange.upperBound = function(upper, open) {
+    return _idb_new_range(lower, undefined, !!open, false);
+}, 1);
+_idl_op(IDBKeyRange, 'upperBound', function(upper, open) {
     if (!_idb_is_valid_key(upper)) throw _idb_error('DataError', 'invalid key');
-    return new IDBKeyRange(undefined, upper, false, !!open);
-};
-IDBKeyRange.bound = function(lower, upper, lowerOpen, upperOpen) {
+    return _idb_new_range(undefined, upper, false, !!open);
+}, 1);
+_idl_op(IDBKeyRange, 'bound', function(lower, upper, lowerOpen, upperOpen) {
     if (!_idb_is_valid_key(lower) || !_idb_is_valid_key(upper)) throw _idb_error('DataError', 'invalid key');
     if (_idb_cmp(lower, upper) > 0) throw _idb_error('DataError', 'lower bound greater than upper bound');
-    return new IDBKeyRange(lower, upper, !!lowerOpen, !!upperOpen);
-};
+    return _idb_new_range(lower, upper, !!lowerOpen, !!upperOpen);
+}, 2);
 
 // Coerces a query argument (key | IDBKeyRange | null) into an IDBKeyRange or null.
 function _idb_to_range(q) {
@@ -279,27 +332,49 @@ function _idb_to_range(q) {
 // rewrite): one listener store per object, the DOM add/remove semantics
 // (capture flag, once, handleEvent) come from the shared EventTarget shim,
 // which loads ahead of this one in every scope that runs it.
-function IDBRequest(source, txn) {
-    EventTarget.call(this);
-    this.result = undefined;
-    this.error = null;
-    this.source = source || null;
-    this.transaction = txn || null;
-    this.readyState = 'pending';
-    this.onsuccess = null;
-    this.onerror = null;
-    this._action = null;
+// IDB-EVENTS-S4: the attributes are prototype accessors over the hidden
+// `_`-fields — internal writes below target those fields directly.
+function IDBRequest() { throw new TypeError('Illegal constructor'); }
+function _idb_init_request(self, source, txn) {
+    EventTarget.call(self);
+    self._result = undefined;
+    self._error = null;
+    self._source = source || null;
+    self._transaction = txn || null;
+    self._readyState = 'pending';
+    self._onsuccess = null;
+    self._onerror = null;
+    self._action = null;
+}
+function _idb_new_request(source, txn) {
+    var self = Object.create(IDBRequest.prototype);
+    _idb_init_request(self, source, txn);
+    return self;
 }
 IDBRequest.prototype = Object.create(EventTarget.prototype);
-IDBRequest.prototype.constructor = IDBRequest;
+Object.defineProperty(IDBRequest.prototype, 'constructor',
+    { value: IDBRequest, writable: true, configurable: true });
+_idl_get(IDBRequest.prototype, IDBRequest, 'result', '_result');
+_idl_get(IDBRequest.prototype, IDBRequest, 'error', '_error');
+_idl_get(IDBRequest.prototype, IDBRequest, 'source', '_source');
+_idl_get(IDBRequest.prototype, IDBRequest, 'transaction', '_transaction');
+_idl_get(IDBRequest.prototype, IDBRequest, 'readyState', '_readyState');
+_idl_rw(IDBRequest.prototype, IDBRequest, 'onsuccess');
+_idl_rw(IDBRequest.prototype, IDBRequest, 'onerror');
 
-function IDBOpenDBRequest() {
-    IDBRequest.call(this, null, null);
-    this.onupgradeneeded = null;
-    this.onblocked = null;
+function IDBOpenDBRequest() { throw new TypeError('Illegal constructor'); }
+function _idb_new_open_request() {
+    var self = Object.create(IDBOpenDBRequest.prototype);
+    _idb_init_request(self, null, null);
+    self._onupgradeneeded = null;
+    self._onblocked = null;
+    return self;
 }
 IDBOpenDBRequest.prototype = Object.create(IDBRequest.prototype);
-IDBOpenDBRequest.prototype.constructor = IDBOpenDBRequest;
+Object.defineProperty(IDBOpenDBRequest.prototype, 'constructor',
+    { value: IDBOpenDBRequest, writable: true, configurable: true });
+_idl_rw(IDBOpenDBRequest.prototype, IDBOpenDBRequest, 'onupgradeneeded');
+_idl_rw(IDBOpenDBRequest.prototype, IDBOpenDBRequest, 'onblocked');
 
 // Fires `blocked` at an open/delete request whose database still has another
 // connection open (Indexed DB §3.3.1 step «fire blocked»). Delete carries
@@ -313,10 +388,17 @@ function _idb_fire_blocked(req, oldVersion, newVersion) {
 // Real `Event`s: only `error` bubbles and is cancelable (§3.5.6); `abort`
 // bubbles without being cancelable; every other type here neither bubbles nor
 // cancels. `isTrusted` is forced — this shim is the trusted source of its own
-// events. Extra fields (`oldVersion`, `newVersion`) stay plain properties
-// until IDB-EVENTS-S4 mints IDBVersionChangeEvent.
+// events. Version-bearing extras (oldVersion/newVersion — upgradeneeded,
+// blocked, versionchange, deleteDatabase success) mint a real
+// IDBVersionChangeEvent (IDB-EVENTS-S4).
 function _idb_make_event(type, target, extra) {
-    var ev = new Event(type, {
+    var ev;
+    if (extra && 'oldVersion' in extra) {
+        ev = new IDBVersionChangeEvent(type, extra);
+        ev.isTrusted = true;
+        return ev;
+    }
+    ev = new Event(type, {
         bubbles: type === 'error' || type === 'abort',
         cancelable: type === 'error'
     });
@@ -324,6 +406,23 @@ function _idb_make_event(type, target, extra) {
     if (extra) for (var k in extra) ev[k] = extra[k];
     return ev;
 }
+
+// Indexed DB §3.3.3. The `init` default keeps the constructor's WebIDL length
+// (1); a bare call without `new` is refused like every interface object.
+function IDBVersionChangeEvent(type, init = {}) {
+    if (new.target === undefined) throw new TypeError('Illegal constructor');
+    Event.call(this, type, init);
+    var old = Number(init.oldVersion);
+    if (!isFinite(old) || old < 0) old = 0;
+    this._oldVersion = Math.floor(old);
+    var nv = init.newVersion;
+    this._newVersion = (nv === undefined || nv === null) ? null : Number(nv);
+}
+IDBVersionChangeEvent.prototype = Object.create(Event.prototype);
+Object.defineProperty(IDBVersionChangeEvent.prototype, 'constructor',
+    { value: IDBVersionChangeEvent, writable: true, configurable: true });
+_idl_get(IDBVersionChangeEvent.prototype, IDBVersionChangeEvent, 'oldVersion', '_oldVersion');
+_idl_get(IDBVersionChangeEvent.prototype, IDBVersionChangeEvent, 'newVersion', '_newVersion');
 
 // Propagation path of a request event, nearest target first: the request, its
 // transaction, that transaction's connection (Indexed DB §3.5.6). An open
@@ -350,7 +449,7 @@ function _idb_invoke(node, event, phase) {
     if (phase !== 1) {
         var handler = node['on' + type];
         if (typeof handler === 'function') {
-            try { handler.call(node, event); } catch (e) { _lumen_console_error('IDB on' + type + ': ' + e); }
+            try { handler.call(node, event); } catch (e) { _idb_listener_exception(event, e); }
         }
     }
     if (!snapshot) return;
@@ -359,12 +458,30 @@ function _idb_invoke(node, event, phase) {
         if (list.indexOf(entry) < 0) continue;
         if (phase === 1 ? !entry.capture : (phase === 3 && entry.capture)) continue;
         try {
-            if (typeof entry.callback === 'function') entry.callback.call(node, event);
-            else if (entry.callback && typeof entry.callback.handleEvent === 'function') entry.callback.handleEvent(event);
-        } catch (e) { _lumen_console_error('IDB ' + type + ' listener: ' + e); }
+            var cb = entry.callback;
+            if (typeof cb === 'function') cb.call(node, event);
+            else {
+                // DOM «get the current value of handleEvent»: the member lookup
+                // itself may throw, a non-callable value throws TypeError.
+                var fn = cb.handleEvent;
+                if (typeof fn === 'function') fn.call(cb, event);
+                else throw new TypeError('handleEvent is not a function');
+            }
+        } catch (e) { _idb_listener_exception(event, e); }
         if (entry.once) node.removeEventListener(type, entry.callback, entry.capture);
         if (event._stopImmediate) break;
     }
+}
+
+// A listener's exception never stops the dispatch — the remaining listeners
+// still run (Indexed DB §3.5.6) — but it is reported like a timer's (the old
+// console-only swallow hid errors from the page) and recorded on the event:
+// the fire-success/error/upgradeneeded procedures abort the owning transaction
+// with AbortError when they see the flag.
+function _idb_listener_exception(event, e) {
+    event._threw = true;
+    if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e);
+    else _lumen_console_error('IDB ' + event.type + ' listener: ' + e);
 }
 
 // Dispatches `event` along `path` (targets nearest-first, Indexed DB §3.5.6):
@@ -399,10 +516,10 @@ function _idb_dispatch_request(req) {
     if (req._action) {
         var action = req._action;
         req._action = null;
-        try { req.result = action(); req.error = null; }
-        catch (e) { req.result = undefined; req.error = (e && e.name) ? e : _idb_error('DataError', String(e)); }
+        try { req._result = action(); req._error = null; }
+        catch (e) { req._result = undefined; req._error = (e && e.name) ? e : _idb_error('DataError', String(e)); }
     }
-    req.readyState = 'done';
+    req._readyState = 'done';
     if (req.error) {
         var ev = _idb_make_event('error', req);
         _idb_dispatch_active(req.transaction, function() {
@@ -410,81 +527,106 @@ function _idb_dispatch_request(req) {
         });
         // The error's default action — abort the owning transaction — is
         // decided only after the whole path has run, so a preventDefault at
-        // any of its nodes suppresses the abort (§3.5.6).
-        if (req.transaction && !ev.defaultPrevented) {
-            req.transaction.error = req.error;
+        // any of its nodes suppresses the abort (§3.5.6). An exception from
+        // any listener aborts regardless, with AbortError (§fire an error
+        // event): the page's failure to handle the event is the more specific
+        // reason, but the spec fixes the transaction's error.
+        if (req.transaction && (ev._threw || !ev.defaultPrevented)) {
+            req.transaction._error = ev._threw
+                ? _idb_error('AbortError', 'an event listener threw an exception')
+                : req.error;
             req.transaction._aborted = true;
         }
     } else {
+        var sev = _idb_make_event('success', req);
         _idb_dispatch_active(req.transaction, function() {
-            _idb_dispatch(req, _idb_make_event('success', req), _idb_request_path(req));
+            _idb_dispatch(req, sev, _idb_request_path(req));
         });
+        // §fire a success event: an exception from a listener aborts the
+        // transaction with AbortError — complete never fires.
+        if (sev._threw && req.transaction) {
+            req.transaction._error = _idb_error('AbortError', 'an event listener threw an exception');
+            req.transaction._aborted = true;
+        }
     }
 }
 
 // --- IDBTransaction (Indexed DB §3.4) ----------------------------------------
 
-function IDBTransaction(db, storeNames, mode, durability) {
-    EventTarget.call(this);
-    this.db = db;
-    this.mode = mode || 'readonly';
-    this.durability = durability || 'default';
-    this._storeNames = storeNames.slice().sort();
-    this.error = null;
-    this.oncomplete = null;
-    this.onabort = null;
-    this.onerror = null;
-    this._queue = [];
-    this._stores = {};
-    this._aborted = false;
+function IDBTransaction() { throw new TypeError('Illegal constructor'); }
+function _idb_new_transaction(db, storeNames, mode, durability) {
+    var self = Object.create(IDBTransaction.prototype);
+    EventTarget.call(self);
+    self._db = db;
+    self._mode = mode || 'readonly';
+    self._durability = durability || 'default';
+    self._storeNames = storeNames.slice().sort();
+    self._error = null;
+    self._oncomplete = null;
+    self._onabort = null;
+    self._onerror = null;
+    self._queue = [];
+    self._stores = {};
+    self._aborted = false;
     // Indexed DB §3.1.7 state 'active': true from creation and during the
     // dispatch of the transaction's events plus the microtasks its handlers
     // queued; the task following a dispatch finds it inactive
     // (_idb_deactivate_later). Requests created while inactive are refused
     // with TransactionInactiveError.
-    this._active = true;
+    self._active = true;
     // Guards the single pending deactivation task (see _idb_deactivate_later).
-    this._deactPending = false;
+    self._deactPending = false;
     // Indexed DB §3.4 state 'finished': set SYNCHRONOUSLY by abort() and by the
     // commit inside the flush, long before the terminal event is delivered — a
     // finished transaction accepts no objectStore(), no request and no second
     // abort()/commit().
-    this._finished = false;
+    self._finished = false;
     // State 'committing': commit() was called explicitly. Requests already in
     // the queue still run; new ones are refused.
-    this._committing = false;
+    self._committing = false;
     // The terminal event (complete/abort) has been fired. Separate from
     // _finished, which the same transaction reaches one turn earlier.
-    this._settled = false;
-    this._isUpgrade = false;
-    this._snapshot = null;
+    self._settled = false;
+    self._isUpgrade = false;
+    self._snapshot = null;
+    return self;
 }
 IDBTransaction.prototype = Object.create(EventTarget.prototype);
-IDBTransaction.prototype.constructor = IDBTransaction;
-Object.defineProperty(IDBTransaction.prototype, 'objectStoreNames', {
-    get: function() { return _idb_string_list(this._storeNames); }
-});
-IDBTransaction.prototype.objectStore = function(name) {
+Object.defineProperty(IDBTransaction.prototype, 'constructor',
+    { value: IDBTransaction, writable: true, configurable: true });
+_idl_get_fn(IDBTransaction.prototype, IDBTransaction, 'objectStoreNames',
+    function() { return _idb_string_list(this._storeNames); });
+_idl_get(IDBTransaction.prototype, IDBTransaction, 'mode', '_mode');
+_idl_get(IDBTransaction.prototype, IDBTransaction, 'durability', '_durability');
+_idl_get(IDBTransaction.prototype, IDBTransaction, 'db', '_db');
+_idl_get(IDBTransaction.prototype, IDBTransaction, 'error', '_error');
+_idl_rw(IDBTransaction.prototype, IDBTransaction, 'onabort');
+_idl_rw(IDBTransaction.prototype, IDBTransaction, 'oncomplete');
+_idl_rw(IDBTransaction.prototype, IDBTransaction, 'onerror');
+_idl_op(IDBTransaction.prototype, 'objectStore', function(name) {
+    _idl_check(this, IDBTransaction);
     if (this._finished) throw _idb_error('InvalidStateError', 'transaction has finished');
     if (this._storeNames.indexOf(name) < 0) throw _idb_error('NotFoundError', 'store not in transaction scope');
     if (!this._stores[name]) {
-        var sd = this.db._data.stores[name];
+        var sd = this._db._data.stores[name];
         if (!sd) throw _idb_error('NotFoundError', 'no object store named ' + name);
-        this._stores[name] = new IDBObjectStore(sd, this);
+        this._stores[name] = _idb_new_store(sd, this);
     }
     return this._stores[name];
-};
-IDBTransaction.prototype.abort = function() {
+}, 1);
+_idl_op(IDBTransaction.prototype, 'abort', function() {
+    _idl_check(this, IDBTransaction);
     if (this._finished) throw _idb_error('InvalidStateError', 'transaction has already finished');
     this._aborted = true;
     this._finished = true;
     _idb_schedule_txn(this);
-};
-IDBTransaction.prototype.commit = function() {
+}, 0);
+_idl_op(IDBTransaction.prototype, 'commit', function() {
+    _idl_check(this, IDBTransaction);
     if (this._finished || this._committing) throw _idb_error('InvalidStateError', 'transaction is no longer active');
     this._committing = true;
     _idb_schedule_txn(this);
-};
+}, 0);
 
 // `abort` bubbles to the connection (BUG-914); `complete` stops at the
 // transaction (Indexed DB §3.4).
@@ -691,7 +833,7 @@ function _idb_revert_txn(txn) {
     var data = txn.db._data;
     if (snap.whole) {
         data.version = snap.version;
-        txn.db.version = snap.version;
+        txn.db._version = snap.version;
         // A store created by this transaction has to go; one it deleted comes
         // back by its original reference, so the page's wrapper still works.
         for (var name in data.stores) {
@@ -721,9 +863,9 @@ function _idb_abort_txn_requests(txn) {
     for (var i = 0; i < queued.length; i++) {
         var req = queued[i];
         req._action = null;
-        req.result = undefined;
-        req.error = _idb_error('AbortError', 'transaction was aborted');
-        req.readyState = 'done';
+        req._result = undefined;
+        req._error = _idb_error('AbortError', 'transaction was aborted');
+        req._readyState = 'done';
         // At the request only: the transaction is already aborting, and this
         // event must not ride up the path to re-abort or re-report it.
         _idb_dispatch(req, _idb_make_event('error', req), [req]);
@@ -739,7 +881,7 @@ function _idb_make_request(source, txn, fn) {
     // (add/put/delete/clear, cursor update/delete) is a request, and it is
     // taken once per transaction. A readonly one is skipped inside.
     _idb_txn_snapshot(txn);
-    var req = new IDBRequest(source, txn);
+    var req = _idb_new_request(source, txn);
     req._action = fn;
     txn._queue.push(req);
     _idb_schedule_txn(txn);
@@ -748,25 +890,37 @@ function _idb_make_request(source, txn, fn) {
 
 // --- IDBDatabase (Indexed DB §3.3) -------------------------------------------
 
-function IDBDatabase(data) {
-    EventTarget.call(this);
-    this._data = data;
-    this.name = data.name;
-    this.version = data.version;
-    this._upgradeTxn = null;
+function IDBDatabase() { throw new TypeError('Illegal constructor'); }
+function _idb_new_database(data) {
+    var self = Object.create(IDBDatabase.prototype);
+    EventTarget.call(self);
+    self._data = data;
+    self._name = data.name;
+    self._version = data.version;
+    self._upgradeTxn = null;
     // «close pending» (Indexed DB §3.3.9): set synchronously by close(), which is
     // what refuses further transaction() calls. The connection itself stays
     // registered until its running transactions have finished — see
     // _idb_conn_open.
-    this._closed = false;
-    this._txns = [];
-    this.onversionchange = null;
-    this.onabort = null;
-    this.onerror = null;
-    this.onclose = null;
+    self._closed = false;
+    self._txns = [];
+    self._onversionchange = null;
+    self._onabort = null;
+    self._onerror = null;
+    self._onclose = null;
+    return self;
 }
 IDBDatabase.prototype = Object.create(EventTarget.prototype);
-IDBDatabase.prototype.constructor = IDBDatabase;
+Object.defineProperty(IDBDatabase.prototype, 'constructor',
+    { value: IDBDatabase, writable: true, configurable: true });
+_idl_get(IDBDatabase.prototype, IDBDatabase, 'name', '_name');
+_idl_get(IDBDatabase.prototype, IDBDatabase, 'version', '_version');
+_idl_get_fn(IDBDatabase.prototype, IDBDatabase, 'objectStoreNames',
+    function() { return _idb_string_list(Object.keys(this._data.stores).sort()); });
+_idl_rw(IDBDatabase.prototype, IDBDatabase, 'onversionchange');
+_idl_rw(IDBDatabase.prototype, IDBDatabase, 'onabort');
+_idl_rw(IDBDatabase.prototype, IDBDatabase, 'onerror');
+_idl_rw(IDBDatabase.prototype, IDBDatabase, 'onclose');
 
 function _idb_fire_db_event(db, type, extra) {
     _idb_dispatch(db, _idb_make_event(type, db, extra), [db]);
@@ -846,10 +1000,8 @@ function _idb_unpark(name) {
     _idb_schedule_flush();
     return true;
 }
-Object.defineProperty(IDBDatabase.prototype, 'objectStoreNames', {
-    get: function() { return _idb_string_list(Object.keys(this._data.stores).sort()); }
-});
-IDBDatabase.prototype.createObjectStore = function(name, options) {
+_idl_op(IDBDatabase.prototype, 'createObjectStore', function(name, options) {
+    _idl_check(this, IDBDatabase);
     if (!this._upgradeTxn) throw _idb_error('InvalidStateError', 'createObjectStore allowed only during a versionchange transaction');
     // Schema mutations bypass the request queue, so they take the snapshot
     // themselves — an aborted upgrade has to lose its new stores and indexes
@@ -869,15 +1021,17 @@ IDBDatabase.prototype.createObjectStore = function(name, options) {
     };
     this._data.stores[name] = store;
     if (this._upgradeTxn._storeNames.indexOf(name) < 0) this._upgradeTxn._storeNames.push(name);
-    return new IDBObjectStore(store, this._upgradeTxn);
-};
-IDBDatabase.prototype.deleteObjectStore = function(name) {
+    return _idb_new_store(store, this._upgradeTxn);
+}, 1);
+_idl_op(IDBDatabase.prototype, 'deleteObjectStore', function(name) {
+    _idl_check(this, IDBDatabase);
     if (!this._upgradeTxn) throw _idb_error('InvalidStateError', 'deleteObjectStore allowed only during a versionchange transaction');
     if (!this._data.stores[name]) throw _idb_error('NotFoundError', 'no object store named ' + name);
     _idb_txn_snapshot(this._upgradeTxn);
     delete this._data.stores[name];
-};
-IDBDatabase.prototype.transaction = function(storeNames, mode, options) {
+}, 1);
+_idl_op(IDBDatabase.prototype, 'transaction', function(storeNames, mode, options) {
+    _idl_check(this, IDBDatabase);
     // WebIDL converts the `mode` argument to the IDBTransactionMode enum before
     // any step of §3.3.4 runs, so an unknown string is a TypeError even for a
     // closed connection; 'versionchange' is a valid enum value and is refused
@@ -898,7 +1052,7 @@ IDBDatabase.prototype.transaction = function(storeNames, mode, options) {
     }
     if (storeNames.length === 0) throw _idb_error('InvalidAccessError', 'empty store scope');
     if (mode === 'versionchange') throw new TypeError('a versionchange transaction cannot be created with transaction()');
-    var txn = new IDBTransaction(this, storeNames, mode, durability);
+    var txn = _idb_new_transaction(this, storeNames, mode, durability);
     // Keeps the connection open for §3.3.9 until this transaction finishes;
     // pruning here bounds the list to the connection's concurrent transactions.
     _idb_conn_open(this);
@@ -910,21 +1064,30 @@ IDBDatabase.prototype.transaction = function(storeNames, mode, options) {
     // it preserves creation order between transactions (the flush is a FIFO).
     _idb_schedule_txn(txn);
     return txn;
-};
-IDBDatabase.prototype.close = function() { _idb_close_connection(this); };
+});
+_idl_op(IDBDatabase.prototype, 'close', function() {
+    _idl_check(this, IDBDatabase);
+    _idb_close_connection(this);
+}, 0);
 
 // --- IDBObjectStore (Indexed DB §3.2) ----------------------------------------
 
-function IDBObjectStore(store, txn) {
-    this._store = store;
-    this.transaction = txn;
-    this.name = store.name;
-    this.keyPath = store.keyPath;
-    this.autoIncrement = store.autoIncrement;
+function IDBObjectStore() { throw new TypeError('Illegal constructor'); }
+function _idb_new_store(store, txn) {
+    var self = Object.create(IDBObjectStore.prototype);
+    self._store = store;
+    self._transaction = txn;
+    self._name = store.name;
+    self._keyPath = store.keyPath;
+    self._autoIncrement = store.autoIncrement;
+    return self;
 }
-Object.defineProperty(IDBObjectStore.prototype, 'indexNames', {
-    get: function() { return _idb_string_list(_idb_effective_index_names(this._store)); }
-});
+_idl_rw(IDBObjectStore.prototype, IDBObjectStore, 'name');
+_idl_get(IDBObjectStore.prototype, IDBObjectStore, 'keyPath', '_keyPath');
+_idl_get(IDBObjectStore.prototype, IDBObjectStore, 'transaction', '_transaction');
+_idl_get(IDBObjectStore.prototype, IDBObjectStore, 'autoIncrement', '_autoIncrement');
+_idl_get_fn(IDBObjectStore.prototype, IDBObjectStore, 'indexNames',
+    function() { return _idb_string_list(_idb_effective_index_names(this._store)); });
 
 // Binary search over the store's key-sorted records array.
 function _idb_find_record(records, key) {
@@ -1001,35 +1164,40 @@ IDBObjectStore.prototype._write = function(value, key, overwrite) {
     return usedKey;
 };
 
-IDBObjectStore.prototype.add = function(value, key) {
+_idl_op(IDBObjectStore.prototype, 'add', function(value, key) {
+    _idl_check(this, IDBObjectStore);
     if (this.transaction.mode === 'readonly') throw _idb_error('ReadOnlyError', 'transaction is read-only');
     var self = this;
-    return _idb_make_request(this, this.transaction, function() { return self._write(value, key, false); });
-};
-IDBObjectStore.prototype.put = function(value, key) {
+    return _idb_make_request(this, this._transaction, function() { return self._write(value, key, false); });
+}, 1);
+_idl_op(IDBObjectStore.prototype, 'put', function(value, key) {
+    _idl_check(this, IDBObjectStore);
     if (this.transaction.mode === 'readonly') throw _idb_error('ReadOnlyError', 'transaction is read-only');
     var self = this;
-    return _idb_make_request(this, this.transaction, function() { return self._write(value, key, true); });
-};
-IDBObjectStore.prototype.get = function(query) {
+    return _idb_make_request(this, this._transaction, function() { return self._write(value, key, true); });
+}, 1);
+_idl_op(IDBObjectStore.prototype, 'get', function(query) {
+    _idl_check(this, IDBObjectStore);
     var store = this._store, range = _idb_to_range(query);
-    return _idb_make_request(this, this.transaction, function() {
+    return _idb_make_request(this, this._transaction, function() {
         if (range === null) return undefined;
         for (var i = 0; i < store.records.length; i++) if (range.includes(store.records[i].key)) return store.records[i].value;
         return undefined;
     });
-};
-IDBObjectStore.prototype.getKey = function(query) {
+}, 1);
+_idl_op(IDBObjectStore.prototype, 'getKey', function(query) {
+    _idl_check(this, IDBObjectStore);
     var store = this._store, range = _idb_to_range(query);
-    return _idb_make_request(this, this.transaction, function() {
+    return _idb_make_request(this, this._transaction, function() {
         if (range === null) return undefined;
         for (var i = 0; i < store.records.length; i++) if (range.includes(store.records[i].key)) return store.records[i].key;
         return undefined;
     });
-};
-IDBObjectStore.prototype.getAll = function(query, count) {
+}, 1);
+_idl_op(IDBObjectStore.prototype, 'getAll', function(query, count) {
+    _idl_check(this, IDBObjectStore);
     var store = this._store, range = _idb_to_range(query);
-    return _idb_make_request(this, this.transaction, function() {
+    return _idb_make_request(this, this._transaction, function() {
         var out = [];
         for (var i = 0; i < store.records.length; i++) {
             if (range === null || range.includes(store.records[i].key)) {
@@ -1039,10 +1207,11 @@ IDBObjectStore.prototype.getAll = function(query, count) {
         }
         return out;
     });
-};
-IDBObjectStore.prototype.getAllKeys = function(query, count) {
+}, 0);
+_idl_op(IDBObjectStore.prototype, 'getAllKeys', function(query, count) {
+    _idl_check(this, IDBObjectStore);
     var store = this._store, range = _idb_to_range(query);
-    return _idb_make_request(this, this.transaction, function() {
+    return _idb_make_request(this, this._transaction, function() {
         var out = [];
         for (var i = 0; i < store.records.length; i++) {
             if (range === null || range.includes(store.records[i].key)) {
@@ -1052,30 +1221,33 @@ IDBObjectStore.prototype.getAllKeys = function(query, count) {
         }
         return out;
     });
-};
-IDBObjectStore.prototype.count = function(query) {
+}, 0);
+_idl_op(IDBObjectStore.prototype, 'count', function(query) {
+    _idl_check(this, IDBObjectStore);
     var store = this._store, range = _idb_to_range(query);
-    return _idb_make_request(this, this.transaction, function() {
+    return _idb_make_request(this, this._transaction, function() {
         if (range === null) return store.records.length;
         var n = 0;
         for (var i = 0; i < store.records.length; i++) if (range.includes(store.records[i].key)) n++;
         return n;
     });
-};
-IDBObjectStore.prototype.delete = function(query) {
+}, 0);
+_idl_op(IDBObjectStore.prototype, 'delete', function(query) {
+    _idl_check(this, IDBObjectStore);
     if (this.transaction.mode === 'readonly') throw _idb_error('ReadOnlyError', 'transaction is read-only');
     var store = this._store, range = _idb_to_range(query);
     if (range === null) throw _idb_error('DataError', 'a key or key range is required');
-    return _idb_make_request(this, this.transaction, function() {
+    return _idb_make_request(this, this._transaction, function() {
         for (var i = store.records.length - 1; i >= 0; i--) if (range.includes(store.records[i].key)) store.records.splice(i, 1);
         return undefined;
     });
-};
-IDBObjectStore.prototype.clear = function() {
+}, 1);
+_idl_op(IDBObjectStore.prototype, 'clear', function() {
+    _idl_check(this, IDBObjectStore);
     if (this.transaction.mode === 'readonly') throw _idb_error('ReadOnlyError', 'transaction is read-only');
     var store = this._store;
-    return _idb_make_request(this, this.transaction, function() { store.records = []; return undefined; });
-};
+    return _idb_make_request(this, this._transaction, function() { store.records = []; return undefined; });
+}, 0);
 // What `name` resolves to on `store` if every createIndex/deleteIndex already
 // queued on it but not yet delivered were applied, in call order — undefined
 // for "does not exist". Indexed DB §3.2.9/§3.2.10 make createIndex/deleteIndex
@@ -1113,7 +1285,8 @@ function _idb_effective_index_names(store) {
     }
     return names.sort();
 }
-IDBObjectStore.prototype.createIndex = function(name, keyPath, options) {
+_idl_op(IDBObjectStore.prototype, 'createIndex', function(name, keyPath, options) {
+    _idl_check(this, IDBObjectStore);
     if (!this.transaction._isUpgrade) throw _idb_error('InvalidStateError', 'createIndex allowed only during a versionchange transaction');
     name = String(name);
     var store = this._store;
@@ -1131,15 +1304,16 @@ IDBObjectStore.prototype.createIndex = function(name, keyPath, options) {
     // the old schema, one queued after must see the new one (BUG-916: a later
     // deleteIndex written after a request must not retroactively undo that
     // request's constraint check).
-    _idb_make_request(this, this.transaction, function() {
+    _idb_make_request(this, this._transaction, function() {
         store.indexes[name] = idx;
         var i = store._pendingIndexOps.indexOf(pendingEntry);
         if (i >= 0) store._pendingIndexOps.splice(i, 1);
         return undefined;
     });
-    return new IDBIndex(idx, this);
-};
-IDBObjectStore.prototype.deleteIndex = function(name) {
+    return _idb_new_index(idx, this);
+}, 2);
+_idl_op(IDBObjectStore.prototype, 'deleteIndex', function(name) {
+    _idl_check(this, IDBObjectStore);
     if (!this.transaction._isUpgrade) throw _idb_error('InvalidStateError', 'deleteIndex allowed only during a versionchange transaction');
     var store = this._store;
     if (!_idb_effective_index(store, name)) throw _idb_error('NotFoundError', 'no index named ' + name);
@@ -1147,39 +1321,50 @@ IDBObjectStore.prototype.deleteIndex = function(name) {
     if (!store._pendingIndexOps) store._pendingIndexOps = [];
     var pendingEntry = { name: name, idx: undefined };
     store._pendingIndexOps.push(pendingEntry);
-    _idb_make_request(this, this.transaction, function() {
+    _idb_make_request(this, this._transaction, function() {
         delete store.indexes[name];
         var i = store._pendingIndexOps.indexOf(pendingEntry);
         if (i >= 0) store._pendingIndexOps.splice(i, 1);
         return undefined;
     });
-};
-IDBObjectStore.prototype.index = function(name) {
+}, 1);
+_idl_op(IDBObjectStore.prototype, 'index', function(name) {
+    _idl_check(this, IDBObjectStore);
     var idx = _idb_effective_index(this._store, name);
     if (!idx) throw _idb_error('NotFoundError', 'no index named ' + name);
-    return new IDBIndex(idx, this);
-};
-IDBObjectStore.prototype.openCursor = function(query, direction) {
+    return _idb_new_index(idx, this);
+}, 1);
+_idl_op(IDBObjectStore.prototype, 'openCursor', function(query, direction) {
+    _idl_check(this, IDBObjectStore);
     var range = _idb_to_range(query), store = this._store, dir = direction || 'next';
-    return _idb_open_cursor(this, this.transaction, store, function() { return _idb_cursor_list_store(store, range, dir); }, true, dir);
-};
-IDBObjectStore.prototype.openKeyCursor = function(query, direction) {
+    return _idb_open_cursor(this, this._transaction, store, function() { return _idb_cursor_list_store(store, range, dir); }, true, dir);
+}, 0);
+_idl_op(IDBObjectStore.prototype, 'openKeyCursor', function(query, direction) {
+    _idl_check(this, IDBObjectStore);
     var range = _idb_to_range(query), store = this._store, dir = direction || 'next';
-    return _idb_open_cursor(this, this.transaction, store, function() { return _idb_cursor_list_store(store, range, dir); }, false, dir);
-};
+    return _idb_open_cursor(this, this._transaction, store, function() { return _idb_cursor_list_store(store, range, dir); }, false, dir);
+}, 0);
 
 // --- IDBIndex (Indexed DB §3.2.8) --------------------------------------------
 
-function IDBIndex(idx, objectStore) {
-    this._index = idx;
-    this.objectStore = objectStore;
-    this._store = objectStore._store;
-    this.transaction = objectStore.transaction;
-    this.name = idx.name;
-    this.keyPath = idx.keyPath;
-    this.unique = idx.unique;
-    this.multiEntry = idx.multiEntry;
+function IDBIndex() { throw new TypeError('Illegal constructor'); }
+function _idb_new_index(idx, objectStore) {
+    var self = Object.create(IDBIndex.prototype);
+    self._index = idx;
+    self._objectStore = objectStore;
+    self._store = objectStore._store;
+    self._transaction = objectStore.transaction;
+    self._name = idx.name;
+    self._keyPath = idx.keyPath;
+    self._unique = idx.unique;
+    self._multiEntry = idx.multiEntry;
+    return self;
 }
+_idl_rw(IDBIndex.prototype, IDBIndex, 'name');
+_idl_get(IDBIndex.prototype, IDBIndex, 'objectStore', '_objectStore');
+_idl_get(IDBIndex.prototype, IDBIndex, 'keyPath', '_keyPath');
+_idl_get(IDBIndex.prototype, IDBIndex, 'multiEntry', '_multiEntry');
+_idl_get(IDBIndex.prototype, IDBIndex, 'unique', '_unique');
 // Materialises an index as a list of { key, primaryKey, value } sorted by
 // (index key, primary key). multiEntry array keys are expanded to one entry per
 // element. Recomputed per query — simple and correct for an in-memory store.
@@ -1203,27 +1388,30 @@ function _idb_index_entries(store, index) {
     });
     return out;
 }
-IDBIndex.prototype.get = function(query) {
+_idl_op(IDBIndex.prototype, 'get', function(query) {
+    _idl_check(this, IDBIndex);
     var store = this._store, index = this._index, range = _idb_to_range(query);
-    return _idb_make_request(this, this.transaction, function() {
+    return _idb_make_request(this, this._transaction, function() {
         if (range === null) return undefined;
         var entries = _idb_index_entries(store, index);
         for (var i = 0; i < entries.length; i++) if (range.includes(entries[i].key)) return entries[i].value;
         return undefined;
     });
-};
-IDBIndex.prototype.getKey = function(query) {
+}, 1);
+_idl_op(IDBIndex.prototype, 'getKey', function(query) {
+    _idl_check(this, IDBIndex);
     var store = this._store, index = this._index, range = _idb_to_range(query);
-    return _idb_make_request(this, this.transaction, function() {
+    return _idb_make_request(this, this._transaction, function() {
         if (range === null) return undefined;
         var entries = _idb_index_entries(store, index);
         for (var i = 0; i < entries.length; i++) if (range.includes(entries[i].key)) return entries[i].primaryKey;
         return undefined;
     });
-};
-IDBIndex.prototype.getAll = function(query, count) {
+}, 1);
+_idl_op(IDBIndex.prototype, 'getAll', function(query, count) {
+    _idl_check(this, IDBIndex);
     var store = this._store, index = this._index, range = _idb_to_range(query);
-    return _idb_make_request(this, this.transaction, function() {
+    return _idb_make_request(this, this._transaction, function() {
         var entries = _idb_index_entries(store, index);
         var out = [];
         for (var i = 0; i < entries.length; i++) {
@@ -1234,10 +1422,11 @@ IDBIndex.prototype.getAll = function(query, count) {
         }
         return out;
     });
-};
-IDBIndex.prototype.getAllKeys = function(query, count) {
+}, 0);
+_idl_op(IDBIndex.prototype, 'getAllKeys', function(query, count) {
+    _idl_check(this, IDBIndex);
     var store = this._store, index = this._index, range = _idb_to_range(query);
-    return _idb_make_request(this, this.transaction, function() {
+    return _idb_make_request(this, this._transaction, function() {
         var entries = _idb_index_entries(store, index);
         var out = [];
         for (var i = 0; i < entries.length; i++) {
@@ -1248,25 +1437,28 @@ IDBIndex.prototype.getAllKeys = function(query, count) {
         }
         return out;
     });
-};
-IDBIndex.prototype.count = function(query) {
+}, 0);
+_idl_op(IDBIndex.prototype, 'count', function(query) {
+    _idl_check(this, IDBIndex);
     var store = this._store, index = this._index, range = _idb_to_range(query);
-    return _idb_make_request(this, this.transaction, function() {
+    return _idb_make_request(this, this._transaction, function() {
         var entries = _idb_index_entries(store, index);
         if (range === null) return entries.length;
         var n = 0;
         for (var i = 0; i < entries.length; i++) if (range.includes(entries[i].key)) n++;
         return n;
     });
-};
-IDBIndex.prototype.openCursor = function(query, direction) {
+}, 0);
+_idl_op(IDBIndex.prototype, 'openCursor', function(query, direction) {
+    _idl_check(this, IDBIndex);
     var range = _idb_to_range(query), store = this._store, index = this._index, dir = direction || 'next';
-    return _idb_open_cursor(this, this.transaction, store, function() { return _idb_cursor_list_index(store, index, range, dir); }, true, dir);
-};
-IDBIndex.prototype.openKeyCursor = function(query, direction) {
+    return _idb_open_cursor(this, this._transaction, store, function() { return _idb_cursor_list_index(store, index, range, dir); }, true, dir);
+}, 0);
+_idl_op(IDBIndex.prototype, 'openKeyCursor', function(query, direction) {
+    _idl_check(this, IDBIndex);
     var range = _idb_to_range(query), store = this._store, index = this._index, dir = direction || 'next';
-    return _idb_open_cursor(this, this.transaction, store, function() { return _idb_cursor_list_index(store, index, range, dir); }, false, dir);
-};
+    return _idb_open_cursor(this, this._transaction, store, function() { return _idb_cursor_list_index(store, index, range, dir); }, false, dir);
+}, 0);
 
 // --- cursors (Indexed DB §3.2.6) ---------------------------------------------
 
@@ -1294,68 +1486,86 @@ function _idb_cursor_list_index(store, index, range, direction) {
     return filtered;
 }
 
-function IDBCursor(req, source, txn, store, withValue, direction) {
-    this._req = req;
-    this.source = source;
-    this._txn = txn;
-    this._store = store;
-    this._list = null;       // materialised at first dispatch (deferred)
-    this._pos = -1;
-    this._withValue = withValue;
-    this.direction = direction;
-    this.key = undefined;
-    this.primaryKey = undefined;
-    if (withValue) this.value = undefined;
+function IDBCursor() { throw new TypeError('Illegal constructor'); }
+function IDBCursorWithValue() { throw new TypeError('Illegal constructor'); }
+// The prototype follows withValue: openCursor hands out IDBCursorWithValue
+// instances, openKeyCursor plain IDBCursor ones (Indexed DB §3.2.6/§3.2.7).
+IDBCursorWithValue.prototype = Object.create(IDBCursor.prototype);
+Object.defineProperty(IDBCursorWithValue.prototype, 'constructor',
+    { value: IDBCursorWithValue, writable: true, configurable: true });
+function _idb_new_cursor(req, source, txn, store, withValue, direction) {
+    var self = Object.create(withValue ? IDBCursorWithValue.prototype : IDBCursor.prototype);
+    self._req = req;
+    self._source = source;
+    self._txn = txn;
+    self._store = store;
+    self._list = null;       // materialised at first dispatch (deferred)
+    self._pos = -1;
+    self._withValue = withValue;
+    self._direction = direction;
+    self._key = undefined;
+    self._primaryKey = undefined;
+    if (withValue) self._value = undefined;
+    return self;
 }
+_idl_get(IDBCursor.prototype, IDBCursor, 'source', '_source');
+_idl_get(IDBCursor.prototype, IDBCursor, 'direction', '_direction');
+_idl_get(IDBCursor.prototype, IDBCursor, 'key', '_key');
+_idl_get(IDBCursor.prototype, IDBCursor, 'primaryKey', '_primaryKey');
+_idl_get(IDBCursor.prototype, IDBCursor, 'request', '_req');
+_idl_get(IDBCursorWithValue.prototype, IDBCursorWithValue, 'value', '_value');
 IDBCursor.prototype._step = function() {
     this._pos++;
     if (this._pos >= this._list.length) {
-        this.key = undefined; this.primaryKey = undefined;
-        if (this._withValue) this.value = undefined;
-        this._req.result = null;
+        this._key = undefined; this._primaryKey = undefined;
+        if (this._withValue) this._value = undefined;
+        this._req._result = null;
         return false;
     }
     var item = this._list[this._pos];
-    this.key = item.key;
-    this.primaryKey = item.primaryKey;
-    if (this._withValue) this.value = item.value;
-    this._req.result = this;
+    this._key = item.key;
+    this._primaryKey = item.primaryKey;
+    if (this._withValue) this._value = item.value;
+    this._req._result = this;
     return true;
 };
-IDBCursor.prototype.continue = function(key) {
+_idl_op(IDBCursor.prototype, 'continue', function(key) {
+    _idl_check(this, IDBCursor);
     if (key !== undefined && !_idb_is_valid_key(key)) throw _idb_error('DataError', 'invalid cursor key');
     var self = this;
     this._req._action = function() {
         if (key !== undefined) {
-            var desc = (self.direction === 'prev' || self.direction === 'prevunique');
+            var desc = (self._direction === 'prev' || self._direction === 'prevunique');
             while (self._step()) {
-                var c = _idb_cmp(self.key, key);
+                var c = _idb_cmp(self._key, key);
                 if ((!desc && c >= 0) || (desc && c <= 0)) break;
             }
         } else {
             self._step();
         }
-        return self._req.result;
+        return self._req._result;
     };
     this._txn._queue.push(this._req);
     _idb_schedule_txn(this._txn);
-};
-IDBCursor.prototype.advance = function(count) {
+}, 0);
+_idl_op(IDBCursor.prototype, 'advance', function(count) {
+    _idl_check(this, IDBCursor);
     count = count >>> 0;
     if (count === 0) throw new TypeError('advance count must be > 0');
     var self = this;
     this._req._action = function() {
         for (var i = 0; i < count; i++) if (!self._step()) break;
-        return self._req.result;
+        return self._req._result;
     };
     this._txn._queue.push(this._req);
     _idb_schedule_txn(this._txn);
-};
-IDBCursor.prototype.update = function(value) {
+}, 1);
+_idl_op(IDBCursor.prototype, 'update', function(value) {
+    _idl_check(this, IDBCursor);
     if (this._txn.mode === 'readonly') throw _idb_error('ReadOnlyError', 'transaction is read-only');
     if (this._pos < 0 || this._pos >= this._list.length) throw _idb_error('InvalidStateError', 'cursor is not positioned on a record');
-    var store = this._store, pk = this.primaryKey;
-    return _idb_make_request(this.source, this._txn, function() {
+    var store = this._store, pk = this._primaryKey;
+    return _idb_make_request(this._source, this._txn, function() {
         if (store.keyPath !== null) {
             var k = _idb_extract_key(value, store.keyPath);
             if (k === undefined || _idb_cmp(k, pk) !== 0) throw _idb_error('DataError', 'cursor.update must not change the primary key');
@@ -1366,26 +1576,27 @@ IDBCursor.prototype.update = function(value) {
         store.records[pos.idx].value = value;
         return pk;
     });
-};
-IDBCursor.prototype.delete = function() {
+}, 1);
+_idl_op(IDBCursor.prototype, 'delete', function() {
+    _idl_check(this, IDBCursor);
     if (this._txn.mode === 'readonly') throw _idb_error('ReadOnlyError', 'transaction is read-only');
     if (this._pos < 0 || this._pos >= this._list.length) throw _idb_error('InvalidStateError', 'cursor is not positioned on a record');
-    var store = this._store, pk = this.primaryKey;
-    return _idb_make_request(this.source, this._txn, function() {
+    var store = this._store, pk = this._primaryKey;
+    return _idb_make_request(this._source, this._txn, function() {
         var pos = _idb_find_record(store.records, pk);
         if (pos.found) store.records.splice(pos.idx, 1);
         return undefined;
     });
-};
+}, 0);
 
 function _idb_open_cursor(source, txn, store, buildList, withValue, direction) {
     if (txn._finished || txn._committing || !txn._active) throw _idb_error('TransactionInactiveError', 'transaction is not active');
-    var req = new IDBRequest(source, txn);
-    var cursor = new IDBCursor(req, source, txn, store, withValue, direction);
+    var req = _idb_new_request(source, txn);
+    var cursor = _idb_new_cursor(req, source, txn, store, withValue, direction);
     req._action = function() {
         cursor._list = buildList();
         cursor._step();
-        return req.result;
+        return req._result;
     };
     txn._queue.push(req);
     _idb_schedule_txn(txn);
@@ -1420,7 +1631,7 @@ function _idb_process_open(entry, budget) {
                 : entry.version;
             if (existing && entry.newVersion < entry.oldVersion) {
                 entry._started = true;
-                req.error = _idb_error('VersionError', 'requested version is lower than the existing version');
+                req._error = _idb_error('VersionError', 'requested version is lower than the existing version');
                 _idb_dispatch_request(req);
                 return budget - 1;
             }
@@ -1463,8 +1674,8 @@ function _idb_process_open(entry, budget) {
             var data = _idb_databases[name];
             if (!data) { data = { name: name, version: 0, stores: {} }; _idb_databases[name] = data; }
             entry.data = data;
-            entry.db = new IDBDatabase(data);
-            req.result = entry.db;
+            entry.db = _idb_new_database(data);
+            req._result = entry.db;
             // Registered before onupgradeneeded runs: a delete queued behind this
             // open must see the connection the upgrade is holding.
             _idb_register_connection(entry.db);
@@ -1477,7 +1688,7 @@ function _idb_process_open(entry, budget) {
         var txn = entry._txn;
         if (!txn) {
             var data = entry.data, db = entry.db;
-            txn = new IDBTransaction(db, Object.keys(data.stores), 'versionchange');
+            txn = _idb_new_transaction(db, Object.keys(data.stores), 'versionchange');
             txn._isUpgrade = true;
             entry._txn = txn;
             db._upgradeTxn = txn;
@@ -1489,17 +1700,24 @@ function _idb_process_open(entry, budget) {
             // aborted upgrade has to give the old version back too.
             _idb_txn_snapshot(txn);
             data.version = entry.newVersion;
-            db.version = entry.newVersion;
-            req.transaction = txn;
-            req.readyState = 'done';
+            db._version = entry.newVersion;
+            req._transaction = txn;
+            req._readyState = 'done';
             // The upgrade transaction is the request's parent for this event
             // (Indexed DB §3.5.6), so capture listeners on it and on the
             // connection see `upgradeneeded` before onupgradeneeded runs.
+            var uev = _idb_make_event('upgradeneeded', req, { oldVersion: entry.oldVersion, newVersion: entry.newVersion });
             _idb_dispatch_active(txn, function() {
-                _idb_dispatch(req,
-                    _idb_make_event('upgradeneeded', req, { oldVersion: entry.oldVersion, newVersion: entry.newVersion }),
-                    [req, txn, db]);
+                _idb_dispatch(req, uev, [req, txn, db]);
             });
+            // §fire a version change event: an exception from a listener
+            // aborts the version change transaction with AbortError; the
+            // settlement below then fails the open request with the same
+            // error through its regular aborted-transaction branch.
+            if (uev._threw) {
+                txn._error = _idb_error('AbortError', 'an event listener threw an exception');
+                txn._aborted = true;
+            }
         }
         if (!entry._settle) {
             while (txn._queue.length > 0 && !txn._aborted && budget > 0) {
@@ -1524,7 +1742,7 @@ function _idb_process_open(entry, budget) {
         // without _settled the flush would fire its terminal event a second time.
         txn._settled = true;
         entry.db._upgradeTxn = null;
-        req.transaction = null;
+        req._transaction = null;
         if (txn._aborted) {
             _idb_revert_txn(txn);
             _idb_abort_txn_requests(txn);
@@ -1534,16 +1752,26 @@ function _idb_process_open(entry, budget) {
             // `success`, handing the page a connection whose upgrade was just
             // rolled back. An error already recorded (a failed upgrade handler)
             // wins — it is the more specific reason.
-            if (!req.error) { req.error = _idb_error('AbortError', 'version change transaction was aborted'); }
-            req.result = undefined;
+            if (!req.error) { req._error = _idb_error('AbortError', 'version change transaction was aborted'); }
+            req._result = undefined;
             _idb_close_connection(entry.db);
             _idb_dispatch_request(req);
             return budget;
         }
         _idb_fire_txn(txn, 'complete');
+        // §3.3.1: a close() during the upgrade (typically from inside
+        // onupgradeneeded) still commits the version change — the schema work
+        // is done — but the open request fails with AbortError instead of
+        // handing the page a connection it asked to go away.
+        if (entry.db._closed) {
+            req._result = undefined;
+            req._error = _idb_error('AbortError', 'the connection was closed during the version change');
+            _idb_dispatch_request(req);
+            return budget;
+        }
     }
-    req.readyState = 'done';
-    req.error = null;
+    req._readyState = 'done';
+    req._error = null;
     // deleteDatabase's success is an IDBVersionChangeEvent (§3.3.1): oldVersion
     // is what was deleted, newVersion is null.
     var ev2 = entry._delete
@@ -1652,53 +1880,96 @@ function _idb_flush_step() {
     }
 }
 
-var indexedDB = {
-    open: function(name, version) {
-        name = String(name);
-        if (version !== undefined) {
-            version = Number(version);
-            if (!isFinite(version) || version < 1) throw new TypeError('IndexedDB version must be >= 1');
-            version = Math.floor(version);
-        }
-        var req = new IDBOpenDBRequest();
-        // Nothing but the argument check happens now: the request joins this
-        // name's connection queue and every decision it makes — the version
-        // comparison, the connection, the upgrade — is taken when the queue
-        // reaches it (§3.3.1), because a request ahead of it may still delete or
-        // upgrade the database.
-        _idb_pending_opens.push({ req: req, name: name, version: version });
-        _idb_schedule_flush();
-        return req;
-    },
-    deleteDatabase: function(name) {
-        name = String(name);
-        var req = new IDBOpenDBRequest();
-        req.result = undefined;
-        // Deferred for the same reason as open(), and additionally because the
-        // deletion itself may not happen while another connection is open.
-        _idb_pending_opens.push({ req: req, name: name, _delete: true });
-        _idb_schedule_flush();
-        return req;
-    },
-    databases: function() {
-        var out = [];
-        for (var name in _idb_databases) out.push({ name: name, version: _idb_databases[name].version });
-        return Promise.resolve(out);
-    },
-    cmp: function(a, b) {
-        if (!_idb_is_valid_key(a) || !_idb_is_valid_key(b)) throw _idb_error('DataError', 'invalid key');
-        return _idb_cmp(a, b);
+// IDB-EVENTS-S4: real interface object. Its only instance is `indexedDB` —
+// the [SameObject] attribute of Window/WorkerGlobalScope — and the
+// constructor is refused like every non-constructible WebIDL interface.
+function IDBFactory() { throw new TypeError('Illegal constructor'); }
+_idl_op(IDBFactory.prototype, 'open', function(name, version) {
+    _idl_check(this, IDBFactory);
+    if (arguments.length === 0) throw new TypeError('name is required');
+    name = String(name);
+    if (version !== undefined) {
+        version = Number(version);
+        if (!isFinite(version) || version < 1) throw new TypeError('IndexedDB version must be >= 1');
+        version = Math.floor(version);
     }
-};
+    var req = _idb_new_open_request();
+    // Nothing but the argument check happens now: the request joins this
+    // name's connection queue and every decision it makes — the version
+    // comparison, the connection, the upgrade — is taken when the queue
+    // reaches it (§3.3.1), because a request ahead of it may still delete or
+    // upgrade the database.
+    _idb_pending_opens.push({ req: req, name: name, version: version });
+    _idb_schedule_flush();
+    return req;
+}, 1);
+_idl_op(IDBFactory.prototype, 'deleteDatabase', function(name) {
+    _idl_check(this, IDBFactory);
+    if (arguments.length === 0) throw new TypeError('name is required');
+    name = String(name);
+    var req = _idb_new_open_request();
+    req._result = undefined;
+    // Deferred for the same reason as open(), and additionally because the
+    // deletion itself may not happen while another connection is open.
+    _idb_pending_opens.push({ req: req, name: name, _delete: true });
+    _idb_schedule_flush();
+    return req;
+}, 1);
+_idl_op(IDBFactory.prototype, 'databases', function() {
+    _idl_check(this, IDBFactory);
+    var out = [];
+    for (var name in _idb_databases) out.push({ name: name, version: _idb_databases[name].version });
+    return Promise.resolve(out);
+}, 0);
+_idl_op(IDBFactory.prototype, 'cmp', function(a, b) {
+    _idl_check(this, IDBFactory);
+    if (arguments.length < 2) throw new TypeError('two keys are required');
+    if (!_idb_is_valid_key(a) || !_idb_is_valid_key(b)) throw _idb_error('DataError', 'invalid key');
+    return _idb_cmp(a, b);
+}, 2);
 
-globalThis.indexedDB        = indexedDB;
-globalThis.IDBKeyRange      = IDBKeyRange;
-globalThis.IDBRequest       = IDBRequest;
-globalThis.IDBOpenDBRequest = IDBOpenDBRequest;
-globalThis.IDBDatabase      = IDBDatabase;
-globalThis.IDBTransaction   = IDBTransaction;
-globalThis.IDBObjectStore   = IDBObjectStore;
-globalThis.IDBIndex         = IDBIndex;
-globalThis.IDBCursor        = IDBCursor;
-globalThis.IDBCursorWithValue = IDBCursor;
+var indexedDB = Object.create(IDBFactory.prototype);
+
+// Interface objects on globalThis: {writable: true, configurable: true,
+// enumerable: false} (WebIDL §4.3.2 — `Object.keys(globalThis)` must not list
+// them); every prototype gets its own @@toStringTag (BUG-912), a
+// non-enumerable `constructor` and a non-configurable `prototype` slot.
+// `indexedDB` itself is the global-scope attribute: an accessor that refuses a
+// foreign receiver, like every WebIDL global attribute getter.
+//
+// Every defineProperty here is guarded: in a service-worker scope this same
+// file runs as a plain Script, whose top-level bindings are non-configurable
+// and cannot be re-described — there the script-shaped globals stay, and only
+// the page scope (whose wrapper prologue made every name configurable) gets
+// the exact WebIDL attributes.
+function _idl_define(obj, name, desc) {
+    try { Object.defineProperty(obj, name, desc); } catch (e) {}
+}
+[['IDBFactory', IDBFactory],
+ ['IDBVersionChangeEvent', IDBVersionChangeEvent],
+ ['IDBRequest', IDBRequest],
+ ['IDBOpenDBRequest', IDBOpenDBRequest],
+ ['IDBDatabase', IDBDatabase],
+ ['IDBTransaction', IDBTransaction],
+ ['IDBObjectStore', IDBObjectStore],
+ ['IDBIndex', IDBIndex],
+ ['IDBKeyRange', IDBKeyRange],
+ ['IDBCursor', IDBCursor],
+ ['IDBCursorWithValue', IDBCursorWithValue]].forEach(function(pair) {
+    _idl_define(globalThis, pair[0],
+        { value: pair[1], writable: true, enumerable: false, configurable: true });
+    _idl_define(pair[1], 'prototype',
+        { value: pair[1].prototype, writable: false, enumerable: false, configurable: false });
+    _idl_define(pair[1].prototype, 'constructor',
+        { value: pair[1], writable: true, enumerable: false, configurable: true });
+    _idl_define(pair[1].prototype, Symbol.toStringTag,
+        { value: pair[0], writable: false, enumerable: false, configurable: true });
+});
+_idl_define(globalThis, 'indexedDB', {
+    get: function() {
+        if (this !== undefined && this !== globalThis) throw new TypeError('Illegal invocation');
+        return indexedDB;
+    },
+    enumerable: true, configurable: true
+});
 __lumen_C._lumen_idb_flush = _lumen_idb_flush;
