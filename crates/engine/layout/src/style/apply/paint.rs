@@ -51,6 +51,7 @@ use crate::style::{
     StrokeLinecap,
     StrokeLinejoin,
     SvgColorInterpolation,
+    SvgColorInterpolationFilters,
     SvgPaint,
     SvgPaintOrder,
     Visibility,
@@ -985,6 +986,40 @@ pub(in crate::style) fn apply_decl_paint(
                 style.svg_color_interpolation = SvgColorInterpolation::Srgb;
             } else if v.eq_ignore_ascii_case("linearrgb") {
                 style.svg_color_interpolation = SvgColorInterpolation::LinearRgb;
+            }
+        }
+        // Filter Effects L1 §11: flood-color/lighting-color take `<color>`
+        // (same parser as caret-color; `currentcolor` stays unresolved in
+        // `CssColor::CurrentColor`), flood-opacity takes `<number> |
+        // <percentage>` clamped to 0..1 like fill-opacity.
+        "color-interpolation-filters" => {
+            let v = val.trim();
+            if v.eq_ignore_ascii_case("auto") {
+                style.svg_color_interpolation_filters = SvgColorInterpolationFilters::Auto;
+            } else if v.eq_ignore_ascii_case("srgb") {
+                style.svg_color_interpolation_filters = SvgColorInterpolationFilters::Srgb;
+            } else if v.eq_ignore_ascii_case("linearrgb") {
+                style.svg_color_interpolation_filters = SvgColorInterpolationFilters::LinearRgb;
+            }
+        }
+        "flood-color" | "lighting-color" => {
+            if let Some(c) = parse_css_color_legacy(val, is_quirks) {
+                if prop == "flood-color" {
+                    style.flood_color = c;
+                } else {
+                    style.lighting_color = c;
+                }
+            }
+        }
+        "flood-opacity" => {
+            let v = val.trim();
+            let parsed = if let Some(pct) = v.strip_suffix('%') {
+                pct.trim().parse::<f32>().ok().map(|n| n / 100.0)
+            } else {
+                v.parse::<f32>().ok()
+            };
+            if let Some(o) = parsed {
+                style.flood_opacity = o.clamp(0.0, 1.0);
             }
         }
         "path-length" => {

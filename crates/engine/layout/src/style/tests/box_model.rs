@@ -640,6 +640,48 @@ use super::*;
         assert_eq!(ts_prop("path-length", "none").svg_path_length, None);
     }
 
+    // === Filter Effects L1 §11 (SVG-FILTER-10-S1) ===
+
+    #[test]
+    fn filter_primitive_properties_defaults() {
+        use crate::style::SvgColorInterpolationFilters as C;
+        let root = ComputedStyle::root();
+        assert_eq!(root.flood_color, CssColor::Rgba(Color { r: 0, g: 0, b: 0, a: 255 }));
+        assert_eq!(root.flood_opacity, 1.0);
+        assert_eq!(root.lighting_color, CssColor::Rgba(Color { r: 255, g: 255, b: 255, a: 255 }));
+        assert_eq!(root.svg_color_interpolation_filters, C::LinearRgb);
+        // Invalid values leave the initial in place.
+        assert_eq!(ts_prop("color-interpolation-filters", "none").svg_color_interpolation_filters, C::LinearRgb);
+        assert_eq!(ts_prop("flood-color", "none").flood_color, CssColor::Rgba(Color { r: 0, g: 0, b: 0, a: 255 }));
+        assert_eq!(ts_prop("flood-opacity", "junk").flood_opacity, 1.0);
+    }
+
+    #[test]
+    fn flood_opacity_clamps_and_accepts_percent() {
+        assert_eq!(ts_prop("flood-opacity", "50%").flood_opacity, 0.5);
+        assert_eq!(ts_prop("flood-opacity", "2").flood_opacity, 1.0);
+        assert_eq!(ts_prop("flood-opacity", "-0.25").flood_opacity, 0.0);
+    }
+
+    #[test]
+    fn flood_color_keeps_currentcolor_unresolved() {
+        assert_eq!(ts_prop("flood-color", "currentcolor").flood_color, CssColor::CurrentColor);
+        assert_eq!(ts_prop("lighting-color", "CurrentColor").lighting_color, CssColor::CurrentColor);
+        assert_eq!(ts_prop("flood-color", "green").flood_color, CssColor::Rgba(Color { r: 0, g: 128, b: 0, a: 255 }));
+    }
+
+    #[test]
+    fn color_interpolation_filters_inherits_flood_trio_does_not() {
+        use crate::style::SvgColorInterpolationFilters as C;
+        let parent = ts_prop("color-interpolation-filters", "sRGB");
+        let inherited = crate::style::ComputedStyle::inheriting(&parent);
+        assert_eq!(inherited.svg_color_interpolation_filters, C::Srgb);
+        // flood-color/flood-opacity/lighting-color reset to initial.
+        assert_eq!(inherited.flood_color, CssColor::Rgba(Color { r: 0, g: 0, b: 0, a: 255 }));
+        assert_eq!(inherited.flood_opacity, 1.0);
+        assert_eq!(inherited.lighting_color, CssColor::Rgba(Color { r: 255, g: 255, b: 255, a: 255 }));
+    }
+
     #[test]
     fn clip_rule_default_is_nonzero() {
         assert_eq!(ComputedStyle::root().svg_clip_rule, FillRule::NonZero);

@@ -134,6 +134,13 @@ pub(in crate::style) fn apply_svg_presentational_hints(
         // SVG 1.1 §14.3 / CSS Masking L1 §3.1 — `clip-path="url(#id)"`;
         // `compute_style` подменяет ссылку на разрешённый `<clipPath>`.
         "clip-path",
+        // Filter Effects L1 §11 — the four filter-primitive properties
+        // (SVG-FILTER-10-S1). Read from fe* primitives and `<filter>` through
+        // the cascade (`box_tree/svg_filter.rs`).
+        "flood-color",
+        "flood-opacity",
+        "lighting-color",
+        "color-interpolation-filters",
         // Filter Effects L1 §3 — `filter="url(#id)"` (как `clip-path`: ссылку
         // разворачивает `compute_style`).
         "filter",
@@ -153,12 +160,21 @@ pub(in crate::style) fn apply_svg_presentational_hints(
     }
 }
 /// True for SVG element local names that accept SVG presentation attributes.
-/// Covers the shapes/containers Lumen lays out plus text elements.
+/// Covers the shapes/containers Lumen lays out plus text elements, and the
+/// `<filter>` element with its `fe*` primitives — the four Filter Effects
+/// properties (`flood-color`, `flood-opacity`, `lighting-color`,
+/// `color-interpolation-filters`) reach the cascade there (SVG-FILTER-10-S1).
 pub(in crate::style) fn is_svg_presentational_element(local: &str) -> bool {
     matches!(
         local,
         "svg" | "g" | "rect" | "circle" | "ellipse" | "line" | "path"
             | "polygon" | "polyline" | "text" | "tspan" | "textPath" | "use" | "clipPath"
+            | "filter" | "feBlend" | "feColorMatrix" | "feComponentTransfer" | "feComposite"
+            | "feConvolveMatrix" | "feDiffuseLighting" | "feDisplacementMap" | "feDistantLight"
+            | "feDropShadow" | "feFlood" | "feFuncA" | "feFuncB" | "feFuncG" | "feFuncR"
+            | "feGaussianBlur" | "feImage" | "feMerge" | "feMergeNode" | "feMorphology"
+            | "feOffset" | "fePointLight" | "feSpecularLighting" | "feSpotLight" | "feTile"
+            | "feTurbulence"
     )
 }
 /// HTML5 §15: `bgcolor` атрибут на `<body>` / table-related элементах

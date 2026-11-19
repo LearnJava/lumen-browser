@@ -12,9 +12,10 @@
 //! `feImage href="#id"` раскрывается в картинку-элемент ([`FePrimitive::Element`]).
 //!
 //! Свойства `flood-color`/`flood-opacity`/`lighting-color`/
-//! `color-interpolation-filters` читаются из presentation-атрибута и
-//! inline-`style` примитива: правила таблицы стилей не учитываются (в
-//! `ComputedStyle` этих свойств пока нет).
+//! `color-interpolation-filters` живут в `ComputedStyle` (SVG-FILTER-10-S1):
+//! их значения попадают сюда из каскада — правила таблицы стилей, inline
+//! `style` и presentation-атрибуты (нулевая специфичность). До S2 граф
+//! читает их по-старому — из атрибута и inline `style` примитива.
 
 use std::sync::Arc;
 

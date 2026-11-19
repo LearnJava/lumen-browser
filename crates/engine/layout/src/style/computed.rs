@@ -70,6 +70,16 @@ pub enum SvgColorInterpolation {
     LinearRgb,
 }
 
+/// Filter Effects L1 §«The `color-interpolation-filters` property» —
+/// `auto | sRGB | linearRGB`. Inherited. Initial `linearRGB`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SvgColorInterpolationFilters {
+    Auto,
+    #[default]
+    LinearRgb,
+    Srgb,
+}
+
 /// Storage for the logical min/max size longhands, resolved onto
 /// `min-`/`max-` `width`/`height` by `writing-mode` after the cascade.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -1243,6 +1253,20 @@ pub struct ComputedStyle {
     pub svg_color_interpolation: SvgColorInterpolation,
     /// SVG 2 §Geometry — `path-length` (`none | <number>`). Not inherited.
     pub svg_path_length: Option<f32>,
+    /// Filter Effects L1 §11.6 — `flood-color` (`<color>`). Not inherited.
+    /// Initial `black`. `CssColor::CurrentColor` stays unresolved (resolves
+    /// against the element's `color` at use time), so the filter graph can
+    /// taint `currentColor` chains (SVG-FILTER-2).
+    pub flood_color: CssColor,
+    /// Filter Effects L1 §11.6 — `flood-opacity` (`<number> | <percentage>`).
+    /// Not inherited. Clamped to 0..1 at cascade time. Initial `1`.
+    pub flood_opacity: f32,
+    /// Filter Effects L1 §11.10 — `lighting-color` (`<color>`). Not inherited.
+    /// Initial `white`; same `CurrentColor` semantics as `flood_color`.
+    pub lighting_color: CssColor,
+    /// Filter Effects L1 — `color-interpolation-filters`
+    /// (`auto | sRGB | linearRGB`). Inherited. Initial `linearRGB`.
+    pub svg_color_interpolation_filters: SvgColorInterpolationFilters,
     // CSS Logical Properties L1 §2 — temporary storage for logical properties.
     // These are resolved to physical properties in resolve_logical_properties().
     /// CSS Logical Properties L1 — `inline-size`. `None` = auto.

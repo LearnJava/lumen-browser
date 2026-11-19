@@ -1045,6 +1045,21 @@ fn apply_css_wide_keyword_with(
         "color-interpolation" => {
             style.svg_color_interpolation = if inh { inherited.svg_color_interpolation } else { init.svg_color_interpolation };
         }
+        // Filter Effects L1: color-interpolation-filters is inherited; the
+        // flood-*/lighting-color trio is not.
+        "color-interpolation-filters" => {
+            style.svg_color_interpolation_filters =
+                if inh { inherited.svg_color_interpolation_filters } else { init.svg_color_interpolation_filters };
+        }
+        "flood-color" => {
+            style.flood_color = if inh_only_inherit { inherited.flood_color } else { init.flood_color };
+        }
+        "flood-opacity" => {
+            style.flood_opacity = if inh_only_inherit { inherited.flood_opacity } else { init.flood_opacity };
+        }
+        "lighting-color" => {
+            style.lighting_color = if inh_only_inherit { inherited.lighting_color } else { init.lighting_color };
+        }
         // CSS Fill & Stroke L3 §6 — paint-order is inherited: unset/revert → inherited.
         "paint-order" => {
             style.paint_order = if inh { inherited.paint_order } else { init.paint_order };
