@@ -64,6 +64,9 @@ fn web_api_shim_splices_its_parts_in_source_order() {
         // Web Crypto — своя часть (BUG-1688; её исполняет и воркер) между IDB и хвостом.
         "function getRandomValues(typedArray)",
         "g._lumen_crypto_expose_secure = exposeSecure",
+        // Native-фасад toString (BUG-1826 срез 3) — самый последний кусок:
+        // маркировка поверхности возможна только когда страничного кода ещё нет.
+        "Function.prototype.toString = function toString",
     ] {
         assert_eq!(
             shim.matches(marker).count(),
@@ -141,6 +144,9 @@ fn make_doc() -> Arc<Mutex<Document>> {
 
 #[cfg(feature = "v8-backend")]
 mod v8_trusted_types;
+
+#[cfg(feature = "v8-backend")]
+mod v8_native_tostring;
 
 #[cfg(feature = "v8-backend")]
 mod v8_wasm_native;

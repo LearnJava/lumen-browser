@@ -136,7 +136,15 @@ Object.defineProperty(Performance.prototype, 'timeOrigin', {
 });
 
 Performance.prototype.now = function() {
-    return (typeof _lumen_now_ms === 'function' ? _lumen_now_ms() : 0) - _perf_origin_ms;
+    // HR Time L3 «time coarsening»: non-isolated contexts get the clock coarsened
+    // to 100 µs, and Chrome does exactly that. `_lumen_now_ms` is a raw
+    // SystemTime whose values resolve ~0.25 µs — the exposed precision itself is
+    // a fingerprinting signal (timer-precision probes; BUG-1826: Cloudflare
+    // challenge spins forever on the fine clock). Scheduling keeps the fine
+    // native; only the page-visible value is quantized (floor keeps monotonicity).
+    return Math.floor(
+        ((typeof _lumen_now_ms === 'function' ? _lumen_now_ms() : 0) - _perf_origin_ms) * 10
+    ) / 10;
 };
 // User Timing L3 §4.2/§4.3 `[Default] object toJSON()` — shared by
 // PerformanceMark and PerformanceMeasure, the only two entry types with a
