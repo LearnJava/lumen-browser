@@ -4,7 +4,10 @@ use std::time::{Duration, Instant};
 /// LOAD-2: сколько страница ждёт таблицы стилей из `<head>` до первого
 /// черновика. Chrome тоже блокирует отрисовку на CSS, но один медленный
 /// файл не должен держать экран пустым до `FETCH_READ_TIMEOUT` (60 с).
-pub(crate) const STREAM_CSS_DEADLINE: Duration = Duration::from_secs(2);
+/// 600 мс: длинный дедлайн давал ~2 с чисто белого окна до первого кадра —
+/// заметно хуже Chrome; пришедшие к этому моменту таблицы уже в
+/// `stream_sheet`, остальные домёржатся следующими кадрами.
+pub(crate) const STREAM_CSS_DEADLINE: Duration = Duration::from_millis(600);
 
 #[derive(Clone, Copy)]
 struct CssPending {
