@@ -161,6 +161,12 @@ impl Lumen {
         // deadline and the rAF-pump deadline (set below), so neither wakeup
         // source can starve the other.
         let mut next_wakeup: Option<std::time::Instant> = None;
+        // Chrome tooltip: the pending label's 2s deadline joins the wakeup
+        // set; `promote_chrome_tooltip` turns it visible once it passes.
+        if let Some((_, _, deadline)) = self.chrome_tooltip_pending {
+            next_wakeup = Some(next_wakeup.map_or(deadline, |t| t.min(deadline)));
+        }
+        self.promote_chrome_tooltip();
         // BUG-480 срез 1: памп sub-документов <iframe>. Хэндлы фреймов живут
         // только на UI-стороне (в EngineJsState их нет), поэтому прямые вызовы
         // без route_*: V8PersistentJs сам туннелирует на JS-поток (ADR-014).

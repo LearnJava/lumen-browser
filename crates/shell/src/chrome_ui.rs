@@ -939,6 +939,37 @@ impl Lumen {
             skin: self.chrome_skin.clone(),
             deck_cards_open: self.deck_cards_open,
             deck_zen: self.deck_zen_open,
+            deck_blank: {
+                let b = matches!(self.source, PageSource::Empty)
+                    || matches!(self.source.url_str(), Some("about:blank") | Some("about:newtab"));
+                if std::env::var_os("LUMEN_DECK_DEBUG").is_some() {
+                    let box_of = |id: &str| {
+                        self.chrome_doc
+                            .as_ref()
+                            .and_then(|(doc, _)| doc.find_by_id(id))
+                            .and_then(|nid| {
+                                self.chrome_layout.as_ref().and_then(|(lb, _)| {
+                                    lumen_layout::find_box_by_node(lb, nid)
+                                })
+                            })
+                            .map(|bx| (bx.rect.x, bx.rect.y, bx.rect.width, bx.rect.height))
+                    };
+                    eprintln!(
+                        "[deck] blank={b} src={:?} host={:?} zen={} skin={} vp={:?} top={:?} stage={:?} film={:?} dock={:?} page={:?}",
+                        self.source.url_str(),
+                        self.chrome_page_host_rect,
+                        self.deck_zen_open,
+                        self.chrome_skin,
+                        self.chrome_prev_viewport,
+                        box_of("deckTop"),
+                        box_of("deckStage"),
+                        box_of("deckFilm"),
+                        box_of("deckDock"),
+                        box_of("contentAreaDeck"),
+                    );
+                }
+                b
+            },
             profile_menu_open: self.profile_menu.visible,
             control_panel: lumen_chrome::ChromeControlPanelModel {
                 shape: self.control_panel_shape,
@@ -1072,6 +1103,144 @@ impl Lumen {
     pub(crate) fn chrome_hit_test(&self, x_css: f32, y_css: f32) -> Option<lumen_paint::HitTestResult> {
         let (layout, _) = self.chrome_layout.as_ref()?;
         hit_test(Point::new(x_css, y_css), layout)
+    }
+
+    /// Chrome tooltip bookkeeping on hover change: resolves the nearest
+    /// labelled ancestor (`data-tip` → `aria-label` → `title`, first
+    /// non-empty wins) and (re)arms the 2s delay. Moving between children
+    /// of the same labelled element keeps the pending deadline — the key is
+    /// the *source* node, not the hit node.
+    pub(crate) fn update_chrome_tooltip(&mut self, hit: Option<&lumen_paint::HitTestResult>) {
+        let Some(hit) = hit else {
+            self.chrome_tooltip_pending = None;
+            self.chrome_tooltip = None;
+            return;
+        };
+        let Some((doc, _)) = self.chrome_doc.as_ref() else { return };
+        let mut label = None;
+        for &nid in &hit.path {
+            let node = doc.get(nid);
+            for attr in ["data-tip", "aria-label", "title"] {
+                if let Some(v) = node.get_attr(attr).map(str::trim).filter(|v| !v.is_empty()) {
+                    label = Some((v.to_owned(), nid));
+                    break;
+                }
+            }
+            if label.is_some() {
+                break;
+            }
+        }
+        match label {
+            Some((text, src)) => {
+                let same_pending = matches!(
+                    &self.chrome_tooltip_pending,
+                    Some((t, n, _)) if *t == text && *n == src
+                );
+                let same_shown = matches!(
+                    &self.chrome_tooltip,
+                    Some((t, n)) if *t == text && *n == src
+                );
+                if !same_pending && !same_shown {
+                    self.chrome_tooltip = None;
+                    self.chrome_tooltip_pending = Some((
+                        text,
+                        src,
+                        std::time::Instant::now() + std::time::Duration::from_secs(2),
+                    ));
+                }
+            }
+            None => {
+                self.chrome_tooltip_pending = None;
+                self.chrome_tooltip = None;
+            }
+        }
+    }
+
+    /// Promotes a pending tooltip whose 2s deadline has passed — called from
+    /// `about_to_wait` (the deadline joins `next_wakeup`). Shows it only
+    /// while the cursor is still inside the labelled element, i.e. the
+    /// source node is an ancestor-or-self of the currently hovered node.
+    pub(crate) fn promote_chrome_tooltip(&mut self) {
+        let Some((text, src, deadline)) = self.chrome_tooltip_pending.clone() else {
+            return;
+        };
+        if std::time::Instant::now() < deadline {
+            return;
+        }
+        self.chrome_tooltip_pending = None;
+        let Some(hov) = self.chrome_hovered_nid else { return };
+        let still_inside = self.chrome_doc.as_ref().is_some_and(|(doc, _)| {
+            let mut cur = Some(hov);
+            while let Some(id) = cur {
+                if id == src {
+                    return true;
+                }
+                cur = doc.get(id).parent;
+            }
+            false
+        });
+        if still_inside {
+            self.chrome_tooltip = Some((text, src));
+            self.request_redraw();
+        }
+    }
+
+    /// Display list for the visible chrome tooltip: dark rounded pill with
+    /// the label text, centred under the source element's box (flipped
+    /// above when there is no room below). Returns `None` when the source
+    /// node has no layout box (e.g. hidden skin).
+    pub(crate) fn chrome_tooltip_dl(
+        &self,
+        text: &str,
+        src: NodeId,
+    ) -> Option<lumen_paint::DisplayList> {
+        use lumen_layout::{Color, FontStretch, FontStyle, FontWeight};
+        let (layout, _) = self.chrome_layout.as_ref()?;
+        let anchor = lumen_layout::find_box_by_node(layout, src)?;
+        let fs = 12.0_f32;
+        let pad_x = 9.0_f32;
+        let pad_y = 5.0_f32;
+        let w = ((text.chars().count() as f32) * 6.6 + pad_x * 2.0).min(360.0);
+        let h = fs + pad_y * 2.0;
+        let win_w = layout.rect.width.max(0.0);
+        let win_h = layout.rect.height.max(0.0);
+        let mut x = anchor.rect.x + anchor.rect.width / 2.0 - w / 2.0;
+        x = x.clamp(4.0, (win_w - w - 4.0).max(4.0));
+        let mut y = anchor.rect.y + anchor.rect.height + 6.0;
+        if y + h > win_h - 4.0 {
+            y = anchor.rect.y - h - 6.0;
+        }
+        let rect = Rect::new(x, y.max(4.0), w, h);
+        let bg = Color { r: 28, g: 31, b: 38, a: 235 };
+        let fg = Color { r: 255, g: 255, b: 255, a: 255 };
+        Some(vec![
+            lumen_paint::DisplayCommand::FillRoundedRect {
+                rect,
+                color: bg,
+                radii: lumen_paint::CornerRadii {
+                    tl: 7.0, tl_y: 7.0, tr: 7.0, tr_y: 7.0,
+                    br: 7.0, br_y: 7.0, bl: 7.0, bl_y: 7.0,
+                },
+            },
+            lumen_paint::DisplayCommand::DrawText {
+                font_stretch: FontStretch::NORMAL,
+                rect: Rect::new(x + pad_x, y + pad_y, w - pad_x * 2.0, fs),
+                text: text.to_string(),
+                font_size: fs,
+                color: fg,
+                font_family: Vec::new(),
+                font_weight: FontWeight::NORMAL,
+                font_style: FontStyle::Normal,
+                font_variation_axes: Vec::new(),
+                font_features: Vec::new(),
+                font_palette: None,
+                tab_size: 0.0,
+                letter_spacing: 0,
+                word_spacing: 0,
+                highlight_name: None,
+                text_orientation: None,
+            },
+        ])
     }
 
     /// CC-5: walks `hit.path` (bubble order, closest node first — the same
@@ -1516,7 +1685,7 @@ pub(crate) fn chrome_node_changes(
 /// `#contentArea` children that [`take_content_area`] keeps in the chrome tree
 /// (hit-testing reads them there) and that [`Lumen::relayout_chrome_host`]
 /// paints separately, unclipped — BUG-1605.
-pub(crate) const SALVAGED_POPOVER_IDS: [&str; 17] = [
+pub(crate) const SALVAGED_POPOVER_IDS: [&str; 19] = [
     lumen_chrome::ids::FIND_BAR,
     lumen_chrome::ids::DOWNLOADS_PANEL,
     lumen_chrome::ids::CP_OVERLAY,
@@ -1534,6 +1703,8 @@ pub(crate) const SALVAGED_POPOVER_IDS: [&str; 17] = [
     lumen_chrome::ids::PIP_CARD,
     lumen_chrome::ids::PAGE_CTX_MENU,
     lumen_chrome::ids::WORKSPACE_BAR,
+    lumen_chrome::ids::DECK_KEYS,
+    lumen_chrome::ids::DECK_CARDS,
 ];
 
 /// CC-4/CC-9: removes `#contentArea`'s [`LayoutBox`] from `lb`'s subtree

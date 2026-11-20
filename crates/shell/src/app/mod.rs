@@ -336,6 +336,8 @@ impl Lumen {
                 self.status_hover_source = None;
                 self.status_bubble_sync(false);
                 self.resize_active = None; // Clear resize when cursor leaves window
+                self.chrome_tooltip = None;
+                self.chrome_tooltip_pending = None;
                 // Clear hover state when cursor leaves the window.
                 if self.hovered_nid.is_some() {
                     // Dispatch leave events before clearing hovered state.

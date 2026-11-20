@@ -770,6 +770,13 @@ impl Lumen {
             popovers.append(&mut overlay_buf);
             overlay_buf = popovers;
         }
+        // Chrome tooltip (data-tip/aria-label/title, 2s hover delay) — appended
+        // last so it paints above every other overlay segment.
+        if let Some((tip_text, tip_src)) = self.chrome_tooltip.clone()
+            && let Some(mut tip_dl) = self.chrome_tooltip_dl(&tip_text, tip_src)
+        {
+            overlay_buf.append(&mut tip_dl);
+        }
         if let Some(t0) = frame_log_t0 {
             bmarks[0] = t0.elapsed().as_secs_f64() * 1e3;
         }

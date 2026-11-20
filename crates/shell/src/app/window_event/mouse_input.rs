@@ -132,6 +132,10 @@ impl Lumen {
             // documents can't share interactive thread-locals).
             if self.point_over_chrome(x_css, y_css) {
                 self.chrome_active_nid = self.chrome_hit_test(x_css, y_css).map(|r| r.node);
+                // Нажатие прячет тултип, как в Chrome — до следующего
+                // 2-секундного dwell на элементе.
+                self.chrome_tooltip = None;
+                self.chrome_tooltip_pending = None;
                 self.relayout_chrome_host();
                 self.request_redraw();
             }

@@ -284,13 +284,15 @@ impl Lumen {
             // `point_over_chrome`/`chrome_hit_test` both answer "no
             // chrome" once the pointer is over the page, so moving out
             // of the sidebar/toolbar correctly clears this again.
-            let new_chrome_hovered = if self.point_over_chrome(x_css, y_css) {
-                self.chrome_hit_test(x_css, y_css).map(|r| r.node)
+            let chrome_hit = if self.point_over_chrome(x_css, y_css) {
+                self.chrome_hit_test(x_css, y_css)
             } else {
                 None
             };
+            let new_chrome_hovered = chrome_hit.as_ref().map(|r| r.node);
             if new_chrome_hovered != self.chrome_hovered_nid {
                 self.chrome_hovered_nid = new_chrome_hovered;
+                self.update_chrome_tooltip(chrome_hit.as_ref());
                 self.relayout_chrome_host();
                 self.request_redraw();
             }

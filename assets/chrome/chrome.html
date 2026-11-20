@@ -1164,6 +1164,33 @@ body[data-deck-cards] .deck-cards{display:block;}
 /* Deck-zen: луна в deck-dock прячет нижнюю панель — минимальный deck без
    переключения на классический zen-скин (body[data-deck-zen]). */
 body[data-deck-zen] .deck-dock{display:none;}
+
+/* Deck-zen: шпаргалка горячих клавиш по центру экрана — только на
+   blank/new-tab странице (body[data-deck-blank]), чтобы не перекрывать
+   контент реальных сайтов. Тултипы на все
+   элементы хрома рисует шелл (chrome_tooltip_dl): текст берётся из
+   data-tip/aria-label/title ближайшего предка hover-узла и показывается
+   через 2с наведения — единый механизм, не только в zen. */
+.deck-keys{
+  position:absolute; inset:0; display:none;
+  align-items:center; justify-content:center;
+  pointer-events:none; z-index:30;
+}
+body[data-deck-zen][data-deck-blank] .deck-keys{display:flex;}
+body[data-deck-cards] .deck-keys{display:none;}
+.dk-card{
+  display:flex; flex-direction:column; align-items:center; gap:10px;
+  padding:18px 24px; background:rgba(17,20,28,.92);
+  border:1px solid rgba(255,255,255,.08); border-radius:14px;
+}
+.dk-title{color:#fff; font-size:13px; font-weight:600;}
+.dk-cols{display:flex; gap:30px;}
+.dk-col{display:flex; flex-direction:column; gap:4px;}
+.dk-row{display:flex; align-items:center; gap:14px; font-size:12px; color:#AAB0C0; white-space:nowrap;}
+.dk-k{
+  min-width:118px; text-align:right; color:#Dfe3ee;
+  font-family:ui-monospace,Consolas,monospace; font-size:11.5px;
+}
 .deck-d{
   width:34px; height:30px; display:flex; align-items:center;
   justify-content:center; border:none; border-radius:8px;
@@ -1550,7 +1577,7 @@ body[data-deck-zen] .deck-dock{display:none;}
         <div class="omnibox-wrap">
           <div class="omnibox" data-testid="omnibox">
             <button class="lock-btn" id="lockBtn" data-action="open-cert-viewer" aria-label="Просмотр сертификата"><svg class="icon"><use href="#i-lock"/></svg></button>
-            <input id="omniInput" type="text" placeholder="Поиск или адрес сайта… (попробуйте: аpple.com)" role="combobox" aria-autocomplete="list">
+            <input id="omniInput" type="text" placeholder="Поиск или адрес сайта… (попробуйте: аpple.com)" role="combobox" aria-autocomplete="list" aria-label="Адресная строка — поиск или адрес, @-команды">
             <div class="omnibox-actions">
               <div class="help-chip" id="helpChip"><button id="helpChipOpen" data-action="compat-chip-open"><span id="helpChipText">Сайт работает не так?</span></button><button class="help-chip-dismiss" id="helpChipDismiss" data-action="compat-chip-dismiss">Не сейчас</button></div>
               <button class="zoom-btn" id="zoomBtn" data-action="zoom-reset" aria-label="Сбросить масштаб страницы"><span id="zoomLabel">100%</span></button>
@@ -2321,22 +2348,52 @@ body[data-deck-zen] .deck-dock{display:none;}
      chrome_ui.rs, когда #contentArea скрыт. Стрелки .deck-cf-arrow
      перемещают активную вкладку (data-action deck-prev/deck-next). -->
 <div class="deck-ui" id="chromeDeck">
-  <div class="deck-top">
+  <div class="deck-top" id="deckTop">
     <button class="deck-ib" data-action="reload" aria-label="Обновить"><svg class="icon"><use href="#i-reload"/></svg></button>
     <button class="deck-ib" data-action="new-tab" aria-label="Новая вкладка"><svg class="icon"><use href="#i-plus"/></svg></button>
-    <div class="deck-omni"><svg class="icon"><use href="#i-lock"/></svg><input class="deck-omni-input" id="deckOmniInput" type="text" placeholder="Поиск или адрес"></div>
+    <div class="deck-omni"><svg class="icon"><use href="#i-lock"/></svg><input class="deck-omni-input" id="deckOmniInput" type="text" placeholder="Поиск или адрес" aria-label="Адресная строка — поиск или адрес, @-команды"></div>
     <button class="deck-ib" id="deckCardsBtn" data-action="toggle-deck-cards" aria-label="Обзор вкладок — колода"><svg class="icon"><use href="#i-grid"/></svg></button>
+    <button class="deck-ib" data-action="toggle-zen" aria-label="Дзен-режим"><svg class="icon"><use href="#i-moon"/></svg></button>
     <button class="deck-ib" data-action="show-view" data-view="settings" aria-label="Настройки"><svg class="icon"><use href="#i-gear"/></svg></button>
   </div>
-  <div class="deck-stage">
+  <div class="deck-stage" id="deckStage">
     <div class="deck-cards" id="deckCards">
       <button class="deck-cf-arrow l" data-action="deck-prev" aria-label="Предыдущая вкладка"><svg class="icon"><use href="#i-chevleft"/></svg></button>
       <button class="deck-cf-arrow r" data-action="deck-next" aria-label="Следующая вкладка"><svg class="icon"><use href="#i-chevright"/></svg></button>
     </div>
     <div class="deck-page" id="contentAreaDeck"></div>
+    <div class="deck-keys" id="deckKeys">
+      <div class="dk-card">
+      <div class="dk-title">Горячие клавиши</div>
+      <div class="dk-cols">
+        <div class="dk-col">
+          <div class="dk-row"><span class="dk-k">Ctrl+T</span><span>новая вкладка</span></div>
+          <div class="dk-row"><span class="dk-k">Ctrl+Shift+T</span><span>вернуть закрытую</span></div>
+          <div class="dk-row"><span class="dk-k">Ctrl+W</span><span>закрыть вкладку</span></div>
+          <div class="dk-row"><span class="dk-k">Ctrl+Tab</span><span>следующая вкладка</span></div>
+          <div class="dk-row"><span class="dk-k">Ctrl+L</span><span>адресная строка</span></div>
+          <div class="dk-row"><span class="dk-k">Ctrl+R · F5</span><span>обновить</span></div>
+          <div class="dk-row"><span class="dk-k">Esc</span><span>остановить загрузку</span></div>
+          <div class="dk-row"><span class="dk-k">F</span><span>подсказки на странице</span></div>
+        </div>
+        <div class="dk-col">
+          <div class="dk-row"><span class="dk-k">Alt+← / →</span><span>назад / вперёд</span></div>
+          <div class="dk-row"><span class="dk-k">Ctrl+F</span><span>найти на странице</span></div>
+          <div class="dk-row"><span class="dk-k">Ctrl+D</span><span>в закладки</span></div>
+          <div class="dk-row"><span class="dk-k">Ctrl+H</span><span>история</span></div>
+          <div class="dk-row"><span class="dk-k">Ctrl+Shift+O</span><span>менеджер закладок</span></div>
+          <div class="dk-row"><span class="dk-k">Ctrl+J</span><span>загрузки</span></div>
+          <div class="dk-row"><span class="dk-k">Ctrl+,</span><span>настройки</span></div>
+          <div class="dk-row"><span class="dk-k">Ctrl+K</span><span>командная палитра</span></div>
+          <div class="dk-row"><span class="dk-k">Ctrl+= / − / 0</span><span>масштаб</span></div>
+          <div class="dk-row"><span class="dk-k">F12</span><span>консоль разработчика</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
   </div>
   <div class="deck-film" id="deckFilm"></div>
-  <div class="deck-dock">
+  <div class="deck-dock" id="deckDock">
     <button class="deck-d" data-action="show-view" data-view="history" aria-label="История"><svg class="icon"><use href="#i-clock"/></svg></button>
     <button class="deck-d" data-action="show-view" data-view="bookmarks" aria-label="Закладки"><svg class="icon"><use href="#i-star"/></svg></button>
     <button class="deck-d" data-action="toggle-downloads" aria-label="Загрузки"><svg class="icon"><use href="#i-download"/></svg></button>

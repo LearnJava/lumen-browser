@@ -123,6 +123,15 @@ pub(crate) struct Lumen {
     /// interactive thread-locals rather than inheriting them — the two
     /// documents' hover state must never leak into each other's layout pass.
     pub(crate) chrome_hovered_nid: Option<NodeId>,
+    /// Chrome tooltip currently shown: `(text, source NodeId)` — the source
+    /// is the ancestor carrying `data-tip`/`aria-label`/`title`, so moving
+    /// between its children does not retrigger the delay. Painted by
+    /// `chrome_tooltip_dl` into the unclipped overlay.
+    pub(crate) chrome_tooltip: Option<(String, NodeId)>,
+    /// Pending chrome tooltip: `(text, source NodeId, deadline)` — promoted
+    /// to [`Self::chrome_tooltip`] once the 2s hover delay passes (the
+    /// deadline joins `about_to_wait`'s `next_wakeup` set).
+    pub(crate) chrome_tooltip_pending: Option<(String, NodeId, std::time::Instant)>,
     /// CC-5: pressed node in `chrome_layout`'s tree — mirrors
     /// [`Self::chrome_hovered_nid`] but for `:active`, set from
     /// `WindowEvent::MouseInput` press.

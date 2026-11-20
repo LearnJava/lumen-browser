@@ -71,6 +71,10 @@ pub struct ChromeModel {
     /// `.deck-dock` display:none) — deck-native zen minimal mode, toggled by
     /// the moon button while `skin == "deck"`. Mirrors `Lumen::deck_zen_open`.
     pub deck_zen: bool,
+    /// `true` when the active tab shows a blank/new-tab page
+    /// (`about:blank`/`about:newtab`) — gates the deck-zen shortcut card
+    /// (`body[data-deck-blank]`), which must not cover real pages.
+    pub deck_blank: bool,
     /// `true` shows the profile dropdown (`#profileMenu`/`#profileMenuH`,
     /// UX-CHROME-PANELS) — mirrors `ProfileMenuPanel::visible`.
     pub profile_menu_open: bool,
@@ -1288,6 +1292,11 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
             set_attr(doc, body, "data-deck-zen", "");
         } else {
             remove_attr(doc, body, "data-deck-zen");
+        }
+        if model.deck_blank {
+            set_attr(doc, body, "data-deck-blank", "");
+        } else {
+            remove_attr(doc, body, "data-deck-blank");
         }
         // Скин "deck" прячет `.app-frame` целиком — внутренние виды
         // (`#view-history`/`#view-bookmarks`/`#view-settings`) живут внутри

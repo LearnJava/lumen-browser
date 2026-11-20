@@ -424,6 +424,8 @@ fn run_window_mode_inner(
         chrome_layout: None,
         chrome_page_host_rect: None,
         chrome_hovered_nid: None,
+        chrome_tooltip: None,
+        chrome_tooltip_pending: None,
         chrome_active_nid: None,
         chrome_omni_input_rect: None,
         chrome_omni_font_size: 12.5,
