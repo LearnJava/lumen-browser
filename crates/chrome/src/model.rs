@@ -1311,7 +1311,7 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
         set_class_token(doc, btn, "loading", loading);
         set_attr(doc, btn, "aria-label", if loading { "Остановить" } else { "Обновить" });
     }
-    bind_omnibox(doc, &model.omnibox);
+    bind_omnibox(doc, &model.omnibox, model.skin == "deck");
     bind_dropdown(doc, &model.dropdown);
     bind_find_bar(doc, &model.find);
     bind_downloads(doc, model.downloads_open, &model.downloads, model.downloads_clearable);
@@ -2769,14 +2769,16 @@ fn bind_permission_row(doc: &mut Document, row: NodeId, state: ChromePermState) 
 /// rebuilt while a warning is present — hidden (`.show` absent) stale text
 /// left over from a previous warning is harmless, since CSS keeps it
 /// `display:none`.
-fn bind_omnibox(doc: &mut Document, omnibox: &OmniboxModel) {
+fn bind_omnibox(doc: &mut Document, omnibox: &OmniboxModel, deck_skin: bool) {
     if let Some(input) = doc.find_by_id(crate::ids::OMNI_INPUT) {
         set_attr(doc, input, "value", &omnibox.value);
     }
     // Deck skin's own omnibox — same editing state (`address_bar`), separate
     // node because the classic `#omniInput` lives under the hidden
-    // `.app-frame`. Harmless for other skins: the input simply isn't visible.
-    if let Some(input) = doc.find_by_id(crate::ids::DECK_OMNI_INPUT) {
+    // `.app-frame`. Written only for the deck skin: touching it on every
+    // keystroke under other skins would report a second selector-dirty node
+    // (BUG-341 S17 incremental bookkeeping) for a field nobody sees.
+    if deck_skin && let Some(input) = doc.find_by_id(crate::ids::DECK_OMNI_INPUT) {
         set_attr(doc, input, "value", &omnibox.value);
     }
     if let Some(btn) = doc.find_by_id(crate::ids::ZOOM_BTN) {
