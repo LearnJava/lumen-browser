@@ -2284,6 +2284,7 @@ fn ax_node_to_a11y(ax: &lumen_a11y::AXNode) -> A11yNode {
         description: ax.description.clone(),
         placeholder: ax.placeholder.clone(),
         state,
+        bounds: None,
         children: ax.children.iter().map(ax_node_to_a11y).collect(),
     }
 }

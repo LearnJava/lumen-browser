@@ -38,7 +38,7 @@ pub mod winit_session;
 pub mod gpu_session;
 
 pub use types::{
-    A11yNode, A11yState, AxQuery, AutomationCommand, AutomationReply, BoxModel, ComputedProperties, ConsoleEntry, ConsoleLevel,
+    A11yBounds, A11yNode, A11yState, AxQuery, AutomationCommand, AutomationReply, BoxModel, ComputedProperties, ConsoleEntry, ConsoleLevel,
     AutomationCookie, ExplainElement, ExplainPage, ExplainPagePhaseTimings, FingerprintProfile, InputCommand, InterceptedRequest,
     InvariantViolationCounts, NetworkEntry, NodeRef, ScrollDelta, TabInfo, Target, WaitCondition,
 };

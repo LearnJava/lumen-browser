@@ -152,11 +152,25 @@ pub fn chrome_nodes(snapshot: &ChromeSnapshot) -> Vec<AXNode> {
 /// see [`synthetic_id`]), so the result attaches via [`attach_chrome`]
 /// exactly like the synthetic nodes did.
 pub fn chrome_root_from_document(doc: &Document, root_id: NodeId, flat_tree: &FlatTree) -> AXNode {
+    chrome_root_from_document_mapped(doc, root_id, flat_tree).0
+}
+
+/// Same as [`chrome_root_from_document`], plus the synthetic→document
+/// [`NodeId`] map: callers that hold the chrome `LayoutBox` (the shell's
+/// automation a11y path) resolve each synthetic id back to the real DOM node
+/// to attach border-box geometry — synthetic ids alone cannot reach
+/// `find_box_by_node`.
+pub fn chrome_root_from_document_mapped(
+    doc: &Document,
+    root_id: NodeId,
+    flat_tree: &FlatTree,
+) -> (AXNode, HashMap<NodeId, NodeId>) {
     let tree = crate::build_ax_tree(doc, root_id, flat_tree);
     let mut old_to_new = HashMap::new();
     let mut counter = 0u32;
     assign_synthetic_ids(&tree.root, &mut old_to_new, &mut counter);
-    remap_ids(tree.root, &old_to_new)
+    let mut_by_doc = old_to_new.iter().map(|(doc, syn)| (*syn, *doc)).collect();
+    (remap_ids(tree.root, &old_to_new), mut_by_doc)
 }
 
 /// Preorder walk assigning every node in `node`'s subtree a fresh synthetic id.

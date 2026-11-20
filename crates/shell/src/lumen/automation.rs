@@ -180,9 +180,34 @@ impl Lumen {
             let doc = source.document.lock().ok()?;
             let flat_tree = lumen_dom::build_flat_tree(&doc);
             let ax_tree = lumen_a11y::build_ax_tree(&doc, doc.root(), &flat_tree);
-            let chrome = self.chrome_ax_nodes();
+            // Chrome nodes carry synthetic ids — resolve them back through
+            // `chrome_ax_nodes_mapped` and measure each against
+            // `chrome_layout` so automation gets window-space bounds for
+            // toolbar/sidebar controls (they are unreachable via `query`).
+            let (chrome, bounds) = match self.chrome_ax_nodes_mapped() {
+                Some((root, id_map)) => {
+                    let mut bounds = std::collections::HashMap::new();
+                    if let Some((layout, _)) = &self.chrome_layout {
+                        for (syn, doc_nid) in &id_map {
+                            if let Some(b) = lumen_layout::find_box_by_node(layout, *doc_nid) {
+                                bounds.insert(
+                                    syn.raw(),
+                                    lumen_driver::A11yBounds {
+                                        x: b.rect.x as f64,
+                                        y: b.rect.y as f64,
+                                        width: b.rect.width as f64,
+                                        height: b.rect.height as f64,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                    (vec![root], bounds)
+                }
+                None => (self.chrome_ax_nodes(), std::collections::HashMap::new()),
+            };
             let ax_tree = lumen_a11y::chrome::attach_chrome(ax_tree, chrome);
-            Some(automation_ax_node(&ax_tree.root))
+            Some(automation_ax_node(&ax_tree.root, &bounds))
         }
 
         /// Role and accessible name of the element a selector chain resolves to
@@ -554,7 +579,10 @@ pub(crate) fn collect_automation_text(doc: &lumen_dom::Document, id: lumen_dom::
 /// type (SDC-2 `A11yTree` support). Mirrors `lumen_driver`'s own private
 /// conversion in `session.rs`/`winit_session.rs` — kept local here since the
 /// shell has no dependency the other direction.
-pub(crate) fn automation_ax_node(ax: &lumen_a11y::AXNode) -> lumen_driver::A11yNode {
+pub(crate) fn automation_ax_node(
+    ax: &lumen_a11y::AXNode,
+    bounds: &std::collections::HashMap<u32, lumen_driver::A11yBounds>,
+) -> lumen_driver::A11yNode {
     let state = lumen_driver::A11yState {
         disabled: ax.state.disabled,
         checked: ax.state.checked,
@@ -574,6 +602,11 @@ pub(crate) fn automation_ax_node(ax: &lumen_a11y::AXNode) -> lumen_driver::A11yN
         description: ax.description.clone(),
         placeholder: ax.placeholder.clone(),
         state,
-        children: ax.children.iter().map(automation_ax_node).collect(),
+        bounds: bounds.get(&ax.node_id.raw()).copied(),
+        children: ax
+            .children
+            .iter()
+            .map(|c| automation_ax_node(c, bounds))
+            .collect(),
     }
 }

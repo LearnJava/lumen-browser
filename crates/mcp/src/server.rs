@@ -1032,6 +1032,7 @@ mod tests {
                 description: String::new(),
                 placeholder: String::new(),
                 state: lumen_driver::A11yState::default(),
+                bounds: None,
                 children: vec![],
             })
         }

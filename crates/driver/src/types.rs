@@ -108,6 +108,21 @@ pub struct A11yState {
     pub level: Option<u32>,
 }
 
+/// Border-box узла в координатах окна (логические пиксели) — для узлов,
+/// живущих вне страничного DOM (engine chrome: тулбар, сайдбар, оверлеи).
+/// Страничные узлы остаются без bounds: их геометрия уже есть в `query`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct A11yBounds {
+    /// Левый край.
+    pub x: f64,
+    /// Верхний край.
+    pub y: f64,
+    /// Ширина.
+    pub width: f64,
+    /// Высота.
+    pub height: f64,
+}
+
 /// Узел accessibility-дерева из [`BrowserSession::a11y_tree`].
 ///
 /// Построен из полного `lumen-a11y::AXNode` через `build_ax_tree()`.
@@ -132,6 +147,12 @@ pub struct A11yNode {
     /// ARIA-состояния и свойства узла.
     #[serde(default)]
     pub state: A11yState,
+    /// Border-box в координатах окна — заполнен только для chrome-узлов
+    /// (engine chrome не входит в страничный `query`, поэтому геометрию
+    /// приходится нести здесь, иначе автоматизация не может кликнуть по
+    /// кнопкам браузера).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bounds: Option<A11yBounds>,
     /// Дочерние узлы accessibility-дерева.
     pub children: Vec<A11yNode>,
 }

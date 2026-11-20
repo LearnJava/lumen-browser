@@ -1432,6 +1432,24 @@ impl Lumen {
         }
     }
 
+    /// Same chrome AX root as [`Self::chrome_ax_nodes`], plus the
+    /// synthetic→document [`lumen_dom::NodeId`] map — the automation a11y
+    /// path uses it to attach each chrome node's border-box (window CSS px)
+    /// so MCP clients can aim `click {point}` at toolbar/sidebar controls.
+    /// `None` on the synthetic-snapshot fallback (no `chrome_doc` → no
+    /// layout boxes to measure).
+    pub(crate) fn chrome_ax_nodes_mapped(
+        &self,
+    ) -> Option<(lumen_a11y::AXNode, std::collections::HashMap<lumen_dom::NodeId, lumen_dom::NodeId>)> {
+        let (doc, _) = self.chrome_doc.as_ref()?;
+        let flat_tree = lumen_dom::build_flat_tree(doc);
+        Some(lumen_a11y::chrome::chrome_root_from_document_mapped(
+            doc,
+            doc.root(),
+            &flat_tree,
+        ))
+    }
+
     /// Rebuild the platform accessibility tree from the current DOM and push it to
     /// the OS bridge. Called after every full page load and tab switch — the
     /// chrome nodes (DS-17, CC-13) are attached as siblings so they stay live too.
