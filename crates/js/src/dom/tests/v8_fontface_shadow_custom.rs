@@ -64,6 +64,40 @@ fn document_fonts_has_setlike_methods() {
 }
 
 #[test]
+fn document_fonts_has_check_method() {
+    let rt = v8_runtime_with_dom(make_doc());
+    // CSS Font Loading §4.3: unknown/system families report available, a
+    // memberless shorthand is trivially true.
+    let result = rt.eval(r#"
+                typeof document.fonts.check === 'function' &&
+                document.fonts.check('16px Arial') === true &&
+                document.fonts.check('bold 12px/1.5 "No Such Family", serif') === true
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn document_fonts_check_tracks_member_status() {
+    let rt = v8_runtime_with_dom(make_doc());
+    // A script-built FontFace starts 'unloaded' → check() must say false for
+    // its family even though no matching member is loaded yet.
+    let result = rt.eval(r#"
+                (function() {
+                    var f = new FontFace('ProbeFam', 'local("NonexistentProbeFont")');
+                    document.fonts.add(f);
+                    var before = document.fonts.check('16px "ProbeFam"');
+                    document.fonts.delete(f);
+                    return JSON.stringify({before: before, after: document.fonts.check('16px "ProbeFam"')});
+                })()
+            "#).unwrap();
+    let s = match result {
+        lumen_core::JsValue::String(s) => s,
+        other => panic!("expected string, got {other:?}"),
+    };
+    assert_eq!(s, r#"{"before":false,"after":true}"#);
+}
+
+#[test]
 fn document_fonts_empty_by_default() {
     let rt = v8_runtime_with_dom(make_doc());
     let result = rt.eval(r#"
