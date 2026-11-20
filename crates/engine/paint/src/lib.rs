@@ -644,8 +644,10 @@ impl OwnedVariableFont {
 /// Хранит `cmap_data` (байты cmap-таблицы) и `advance_widths` (из hmtx),
 /// что позволяет измерять ширину символов без хранения ссылки на оригинал.
 struct OwnedFontMetrics {
-    /// Байты cmap-таблицы для временного создания `Cmap<'_>` при lookup'е.
-    cmap_data: Vec<u8>,
+    /// Parsed cmap for lookups — `Cmap::parse` on EVERY symbol used to cost
+    /// tens of µs (the hot `resolve_shape_face`/`char_width_varied` path calls
+    /// `try_char_width` per codepoint of every measured word).
+    cmap: Option<lumen_font::OwnedCmap>,
     /// advance_width по glyph_id (индекс = glyph_id; из hmtx).
     advance_widths: Vec<u16>,
     units_per_em: u16,
@@ -703,6 +705,7 @@ impl OwnedFontMetrics {
             .table(b"cmap")
             .ok_or(FontError::TableNotFound(*b"cmap"))?
             .to_vec();
+        let cmap = Cmap::parse(&cmap_data).ok().map(|c| c.to_owned_cmap());
         let num_glyphs = maxp.num_glyphs;
         let advance_widths: Vec<u16> =
             (0..num_glyphs).map(|id| hmtx.advance_width(id).unwrap_or(0)).collect();
@@ -742,7 +745,7 @@ impl OwnedFontMetrics {
         Ok(Self {
             x_height_units,
             cap_height_units,
-            cmap_data,
+            cmap,
             advance_widths,
             units_per_em: head.units_per_em,
             wdth_axis,
@@ -829,8 +832,7 @@ impl OwnedFontMetrics {
     /// Возвращает ширину символа в px. Если глиф не найден (glyph_id == 0),
     /// возвращает `None`, чтобы вызывающий код мог попробовать следующую семью.
     fn try_char_width(&self, ch: char, font_size_px: f32) -> Option<f32> {
-        let cmap = Cmap::parse(&self.cmap_data).ok()?;
-        let glyph_id = cmap.glyph_index(ch as u32)?;
+        let glyph_id = self.cmap.as_ref()?.glyph_index(ch as u32)?;
         if glyph_id == 0 {
             return None; // .notdef — глиф не покрыт этим шрифтом
         }
@@ -841,8 +843,7 @@ impl OwnedFontMetrics {
     /// Like [`try_char_width`] but applies HVAR advance width deltas for
     /// variable fonts when `css_axes` is non-empty (CSS Fonts L4 §6.3).
     fn try_char_width_varied(&self, ch: char, font_size_px: f32, css_axes: &[FontVariationSetting]) -> Option<f32> {
-        let cmap = Cmap::parse(&self.cmap_data).ok()?;
-        let glyph_id = cmap.glyph_index(ch as u32)?;
+        let glyph_id = self.cmap.as_ref()?.glyph_index(ch as u32)?;
         if glyph_id == 0 {
             return None;
         }
@@ -1429,7 +1430,7 @@ impl MultiFontMeasurer {
     fn insert_test_wdth_family(&mut self, family: &str, wdth_min: f32, wdth_max: f32) {
         let slot = FontFaceSlot {
             metrics: OwnedFontMetrics {
-                cmap_data: vec![],
+                cmap: None,
                 advance_widths: vec![],
                 units_per_em: 1000,
                 wdth_axis: Some((wdth_min, wdth_max)),
@@ -1460,6 +1461,12 @@ impl MultiFontMeasurer {
 
 /// Шрифт, в который каскад `font-family` отправил символ при измерении
 /// shaped run-а ([`MultiFontMeasurer::resolve_shape_face`]).
+/// One `font-family` entry resolved once per `shaped_width` call:
+/// @font-face slots (with `unicode-range`) and/or system metrics — in
+/// `font-family` order, so the per-char resolve does not repeat the lookup
+/// for every symbol.
+type ResolvedFamily<'a> = (Option<&'a Vec<FontFaceSlot>>, Option<Arc<OwnedFontMetrics>>);
+
 enum ResolvedFace<'a> {
     /// @font-face-слот (со своим `size-adjust`).
     Slot(&'a FontFaceSlot),
@@ -1496,12 +1503,18 @@ impl MultiFontMeasurer {
     /// Face, которым рендер нарисует `ch`: тот же порядок, что у
     /// [`TextMeasurer::char_width_with_families`] — по семьям, внутри семьи
     /// @font-face-слоты (с `unicode-range`), затем системное имя, иначе
-    /// bundled Inter. `families_lower` — уже в нижнем регистре.
-    fn resolve_shape_face(&self, ch: char, families_lower: &[String]) -> ResolvedFace<'_> {
+    /// bundled Inter. `fams` — families already resolved into slots/metrics
+    /// once per `shaped_width` call (previously the HashMap/RwLock lookup and
+    /// lowercasing repeated for every symbol of a run).
+    fn resolve_shape_face<'s>(
+        &'s self,
+        ch: char,
+        fams: &[ResolvedFamily<'s>],
+    ) -> ResolvedFace<'s> {
         let cp = ch as u32;
-        for lower in families_lower {
-            if let Some(slots) = self.faces.get(lower) {
-                for slot in slots {
+        for (slots, sys) in fams {
+            if let Some(slots) = slots {
+                for slot in slots.iter() {
                     if codepoint_in_ranges(cp, &slot.unicode_ranges)
                         && slot.metrics.try_char_width(ch, 1.0).is_some()
                     {
@@ -1509,10 +1522,10 @@ impl MultiFontMeasurer {
                     }
                 }
             }
-            if let Some(m) = self.system_metrics(lower)
+            if let Some(m) = sys
                 && m.try_char_width(ch, 1.0).is_some()
             {
-                return ResolvedFace::System(m);
+                return ResolvedFace::System(m.clone());
             }
         }
         ResolvedFace::Bundled
@@ -1592,12 +1605,23 @@ impl TextMeasurer for MultiFontMeasurer {
     /// face шейпить нельзя (крупный CJK-шрифт, битый файл): вызывающий код
     /// меряет весь run посимвольно, а не половину так, половину этак.
     fn shaped_width(&self, text: &str, params: &lumen_layout::ShapeParams<'_>) -> Option<f32> {
-        let lowered: Vec<String> = params.families.iter().map(|f| f.to_ascii_lowercase()).collect();
+        // Resolve families into face slots/metrics once per call: previously
+        // `resolve_shape_face` repeated lowercasing + HashMap/RwLock lookups
+        // for every symbol of a run (thousands of words × ~7 chars per layout
+        // pass).
+        let fams: Vec<ResolvedFamily<'_>> = params
+            .families
+            .iter()
+            .map(|f| {
+                let lower = f.to_ascii_lowercase();
+                (self.faces.get(&lower), self.system_metrics(&lower))
+            })
+            .collect();
         let mut total = 0.0_f32;
         // Текущий под-run: face, его идентичность и начало в `text`.
         let mut current: Option<(ResolvedFace<'_>, (u64, u32), usize)> = None;
         for (idx, ch) in text.char_indices() {
-            let face = self.resolve_shape_face(ch, &lowered);
+            let face = self.resolve_shape_face(ch, &fams);
             let id = face.identity(&self.fallback)?;
             match &current {
                 Some((_, cur_id, _)) if *cur_id == id => {}

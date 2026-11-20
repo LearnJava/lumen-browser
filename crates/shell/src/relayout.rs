@@ -208,7 +208,11 @@ impl Lumen {
         let Some(base) = dynamic_css.as_mut() else {
             return false;
         };
-        let Ok(doc) = document.lock() else {
+        // PERF-INPUT-1c: an off-thread layout job holds this mutex for the
+        // whole layout; a blocking `lock()` here parked the UI thread inside
+        // `make_relayout_job` (measured ~1.4 s `js`-bucket stalls). A skipped
+        // refresh only delays late-`<style>` pickup to the next submit.
+        let Ok(doc) = document.try_lock() else {
             return false;
         };
         let fp = inline_style_fingerprint(&doc);
@@ -1035,9 +1039,14 @@ impl Lumen {
         if m4_swap_override() {
             if m4_swap_mode() == M4Swap::Guarded {
                 let busy = self
-                    .engine_thread
+                    .layout_thread
                     .as_ref()
                     .and_then(|e| e.busy())
+                    .or_else(|| {
+                        self.engine_thread
+                            .as_ref()
+                            .and_then(|e| e.busy())
+                    })
                     .filter(|(_, since)| m4_busy_blocks_tick(*since));
                 let backoff = self.m4_swap_backoff > 0;
                 if (busy.is_some() || backoff) && self.submit_relayout_job() {
@@ -1180,7 +1189,11 @@ impl Lumen {
             self.raf_turn_inflight(),
             self.engine_job_generation,
             self.engine_applied_generation,
-        ) {
+        ) || self
+            .engine_thread
+            .as_ref()
+            .is_some_and(|e| e.busy().is_some())
+        {
             return None;
         }
         route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), read)

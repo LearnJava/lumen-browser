@@ -22,9 +22,13 @@ use lumen_layout::ShapeParams;
 /// (там меряется посимвольно, как и раньше).
 pub(crate) const MAX_SHAPEABLE_FONT_BYTES: usize = 8 << 20;
 
-/// Сколько записей держит кэш на поток; при переполнении сбрасывается целиком
-/// (слов на странице — тысячи, а не сотни тысяч).
-const CACHE_MAX_ENTRIES: usize = 1 << 15;
+/// How many entries the per-thread cache holds. Heavy pages produce tens of
+/// thousands of unique `(face, text, features, axes)` keys — at the old 32k
+/// limit the cache overflowed and cleared entirely, after which nearly every
+/// `shaped_width` re-shaped (~50–100 µs instead of a ~0.1 µs lookup). 256k
+/// entries cost ~15–25 MB per thread worst case, acceptable for the single
+/// engine thread.
+const CACHE_MAX_ENTRIES: usize = 1 << 18;
 
 /// Фичи шейпинга run-а (TEXTQ-4): `font-feature-settings` как есть, а при
 /// ненулевом `letter-spacing` перед ними — выключенные `liga`/`clig`. CSS Text

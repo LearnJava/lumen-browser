@@ -696,12 +696,21 @@ impl Lumen {
     /// `about_to_wait` rAF DOM-dirty flush ([`Self::relayout_raf_dirty`], M2.2c-3) —
     /// none reads geometry synchronously afterward.
     pub(crate) fn submit_relayout_job(&mut self) -> bool {
-        if self.engine_thread.is_none() {
+        if self.engine_thread.is_none() && self.layout_thread.is_none() {
             return false;
         }
         let Some((generation, job)) = self.make_relayout_job() else { return false };
-        let Some(engine) = self.engine_thread.as_ref() else { return false };
-        engine.submit(generation, job);
+        // PERF-INPUT-1: layout jobs go to the dedicated layout thread so JS
+        // `Task`s (input, eval, observers) on `engine_thread` are not queued
+        // behind them. Fallback to `engine_thread` keeps the old path when
+        // the layout thread failed to spawn but the JS engine thread lives.
+        if let Some(engine) = self.layout_thread.as_ref() {
+            engine.submit(generation, job);
+        } else if let Some(engine) = self.engine_thread.as_ref() {
+            engine.submit(generation, job);
+        } else {
+            return false;
+        }
         true
     }
 
@@ -722,12 +731,37 @@ impl Lumen {
     /// advances to the just-bumped `engine_job_generation`, dropping any older
     /// in-flight async commit in [`Self::poll_engine_commit`]'s guard.
     pub(crate) fn readback_relayout_job(&mut self) -> bool {
-        if self.engine_thread.is_none() {
+        if self.engine_thread.is_none() && self.layout_thread.is_none() {
             return false;
         }
         let Some((_generation, job)) = self.make_relayout_job() else { return false };
-        let Some(engine) = self.engine_thread.as_ref() else { return false };
-        let Some(commit) = engine.readback(job) else { return false };
+        // PERF-INPUT-1: same routing as `submit_relayout_job` — the layout
+        // thread first, `engine_thread` as the spawn-failure fallback.
+        // PERF-INPUT-1c: never park the UI thread behind a busy executor —
+        // skip the readback outright while `busy`, and bound the wait for
+        // the queued-but-idle case. On `None` (busy / timeout / shutdown)
+        // the work is resubmitted through the async latest-wins path; the
+        // caller's synchronous-fallback chain is only for "no threads".
+        let commit = {
+            const BUDGET: std::time::Duration = std::time::Duration::from_millis(8);
+            // `layout_thread` is stateless (`S = ()`), `engine_thread` carries
+            // `EngineJsState` — different types, so the two arms duplicate the
+            // three lines instead of sharing a helper.
+            if let Some(engine) = self.layout_thread.as_ref() {
+                (engine.busy().is_none())
+                    .then(|| engine.readback_within(BUDGET, job))
+                    .flatten()
+            } else {
+                self.engine_thread.as_ref().and_then(|engine| {
+                    (engine.busy().is_none())
+                        .then(|| engine.readback_within(BUDGET, job))
+                        .flatten()
+                })
+            }
+        };
+        let Some(commit) = commit else {
+            return self.submit_relayout_job();
+        };
         // Authoritative like `relayout()`: mark the just-bumped generation applied so
         // a stale in-flight async commit is dropped by `poll_engine_commit`.
         self.engine_applied_generation = self.engine_job_generation;
@@ -759,9 +793,16 @@ impl Lumen {
     /// `generation` no longer matches `engine_job_generation` — a newer job or a
     /// synchronous `relayout()` has superseded it (generation-guard, invariant 2).
     pub(crate) fn poll_engine_commit(&mut self) {
-        // Take the commit and release the `engine_thread` borrow before the
-        // `&mut self` apply below.
-        let Some(commit) = self.engine_thread.as_ref().and_then(|e| e.take_committed()) else {
+        // Take the commit and release the thread borrow before the
+        // `&mut self` apply below. PERF-INPUT-1: commits now come from
+        // `layout_thread`; poll it first and fall back to `engine_thread`
+        // for jobs submitted before the split or via the fallback path.
+        let commit = self
+            .layout_thread
+            .as_ref()
+            .and_then(|e| e.take_committed())
+            .or_else(|| self.engine_thread.as_ref().and_then(|e| e.take_committed()));
+        let Some(commit) = commit else {
             return;
         };
         if commit.generation != self.engine_job_generation {

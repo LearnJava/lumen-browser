@@ -287,14 +287,26 @@ impl<C: Send + 'static, S: Send + 'static> EngineThread<C, S> {
     /// Живой с M2.2c-3: `Lumen::readback_relayout_job` вызывает его для rAF
     /// DOM-dirty flush в `RedrawRequested`, где следующий шаг читает
     /// `display_list.is_empty()` (PerformancePaintTiming) синхронно.
-    pub fn readback(&self, job: impl FnOnce() -> C + Send + 'static) -> Option<C> {
+    ///
+    /// PERF-INPUT-1c: bounded — the caller gives up after `timeout` and gets
+    /// `None`. The queued `Readback` still executes later on the thread; its
+    /// reply channel is then dropped, so only the result is discarded. An
+    /// unbounded wait behind a multi-second layout job froze the UI thread
+    /// (rAF DOM-dirty flush measured ~1.4 s stalls on market.yandex); the
+    /// short budget keeps the fresh-layout fast path for idle threads
+    /// without ever parking the window.
+    pub fn readback_within(
+        &self,
+        timeout: Duration,
+        job: impl FnOnce() -> C + Send + 'static,
+    ) -> Option<C> {
         // Queue depth 1: ровно один ответ на одно задание.
         let (reply_tx, reply_rx) = mpsc::sync_channel::<C>(1);
         self.tx
             .send(EngineMsg::Readback { job: Box::new(job), reply: reply_tx })
             .ok()?;
-        // Блокируемся до ответа; `Err` (sender дропнут при shutdown) → None.
-        reply_rx.recv().ok()
+        // `Err` — и `Disconnected` (shutdown), и `Timeout` — → None.
+        reply_rx.recv_timeout(timeout).ok()
     }
 
     /// Ставит упорядоченное задание над персистентным состоянием `S` движкового
@@ -854,7 +866,7 @@ mod tests {
         // End-to-end request/reply: `readback` блокируется до ответа потока и
         // возвращает ровно результат задания. Никакого спина — метод сам ждёт.
         let engine = EngineThread::<u64>::spawn().expect("spawn engine thread");
-        let got = engine.readback(|| 1234);
+        let got = engine.readback_within(std::time::Duration::from_secs(30), || 1234);
         assert_eq!(got, Some(1234));
     }
 
@@ -865,7 +877,7 @@ mod tests {
         let engine = EngineThread::<u64>::spawn().expect("spawn engine thread");
         engine.submit(1, || 1);
         engine.submit(2, || 2);
-        assert_eq!(engine.readback(|| 99), Some(99));
+        assert_eq!(engine.readback_within(std::time::Duration::from_secs(30), || 99), Some(99));
     }
 
     #[test]
@@ -973,8 +985,8 @@ mod tests {
     #[test]
     fn panicking_readback_returns_none_to_caller() {
         let engine = EngineThread::<u64, u64>::spawn_with_state(0).expect("spawn engine thread");
-        assert_eq!(engine.readback(|| std::panic::panic_any("readback упал")), None);
-        assert_eq!(engine.readback(|| 5), Some(5));
+        assert_eq!(engine.readback_within(std::time::Duration::from_secs(30), || std::panic::panic_any("readback упал")), None);
+        assert_eq!(engine.readback_within(std::time::Duration::from_secs(30), || 5), Some(5));
         assert!(engine.take_crash().is_some());
     }
 }

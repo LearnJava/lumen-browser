@@ -232,7 +232,7 @@ impl Lumen {
             };
             // CSSANIM-MODEL-2 S4/S5: a script's `cancel()`/`play()`/seek moves the frame the
             // schedulers paint — drain its commands before the tick that uses them.
-            let motion_cmds = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+            let motion_cmds = route_poll_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
                 j.take_css_motion_cmds()
             })
             .unwrap_or_default();
@@ -429,13 +429,13 @@ impl Lumen {
         } else {
             // Flag off (default): byte-identical synchronous path.
             if raf_due
-                && route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                && route_poll_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
                     j.has_raf_pending()
                 })
                 .unwrap_or(false)
             {
                 // Consume the flag and fire the batch (former direct call).
-                route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                route_poll_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
                     j.take_raf_pending()
                 });
                 self.last_raf_batch_ms = timestamp_ms;
@@ -457,7 +457,7 @@ impl Lumen {
             // Step 5 below reads `display_list.is_empty()` synchronously
             // (PerformancePaintTiming), so this reflow is the synchronous
             // `relayout` (no engine thread to defer to).
-            let dom_dirty = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+            let dom_dirty = route_poll_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
                 j.take_dom_dirty()
             })
             .unwrap_or(false);
@@ -468,6 +468,10 @@ impl Lumen {
                 // выше; под движковым потоком это место не выполняется вовсе
                 // (см. doc-comment `frame_dynamic.rs`).
                 self.poll_dynamic_frames();
+                // PERF-INPUT-1c: the readback is now bounded (8 ms budget +
+                // busy-skip) and falls back to the async latest-wins submit,
+                // so it can no longer park the UI thread behind a
+                // multi-second layout job the way the unbounded variant did.
                 self.relayout_raf_dirty_readback();
             } else if self
                 .anim_frame
@@ -488,7 +492,15 @@ impl Lumen {
                 // Scope of this slice: the synchronous default path only —
                 // `LUMEN_ENGINE_THREAD=1`'s `pump_raf_engine_thread` is not
                 // wired to this trigger yet.
-                self.relayout();
+                // PERF-INPUT-1c: `relayout()` is a full synchronous layout —
+                // measured as the ~1.5 s `js`-bucket stalls on
+                // market.yandex while a height animation runs. The deferred
+                // variant submits the same job off-thread (animated heights
+                // are captured into the job snapshot) and only falls back
+                // to the synchronous path when no engine/layout thread
+                // exists; the frame paints one tick behind instead of
+                // freezing.
+                self.relayout_raf_dirty();
             }
         }
 

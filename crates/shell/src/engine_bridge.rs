@@ -197,6 +197,31 @@ pub(crate) fn route_query_js<R: Send + 'static>(
     }
 }
 
+/// PERF-INPUT-1: non-blocking variant of [`route_query_js`] for per-frame
+/// polls (`has_raf_pending`, `take_dom_dirty`, `take_css_motion_cmds`, …).
+///
+/// A blocking `query` behind a busy engine thread waits up to
+/// `QUERY_TIMEOUT` (5 s) — measured on market.yandex as whole `[frame] anim`
+/// steps of ~5000 ms, freezing the UI window. These polls are pure drains or
+/// reads whose skipped tick is retried on the next frame (the drained state
+/// stays queued engine-side), so when the engine reports `busy` we return
+/// `None` **without enqueueing** — one degraded frame instead of a frozen
+/// window. Effectful reads (`eval_js*`, navigate intercepts) must keep using
+/// [`route_query_js`]: skipping them would drop the script or mis-pair a
+/// drained result with a later event.
+pub(crate) fn route_poll_js<R: Send + 'static>(
+    engine: Option<&engine_thread::EngineThread<EngineCommit, EngineJsState>>,
+    js: Option<&Arc<dyn PersistentJs>>,
+    read: impl FnOnce(&Arc<dyn PersistentJs>) -> R + Send + 'static,
+) -> Option<R> {
+    if let Some(engine) = engine
+        && engine.busy().is_some()
+    {
+        return None;
+    }
+    route_query_js(engine, js, read)
+}
+
 /// THREAD-9: кладёт результат `take_navigate_request` в почтовый ящик
 /// (`Lumen::js_nav_inbox`) из движковой задачи. `None` ящик не трогает, чтобы
 /// пустое чтение не стёрло ещё не забранный запрос.
@@ -277,6 +302,30 @@ pub(crate) fn spawn_engine_thread_if_enabled()
         }
         Err(e) => {
             eprintln!("[engine-thread] не удалось запустить: {e}; продолжаем без него");
+            None
+        }
+    }
+}
+
+/// PERF-INPUT-1: отдельный поток только для layout-заданий (`Run`/`Readback`).
+/// Раньше `Run` и JS-`Task` делили один FIFO: 5-секундный layout-джоб
+/// блокировал вводные JS-события (клики, pointermove) на то же время.
+/// Layout-джоб самодостаточен — ему нужны лишь immutable Arc-снимки
+/// (`make_relayout_job`), состояние `EngineJsState` не требуется, поэтому
+/// достаточно stateless-потока `S = ()`. Коммиты по-прежнему единственные —
+/// с этого потока, generation-guard в `poll_engine_commit` не меняется.
+pub(crate) fn spawn_layout_thread_if_enabled()
+-> Option<engine_thread::EngineThread<EngineCommit>> {
+    if !engine_thread_enabled() {
+        return None;
+    }
+    match engine_thread::EngineThread::<EngineCommit>::spawn() {
+        Ok(engine) => {
+            eprintln!("[layout-thread] запущен (PERF-INPUT-1: layout jobs off the JS engine thread)");
+            Some(engine)
+        }
+        Err(e) => {
+            eprintln!("[layout-thread] не удалось запустить: {e}; продолжаем без него");
             None
         }
     }

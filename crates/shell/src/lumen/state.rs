@@ -568,6 +568,16 @@ pub(crate) struct Lumen {
     /// folds it into the `WaitUntil` deadline and runs `relayout()` when it
     /// elapses. `None` when no zoom preview is in flight.
     pub(crate) pending_zoom_relayout: Option<std::time::Instant>,
+    /// Pending coalesced relayout deadline for `FontLoaded` swaps (FOUT→FOIT).
+    ///
+    /// A page's fonts arrive by the dozen during one load; a relayout per
+    /// `FontLoaded` is a full layout pass of the page (on market.yandex —
+    /// ~0.9 s × 15+ events). The first event arms the deadline
+    /// `now + FONT_RELAYOUT_DEBOUNCE_MS`; later ones inside the window do not
+    /// extend it — one relayout picks up every font registered by the time it
+    /// fires. `about_to_wait` folds the deadline into `WaitUntil`, like
+    /// `pending_zoom_relayout`. `None` — queue empty.
+    pub(crate) pending_font_relayout: Option<std::time::Instant>,
     /// Последняя известная позиция курсора в **physical** пикселях (от winit).
     /// `None` пока курсор не вошёл в окно. Конвертируется в CSS px через
     /// `scale_factor()` непосредственно в hit-test / drag callback-ах.
@@ -829,6 +839,12 @@ pub(crate) struct Lumen {
     /// [`EngineJsState`] (`Document` + хэндл `js_ctx`) — сиденье для переноса JS на
     /// движковый поток. Заполняется через `sync_engine_js_state` при смене страницы.
     pub(crate) engine_thread: Option<engine_thread::EngineThread<EngineCommit, EngineJsState>>,
+    /// PERF-INPUT-1: thread for layout jobs only (`Run`/`Readback`). JS `Task`s
+    /// (input, eval, observers) stay on `engine_thread` and no longer queue
+    /// behind multi-second layout jobs. `None` under the same rollback as
+    /// `engine_thread` (`LUMEN_NO_ENGINE_THREAD=1` or spawn failure): relayout
+    /// jobs then fall back to the synchronous `relayout()`, as before.
+    pub(crate) layout_thread: Option<engine_thread::EngineThread<EngineCommit>>,
     /// ADR-016 M2.2: generation последнего **применённого** relayout-результата.
     /// Off-thread задание считается «в полёте» (нужен poll-будильник), пока
     /// `engine_job_generation != engine_applied_generation`. Синхронный

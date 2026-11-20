@@ -616,6 +616,21 @@ impl Lumen {
                 next_wakeup = Some(next_wakeup.map_or(deadline, |t| t.min(deadline)));
             }
         }
+        // FONT-COALESCE: the coalesced FontLoaded relayout deadline — same
+        // scheme as the zoom debounce above: fired → `submit_relayout_job`
+        // (off-thread full pass, the `web_fonts` snapshot already holds the
+        // whole batch); not yet → fold into `WaitUntil` so the loop wakes
+        // exactly at the deadline.
+        if let Some(deadline) = self.pending_font_relayout {
+            if std::time::Instant::now() >= deadline {
+                self.pending_font_relayout = None;
+                if !self.submit_relayout_job() {
+                    self.relayout();
+                }
+            } else {
+                next_wakeup = Some(next_wakeup.map_or(deadline, |t| t.min(deadline)));
+            }
+        }
         // ADR-016 M2.2: while an off-thread job is in flight (submitted but not yet
         // applied), the parked winit loop would not wake on its own to pick up the
         // commit — arm a short poll deadline. Bounded by the always-landing newest

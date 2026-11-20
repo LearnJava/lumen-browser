@@ -8,7 +8,12 @@ use super::*;
 
 /// Strips U+00AD (soft hyphens) from a word and collects break positions
 /// (byte offsets in the returned display string).
-pub(crate) fn strip_soft_hyphens(raw: &str) -> (String, Vec<usize>) {
+pub(crate) fn strip_soft_hyphens(raw: &str) -> (std::borrow::Cow<'_, str>, Vec<usize>) {
+    // Fast path: no soft hyphen — borrow, don't allocate. The word loop calls
+    // this for every word of every inline box on every layout pass.
+    if !raw.contains('\u{00AD}') {
+        return (std::borrow::Cow::Borrowed(raw), Vec::new());
+    }
     let mut display = String::with_capacity(raw.len());
     let mut positions: Vec<usize> = Vec::new();
     for ch in raw.chars() {
@@ -18,7 +23,7 @@ pub(crate) fn strip_soft_hyphens(raw: &str) -> (String, Vec<usize>) {
             display.push(ch);
         }
     }
-    (display, positions)
+    (std::borrow::Cow::Owned(display), positions)
 }
 
 /// Ширина `text` как последовательности shaped run-ов между табуляциями
@@ -106,6 +111,7 @@ pub fn measure_text_w_varied(
 /// и оси вариаций (с автоматическими `opsz`/`wdth`) — ровно те, с которыми
 /// стиль уйдёт в `DrawText`. Ширина слова в раскладке совпадает с нарисованной.
 pub(crate) fn measure_text_w_styled(text: &str, style: &ComputedStyle, tab_size: f32, m: &dyn TextMeasurer) -> f32 {
+    let _prof = lumen_core::profile::scope_detail("mtws");
     let features = crate::style::text_font_features(style);
     crate::style::with_text_variation_axes(style, |axes| {
         let params = ShapeParams {
@@ -1036,6 +1042,7 @@ pub(crate) fn wrap_inline_run_indented(
 
         let n = raw_words.len();
         for (wi, raw_word) in raw_words.iter().enumerate() {
+            let _wprof = lumen_core::profile::scope_detail("lw_word");
             let is_seg_first = wi == 0;
             let is_seg_last = wi == n - 1;
 
@@ -1297,7 +1304,7 @@ pub(crate) fn wrap_inline_run_indented(
                 if word_break == WordBreak::BreakAll {
                     let gap_w = if current_line.is_empty() { 0.0 } else { word_inter };
                     current_x += gap_w + pre;
-                    let mut rest = display_word.as_str();
+                    let mut rest: &str = &display_word;
                     let mut first_chunk = true;
                     while !rest.is_empty() {
                         let avail = (max_width - current_x).max(0.0);
@@ -1363,7 +1370,7 @@ pub(crate) fn wrap_inline_run_indented(
             if ow_char_break {
                 let line_gap_ow = if current_line.is_empty() { 0.0 } else { word_inter };
                 current_x += line_gap_ow + pre;
-                let mut rest = display_word.as_str();
+                let mut rest: &str = &display_word;
                 let mut first_chunk = true;
                 while !rest.is_empty() {
                     let avail = (max_width - current_x).max(0.0);
@@ -1472,7 +1479,7 @@ pub(crate) fn wrap_inline_run_indented(
                     x: frag_x,
                     y_offset: 0.0,
                     width: word_w,
-                    text: display_word,
+                    text: display_word.into_owned(),
                     style: style.clone(),
                     padding_left: if is_seg_first || cs { pad_l } else { 0.0 },
                     padding_right: if is_seg_last { pad_r } else { 0.0 },

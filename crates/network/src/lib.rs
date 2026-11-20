@@ -1822,12 +1822,16 @@ fn fetch_single(
     // QUIC connection pool for reuse across sequential h3 requests; `Some` ⇔
     // HTTP/3 enabled ([`HttpClient::with_http3`]).
     h3_pool: Option<&std::sync::Mutex<h3::client_pool::H3ConnectionPool>>,
-    // PH1-2a: HTTP/1.1 streaming body sink. Only the direct (non-proxy) HTTP/1.1
-    // path streams; the H2 and proxy-CONNECT paths buffer (sink unused there).
+    // PH1-2a: HTTP/1.1 streaming body sink. The H2 mux and the proxy-CONNECT
+    // path buffer the body (the sink is never invoked there), so a request
+    // carrying a sink is forced onto HTTP/1.1 — `STREAM-H1`: without it a
+    // progressive document load over H2 delivers zero chunks and the page
+    // shows nothing until the final pipeline.
     mut stream_sink: Option<ChunkSink<'_>>,
     // Request body for POST/PUT/PATCH/DELETE; `None` for GET/HEAD.
     body: Option<&RequestBody<'_>>,
 ) -> Result<Response> {
+    let stream_h1 = stream_sink.is_some();
     // SOCKS5 takes precedence over HTTP proxy when both are set.
     // With SOCKS5 the tunnel is established by the proxy itself, so we
     // connect to the target host:port directly (the pool key uses the
@@ -1924,7 +1928,16 @@ fn fetch_single(
     // only the TLS/CONNECT-tunnelled leg does — `key` above now names the
     // real tunnelled origin, so pooling it is safe. The plain-HTTP relay leg
     // never negotiates h2 (no TLS ALPN), so it is excluded either way.
-    let h2_pool = if effective_proxy.is_none() || is_tls { h2_pool } else { None };
+    // STREAM-H1: a request carrying a progressive body sink never enters the
+    // H2 mux — its DATA frames are buffered until the stream completes, so
+    // the sink would stay silent for the whole download.
+    let h2_pool = if stream_h1 {
+        None
+    } else if effective_proxy.is_none() || is_tls {
+        h2_pool
+    } else {
+        None
+    };
     let scheme = if is_tls { "https" } else { "http" };
     let send = |mux: &h2::mux::H2Mux| {
         h2_mux_request(mux, scheme, request_host_header, request_path, extra_headers, http_profile, identity, accept_encoding, method, body)
@@ -1990,8 +2003,14 @@ fn fetch_single(
             }
         }
 
-        // Попытка 2 (или 1, если пул был пуст): свежий connect.
-        let mut conn = connect(connect_host, connect_port, connect_is_tls, resolver, tls_profile, socks5_proxy, Some(FETCH_READ_TIMEOUT))?;
+        // Попытка 2 (или 1, если пул был пуст): свежий connect. STREAM-H1:
+        // ALPN ограничен http/1.1, иначе TLS согласует h2 и тело опять
+        // уйдёт в буферный mux без единого chunk-а для sink-а.
+        let mut conn = if stream_h1 {
+            connect_h1(connect_host, connect_port, connect_is_tls, resolver, tls_profile, socks5_proxy, Some(FETCH_READ_TIMEOUT))?
+        } else {
+            connect(connect_host, connect_port, connect_is_tls, resolver, tls_profile, socks5_proxy, Some(FETCH_READ_TIMEOUT))?
+        };
 
         // Если используется HTTPS HTTP-прокси: выполнить CONNECT-туннель.
         #[allow(clippy::collapsible_if)]
@@ -2049,7 +2068,9 @@ fn fetch_single(
                 };
 
                 // BUG-1826: BoringSSL transport, как и в `connect_inner`.
-                let stream = tls::boring::connect(host, tcp, tls_profile, false)?;
+                // STREAM-H1: внутри CONNECT-туннеля тоже только http/1.1 —
+                // иначе согласованный h2 вернул бы нас в буферный mux.
+                let stream = tls::boring::connect(host, tcp, tls_profile, stream_h1)?;
                 let alpn = tls::boring::negotiated_alpn(&stream);
                 let is_h2 = check_negotiated_alpn(alpn.as_deref())?;
                 let cert_info = tls::boring::cert_info(&stream, host);

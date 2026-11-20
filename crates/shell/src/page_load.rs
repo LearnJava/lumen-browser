@@ -573,6 +573,7 @@ impl Lumen {
             self.stream_image_errors.clear();
             self.stream_image_events_fired.clear();
             self.pending_window_load = None;
+            self.pending_font_relayout = None;
             self.stream_sheet = lumen_css_parser::Stylesheet::default();
             self.stream_layout_seeded = false;
             self.stream_builder = None;
@@ -1206,6 +1207,15 @@ impl Lumen {
             _ => lumen_layout::layout_measured(doc, &self.stream_sheet, viewport, &measurer),
         };
         let dl = crate::display_list_metrics::paint_ordered_in(&layout, viewport);
+        #[cfg(feature = "v8")]
+        if std::env::var("LUMEN_FRAME_LOG").is_ok_and(|v| v != "0") {
+            eprintln!(
+                "[draft] t={:?} dl={} cmds nodes={}",
+                self.nav_start.map(|t| t.elapsed()),
+                dl.len(),
+                doc.node_count(),
+            );
+        }
 
         (self.content_height, self.content_width) = crate::display_list_metrics::page_content_extent(&dl, &layout, self.viewport_width_css());
         let has_content = !dl.is_empty();
@@ -1394,7 +1404,14 @@ impl Lumen {
         let mut written: Vec<u32> = Vec::new();
         let changed = {
             let Some(src) = self.layout_source.as_ref() else { return };
-            let Ok(mut doc) = src.document.lock() else { return };
+            // PERF-INPUT-1c: an off-thread layout job holds this mutex for the
+            // whole layout (seconds on heavy pages); a blocking `lock()` here
+            // froze the UI thread inside the frame's scroll step. Retry on
+            // the next frame instead — the dirty flag is restored below.
+            let Ok(mut doc) = src.document.try_lock() else {
+                self.stream_image_sizes_dirty = true;
+                return;
+            };
             // Тот же picker, что эмитит ключи `src` в `DrawImage`, — url из
             // запроса совпадает с ключом карты по построению.
             let requests = lumen_layout::collect_image_requests(&doc, viewport);
@@ -2226,6 +2243,9 @@ impl Lumen {
         self.requested_web_fonts.clear();
         self.deferred_web_fonts.clear();
         self.web_font_fetches.clear();
+        // FONT-COALESCE: a deadline armed by the previous page's fonts must
+        // not retrigger a relayout on the new document.
+        self.pending_font_relayout = None;
 
         // PH3-19: spawn one background thread per pending @font-face url() source.
         // Each thread fetch+decodes the font and sends FontLoaded; the handler

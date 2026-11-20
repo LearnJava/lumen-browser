@@ -1379,3 +1379,114 @@ GPR 10/20 = 0,50. Дельта — одна страница (datadome-leboncoin
 дефолтного плеча сверх шума не зафиксировано; порог «не хуже 0,5 %» по существу
 выполнен (отличие — артефакт n=20). Артефакты:
 `runs/2026-11-19-captcha-lumen-chrome_lumen.json`, `…-chrome_unbranded.json`.
+## 2026-11-19 — AB-CHROME-22 + FONT-COALESCE + MARKET-YANDEX PROF
+
+**Прогон AB-CHROME-22** (`.tmp/perf-audit/20261119-185421` + `.tmp/ab-chrome-all`, compat,
+`--maximized`, `LUMEN_NO_ADBLOCK=1`, холодный `data/`, Chrome 157 headless `--no-proxy-server`,
+22 сайта RU+foreign, один маршрут). Lumen `ready_s` vs Chrome `load`: паритет на лёгких
+(yandex 2.5/20.1 — у Chrome антибот-ветка; avito 1.9/2.5; mail 9.9/9.9); разрыв растёт с
+JS-весом: mdn 2.6×, pikabu 2.0×, habr 1.9×, bbc 4.7×, auto-ru 3.4×, drom 4.4×, ok-ru 5.6×,
+github 4.9×, **market-yandex 13×** (50.3 vs 3.8 с), cnn >26× (TIMEOUT). Разрыв =
+`ready_s − final_applied` (19–57 с на тяжёлых) — очередь движкового потока, не сеть.
+
+**Профиль market-yandex** (`LUMEN_PROFILE_TREE=1+DETAIL`, run 20261119-202832, ready 48.6 с):
+`maybe_flush` до **4.7 с** за вызов (JS-синхронный флаш, семейство BUG-1800); внутри —
+`layout_measured_hyp` 4.4–4.7 с → `lay_out` ~3.9 с → **`lo_wrap` ×~3500 = 2.4 с**
+(~0.66 мс/вызов, шейпинг уже кэширован в `shaped_width.rs` — цена самого алгоритма
+переноса). `flush.try_incremental` → `layout_mutation_incremental_restyle` до 4.5 с:
+инкрементальный путь деградирует до почти полного — `cascade_recomputed=14064`
+(широкий дельта, класс ADR-036). Полные off-thread relayout 5.5–10.8 с.
+
+**FONT-COALESCE (эксперимент, в работе):** `FontLoaded` больше не вызывает
+`relayout_chrome()` синхронно — дебаунс 120 мс (`pending_font_relayout`,
+`about_to_wait`), один проход на пачку шрифтов; сброс на навигации. Механизм корректен
+(работы строго меньше), но A/B на market-yandex неубедителен: 50.3 (база) → 74.5/46.5/72.9/48.6 с
+(разброс ±50 %, n мал); CPU сайта 106→105–190 с. Доминанта сайта — не число font-проходов,
+а цена каждого полного layout и JS-флаши.
+
+**Вывод:** разрыв с Chrome — архитектурный (один поток, дорогой lay_out/lo_wrap,
+инкрементальность стиля деградирует на широких дельтах). Следующие срезы по данным:
+(1) атрибуция/сужение `cascade_recomputed` на DOM-churn (14k узлов); (2) внутреннее
+профилирование `lo_wrap` (detail-scope отсутствуют); (3) параллелизм lay_out — крупное.
+
+### Продолжение: MICRO-SLICES на market-yandex (2026-11-19, вторая волна)
+
+**Инструментация:** добавлены `scope_detail("mtws")` (measure_text_w_styled) и
+`scope_detail("lw_word")` (цикл слов в lo_wrap). Замеры DETAIL-прогонов:
+`lw_word` ~0.09–0.18 мс/слово ×12–16 тыс.; `mtws` ~30–127 мкс/вызов ×15–18 тыс.
+Эксперимент `LUMEN_NO_TEXT_SHAPING=1`: mtws вырос до ~127 мкс → посимвольный
+fallback медленнее шейпинга, значит стоимость mtws — НЕ промахи кэша шейпера,
+а работа ДО `sub_run_width`: разрешение face на каждый символ.
+
+**Найдено и исправлено (3 правки в `crates/engine/paint/src/lib.rs` + 1 в layout):**
+1. `OwnedFontMetrics::try_char_width[_varied]` вызывал `Cmap::parse(&cmap_data)`
+   на КАЖДЫЙ кодпойнт — парсинг cmap-таблицы (~мкс×десятки) в горячем пути
+   `resolve_shape_face`/`char_width_varied`. Теперь `OwnedCmap` строится один раз
+   в `from_bytes` (`Cmap::to_owned_cmap`), поле `cmap_data` удалено.
+2. `MultiFontMeasurer::shaped_width` lowercase'ил и делал HashMap/RwLock-lookup
+   семей на КАЖДЫЙ символ run-а — теперь `fams` (slots + system Arc) резолвится
+   один раз на вызов, `resolve_shape_face` итерирует готовый список.
+3. `strip_soft_hyphens` (layout): `String`+`Vec` аллокация на каждое слово →
+   `Cow::Borrowed` fast-path (U+00AD редок); ~15 тыс. аллокаций/проход снято.
+4. `shaped_width::CACHE_MAX_ENTRIES` 32k → 256k: при переполнении кэш
+   сбрасывался целиком и страницы с >32k уникальных run-ключей трешили его.
+
+**Результат на market-yandex (ready_s, шум ±50% между прогонами):**
+база ~50.3 → после срезов 33.2–51.1 с; `layout_measured_hyp` 3.4–4.8 с → 2.2–2.6 с
+в сопоставимых прогонах; `mtws` 54–72 → ~30 мкс. Чистый A/B по методике репо
+(≥2 прогона/плечо, дельта >20%) ещё не добран — контент сайта меняется
+(рекламные блоки), поэтому серия на RU-корпусе.
+
+## PROGRESSIVE-PAINT / CSS-INCREMENTAL (заметки к следующему срезу)
+
+Наблюдение пользователя: market.yandex ~20 с белого экрана, затем всё сразу.
+
+Факты из кода (не домыслы):
+- Прогрессивная отрисовка ЕСТЬ: `paint_partial_dom` (page_load.rs:1183) — частичный
+  DOM → layout → display list → request_redraw; вызывается из HtmlChunk/CssLoaded
+  через `paint_stream_draft`, троттлинг 16 мс.
+- Гейт: черновик не рисуется, пока `stream_css_pending(generation)`; дедлайн
+  `STREAM_CSS_DEADLINE = 2s` (page_load/css_pending.rs:7) → `stream_css_deadline_tick`
+  в about_to_wait рисует unstyled-кадр по истечении.
+- CSS грузится параллельными потоками и мёрджится в `stream_sheet` по готовности
+  КАЖДОГО `<link>` (LoadEvent::CssLoaded → merge_from → paint_stream_draft).
+- ОГРАНИЧЕНИЕ 1: CSS парсится только ЦЕЛИКОМ — `fetch_subresource` отдаёт всё тело,
+  `lumen_css_parser::parse(&text)` однопроходный. «Применять по мере парсинга внутри
+  файла» требует инкрементального CSS-парсера — отдельный большой срез.
+- ОГРАНИЧЕНИЕ 2: каждый черновик = layout частичного DOM СИНХРОННО на UI-потоке
+  (layout_measured / layout_streaming_incremental). На market.yandex DOM огромный
+  и JS-driven: unstyled-оболочка почти пустая → кадры идут, но выглядят белыми;
+  контент появляется только после JS (~20 с) — цена движка, не сети.
+
+Гипотезы для проверки (FRAME_LOG + скриншоты по секундам на market.yandex):
+- когда реально первый непустой кадр: до/после JS?
+- успевают ли черновики (layout на UI-потоке может стоить секунды на большом DOM)?
+
+Рычаги: (а) draft-layout на layout-thread / viewport-only; (б) раньше снимать
+CSS-гейт или рисовать unstyled мгновенно; (в) инкрементальный CSS-парсер (backlog).
+
+## PERF-INPUT-1b: UI-столлы за QUERY_TIMEOUT (market.yandex, FRAME_LOG)
+
+Замер `LUMEN_FRAME_LOG=1` на market.yandex (post-split):
+- `[frame] total 5006ms / 3055ms`, разбивка `anim ~5000ms` — весь шаг
+  CSS-animations/.transitions кадра.
+- Причина: `route_query_js` → `EngineThread::query` блокирует UI-поток до
+  `QUERY_TIMEOUT = 5s` (engine_thread.rs:64), когда движковый поток занят
+  (в логе рядом `[engine] task 3232ms`). Опрошенный сайт делает частые
+  DOM-мутации → кадры регулярно попадали в 5-секундный таймаут → окно
+  визуально «мёртвое», кнопки не нажимаются.
+- `first non-empty frame: 34007ms` — подтверждено: прогрессивные кадры
+  фактически не появляются до ~34 с (JS-driven контент + редкие draft-кадры).
+
+Срез: `route_poll_js` (engine_bridge.rs) — неблокирующий опрос для
+по-кадровых drain'ов: при `engine.busy()` возвращает None БЕЗ постановки
+в очередь (drain'ы повторятся следующим кадром — состояние остаётся в JS).
+Применён к: `take_css_motion_cmds`, `has/take_raf_pending`, `take_dom_dirty`
+в redraw_requested. `drain_query_js` (relayout.rs) — добавлена проверка
+`engine.busy()` поверх `should_defer_query`: закрывает ~15 value-drain
+сайтов about_to_wait (canvas/history/nav/notifications/fullscreen/print/
+focus/view-transition) одним местом.
+
+НЕ тронуто намеренно: `route_query_js` для effectful-чтений
+(`eval_js_value` в click/form_submit, `take_nav_intercept_result`) —
+пропуск там терял бы выполнение скрипта или рассинхронизировал drain.
