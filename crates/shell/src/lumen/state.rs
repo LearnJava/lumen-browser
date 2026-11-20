@@ -155,6 +155,10 @@ pub(crate) struct Lumen {
     /// (`body[data-deck-cards]`) — toggled by `ChromeAction::ToggleDeckCards`
     /// (the grid button in `.deck-top`). Session-only UI state.
     pub(crate) deck_cards_open: bool,
+    /// `true` hides the deck skin's bottom dock (`body[data-deck-zen]`) —
+    /// deck-native zen mode toggled by the moon button while `skin == "deck"`,
+    /// so zen under deck does not swap to the classic "zen" skin. Session-only.
+    pub(crate) deck_zen_open: bool,
     /// CC-10b (docs/tasks/p1-css-chrome.md): `data-section` slug of the
     /// active `#view-settings` tab (`"general"`/`"privacy"`/`"appearance"`/
     /// `"sync"`/`"ext"`/`"qa"`). Engine-chrome-only UI state — the design's 6

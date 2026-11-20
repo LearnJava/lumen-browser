@@ -67,6 +67,10 @@ pub struct ChromeModel {
     /// (`body[data-deck-cards]` → `#deckCards` visible) — mirrors
     /// `Lumen::deck_cards_open`, toggled by `data-action="toggle-deck-cards"`.
     pub deck_cards_open: bool,
+    /// `true` hides the deck skin's bottom dock (`body[data-deck-zen]` →
+    /// `.deck-dock` display:none) — deck-native zen minimal mode, toggled by
+    /// the moon button while `skin == "deck"`. Mirrors `Lumen::deck_zen_open`.
+    pub deck_zen: bool,
     /// `true` shows the profile dropdown (`#profileMenu`/`#profileMenuH`,
     /// UX-CHROME-PANELS) — mirrors `ProfileMenuPanel::visible`.
     pub profile_menu_open: bool,
@@ -1280,6 +1284,26 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
         } else {
             remove_attr(doc, body, "data-deck-cards");
         }
+        if model.deck_zen {
+            set_attr(doc, body, "data-deck-zen", "");
+        } else {
+            remove_attr(doc, body, "data-deck-zen");
+        }
+        // Скин "deck" прячет `.app-frame` целиком — внутренние виды
+        // (`#view-history`/`#view-bookmarks`/`#view-settings`) живут внутри
+        // `#contentArea` и без этого атрибута были бы недостижимы: CSS ниже
+        // возвращает классический каркас, пока вид открыт.
+        set_attr(
+            doc,
+            body,
+            "data-view",
+            match model.content_view {
+                ChromeContentView::Page => "page",
+                ChromeContentView::History => "history",
+                ChromeContentView::Bookmarks => "bookmarks",
+                ChromeContentView::Settings => "settings",
+            },
+        );
     }
     bind_control_panel(doc, model);
     bind_profile_menu(doc, model);

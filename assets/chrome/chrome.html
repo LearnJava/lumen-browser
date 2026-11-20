@@ -1027,6 +1027,30 @@ body[data-skin="deck"] #chromeDeck{
 }
 body[data-skin="deck"] .app-frame,
 body[data-skin="deck"] .demo-bar{display:none;}
+/* Открытый внутренний вид (история/закладки/настройки) живёт в #contentArea
+   внутри .app-frame: под deck он недостижим, поэтому на время вида
+   возвращаем каркас, но прячем его «классические» части (сайдбар, полосу
+   вкладок, правый сайдбар, workspace-bar) — остаётся только тулбар с
+   омнибоксом и кнопкой настроек (путь назад) и сам вид на всю оставшуюся
+   площадь. Закрытие вида (data-view="page") возвращает deck. */
+body[data-skin="deck"][data-view="history"] #chromeDeck,
+body[data-skin="deck"][data-view="bookmarks"] #chromeDeck,
+body[data-skin="deck"][data-view="settings"] #chromeDeck{display:none;}
+body[data-skin="deck"][data-view="history"] .app-frame,
+body[data-skin="deck"][data-view="bookmarks"] .app-frame,
+body[data-skin="deck"][data-view="settings"] .app-frame{display:flex;}
+body[data-skin="deck"][data-view="history"] #sidebar,
+body[data-skin="deck"][data-view="history"] .hbar-row1,
+body[data-skin="deck"][data-view="history"] #rightSidebar,
+body[data-skin="deck"][data-view="history"] #workspaceBar,
+body[data-skin="deck"][data-view="bookmarks"] #sidebar,
+body[data-skin="deck"][data-view="bookmarks"] .hbar-row1,
+body[data-skin="deck"][data-view="bookmarks"] #rightSidebar,
+body[data-skin="deck"][data-view="bookmarks"] #workspaceBar,
+body[data-skin="deck"][data-view="settings"] #sidebar,
+body[data-skin="deck"][data-view="settings"] .hbar-row1,
+body[data-skin="deck"][data-view="settings"] #rightSidebar,
+body[data-skin="deck"][data-view="settings"] #workspaceBar{display:none;}
 .deck-top{
   display:flex; align-items:center; gap:8px; height:42px; flex:none;
   padding:0 14px; background:rgba(17,20,28,.9);
@@ -1137,6 +1161,9 @@ body[data-deck-cards] .deck-cards{display:block;}
   align-items:center; background:rgba(13,16,24,.95);
   border-top:1px solid rgba(255,255,255,.07);
 }
+/* Deck-zen: луна в deck-dock прячет нижнюю панель — минимальный deck без
+   переключения на классический zen-скин (body[data-deck-zen]). */
+body[data-deck-zen] .deck-dock{display:none;}
 .deck-d{
   width:34px; height:30px; display:flex; align-items:center;
   justify-content:center; border:none; border-radius:8px;

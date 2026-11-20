@@ -36,6 +36,21 @@ impl Lumen {
         }
         let hit = self.chrome_hit_test(x_css, y_css);
         self.chrome_active_nid = hit.as_ref().map(|r| r.node);
+        if std::env::var_os("LUMEN_CHROME_CLICK_DEBUG").is_some() {
+            let desc = hit.as_ref().map(|h| {
+                let acts: Vec<String> = h
+                    .path
+                    .iter()
+                    .filter_map(|&nid| {
+                        self.chrome_doc.as_ref().and_then(|(doc, _)| {
+                            doc.get(nid).get_attr("data-action").map(str::to_owned)
+                        })
+                    })
+                    .collect();
+                format!("node={:?} path={} actions={acts:?}", h.node, h.path.len())
+            });
+            eprintln!("[chrome-click] ({x_css},{y_css}) -> {desc:?}");
+        }
         self.relayout_chrome_host();
         if let Some(hit) = hit {
             // CC-7: `.omnibox`/`#omniInput` carries no `data-action` (nothing
@@ -94,6 +109,9 @@ impl Lumen {
             self.chrome_skin_before_zen = None;
         }
         self.chrome_skin = skin.to_owned();
+        if skin != "deck" {
+            self.deck_zen_open = false;
+        }
         let _ = self.settings_store.set_skin(skin);
         self.relayout_chrome_host();
     }
@@ -405,6 +423,9 @@ impl Lumen {
                     .as_ref()
                     .and_then(|(doc, _)| doc.get(nid).get_attr("data-view"))
                     .map(str::to_owned);
+                if std::env::var_os("LUMEN_CHROME_CLICK_DEBUG").is_some() {
+                    eprintln!("[chrome-action] ShowView nid={nid:?} view={view:?}");
+                }
                 match view.as_deref() {
                     Some("settings") => {
                         if self.settings_panel.visible {
@@ -1009,17 +1030,26 @@ impl Lumen {
             // скин (`apply_chrome_skin`), выход возвращает его; если zen был
             // включён через настройки (без памяти) — возвращается "default".
             ChromeAction::ToggleZen => {
-                let target = if self.chrome_skin == "zen" {
-                    // Нет памяти о предыдущем скине (zen был включён через
-                    // настройки и пережил рестарт) — возвращаемся к дефолту
-                    // из settings, а не к «Стандарту».
-                    self.chrome_skin_before_zen
-                        .take()
-                        .unwrap_or_else(|| lumen_storage::browser_settings::DEFAULT_SKIN.to_owned())
+                // Под скином "deck" луна — это deck-zen (прячем нижний dock),
+                // а не переход на классический "zen"-скин: тот выглядел бы
+                // как откат на старый дизайн. В остальных скинах — обычный
+                // скин-своп с памятью предыдущего.
+                if self.chrome_skin == "deck" {
+                    self.deck_zen_open = !self.deck_zen_open;
+                    self.relayout_chrome_host();
                 } else {
-                    "zen".to_owned()
-                };
-                self.apply_chrome_skin(&target);
+                    let target = if self.chrome_skin == "zen" {
+                        // Нет памяти о предыдущем скине (zen был включён через
+                        // настройки и пережил рестарт) — возвращаемся к дефолту
+                        // из settings, а не к «Стандарту».
+                        self.chrome_skin_before_zen
+                            .take()
+                            .unwrap_or_else(|| lumen_storage::browser_settings::DEFAULT_SKIN.to_owned())
+                    } else {
+                        "zen".to_owned()
+                    };
+                    self.apply_chrome_skin(&target);
+                }
             }
             // Deck skin: grid button in `.deck-top` toggles the coverflow
             // tab overview (`body[data-deck-cards]`); arrows step the

@@ -257,6 +257,25 @@ impl Lumen {
         // BUG-341 S22: the detachment record is kept, not discarded — it is
         // what lets the next pass rebuild this tree's pristine form instead of
         // this pass copying one aside.
+        // Открытый внутренний вид (`#view-settings`/`#view-history`/
+        // `#view-bookmarks`) — такой же «popover» для движка: его бокс лежит
+        // внутри изымаемого `#contentArea`, поэтому без salvage он не попал бы
+        // ни в layout (клики), ни в unclipped-слой (отрисовка). Активный вид
+        // добавляем к salvage-списку — остальные `.view` остаются в удалённом
+        // поддереве и не рисуются.
+        let active_view_id = if self.settings_panel.visible {
+            Some(lumen_chrome::ids::VIEW_SETTINGS)
+        } else if self.history_panel.visible {
+            Some(lumen_chrome::ids::VIEW_HISTORY)
+        } else if self.bookmark_panel.visible {
+            Some(lumen_chrome::ids::VIEW_BOOKMARKS)
+        } else {
+            None
+        };
+        let mut salvage_ids = SALVAGED_POPOVER_IDS.to_vec();
+        if let Some(id) = active_view_id {
+            salvage_ids.push(id);
+        }
         // Skin "deck" hides the classic `#contentArea` (display:none → no
         // layout box), so fall back to its own `#contentAreaDeck` host —
         // whichever yields a box first wins; in every other skin the first
@@ -264,12 +283,15 @@ impl Lumen {
         let pruned = [lumen_chrome::ids::CONTENT_AREA, lumen_chrome::ids::CONTENT_AREA_DECK]
             .iter()
             .filter_map(|&id| doc.find_by_id(id))
-            .find_map(|id| take_content_area(&mut layout, id, &SALVAGED_POPOVER_IDS, doc));
+            .find_map(|id| take_content_area(&mut layout, id, &salvage_ids, doc));
         let (page_host_rect, detached) = match pruned {
             Some((rect, detached)) => (Some(rect), Some(detached)),
             None => (None, None),
         };
         self.chrome_page_host_rect = page_host_rect;
+        if std::env::var_os("LUMEN_CHROME_RECT_DEBUG").is_some() {
+            eprintln!("[chrome-rect] host={page_host_rect:?}");
+        }
         self.chrome_content_area_detached = detached;
         // BUG-1059: `#demoBar`/`#infoPanel` are `position:fixed` siblings of
         // `#contentArea` (not descendants — chrome.html declares them
@@ -280,8 +302,15 @@ impl Lumen {
         // `FloatingPanelDetachment`'s doc comment for why they'd otherwise be
         // silently discarded. Painted separately, unclipped, via
         // `chrome_floating_dl` (`RedrawRequested`).
-        let popover_nodes: Vec<_> =
-            SALVAGED_POPOVER_IDS.iter().filter_map(|&id| doc.find_by_id(id).map(|n| (n, id))).collect();
+        // Активный `.view` кладём первым — он лежит ниже прочих popover'ов
+        // (find-bar, палитра и т.п.) по z-order, но всё равно поверх страницы.
+        let mut popover_nodes: Vec<_> = active_view_id
+            .into_iter()
+            .filter_map(|id| doc.find_by_id(id).map(|n| (n, id)))
+            .collect();
+        popover_nodes.extend(
+            SALVAGED_POPOVER_IDS.iter().filter_map(|&id| doc.find_by_id(id).map(|n| (n, id))),
+        );
         let mut floating_detached = Vec::new();
         for id in [lumen_chrome::ids::DEMO_BAR, lumen_chrome::ids::INFO_PANEL, lumen_chrome::ids::UPDATE_BAR, lumen_chrome::ids::LOGIN_BAR, lumen_chrome::ids::MEDIA_BAR, lumen_chrome::ids::HANG_BAR, lumen_chrome::ids::DIALOG_BOX, lumen_chrome::ids::SECURITY_BOX, lumen_chrome::ids::PROFILE_FRAME] {
             if let Some(node) = doc.find_by_id(id)
@@ -909,6 +938,7 @@ impl Lumen {
             profile_slug,
             skin: self.chrome_skin.clone(),
             deck_cards_open: self.deck_cards_open,
+            deck_zen: self.deck_zen_open,
             profile_menu_open: self.profile_menu.visible,
             control_panel: lumen_chrome::ChromeControlPanelModel {
                 shape: self.control_panel_shape,
