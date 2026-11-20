@@ -1185,7 +1185,7 @@ pub fn incremental_precompute_counters(
     // the middle one is proportional to the delta — the prologue is sheet-wide
     // and the epilogue is proportional to the *document*. A stage total cannot
     // tell "the cascade is expensive" from "the bookkeeping around it is".
-    let (mut ctx, mut map, incr) = {
+    let (mut ctx, mut map, incr, pre_match_needed) = {
         let _prof = lumen_core::profile::scope("cascade_prologue");
         let ctx = CounterCtx {
             pseudo_probe: crate::style::sheet_has_quote_content(sheet, viewport, dark_mode)
@@ -1211,8 +1211,31 @@ pub fn incremental_precompute_counters(
             ctx.pseudo_probe,
             prev_quotes,
         );
+        // PERF-PRE-MATCH-INCR: the scoped walk recomputes only the spine plus the
+        // subtrees under the delta's roots — pre-match exactly those elements in
+        // parallel instead of letting every recompute scan candidates serially.
+        // `None` (no spine licence) means the walk may visit anything: match all.
+        let pre_match_needed = spine.as_ref().map(|spine| {
+            let mut set = spine.clone();
+            let mut stack: Vec<NodeId> = dirty_roots
+                .iter()
+                .chain(shallow_roots.iter())
+                .chain(point_roots.iter())
+                .copied()
+                .collect();
+            while let Some(id) = stack.pop() {
+                if set.insert(id) {
+                    stack.extend(flat.children_of(doc, id).iter().copied());
+                }
+            }
+            set
+        });
         let map = CounterMap::continuing(prev_styles, elements);
-        (ctx, map, IncrRestyle { dirty_roots, shallow_roots, point_roots, content_dirty, spine, prev_counter_scopes, invalidation, prev_sheet })
+        (ctx, map, IncrRestyle { dirty_roots, shallow_roots, point_roots, content_dirty, spine, prev_counter_scopes, invalidation, prev_sheet }, pre_match_needed)
+    };
+    let _pre_matched = match &pre_match_needed {
+        Some(needed) => crate::style::pre_match::install_subset(doc, sheet, viewport, dark_mode, flat, needed),
+        None => crate::style::pre_match::install(doc, sheet, viewport, dark_mode, flat),
     };
     {
         let _prof = lumen_core::profile::scope("cascade_walk");

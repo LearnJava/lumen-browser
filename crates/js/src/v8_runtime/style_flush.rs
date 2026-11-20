@@ -991,7 +991,7 @@ impl FlushHandles {
             let mut custom = self.custom_properties.lock().unwrap_or_else(|e| e.into_inner());
             match (&scoped_plan, scoped_ids) {
                 (Some(plan), Some(ids))
-                    if self.custom_props_collected.load(Ordering::Relaxed) && counters.cq_boxless().is_empty() =>
+                    if self.custom_props_collected.load(Ordering::Relaxed) =>
                 {
                     for nid in ids {
                         if !plan.keeps_published(*nid) {
@@ -999,6 +999,19 @@ impl FlushHandles {
                         }
                     }
                     plan.collect_custom_properties(viewport, &mut custom);
+                    // Box-less `@container`-restyled elements own no box the plan
+                    // walks — publish their maps the way the whole-document collect
+                    // does, so the scoped path does not have to fall back for them.
+                    for (id, style) in counters.cq_boxless() {
+                        let idx = id.index() as u32;
+                        if style.custom_props.is_empty() {
+                            custom.remove(&idx);
+                        } else {
+                            custom.entry(idx).or_insert_with(|| {
+                                lumen_layout::custom_props_map_for_style(style, viewport)
+                            });
+                        }
+                    }
                     if verify_scope_prune() {
                         let full = lumen_layout::collect_custom_properties_for(&layout_root, Some(&counters), viewport);
                         let stale = full.iter().filter(|(k, v)| custom.get(*k) != Some(*v)).count();

@@ -29,6 +29,10 @@ pub type PseudoMaps = HashMap<(u32, String), HashMap<String, String>>;
 /// The published resolved custom properties, keyed by node index.
 pub type CustomPropMaps = HashMap<u32, Arc<HashMap<String, String>>>;
 
+/// First style seen per distinct `custom_props` allocation — the
+/// `(shared raw map, em basis)` a parallel resolve needs per allocation.
+type FirstStyles = HashMap<usize, (Arc<std::collections::HashMap<String, String>>, f32)>;
+
 /// `LUMEN_NO_CUSTOM_ONLY_PLAN=1` — a carried subtree whose styles differ in `custom_props` alone
 /// is planned box by box again: the A/B arm of PERF-INVALIDATION S2 (the collector half of the
 /// BUG-935 срез 102 licence) and the way back if a page ever shows a stale custom property after
@@ -665,17 +669,49 @@ impl<'a> ScopedCollection<'a> {
     /// instead of a plan-wide walk. An entry whose map became empty is dropped, or a removed
     /// property would stay published.
     pub fn collect_custom_properties(&self, viewport: lumen_core::geom::Size, out: &mut CustomPropMaps) {
-        let mut fresh = HashMap::new();
-        let mut resolved = HashMap::new();
+        let dbg = std::env::var_os("LUMEN_CP_DEBUG").is_some();
+        let t0 = std::time::Instant::now();
+        // PERF-CP-PAR: same two-phase shape as the whole-document collector —
+        // phase 1 records which map allocation each node publishes (first box
+        // in traversal order wins; `custom_prop_tops` removals override),
+        // phase 2 resolves every distinct allocation in parallel, phase 3
+        // publishes the shared `Arc`s.
+        let mut claims: HashMap<u32, usize> = HashMap::new();
+        let mut removals: Vec<u32> = Vec::new();
+        let mut first_style: FirstStyles = HashMap::new();
+        let claim = |b: &LayoutBox,
+                         claims: &mut HashMap<u32, usize>,
+                         first_style: &mut FirstStyles| {
+            let idx = b.node.index() as u32;
+            let ptr = b.style.custom_props.as_ptr() as usize;
+            if claims.contains_key(&idx) {
+                return;
+            }
+            claims.insert(idx, ptr);
+            first_style
+                .entry(ptr)
+                .or_insert_with(|| (b.style.custom_props.shared(), b.style.font_size));
+        };
         for it in &self.items {
             let held = (!it.in_root).then_some(&*out);
             if !it.whole {
-                crate::collect_custom_properties_box(it.b, viewport, held, &mut fresh, &mut resolved);
+                let b = it.b;
+                if !b.style.custom_props.is_empty()
+                    && !held.is_some_and(|h| h.contains_key(&(b.node.index() as u32)))
+                {
+                    claim(b, &mut claims, &mut first_style);
+                }
                 continue;
             }
             let mut stack = vec![it.b];
             while let Some(b) = stack.pop() {
-                crate::collect_custom_properties_box(b, viewport, held, &mut fresh, &mut resolved);
+                if b.style.custom_props.is_empty()
+                    || held.is_some_and(|h| h.contains_key(&(b.node.index() as u32)))
+                {
+                    // carried over: keep the published entry
+                } else {
+                    claim(b, &mut claims, &mut first_style);
+                }
                 stack.extend(b.children.iter().rev());
             }
         }
@@ -684,15 +720,53 @@ impl<'a> ScopedCollection<'a> {
             while let Some(b) = stack.pop() {
                 let idx = b.node.index() as u32;
                 if b.style.custom_props.is_empty() {
-                    fresh.remove(&idx);
-                    out.remove(&idx);
+                    claims.remove(&idx);
+                    removals.push(idx);
                 } else {
-                    crate::collect_custom_properties_box(b, viewport, None, &mut fresh, &mut resolved);
+                    claim(b, &mut claims, &mut first_style);
                 }
                 stack.extend(b.children.iter().rev());
             }
         }
-        out.extend(fresh);
+        let resolved: HashMap<
+            usize,
+            std::sync::Arc<std::collections::HashMap<String, String>>,
+        > = {
+            use rayon::prelude::*;
+            first_style
+                .par_iter()
+                .map(|(&ptr, (raw, em_basis))| {
+                    (
+                        ptr,
+                        std::sync::Arc::new(crate::resolve_custom_props_raw(
+                            raw, *em_basis, viewport,
+                        )),
+                    )
+                })
+                .collect()
+        };
+        let n_claims = claims.len();
+        let n_removals = removals.len();
+        for &idx in &removals {
+            out.remove(&idx);
+        }
+        for (idx, ptr) in claims {
+            if let Some(m) = resolved.get(&ptr) {
+                out.insert(idx, std::sync::Arc::clone(m));
+            }
+        }
+        if dbg {
+            eprintln!(
+                "[cp] scoped: items={} tops={} claims={} distinct_maps={} removals={} out={} {:?}",
+                self.items.len(),
+                self.custom_prop_tops.len(),
+                n_claims,
+                resolved.len(),
+                n_removals,
+                out.len(),
+                t0.elapsed()
+            );
+        }
     }
 
     /// BUG-935 срез 100: [`crate::collect_text_frag_rects`] over the planned boxes — the

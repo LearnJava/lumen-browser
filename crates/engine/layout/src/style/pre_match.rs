@@ -25,7 +25,7 @@
 //! style; read once per process, like the other rollback switches of this track.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use lumen_core::geom::Size;
@@ -115,6 +115,32 @@ pub(crate) fn install(
     dark_mode: bool,
     flat: &FlatTree,
 ) -> Guard {
+    install_impl(doc, sheet, viewport, dark_mode, flat, None)
+}
+
+/// Incremental-cascade variant: matches only the elements in `needed` — the
+/// nodes the scoped walk can recompute — instead of the whole document. A node
+/// outside the set simply falls back to matching inside `compute_style`, so an
+/// under-approximation costs time, never correctness.
+pub(crate) fn install_subset(
+    doc: &Document,
+    sheet: &Stylesheet,
+    viewport: Size,
+    dark_mode: bool,
+    flat: &FlatTree,
+    needed: &HashSet<NodeId>,
+) -> Guard {
+    install_impl(doc, sheet, viewport, dark_mode, flat, Some(needed))
+}
+
+fn install_impl(
+    doc: &Document,
+    sheet: &Stylesheet,
+    viewport: Size,
+    dark_mode: bool,
+    flat: &FlatTree,
+    needed: Option<&HashSet<NodeId>>,
+) -> Guard {
     let _prof = lumen_core::profile::scope("pre_match");
     TABLE.with(|t| t.borrow_mut().take());
     // `node_count` bounds the element count from above — this early exit keeps tiny documents
@@ -123,7 +149,7 @@ pub(crate) fn install(
         return Guard;
     }
     let mut nodes = Vec::new();
-    collect_elements(doc, flat, doc.root(), &mut nodes);
+    collect_elements(doc, flat, doc.root(), needed, &mut nodes);
     if nodes.len() < MIN_ELEMENTS {
         return Guard;
     }
@@ -189,10 +215,18 @@ pub(crate) fn lookup(
 
 /// Elements of the composed tree in document order — the set [`crate::counters::walk`]
 /// re-cascades on a full pass. Text and other non-elements carry no style of their own.
-fn collect_elements(doc: &Document, flat: &FlatTree, root: NodeId, out: &mut Vec<NodeId>) {
+fn collect_elements(
+    doc: &Document,
+    flat: &FlatTree,
+    root: NodeId,
+    needed: Option<&HashSet<NodeId>>,
+    out: &mut Vec<NodeId>,
+) {
     let mut stack = vec![root];
     while let Some(id) = stack.pop() {
-        if matches!(doc.get(id).data, NodeData::Element { .. }) {
+        if matches!(doc.get(id).data, NodeData::Element { .. })
+            && needed.is_none_or(|s| s.contains(&id))
+        {
             out.push(id);
         }
         stack.extend(flat.children_of(doc, id).iter().rev().copied());

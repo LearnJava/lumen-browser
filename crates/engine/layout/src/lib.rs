@@ -1508,21 +1508,102 @@ pub fn collect_custom_properties_for(
     viewport: lumen_core::geom::Size,
 ) -> std::collections::HashMap<u32, std::sync::Arc<std::collections::HashMap<String, String>>> {
     let mut out = std::collections::HashMap::new();
-    // Keyed by the address of the source allocation — identity, never read.
-    let mut resolved: std::collections::HashMap<
+    // PERF-CP-PAR: resolution (`var()` chains) dominates this collector —
+    // ~450 distinct maps × ~150 props measured ~1.9 s on github.com. Phase 1
+    // walks the tree and records (node → map allocation) plus the first style
+    // seen per allocation; phase 2 resolves every distinct map in parallel;
+    // phase 3 publishes the shared `Arc`s. "First box in tree order wins" per
+    // node and per allocation is preserved by the sequential phase 1.
+    let dbg = std::env::var_os("LUMEN_CP_DEBUG").is_some();
+    let t0 = std::time::Instant::now();
+    let mut pending: Vec<(u32, usize)> = Vec::new();
+    let mut first_style: std::collections::HashMap<
         usize,
-        std::sync::Arc<std::collections::HashMap<String, String>>,
+        (std::sync::Arc<std::collections::HashMap<String, String>>, f32),
     > = std::collections::HashMap::new();
-    collect_custom_properties_rec(root, viewport, &mut out, &mut resolved);
-    if let Some(counters) = counters {
-        for (id, style) in counters.cq_boxless() {
-            let idx = id.index() as u32;
-            if !out.contains_key(&idx) && !style.custom_props.is_empty() {
-                out.insert(idx, resolve_custom_props(style, viewport, &mut resolved));
+    let mut seen_nodes: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    {
+        let mut stack: Vec<&LayoutBox> = vec![root];
+        while let Some(b) = stack.pop() {
+            if !b.style.custom_props.is_empty() {
+                let idx = b.node.index() as u32;
+                if seen_nodes.insert(idx) {
+                    let ptr = b.style.custom_props.as_ptr() as usize;
+                    pending.push((idx, ptr));
+                    first_style.entry(ptr).or_insert_with(|| {
+                        (b.style.custom_props.shared(), b.style.font_size)
+                    });
+                }
+            }
+            for child in b.children.iter().rev() {
+                stack.push(child);
             }
         }
     }
+    let boxless = counters.map(|c| {
+        c.cq_boxless()
+            .iter()
+            .filter(|(id, style)| {
+                !seen_nodes.contains(&(id.index() as u32)) && !style.custom_props.is_empty()
+            })
+            .map(|(id, style)| (id.index() as u32, style))
+            .collect::<Vec<_>>()
+    });
+    if let Some(list) = &boxless {
+        for &(idx, style) in list {
+            seen_nodes.insert(idx);
+            let ptr = style.custom_props.as_ptr() as usize;
+            pending.push((idx, ptr));
+            first_style
+                .entry(ptr)
+                .or_insert_with(|| (style.custom_props.shared(), style.font_size));
+        }
+    }
+    let resolved: std::collections::HashMap<
+        usize,
+        std::sync::Arc<std::collections::HashMap<String, String>>,
+    > = {
+        use rayon::prelude::*;
+        first_style
+            .par_iter()
+            .map(|(&ptr, (raw, em_basis))| {
+                (
+                    ptr,
+                    std::sync::Arc::new(resolve_custom_props_raw(raw, *em_basis, viewport)),
+                )
+            })
+            .collect()
+    };
+    let n_pending = pending.len();
+    out.reserve(n_pending);
+    for (idx, ptr) in pending {
+        if let Some(m) = resolved.get(&ptr) {
+            out.insert(idx, std::sync::Arc::clone(m));
+        }
+    }
+    if dbg {
+        eprintln!(
+            "[cp] full: out={} distinct_maps={} pending={} walk+resolve={:?}",
+            out.len(),
+            resolved.len(),
+            n_pending,
+            t0.elapsed()
+        );
+    }
     out
+}
+
+/// Resolved custom-property map for one cascaded style — the boxless
+/// (`@container`-restyled, no layout box) counterpart of what
+/// [`collect_custom_properties_for`] publishes for boxed elements. Used by the
+/// scoped collectors, which merge [`CounterMap::cq_boxless`] entries on top of
+/// the plan's boxes instead of falling back to a whole-document walk.
+pub fn custom_props_map_for_style(
+    style: &ComputedStyle,
+    viewport: lumen_core::geom::Size,
+) -> std::sync::Arc<std::collections::HashMap<String, String>> {
+    let mut resolved = std::collections::HashMap::new();
+    resolve_custom_props(style, viewport, &mut resolved)
 }
 
 /// `style.custom_props` with every `var()` expanded, one resolution per distinct
@@ -1540,68 +1621,25 @@ fn resolve_custom_props(
         return std::sync::Arc::clone(m);
     }
     let raw = style.custom_props.shared();
-    let em_basis = style.font_size;
-    let m = std::sync::Arc::new(
-        raw.iter()
-            .map(|(name, value)| {
-                let computed = crate::style::expand_custom_property_value(name, value, &raw, em_basis, viewport).unwrap_or_default();
-                (name.clone(), computed.trim().to_string())
-            })
-            .collect::<std::collections::HashMap<String, String>>(),
-    );
+    let m = std::sync::Arc::new(resolve_custom_props_raw(&raw, style.font_size, viewport));
     resolved.insert(key, std::sync::Arc::clone(&m));
     m
 }
 
-/// Explicit heap-stack pre-order walk (LAYOUT-2 срез 2), not native
-/// recursion: nothing after the loop over `children` reads a value the walk
-/// produced, so this is the same safe mechanical class LAYOUT-1 already
-/// converted. "First box in tree order wins" (below) depends on left-to-right
-/// pre-order — preserved by pushing children in reverse so the LIFO stack
-/// pops them in source order.
-fn collect_custom_properties_rec(
-    root: &LayoutBox,
+/// Expands every `var()`/`env()` of one raw custom-property map — the
+/// per-allocation unit [`resolve_custom_props`] memoises and the parallel
+/// collector resolves across allocations.
+fn resolve_custom_props_raw(
+    raw: &std::collections::HashMap<String, String>,
+    em_basis: f32,
     viewport: lumen_core::geom::Size,
-    out: &mut std::collections::HashMap<
-        u32,
-        std::sync::Arc<std::collections::HashMap<String, String>>,
-    >,
-    resolved: &mut std::collections::HashMap<
-        usize,
-        std::sync::Arc<std::collections::HashMap<String, String>>,
-    >,
-) {
-    let mut stack: Vec<&LayoutBox> = vec![root];
-    while let Some(b) = stack.pop() {
-        collect_custom_properties_box(b, viewport, None, out, resolved);
-        for child in b.children.iter().rev() {
-            stack.push(child);
-        }
-    }
-}
-
-/// One box's contribution to [`collect_custom_properties`]. `held` — the entries already
-/// published, which are left as they are (BUG-935 срез 96).
-pub(crate) fn collect_custom_properties_box(
-    b: &LayoutBox,
-    viewport: lumen_core::geom::Size,
-    held: Option<&scoped_collect::CustomPropMaps>,
-    out: &mut std::collections::HashMap<
-        u32,
-        std::sync::Arc<std::collections::HashMap<String, String>>,
-    >,
-    resolved: &mut std::collections::HashMap<
-        usize,
-        std::sync::Arc<std::collections::HashMap<String, String>>,
-    >,
-) {
-    // First box in tree order wins — see `collect_layout_rects_rec` for why
-    // several boxes can carry the same `NodeId`.
-    if b.style.custom_props.is_empty() || held.is_some_and(|h| h.contains_key(&(b.node.index() as u32))) {
-        return;
-    }
-    let map = resolve_custom_props(&b.style, viewport, resolved);
-    out.entry(b.node.index() as u32).or_insert(map);
+) -> std::collections::HashMap<String, String> {
+    raw.iter()
+        .map(|(name, value)| {
+            let computed = crate::style::expand_custom_property_value(name, value, raw, em_basis, viewport).unwrap_or_default();
+            (name.clone(), computed.trim().to_string())
+        })
+        .collect()
 }
 
 // ──────────────── collect_layout_rects ────────────────
