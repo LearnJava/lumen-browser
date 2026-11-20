@@ -1207,6 +1207,15 @@ impl Lumen {
             _ => lumen_layout::layout_measured(doc, &self.stream_sheet, viewport, &measurer),
         };
         let dl = crate::display_list_metrics::paint_ordered_in(&layout, viewport);
+        #[cfg(feature = "v8")]
+        if std::env::var("LUMEN_FRAME_LOG").is_ok_and(|v| v != "0") {
+            eprintln!(
+                "[draft] t={:?} dl={} cmds nodes={}",
+                self.nav_start.map(|t| t.elapsed()),
+                dl.len(),
+                doc.node_count(),
+            );
+        }
 
         (self.content_height, self.content_width) = crate::display_list_metrics::page_content_extent(&dl, &layout, self.viewport_width_css());
         let has_content = !dl.is_empty();
