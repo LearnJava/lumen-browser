@@ -1255,6 +1255,25 @@ fn find_first_matching(
     None
 }
 
+/// Все элементы-потомки `start` (сам `start` не входит), в порядке дерева,
+/// отфильтрованные `pred`. Двойник `find_first_matching` для
+/// `getElementsByTagName(NS)` фасадов.
+#[cfg(feature = "v8-backend")]
+fn collect_descendants_matching(
+    doc: &lumen_dom::Document,
+    start: lumen_dom::NodeId,
+    pred: &dyn Fn(&lumen_dom::Node) -> bool,
+    out: &mut Vec<lumen_dom::NodeId>,
+) {
+    for &child in &doc.get(start).children.clone() {
+        let node = doc.get(child);
+        if matches!(node.data, lumen_dom::NodeData::Element { .. }) && pred(node) {
+            out.push(child);
+        }
+        collect_descendants_matching(doc, child, pred, out);
+    }
+}
+
 /// Конкатенация текстовых узлов поддерева. Mirrors `v8_runtime::collect_text_content`.
 #[cfg(feature = "v8-backend")]
 fn collect_text_content(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> String {
@@ -2026,6 +2045,80 @@ pub(crate) fn install_frame_bridge_v8(
         )?;
     }
 
+    // ── getElementsByTagName(NS) для фасадов ─────────────────────────────────
+    // Фасадный документ/элемент не имел этих методов вообще — страницы
+    // вида meduza (`iframe.contentDocument.getElementsByTagName`) и osm
+    // ловили TypeError. Обход — потомки `scope` (scope < 0 — корень
+    // документа), матчинг повторяет `_lumen_tag_name_predicate` главного
+    // шима: HTML-элемент матчится без учёта регистра, чужие неймспейсы —
+    // точно.
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_f_by_tag",
+            into_v8_fn3(move |bid: u32, scope: i32, qname: String| -> Vec<u32> {
+                with_accessible_doc(&reg, bid, |d| {
+                    let start = if scope < 0 {
+                        d.root()
+                    } else {
+                        lumen_dom::NodeId::from_raw(scope as u32)
+                    };
+                    let want = qname;
+                    let lower = want.to_lowercase();
+                    let all = want == "*";
+                    let mut out = Vec::new();
+                    collect_descendants_matching(d, start, &|n| {
+                        match &n.data {
+                            lumen_dom::NodeData::Element { name, .. } => {
+                                if all {
+                                    return true;
+                                }
+                                if matches!(name.namespace, lumen_dom::Namespace::Html) {
+                                    name.local.to_lowercase() == lower
+                                } else {
+                                    name.local == want
+                                }
+                            }
+                            _ => false,
+                        }
+                    }, &mut out);
+                    out.iter().map(|n| n.raw()).collect()
+                }, Vec::new())
+            }),
+        )?;
+    }
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_f_by_tag_ns",
+            into_v8_fn4(move |bid: u32, scope: i32, ns: String, local: String| -> Vec<u32> {
+                with_accessible_doc(&reg, bid, |d| {
+                    let start = if scope < 0 {
+                        d.root()
+                    } else {
+                        lumen_dom::NodeId::from_raw(scope as u32)
+                    };
+                    let want_ns = if ns.is_empty() { None } else { Some(ns.as_str()) };
+                    let any_ns = ns == "*";
+                    let any_local = local == "*";
+                    let mut out = Vec::new();
+                    collect_descendants_matching(d, start, &|n| {
+                        match &n.data {
+                            lumen_dom::NodeData::Element { name, .. } => {
+                                if !any_ns && name.namespace.uri() != want_ns {
+                                    return false;
+                                }
+                                any_local || name.local == local
+                            }
+                            _ => false,
+                        }
+                    }, &mut out);
+                    out.iter().map(|n| n.raw()).collect()
+                }, Vec::new())
+            }),
+        )?;
+    }
+
     // ── Element-level чтение ─────────────────────────────────────────────────
     {
         let reg = Arc::clone(&registry);
@@ -2660,6 +2753,26 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     });
   }
 
+  // getElementsByClassName фасадов: полный список элементов scope
+  // (`_lumen_f_by_tag('*')`, scope < 0 — документ) фильтруется по
+  // ASCII-пробельным токенам class. По DOM LS §4.5 элемент матчится,
+  // только если его class-list содержит ВСЕ запрошенные токены
+  // (пересечение, как `.a.b`, а не объединение).
+  function frameByClass(bid, scope, names) {
+    var want = String(names == null ? '' : names).split(/[\t\n\f\r ]+/);
+    want = want.filter(function(s) { return s !== ''; });
+    if (!want.length) return [];
+    return _lumen_f_by_tag(bid, scope, '*').filter(function(n) {
+      var cls = _lumen_f_attr(bid, n, 'class');
+      if (cls === null || cls === undefined || cls === '') return false;
+      var toks = String(cls).split(/[\t\n\f\r ]+/);
+      for (var i = 0; i < want.length; i++) {
+        if (toks.indexOf(want[i]) === -1) return false;
+      }
+      return true;
+    }).map(function(n) { return frameElem(bid, n); });
+  }
+
   function frameElem(bid, nid) {
     if (nid === null || nid === undefined || nid < 0) return null;
     var cache = elems[bid];
@@ -2733,6 +2846,19 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
       querySelector: function(sel) { return frameElem(bid, _lumen_f_query_scoped(bid, nid, String(sel))); },
       querySelectorAll: function(sel) {
         return _lumen_f_query_all_scoped(bid, nid, String(sel)).map(function(c) { return frameElem(bid, c); });
+      },
+      // getElementsBy*(DOM LS §4.5): обход делает натив `_lumen_f_by_tag*`
+      // с тем же регистровым правилом, что у главного документа; ClassName
+      // фильтрует тот же список по токенам class.
+      getElementsByTagName: function(q) {
+        return _lumen_f_by_tag(bid, nid, String(q)).map(function(c) { return frameElem(bid, c); });
+      },
+      getElementsByTagNameNS: function(ns, l) {
+        return _lumen_f_by_tag_ns(bid, nid, ns == null ? '' : String(ns), String(l))
+          .map(function(c) { return frameElem(bid, c); });
+      },
+      getElementsByClassName: function(names) {
+        return frameByClass(bid, nid, names);
       },
       // BUG-480 срез 5: запись через фасад. Аргументы-узлы обязаны быть
       // фасадами ТОГО ЖЕ биндинга (чужой документ — тихий no-op); removeChild
@@ -2898,6 +3024,33 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     d.querySelector = function(sel) { return el(_lumen_f_query(bid, String(sel))); };
     d.querySelectorAll = function(sel) {
       return _lumen_f_query_all(bid, String(sel)).map(function(n) { return frameElem(bid, n); });
+    };
+    // Те же §4.5-обходы, что у элемента, но от корня документа (scope < 0).
+    // Без них `iframe.contentDocument.getElementsByTagName` давал TypeError
+    // (meduza, codepen в аудите).
+    d.getElementsByTagName = function(q) {
+      return _lumen_f_by_tag(bid, -1, String(q)).map(function(n) { return frameElem(bid, n); });
+    };
+    d.getElementsByTagNameNS = function(ns, l) {
+      return _lumen_f_by_tag_ns(bid, -1, ns == null ? '' : String(ns), String(l))
+        .map(function(n) { return frameElem(bid, n); });
+    };
+    d.getElementsByClassName = function(names) {
+      return frameByClass(bid, -1, names);
+    };
+    // Document — тоже EventTarget (HTML LS §3.1.1): слушатели идут в ту же
+    // карту facadeOn, что и у элементов; доставка ресурсных событий ребёнка
+    // в doc-фасад — отдельный срез, но отсутствие метода ломало страницы
+    // сразу (osm: `contentDocument.addEventListener is not a function`).
+    d.addEventListener = function(type, fn) {
+      if (typeof type === 'string' && type && typeof fn === 'function') {
+        facadeOn(d, type, fn, true);
+      }
+    };
+    d.removeEventListener = function(type, fn) {
+      if (typeof type === 'string' && type && typeof fn === 'function') {
+        facadeOn(d, type, fn, false);
+      }
     };
     // Срез 5: фабрики узлов под-документа. Отрицательный ответ натива
     // (переполнение арены) → null, как у главного документа.
