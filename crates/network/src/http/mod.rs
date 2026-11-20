@@ -17,6 +17,7 @@
 //!   Browser traffic instead of presenting a unique minimal fingerprint
 
 pub mod accept_language;
+pub mod chrome_manifest;
 pub mod headers;
 pub mod h2_settings;
 pub mod client_hints;
@@ -29,6 +30,7 @@ pub use headers::{
     build_request_headers_with_identity, h2_fingerprint_headers,
     h2_fingerprint_headers_with_identity, sends_global_privacy_control,
 };
+pub use chrome_manifest::{ChromeManifest, H2Spec, TlsSpec, CHROME_157};
 pub use h2_settings::{H2Settings, H2StreamPriority};
 pub use client_hints::{
     ClientHintsProfile, should_send_client_hints, client_hints_headers, low_entropy_client_hints,

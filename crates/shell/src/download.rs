@@ -516,14 +516,11 @@ fn run_download(
     };
 
     use lumen_core::ext::NetworkTransport as _;
-    use lumen_network::{BrotliContentDecoder, DeflateContentDecoder, GzipContentDecoder, HttpClient, ZstdContentDecoder};
+    use lumen_network::HttpClient;
 
     let client = crate::config::global().apply_http(
         HttpClient::new()
-            .with_content_decoder(Arc::new(GzipContentDecoder::new()))
-            .with_content_decoder(Arc::new(DeflateContentDecoder::new()))
-            .with_content_decoder(Arc::new(BrotliContentDecoder::new()))
-            .with_content_decoder(Arc::new(ZstdContentDecoder::new())),
+            .with_content_decoders(lumen_network::default_content_decoders()),
     );
 
     let body = match client.fetch(&parsed) {
