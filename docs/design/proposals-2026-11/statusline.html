@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Статус</title>
+<style>
+  :root{--bg:#1a1c20;--panel:#22252b;--ink:#d8dce2;--mut:#7d8590;--line:#2e333b;--acc:#5b9dff;--grn:#3fb96f}
+  *{box-sizing:border-box}
+  body{margin:0;font:13px/1.5 'Segoe UI',Consolas,monospace;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  /* контент */
+  main{flex:1;overflow:auto;padding:0}
+  main .hd{height:120px;background:linear-gradient(120deg,#2a3441,#3d4a5c)}
+  main .bd{max-width:600px;margin:24px auto;padding:0 22px;font-size:14.5px;line-height:1.7}
+  main .bd h1{font-size:21px}
+  /* верхняя минимальная строка */
+  .top{height:34px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;background:var(--panel);border-bottom:1px solid var(--line);font-family:'Segoe UI',sans-serif}
+  .ib{height:26px;padding:0 8px;border:1px solid var(--line);border-radius:6px;background:none;color:var(--mut);cursor:pointer;font-size:12px}
+  .ib:hover{color:var(--ink);border-color:#3a4250}
+  .omni{flex:1;max-width:440px;margin-left:auto;height:26px;display:flex;align-items:center;padding:0 12px;background:#14161a;border:1px solid var(--line);border-radius:13px;font-size:12.5px;color:var(--mut);cursor:pointer;font-family:Consolas,monospace}
+  .omni:hover{border-color:#3a4250}
+  /* статус-строка внизу — как в vim */
+  .status{height:30px;flex:none;display:flex;align-items:center;gap:0;background:#14161a;border-top:1px solid var(--line);font-family:Consolas,monospace;font-size:12px;user-select:none}
+  .seg{display:flex;align-items:center;gap:6px;height:100%;padding:0 12px;cursor:pointer;border-right:1px solid var(--line)}
+  .seg:hover{background:#1f242c}
+  .seg .k{color:#5b636e}
+  .seg .v{color:var(--ink);font-weight:600}
+  .seg .v.acc{color:var(--acc)}
+  .seg .v.grn{color:var(--grn)}
+  .seg.mode{background:#2a2416;color:#e8a33d;font-weight:700}
+  .seg.right{margin-left:auto;border-right:none;border-left:1px solid var(--line)}
+  .find{height:30px;flex:none;display:none;align-items:center;gap:8px;padding:0 12px;background:#1f242c;border-top:1px solid var(--line);font-family:Consolas,monospace;font-size:12.5px}
+  .find.open{display:flex}
+  .find input{background:#14161a;border:1px solid var(--line);border-radius:6px;padding:4px 10px;color:var(--ink);font:inherit;width:260px;outline:none}
+  .find input:focus{border-color:var(--acc)}
+  .find .cnt{color:var(--mut)}
+  .find button{background:none;border:1px solid var(--line);border-radius:6px;color:var(--mut);cursor:pointer;padding:3px 9px;font-size:11.5px}
+  .find button:hover{color:var(--ink)}
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#0d1117;color:#e6e9ee;font-size:12px;line-height:1.4;padding:6px 9px;border-radius:7px;max-width:290px;border:1px solid #2a313c;box-shadow:0 6px 20px rgba(0,0,0,.5);display:none}
+  #tip b{color:#8fb8ec}#tip kbd{background:#262b33;border-radius:4px;padding:0 5px;font:11px Consolas;margin-left:4px}
+</style>
+</head>
+<body>
+  <div class="top">
+    <button class="ib" data-tip="Назад"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg></button>
+    <button class="ib" data-tip="Вперёд"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></button>
+    <button class="ib" data-tip="Обновить"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12a8 8 0 11-2.34-5.66M20 4v4h-4"/></svg></button>
+    <div class="omni" data-tip="Адрес / поиск / @-команды — в стиле command-line" onclick="openPage('app.html?s=history')">lumen.local/article</div>
+  </div>
+  <main><div class="hd"></div><div class="bd"><h1>Статус — вся информация в нижней строке</h1><p>Как в Vim: внизу одна строка состояния, в которой живёт всё — режим, вкладка, URL, щиты, загрузки, позиция чтения. Верхний хром минимален: три кнопки и адресная строка.</p><p>Статус-строка обновляется в реальном времени: при загрузке показывает прогресс, при скролле — позицию, при hover на ссылке — её адрес (то, чего не хватает в Chrome — status bar с URL ссылки).</p><p>Нажмите <kbd>Ctrl+F</kbd> — строка поиска откроется над статус-строкой, как в Vim.</p></div></main>
+  <div class="find" id="find"><span style="color:var(--mut)">find:</span><input placeholder="найти на странице…" id="fq"><span class="cnt" id="fc">0/0</span><button onclick="step(-1)">↑</button><button onclick="step(1)">↓</button><button onclick="document.getElementById('find').classList.remove('open')">esc</button></div>
+  <div class="status">
+    <div class="seg mode" data-tip="Режим: NORMAL — как в Vim. <kbd>i</kbd> — ввод, <kbd>:</kbd> — команда"><span>NORMAL</span></div>
+    <div class="seg" data-tip="Активная вкладка и её пространство"><span class="k">tab</span><span class="v">3/7</span><span>Lumen — движок</span></div>
+    <div class="seg" data-tip="Текущий URL — в статус-строке всегда видно, где вы"><span class="k">url</span><span class="v acc">lumen.local/article</span></div>
+    <div class="seg" data-tip="Щиты: 7 запросов заблокировано на этой странице" onclick="openPage('app.html?s=privacy')"><span class="k">🛡</span><span class="v grn">on·7</span></div>
+    <div class="seg" data-tip="Загрузки: 2 активных" onclick="openPage('app.html?s=downloads')"><span class="k">⬇</span><span class="v">2</span></div>
+    <div class="seg" data-tip="Позиция чтения: 34% статьи · 4 мин осталось" onclick="openPage('app.html?s=readlater')"><span class="k">read</span><span class="v">34%</span></div>
+    <div class="seg" data-tip="Пространство «Работа» — Ctrl+Shift+W" onclick="openPage('app.html?s=workspaces')"><span class="k">ws</span><span class="v">Работа</span></div>
+    <div class="seg right" data-tip="Lumen 0.5.0 · UTF-8 · 60fps"><span>0.5.0</span><span class="k">·</span><span>UTF-8</span></div>
+  </div>
+  <div id="tip"></div>
+<script>
+function openPage(u){window.open(u,'_blank')}
+addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='f'){e.preventDefault();document.getElementById('find').classList.add('open');document.getElementById('fq').focus()}});
+const tip=document.getElementById('tip');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+12,innerWidth-300)+'px';tip.style.top=(e.clientY+14)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none'});
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

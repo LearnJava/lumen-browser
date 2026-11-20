@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Пространства и контейнеры</title>
+<style>
+  :root{--bg:#eceef1;--panel:#fff;--ink:#1f2328;--mut:#7d8590;--line:#dde2e8;--acc:#0b6fe0;--acc-soft:#e3eefc}
+  *{box-sizing:border-box}
+  body{margin:0;font:13.5px/1.45 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  .bar{height:44px;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--panel);border-bottom:1px solid var(--line);flex:none}
+  .ib{height:30px;min-width:30px;padding:0 8px;border:none;background:none;border-radius:7px;color:var(--mut);display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12.5px}
+  .ib:hover{background:#e6e9ed;color:var(--ink)}
+  .ib svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .omni{flex:1;max-width:520px;margin:0 auto;display:flex;align-items:center;height:32px;padding:0 12px;background:#fff;border:1px solid var(--line);border-radius:8px;font-size:13px;cursor:text}
+  .omni:hover{border-color:#b9c2cc}
+  .tabs{display:flex;align-items:flex-end;gap:2px;padding:0 10px;background:#dfe3e8;flex:none;min-height:34px;overflow-x:auto}
+  .tab{display:flex;align-items:center;gap:8px;height:30px;padding:0 12px;background:#eef1f4;border-radius:8px 8px 0 0;font-size:12.5px;cursor:pointer;position:relative;border:1px solid transparent;border-bottom:none;white-space:nowrap}
+  .tab:hover{background:#e4e8ec}
+  .tab.on{background:#fff;border-color:#dfe3e8;color:var(--ink);font-weight:600}
+  .tab .fav{width:13px;height:13px;border-radius:3px;flex:none}
+  .tab .stripe{position:absolute;left:0;top:6px;bottom:6px;width:3px;border-radius:2px}
+  .tab .x{color:var(--mut);font-size:12px;padding:0 2px;border-radius:4px}
+  .tab .x:hover{background:#d5dae0;color:var(--ink)}
+  .tab .sleep{color:var(--mut);font-size:10px}
+  .newtab{height:30px;padding:0 10px;display:flex;align-items:center;color:var(--mut);cursor:pointer;font-size:15px}
+  .newtab:hover{color:var(--ink)}
+  .content{flex:1;display:flex;min-height:0}
+  main{flex:1;background:#fff;overflow:auto;min-width:0}
+  main .ph{height:150px;background:linear-gradient(120deg,#eef1f4,#e2e7ec);display:flex;align-items:center;justify-content:center;color:#8a939e;font-size:13px}
+  main .bd{max-width:620px;margin:24px auto;padding:0 22px;font-size:14.5px;line-height:1.65}
+  main .bd h1{font-size:21px}
+  /* ===== Нижняя панель workspace bar (как в коде: #workspaceBar, Ctrl+Shift+W) ===== */
+  .wsbar{height:36px;flex:none;background:#f7f8fa;border-top:1px solid var(--line);display:flex;align-items:center;gap:6px;padding:0 12px}
+  .wsbar .lbl{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);margin-right:6px}
+  .chip{display:flex;align-items:center;gap:8px;height:26px;padding:0 8px 0 12px;border-radius:13px;border:1px solid var(--line);background:#fff;font-size:12.5px;cursor:pointer;position:relative}
+  .chip .dot{width:9px;height:9px;border-radius:3px}
+  .chip:hover{border-color:#b9c2cc}
+  .chip.on{background:var(--acc-soft);border-color:var(--acc);font-weight:600}
+  .chip .x{color:var(--mut);font-size:12px;border-radius:50%;width:16px;height:16px;display:flex;align-items:center;justify-content:center}
+  .chip .x:hover{background:#d5dae0;color:var(--ink)}
+  .chip.add{border-style:dashed;color:var(--mut)}
+  .hint-line{font-size:11px;color:var(--mut);margin-left:auto}
+  /* меню контейнеров */
+  .cmenu{position:fixed;z-index:90;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 12px 34px rgba(0,0,0,.18);padding:6px;display:none;min-width:230px}
+  .cmenu .h{padding:6px 12px 4px;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);font-weight:600}
+  .cmenu .it{display:flex;align-items:center;gap:9px;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px}
+  .cmenu .it:hover{background:var(--acc-soft);color:var(--acc)}
+  .cmenu .it .sw{width:4px;height:14px;border-radius:2px}
+  .cmenu .it .hint{margin-left:auto;font-size:10.5px;color:var(--mut)}
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#1c1f26;color:#e8eaed;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:290px;box-shadow:0 6px 20px rgba(0,0,0,.25);display:none}
+  #tip b{color:#8fb8ec}#tip kbd{background:#33373f;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+</style>
+</head>
+<body>
+  <div class="bar">
+    <button class="ib" data-tip="Назад <kbd>Alt+←</kbd>"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
+    <button class="ib" data-tip="Вперёд <kbd>Alt+→</kbd>"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+    <button class="ib" data-tip="Обновить <kbd>F5</kbd>"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 11-2.34-5.66M20 4v4h-4"/></svg></button>
+    <div class="omni" data-tip="Омнибокс — поиск внутри активного пространства: @tabs показывает только его вкладки">lumen.local — пространство «Работа»</div>
+    <button class="ib" data-tip="Пространства <kbd>Ctrl+Shift+W</kbd> — панель внизу экрана"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="8" height="7" rx="1"/><rect x="13" y="4" width="8" height="7" rx="1"/><rect x="3" y="13" width="8" height="7" rx="1"/><rect x="13" y="13" width="8" height="7" rx="1"/></svg></button>
+    <button class="ib" data-tip="Новая вкладка <kbd>Ctrl+T</kbd> — откроется в активном пространстве и контейнере вкладки-источника"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>+</button>
+    <button class="ib" data-tip="Меню"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/></svg></button>
+  </div>
+
+  <!-- Вкладки активного пространства: полоса слева = контейнер -->
+  <div class="tabs">
+    <div class="tab on" data-tip="Активная вкладка пространства «Работа». Цветная полоса слева — контейнер: у этой вкладки свои cookie и хранилища"><span class="stripe" style="background:#7c3aed"></span><span class="fav" style="background:#7c3aed"></span>Lumen — движок<span class="x" data-tip="Закрыть">✕</span></div>
+    <div class="tab" data-tip="Вкладка в контейнере «Личное» (синяя полоса): куки и localStorage изолированы от рабочих" onclick="openPage('page.html')"><span class="stripe" style="background:#0b6fe0"></span><span class="fav" style="background:#4285f4"></span>Личный банк<span class="x">✕</span></div>
+    <div class="tab" data-tip="Без контейнера — общие куки пространства"><span class="fav" style="background:#34a853"></span>GitHub — lumen<span class="x">✕</span></div>
+    <div class="tab" data-tip="Спящая вкладка T3: DOM+JS заморожены, контекстное меню → «Разбудить»"><span class="fav" style="background:#d93025"></span>Доклад про V8<span class="sleep">💤</span><span class="x">✕</span></div>
+    <div class="tab" data-tip="Группа «Ревью» внутри пространства — цветная полоса снизу"><span class="fav" style="background:#ea4335"></span>PR #412 — фиксы<span class="x">✕</span></div>
+    <div class="newtab" data-tip="Новая вкладка <kbd>Ctrl+T</kbd>">＋</div>
+  </div>
+
+  <div class="content">
+    <main>
+      <div class="ph">lumen.local/docs — страница активной вкладки</div>
+      <div class="bd">
+        <h1>Пространства и контейнеры — уже в движке</h1>
+        <p><b>Workspace</b> — именованная группа вкладок с цветной меткой и опциональной изоляцией cookie. Хранится в SQLite (<code>Workspaces</code>), переключается нижней панелью <code>#workspaceBar</code> (<kbd>Ctrl+Shift+W</kbd>): чипы с «×» и «+», автогенерация «Workspace N».</p>
+        <p><b>Container</b> — изоляция на уровне вкладки: свои cookie/storage, цветная полоса <code>.container-stripe</code> в хроме. Правая кнопка по вкладке → «Открыть в контейнере…».</p>
+        <p>Профиль (аватар слева в тулбаре других макетов) — уровень выше: отдельный <code>storage_path</code> в profiles.db, своя тема-акцент. Связка: профиль → пространства → контейнеры → вкладки.</p>
+      </div>
+    </main>
+  </div>
+
+  <!-- Workspace bar: как #workspaceBar -->
+  <div class="wsbar">
+    <span class="lbl">Пространства</span>
+    <div class="chip" data-tip="Пространство по умолчанию — без имени, всегда существует"><span class="dot" style="background:#9aa3ad"></span>Default<span class="x" data-tip="Удалить пространство (вкладки закроются)">✕</span></div>
+    <div class="chip on" data-tip="Активное пространство «Работа»: 5 вкладок, фиолетовая метка, изоляция cookie включена"><span class="dot" style="background:#7c3aed"></span>Работа<span class="x">✕</span></div>
+    <div class="chip" data-tip="Пространство «Дом»: 3 вкладки, синяя метка — личные сайты" onclick="openPage('page.html')"><span class="dot" style="background:#0b6fe0"></span>Дом<span class="x">✕</span></div>
+    <div class="chip add" data-tip="Новое пространство <kbd>Ctrl+Shift+W</kbd> → «+» — имя Workspace N, сразу в SQLite">＋</div>
+    <span class="hint-line">Ctrl+Shift+W — скрыть/показать панель · вкладки не покидают своё пространство</span>
+  </div>
+
+  <!-- Контекстное меню контейнеров -->
+  <div class="cmenu" id="cm">
+    <div class="h">Открыть в контейнере</div>
+    <div class="it" data-tip="Контейнер «Работа»: куки и хранилища изолированы от «Личное»"><span class="sw" style="background:#7c3aed"></span>Работа<span class="hint">5 вкладок</span></div>
+    <div class="it" data-tip="Контейнер «Личное»: отдельная cookie-банка, синяя полоса на вкладке"><span class="sw" style="background:#0b6fe0"></span>Личное<span class="hint">3 вкладки</span></div>
+    <div class="it" data-tip="Без контейнера — общие куки активного пространства"><span class="sw" style="background:#c9cdd4"></span>Без контейнера</div>
+    <div class="h">Действия</div>
+    <div class="it" data-tip="Переместить вкладку в другое пространство">⇄ Переместить в пространство…</div>
+    <div class="it" data-tip="Новый контейнер с именем и цветом — свои куки, история-фильтр щитов">＋ Новый контейнер…</div>
+  </div>
+
+  <div id="tip"></div>
+<script>
+function openPage(p){window.open(p||'page.html','_blank')}
+const tip=document.getElementById('tip'),cm=document.getElementById('cm');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-300)+'px';tip.style.top=(e.clientY+16)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none';});
+document.querySelectorAll('.tab').forEach(t=>t.addEventListener('contextmenu',e=>{e.preventDefault();cm.style.display='block';cm.style.left=Math.min(e.clientX,innerWidth-240)+'px';cm.style.top=Math.min(e.clientY,innerHeight-260)+'px';}));
+document.querySelectorAll('.cmenu .it').forEach(it=>it.onclick=()=>{cm.style.display='none';openPage('page.html')});
+addEventListener('click',e=>{if(!e.target.closest('.cmenu'))cm.style.display='none'});
+document.querySelectorAll('.chip').forEach(c=>c.onclick=e=>{if(e.target.classList.contains('x'))return;document.querySelectorAll('.chip').forEach(x=>x.classList.remove('on'));c.classList.add('on')});
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Колонки</title>
+<style>
+  :root{--bg:#f4f5f7;--panel:#fff;--ink:#1f2328;--mut:#7d8590;--line:#dde2e8;--acc:#0b6fe0}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  .bar{height:44px;display:flex;align-items:center;gap:8px;padding:0 12px;background:var(--panel);border-bottom:1px solid var(--line);flex:none}
+  .ib{height:30px;min-width:30px;padding:0 8px;border:none;background:none;border-radius:7px;color:var(--mut);display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12.5px}
+  .ib:hover{background:#eef1f4;color:var(--ink)}
+  .brand{font-weight:700}.brand span{color:var(--acc)}
+  .omni{flex:1;max-width:420px;margin-left:8px;height:32px;display:flex;align-items:center;padding:0 12px;background:#f4f5f7;border:1px solid var(--line);border-radius:8px;font-size:13px;cursor:pointer}
+  .omni:hover{border-color:#b9c2cc}
+  .masonry{flex:1;overflow:auto;padding:20px;columns:3 240px;column-gap:14px}
+  .card{break-inside:avoid;background:var(--panel);border:1px solid var(--line);border-radius:13px;margin-bottom:14px;overflow:hidden;cursor:pointer;transition:border-color .15s,transform .15s}
+  .card:hover{border-color:var(--acc);transform:translateY(-2px)}
+  .card .shot{height:80px;background:linear-gradient(140deg,#232a33,#1a2029)}
+  .card .shot.w{height:120px}
+  .card .hd{display:flex;align-items:center;gap:8px;padding:10px 13px}
+  .fav{width:20px;height:20px;border-radius:5px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:10px;font-weight:700;flex:none}
+  .card .hd b{font-size:13px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .card .u{font-size:10.5px;color:var(--mut)}
+  .card .tx{padding:0 13px 12px;font-size:12.5px;color:#4a5568}
+  .card .meta{display:flex;gap:6px;padding:0 13px 12px;flex-wrap:wrap}
+  .card .meta i{font-style:normal;font-size:10px;background:#f0f2f5;border-radius:8px;padding:1px 7px;color:var(--mut)}
+  .card .live{color:#1f9d55;font-size:10.5px}
+  .filter{display:flex;gap:6px;padding:0 20px 12px}
+  .filter span{padding:4px 12px;border-radius:15px;background:var(--panel);border:1px solid var(--line);font-size:11.5px;cursor:pointer;color:var(--mut)}
+  .filter span.on{background:var(--acc-soft);color:var(--acc);border-color:var(--acc);font-weight:600}
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#1c1f26;color:#e8eaed;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:290px;box-shadow:0 6px 20px rgba(0,0,0,.25);display:none}
+  #tip b{color:#8fb8ec}#tip kbd{background:#33373f;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+</style>
+</head>
+<body>
+  <div class="bar">
+    <button class="ib" data-tip="Назад"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15 18l-6-6 6-6"/></svg></button>
+    <button class="ib" data-tip="Вперёд"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 6l6 6-6 6"/></svg></button>
+    <button class="ib" data-tip="Обновить"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 12a8 8 0 11-2.34-5.66M20 4v4h-4"/></svg></button>
+    <div class="brand">lumen<span>://</span>columns</div>
+    <div class="omni" data-tip="Поиск по всем вкладкам и истории" onclick="openPage('app.html?s=history')">🔍 поиск по вкладкам…</div>
+    <button class="ib" data-tip="Новая вкладка <kbd>Ctrl+T</kbd>" onclick="openPage('app.html?s=home')">＋</button>
+    <button class="ib" data-tip="Настройки" onclick="openPage('app.html?s=settings')">⚙</button>
+  </div>
+  <div class="filter" id="f">
+    <span class="on" data-tip="Все вкладки и страницы">Всё</span>
+    <span data-tip="Только активные вкладки">Вкладки</span>
+    <span data-tip="Закладки">Закладки</span>
+    <span data-tip="История">История</span>
+    <span data-tip="Читать позже">Read-later</span>
+  </div>
+  <div class="masonry" id="m"></div>
+  <div id="tip"></div>
+<script>
+function openPage(u){window.open(u,'_blank')}
+const C=[
+ ['Lumen — движок','lumen.local/docs','#e3a008','w','Архитектура: DOM-арена, layout, paint, V8. Потоковая загрузка без фризов UI.',['движок','core','rust']],
+ ['GitHub — lumen-browser','github.com/lumen','#4285f4','n','Репозиторий: issues, PR, CI pipeline. Работа ведётся в worktree-слотах.',['код','PR','CI']],
+ ['MDN — CSS Grid','developer.mozilla.org','#d93025','w','Справочник по grid: subgrid, implicit tracks, placement.',['справка','спит']],
+ ['Подкаст «Эпизод 42»','youtube.com/watch','#34a853','w','Разговор о V8 и JIT. Идёт в фоне — можно в PiP.',['LIVE','42 мин']],
+ ['Read-later: V8 deep dive','read-later','#8b5cf6','t','«Inside the V8 engine» — 42 минуты чтения/просмотра.',['чтение','68%']],
+ ['Спека HTML','whatwg.org','#fbbc05','n','Living Standard: навигация, bfcache, focus, forms.',['spec','w3c']],
+ ['Новости — дайджест','news.example.com','#ea4335','n','12 новых материалов за день. Утренний обзор.',['новости','сегодня']],
+ ['Банк — счета','bank.example.com','#d6453d','w','Финансовый сайт. Открыт в контейнере «Личное».',['🔒','контейнер']],
+ ['Rust async in depth','read-later','#8b5cf6','t','Статья про executor-модель и futures. 12% прочитано.',['чтение','12%']],
+ ['PR #412 — ревью','github.com/pull/412','#7c3aed','w','Фиксы layout-краёв. Ждёт ревью.',['работа','PR']],
+];
+document.getElementById('m').innerHTML=C.map(c=>`
+ <div class="card" data-tip="<b>${c[0]}</b><br>${c[1]}${c[3]==='w'?' · активная вкладка':c[3]==='t'?' · read-later':''}<br>${c[4].slice(0,60)}…<br>клик — открыть" onclick="openPage('app.html?s=${c[3]==='w'?'home':'readlater'}')">
+  <div class="shot ${c[3]==='w'?'w':''}"></div>
+  <div class="hd"><div class="fav" style="background:${c[2]}">${c[0][0]}</div><b>${c[0]}</b><span class="u">${c[1]}</span></div>
+  <div class="tx">${c[4]}</div>
+  <div class="meta">${c[5].map(t=>`<i>${t}</i>`).join('')}</div>
+ </div>`).join('');
+document.getElementById('f').querySelectorAll('span').forEach(s=>s.onclick=()=>{
+  document.querySelectorAll('#f span').forEach(x=>x.classList.remove('on'));s.classList.add('on');
+});
+const tip=document.getElementById('tip');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-320)+'px';tip.style.top=(e.clientY+16)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none'});
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Управление профилями и пространствами</title>
+<style>
+  :root{--bg:#f2f3f5;--panel:#fff;--ink:#1f2328;--mut:#7d8590;--line:#dde2e8;--acc:#0b6fe0;--acc-soft:#e3eefc;--red:#d6453d;--red-soft:#fdeceb}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  .bar{height:48px;flex:none;display:flex;align-items:center;gap:10px;padding:0 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+  .brand{font-weight:700;font-size:15px}.brand span{color:var(--acc)}
+  .crumb{color:var(--mut);font-size:13px}
+  .ib{height:32px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:none;color:var(--mut);cursor:pointer;font-size:13px}
+  .ib:hover{color:var(--ink);border-color:#b9c2cc}
+  .layout{flex:1;display:flex;min-height:0}
+  /* левый нав */
+  nav{width:210px;flex:none;background:var(--panel);border-right:1px solid var(--line);padding:14px 10px}
+  nav .ni{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:9px;cursor:pointer;font-size:13.5px;margin-bottom:2px}
+  nav .ni:hover{background:#f0f2f5}
+  nav .ni.on{background:var(--acc-soft);color:var(--acc);font-weight:600}
+  nav .ni .ic{width:16px;height:16px}
+  nav .grp{font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--mut);padding:14px 12px 5px}
+  main{flex:1;overflow:auto;padding:26px 32px}
+  main h1{font-size:20px;margin:0 0 4px}
+  main .sub{color:var(--mut);font-size:13px;margin-bottom:22px}
+  /* карточки профилей */
+  .pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px;margin-bottom:26px}
+  .pc{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;position:relative}
+  .pc.on{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
+  .pc .top{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+  .pc .av{width:46px;height:46px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:18px;flex:none}
+  .pc .nm{font-weight:700;font-size:15px}
+  .pc .st{font-size:11.5px;color:var(--mut)}
+  .pc .badge{position:absolute;top:14px;right:14px;font-size:10.5px;font-weight:700;border-radius:10px;padding:3px 9px}
+  .pc .badge.on{background:var(--acc-soft);color:var(--acc)}
+  .pc .stats{display:flex;gap:14px;font-size:12px;color:var(--mut);margin-bottom:14px}
+  .pc .stats b{color:var(--ink);display:block;font-size:15px}
+  .pc .acts{display:flex;gap:8px}
+  .pc .acts button{flex:1;border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 0;font-size:12.5px;cursor:pointer;color:var(--ink)}
+  .pc .acts button:hover{border-color:var(--acc);color:var(--acc)}
+  .pc .acts button.danger:hover{border-color:var(--red);color:var(--red)}
+  .pc.add{border-style:dashed;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:190px;color:var(--mut);cursor:pointer}
+  .pc.add:hover{border-color:var(--acc);color:var(--acc)}
+  .pc.add .plus{font-size:34px;font-weight:300}
+  /* таблица пространств */
+  table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;font-size:13px}
+  th{background:#f7f8fa;text-align:left;padding:10px 14px;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut);border-bottom:1px solid var(--line)}
+  td{padding:11px 14px;border-bottom:1px solid #f0f2f4;vertical-align:middle}
+  tr:last-child td{border-bottom:none}
+  tr:hover td{background:#fafbfc}
+  .dot{width:10px;height:10px;border-radius:3px;display:inline-block;margin-right:8px}
+  .chip{font-size:11px;border-radius:10px;padding:2px 9px;font-weight:600}
+  .chip.iso{background:#e6f4ec;color:#1f9d55}
+  .chip.pub{background:#f0f2f5;color:var(--mut)}
+  .mini-btn{border:1px solid var(--line);background:#fff;border-radius:7px;padding:4px 11px;font-size:12px;cursor:pointer;color:var(--ink)}
+  .mini-btn:hover{border-color:var(--acc);color:var(--acc)}
+  .mini-btn.d:hover{border-color:var(--red);color:var(--red)}
+  /* модал создания */
+  .modal{position:fixed;inset:0;background:rgba(20,22,26,.45);display:none;align-items:center;justify-content:center;z-index:50}
+  .modal.open{display:flex}
+  .modal .box{width:400px;background:#fff;border-radius:16px;padding:24px;box-shadow:0 24px 60px rgba(0,0,0,.25)}
+  .modal h3{margin:0 0 16px;font-size:16px}
+  .modal .fl{display:flex;align-items:center;gap:10px;margin-bottom:11px;font-size:13px}
+  .modal .fl label{width:100px;color:var(--mut);flex:none}
+  .modal input[type=text]{flex:1;border:1px solid var(--line);border-radius:8px;padding:8px 11px;font:inherit;font-size:13.5px;outline:none}
+  .modal input[type=text]:focus{border-color:var(--acc)}
+  .swatches{display:flex;gap:7px}
+  .swatches span{width:22px;height:22px;border-radius:50%;cursor:pointer;border:2px solid transparent}
+  .swatches span.on{border-color:#fff;box-shadow:0 0 0 2px var(--ink)}
+  .toggle{width:38px;height:21px;border-radius:11px;background:#cfd5dc;position:relative;cursor:pointer;flex:none}
+  .toggle::after{content:'';position:absolute;top:2px;left:2px;width:17px;height:17px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:left .15s}
+  .toggle.on{background:var(--acc)}.toggle.on::after{left:19px}
+  .modal .acts{display:flex;gap:8px;justify-content:flex-end;margin-top:18px}
+  .modal .acts button{border:none;border-radius:9px;padding:8px 20px;font-weight:600;cursor:pointer;font-size:13.5px}
+  .modal .acts .ok{background:var(--acc);color:#fff}
+  .modal .acts .no{background:#eef1f4;color:var(--ink)}
+  .confirm{border-color:var(--red)!important}
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#1c1f26;color:#e8eaed;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:300px;box-shadow:0 6px 20px rgba(0,0,0,.25);display:none}
+  #tip b{color:#8fb8ec}#tip kbd{background:#33373f;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+</style>
+</head>
+<body>
+  <div class="bar">
+    <div class="brand">lumen<span>://</span>control</div>
+    <span class="crumb">Настройки → Профили и пространства</span>
+    <button class="ib" data-tip="Быстрый переключатель — тот же оверлей, что по Ctrl+Shift+P" onclick="openPage('switcher.html')">⚡ Переключатель</button>
+    <button class="ib" data-tip="Назад к браузеру" onclick="openPage('index.html')">←</button>
+  </div>
+
+  <div class="layout">
+    <nav>
+      <div class="ni on" data-tip="Профили: независимые наборы данных — история, куки, закладки, разрешения, тема"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>Профили</div>
+      <div class="ni" data-tip="Пространства: именованные группы вкладок внутри профиля, с опциональной изоляцией cookie" onclick="document.getElementById('wstable').scrollIntoView({behavior:'smooth'})"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="8" height="7" rx="1"/><rect x="13" y="4" width="8" height="7" rx="1"/><rect x="3" y="13" width="8" height="7" rx="1"/><rect x="13" y="13" width="8" height="7" rx="1"/></svg>Пространства</div>
+      <div class="ni" data-tip="Контейнеры: изоляция cookie/storage на уровне вкладки — для сайтов одного домена в разных «личинах»"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg>Контейнеры</div>
+      <div class="ni" data-tip="Данные: что хранит каждый профиль и как это очистить"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>Данные</div>
+      <div class="grp">Быстрые действия</div>
+      <div class="ni" data-tip="Импорт закладок, паролей, истории из Chrome / Firefox / Edge" onclick="openPage('page.html')"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>Импорт из браузера</div>
+      <div class="ni" data-tip="Экспорт: закладки HTML, пароли CSV, история — в файл" onclick="openPage('page.html')"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 21V9m0 0l-4 4m4-4l4 4M4 3h16"/></svg>Экспорт данных</div>
+    </nav>
+
+    <main>
+      <h1>Профили</h1>
+      <div class="sub">Профиль — независимый набор данных: история, куки, закладки, разрешения, пароли, тема-акцент. Хранилище — отдельный <code>storage_path</code> в <code>profiles.db</code>. Переключение мгновенное: <kbd>Ctrl+Shift+P</kbd>.</div>
+
+      <div class="pgrid" id="pgrid"></div>
+
+      <h1 id="wstable" style="margin-top:8px">Пространства</h1>
+      <div class="sub">Пространство — именованная группа вкладок профиля с цветной меткой. Изоляция cookie — опция: включённые пространства получают собственную cookie-банку. Хранится в <code>workspaces.db</code>.</div>
+      <table>
+        <thead><tr><th>Пространство</th><th>Профиль</th><th>Вкладки</th><th>Изоляция</th><th>Последнее использование</th><th></th></tr></thead>
+        <tbody id="wstb"></tbody>
+      </table>
+
+      <h1 style="margin-top:26px">Контейнеры</h1>
+      <div class="sub">Контейнер — изоляция на уровне вкладки: один сайт может жить в нескольких «личинах» с разными куками. Полоса цвета на вкладке = контейнер.</div>
+      <table>
+        <thead><tr><th>Контейнер</th><th>Профиль</th><th>Цвет</th><th>Вкладок</th><th>Cookie</th><th></th></tr></thead>
+        <tbody id="ctb"></tbody>
+      </table>
+    </main>
+  </div>
+
+  <!-- Модал создания профиля -->
+  <div class="modal" id="pm">
+    <div class="box">
+      <h3>Новый профиль</h3>
+      <div class="fl"><label>Имя</label><input type="text" id="pn" placeholder="Личный, Работа, Семья…"></div>
+      <div class="fl"><label>Цвет акцента</label><div class="swatches" id="pcs"></div></div>
+      <div class="fl"><label>Значок</label><div class="swatches" id="picons" style="gap:5px"></div></div>
+      <div class="fl"><label>Щиты по умолчанию</label><span class="toggle on" data-tip="Включать блокировку трекеров для всех сайтов профиля"></span></div>
+      <div class="fl"><label>Tor по умолчанию</label><span class="toggle" data-tip="Окна этого профиля ходят через Tor (SOCKS5), без записи на диск"></span></div>
+      <div class="fl"><label>Синхронизация</label><span class="toggle" data-tip="Закладки/пароли/история — на ваш sync-сервер (self-hosted)"></span></div>
+      <div class="acts"><button class="no" onclick="closeM('pm')">Отмена</button><button class="ok" onclick="createP()">Создать</button></div>
+    </div>
+  </div>
+
+  <!-- Модал создания пространства -->
+  <div class="modal" id="wm">
+    <div class="box">
+      <h3>Новое пространство</h3>
+      <div class="fl"><label>Имя</label><input type="text" id="wn" placeholder="Работа, Учёба, Покупки…"></div>
+      <div class="fl"><label>Цвет метки</label><div class="swatches" id="wcs"></div></div>
+      <div class="fl"><label>Значок</label><div class="swatches" id="wicons" style="gap:5px"></div></div>
+      <div class="fl"><label>Изоляция cookie</label><span class="toggle on" data-tip="Своя cookie-банка: сессии сайтов не пересекаются с другими пространствами профиля"></span></div>
+      <div class="fl"><label>Свои разрешения</label><span class="toggle" data-tip="Разрешения per-site хранятся отдельно для этого пространства"></span></div>
+      <div class="acts"><button class="no" onclick="closeM('wm')">Отмена</button><button class="ok" onclick="createW()">Создать</button></div>
+    </div>
+  </div>
+
+  <!-- Модал подтверждения удаления -->
+  <div class="modal" id="dm">
+    <div class="box confirm">
+      <h3 id="dmT">Удалить?</h3>
+      <div class="sub" id="dmD" style="color:var(--mut);font-size:13px"></div>
+      <div class="acts"><button class="no" onclick="closeM('dm')">Отмена</button><button class="ok" style="background:var(--red)" onclick="closeM('dm');openPage('page.html')">Удалить</button></div>
+    </div>
+  </div>
+
+  <div id="tip"></div>
+<script>
+function openPage(p){window.open(p||'page.html','_blank')}
+const COLORS=['#0066FF','#8B5CF6','#FF3B30','#8E8E93','#0b6fe0','#1f9d55','#d8a400','#e0342b','#7c3aed','#0e7490'];
+const ICONS=['👤','💼','🕶','👻','🎮','📚','🔬','🎨','🛒','🌿'];
+const PROFILES=[
+ {n:'Личный',l:'Л',c:'#0066FF',tabs:12,mb:'48 МБ',ws:3,on:1},
+ {n:'Рабочий',l:'Р',c:'#8B5CF6',tabs:8,mb:'112 МБ',ws:2},
+ {n:'Анонимный',l:'А',c:'#FF3B30',tabs:0,mb:'0 МБ',ws:0,note:'без записи на диск'},
+ {n:'Гость',l:'Г',c:'#8E8E93',tabs:2,mb:'сессия',ws:1},
+];
+const WSTAB=[
+ ['Default','Личный','#9aa3ad',4,'общие',1,'сегодня'],
+ ['Чтение','Личный','#0b6fe0',6,'изолир.',1,'сегодня'],
+ ['Медиа','Личный','#8b5cf6',2,'изолир.',0,'вчера'],
+ ['Проект Lumen','Рабочий','#7c3aed',5,'изолир.',1,'сегодня'],
+ ['Ревью','Рабочий','#0b6fe0',3,'общие',1,'2 дня назад'],
+ ['Default','Гость','#9aa3ad',2,'общие',1,'сессия'],
+];
+const CTAB=[
+ ['Работа','#7c3aed','Личный',5,'142'],
+ ['Личное','#0b6fe0','Личный',3,'87'],
+ ['Банкинг','#d6453d','Личный',1,'12'],
+ ['Sudo','#8b5cf6','Рабочий',2,'34'],
+];
+function render(){
+  document.getElementById('pgrid').innerHTML=PROFILES.map((p,i)=>`
+    <div class="pc ${p.on?'on':''}" data-tip="<b>${p.n}</b><br>${p.tabs} вкладок · ${p.mb} · ${p.ws} пространств${p.note?' · '+p.note:''}<br>storage_path: data/profiles/${p.l.toLowerCase()}/" onclick="openPage('profiles.html')">
+      ${p.on?'<span class="badge on">активен</span>':''}
+      <div class="top"><div class="av" style="background:${p.c}">${p.l}</div><div><div class="nm">${p.n}</div><div class="st">${p.note||'стандартный профиль'}</div></div></div>
+      <div class="stats"><span><b>${p.tabs}</b>вкладок</span><span><b>${p.ws}</b>пространств</span><span><b>${p.mb}</b>данных</span></div>
+      <div class="acts" onclick="event.stopPropagation()">
+        <button data-tip="Открыть окно в этом профиле" onclick="openPage('page.html')">Открыть</button>
+        <button data-tip="Изменить: имя, цвет, значок, щиты/Tor по умолчанию" onclick="openPage('page.html')">Изменить</button>
+        <button class="danger" data-tip="Удалить профиль и ВСЕ его данные безвозвратно" onclick="askDel('${p.n}')">Удалить</button>
+      </div>
+    </div>`).join('')+`
+    <div class="pc add" data-tip="Создать профиль: имя, цвет, значок, щиты и Tor по умолчанию, sync. Данные изолируются сразу" onclick="document.getElementById('pm').classList.add('open')"><div class="plus">＋</div><div style="font-weight:600;margin-top:6px">Новый профиль</div><div style="font-size:12px">личное пространство данных</div></div>`;
+  document.getElementById('wstb').innerHTML=WSTAB.map(w=>`
+    <tr data-tip="<b>${w[0]}</b> · профиль «${w[1]}»<br>${w[4]==='изолир.'?'Свои куки и хранилища — сессии не пересекаются':'Общие куки профиля'}">
+      <td><span class="dot" style="background:${w[2]}"></span><b>${w[0]}</b></td><td>${w[1]}</td><td>${w[3]}</td>
+      <td><span class="chip ${w[4]==='изолир.'?'iso':'pub'}">${w[4]}</span></td><td>${w[6]}</td>
+      <td style="white-space:nowrap"><button class="mini-btn" data-tip="Открыть обзор пространства" onclick="openPage('orbit.html')">Обзор</button> <button class="mini-btn" data-tip="Переименовать / сменить цвет" onclick="openPage('page.html')">Изменить</button> <button class="mini-btn d" data-tip="Удалить пространство — вкладки закроются, куки сотрутся" onclick="askDel('${w[0]}')">✕</button></td>
+    </tr>`).join('')+`
+    <tr><td colspan="6" style="text-align:center"><button class="mini-btn" data-tip="Новое пространство в выбранном профиле" onclick="document.getElementById('wm').classList.add('open')" style="padding:8px 22px">＋ Новое пространство</button></td></tr>`;
+  document.getElementById('ctb').innerHTML=CTAB.map(c=>`
+    <tr data-tip="Контейнер «${c[0]}»: ${c[4]} куки · ${c[3]} вкладок${c[1]==='#d6453d'?' · финансовый — строгие щиты':''}">
+      <td><span class="dot" style="background:${c[1]}"></span><b>${c[0]}</b></td><td>${c[2]}</td><td><span class="dot" style="background:${c[1]}"></span></td><td>${c[3]}</td><td>${c[4]}</td>
+      <td style="white-space:nowrap"><button class="mini-btn" data-tip="Открыть новую вкладку в этом контейнере" onclick="openPage('page.html')">＋ Вкладка</button> <button class="mini-btn d" data-tip="Очистить cookie и хранилища контейнера" onclick="askDel('${c[0]}')">Очистить</button></td>
+    </tr>`).join('')+`
+    <tr><td colspan="6" style="text-align:center"><button class="mini-btn" data-tip="Новый контейнер: имя, цвет, стартовые разрешения" onclick="openPage('page.html')" style="padding:8px 22px">＋ Новый контейнер</button></td></tr>`;
+}
+function askDel(what){document.getElementById('dmT').textContent='Удалить «'+what+'»?';document.getElementById('dmD').innerHTML='Будут безвозвратно удалены все связанные данные: вкладки, история, куки, хранилища, закладки профиля.<br><br>Это действие нельзя отменить.';document.getElementById('dm').classList.add('open')}
+function closeM(id){document.getElementById(id).classList.remove('open')}
+function sw(el,cb){el.innerHTML=COLORS.map(c=>`<span style="background:${c}" onclick="this.parentElement.querySelectorAll('span').forEach(x=>x.classList.remove('on'));this.classList.add('on');cb&&cb('${c}')"></span>`).join('');el.firstChild.classList.add('on')}
+function swI(el){el.innerHTML=ICONS.map(i=>`<span style="width:30px;height:30px;display:flex;align-items:center;justify-content:center;border-radius:8px;background:#f0f2f5;font-size:15px;cursor:pointer" onclick="this.parentElement.querySelectorAll('span').forEach(x=>x.style.outline='');this.style.outline='2px solid var(--acc)'">${i}</span>`).join('')}
+sw(document.getElementById('pcs'));sw(document.getElementById('wcs'));swI(document.getElementById('picons'));swI(document.getElementById('wicons'));
+document.querySelectorAll('.toggle').forEach(t=>t.onclick=()=>t.classList.toggle('on'));
+function createP(){closeM('pm');openPage('page.html')}
+function createW(){closeM('wm');openPage('page.html')}
+const tip=document.getElementById('tip');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-320)+'px';tip.style.top=(e.clientY+16)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none';});
+render();
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

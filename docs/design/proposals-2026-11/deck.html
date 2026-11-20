@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Колода</title>
+<style>
+  :root{--bg:#101318;--panel:#181c22;--ink:#e8eaed;--mut:#8a919c;--line:#2a2f37;--acc:#5b9dff;--acc-soft:#1b2b45}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  .top{height:42px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+  .ib{width:30px;height:30px;border:none;background:none;border-radius:8px;color:var(--mut);display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+  .ib:hover{background:#22262e;color:var(--ink)}
+  .ib svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .omni{flex:1;max-width:640px;margin:0 auto;display:flex;align-items:center;height:32px;padding:0 14px;background:#0b0d10;border:1px solid var(--line);border-radius:16px;font-size:13.5px;cursor:text}
+  .omni:hover{border-color:#3a4250}
+
+  /* ===== Coverflow: колода как окна в Alt+Tab ===== */
+  .deck-zone{flex:1;display:flex;align-items:center;justify-content:center;position:relative;min-height:0;perspective:1600px;overflow:hidden}
+  .cf{position:absolute;left:50%;top:50%;width:300px;height:200px;margin:-100px 0 0 -150px;transform-style:preserve-3d;transition:transform .5s cubic-bezier(.22,.9,.3,1.1),opacity .4s;cursor:pointer;will-change:transform}
+  .cf .inner{position:absolute;inset:0;background:#fff;color:#222;border-radius:13px;overflow:hidden;box-shadow:0 18px 50px rgba(0,0,0,.45);border:2px solid transparent;backface-visibility:hidden}
+  .cf.on .inner{border-color:var(--acc);box-shadow:0 24px 70px rgba(0,0,0,.6),0 0 0 3px var(--acc-soft)}
+  .cf .hd{height:32px;background:#f0f2f5;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid #e4e6e8}
+  .cf .fav{width:13px;height:13px;border-radius:4px;flex:none}
+  .cf .url{font-size:10.5px;color:#77809a;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cf .shot{position:absolute;top:32px;left:0;right:0;bottom:44px;background:linear-gradient(140deg,#e8ecf2,#d3dbe6);display:flex;align-items:center;justify-content:center;color:#8a97a8;font-size:11px}
+  .cf .ft{position:absolute;left:0;right:0;bottom:0;height:44px;background:#fff;border-top:1px solid #eee;padding:6px 12px}
+  .cf .ft b{display:block;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cf .ft span{font-size:10px;color:#8a97a8}
+  .cf .tag{position:absolute;top:38px;right:8px;font-size:9.5px;border-radius:8px;padding:1px 7px;font-weight:700;background:#fdf3dc;color:#9a6d10}
+  .cf .tag.live{background:#fdeceb;color:#d6453d}
+  .deck-hint{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);color:var(--mut);font-size:12px;z-index:15;display:flex;gap:14px;align-items:center}
+  .deck-hint kbd{background:#22262e;border:1px solid var(--line);border-radius:4px;padding:1px 6px;font:11px 'Segoe UI';margin:0 2px}
+  .deck-hint .cnt{color:var(--acc);font-weight:600}
+  /* стрелки по краям */
+  .cf-arrow{position:absolute;top:50%;transform:translateY(-50%);width:52px;height:52px;border-radius:50%;border:1px solid var(--line);background:rgba(24,28,34,.7);backdrop-filter:blur(8px);color:var(--mut);display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:14;opacity:.35;transition:all .2s;font-size:20px}
+  .cf-arrow:hover{opacity:1;color:var(--acc);border-color:var(--acc);transform:translateY(-50%) scale(1.08)}
+  .cf-arrow.l{left:16px}.cf-arrow.r{right:16px}
+  .cf-arrow svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+
+  /* ===== Открытая страница на весь экран ===== */
+  .pageview{position:absolute;inset:0;display:none;flex-direction:column;background:#f7f8fa;color:#1f2328;z-index:20}
+  .pageview.open{display:flex}
+  .pageview .pbar{height:44px;flex:none;display:flex;align-items:center;gap:8px;padding:0 14px;background:#fff;border-bottom:1px solid #e8eaee}
+  .pageview .pbar .ib{color:#5b636e;width:28px;height:28px}
+  .pageview .pbar .ib:hover{background:#eef1f4;color:#1f2328}
+  .pageview .pbar .ttl{font-size:13px;color:#5b636e;display:flex;align-items:center;gap:9px;flex:1;min-width:0}
+  .pageview .pbar .ttl b{color:#1f2328;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pageview .pbar .ttl .u{color:#9aa3ad;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pageview .content{flex:1;overflow:auto}
+  .pageview .content .hero{height:170px;background:linear-gradient(120deg,#dfe6ee,#cfd8e3);display:flex;align-items:center;justify-content:center;color:#77839a}
+  .pageview .content .tx{max-width:700px;margin:0 auto;padding:30px 26px;font-size:15.5px;line-height:1.75}
+  .pageview .content .tx h1{font-size:26px;margin:0 0 8px}
+  .pageview .content .tx .meta{font-size:12.5px;color:#8a97a8;margin-bottom:22px}
+  .pageview .content .tx p{margin:0 0 1.1em}
+  .filmstrip{flex:none;height:58px;display:flex;gap:8px;align-items:center;padding:0 14px;background:#fff;border-top:1px solid #e8eaee;overflow-x:auto;scrollbar-width:thin}
+  .filmstrip::-webkit-scrollbar{height:6px}
+  .filmstrip .fm{flex:none;width:100px;height:38px;border-radius:7px;border:2px solid transparent;cursor:pointer;overflow:hidden;position:relative;background:#eef0f4}
+  .filmstrip .fm:hover{border-color:#b9c2cc}
+  .filmstrip .fm.on{border-color:var(--acc)}
+  .filmstrip .fm .fh{height:12px;background:#dde2e8;display:flex;align-items:center;gap:5px;padding:0 6px}
+  .filmstrip .fm .fh i{width:8px;height:8px;border-radius:2px;display:block}
+  .filmstrip .fm .fm-t{position:absolute;bottom:0;left:0;right:0;font-size:9.5px;color:#5b636e;padding:2px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:rgba(255,255,255,.85)}
+  /* нижняя dock */
+  .dock{height:50px;flex:none;display:flex;align-items:center;justify-content:center;gap:6px;background:var(--panel);border-top:1px solid var(--line)}
+  .dock .d{width:42px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:var(--mut);cursor:pointer;position:relative}
+  .dock .d:hover{background:#22262e;color:var(--ink)}
+  .dock .d svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .dock .d .badge{position:absolute;top:2px;right:2px;min-width:15px;height:15px;border-radius:8px;background:var(--acc);color:#fff;font-size:9.5px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 3px}
+  /* подсказки */
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#0d1117;color:#e6e9ee;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:290px;border:1px solid #2a313c;box-shadow:0 6px 20px rgba(0,0,0,.5);display:none}
+  #tip b{color:#8fb8ec}#tip kbd{background:#262b33;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+</style>
+</head>
+<body>
+  <div class="top">
+    <button class="ib" data-tip="Назад в колоду <kbd>Esc</kbd>"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9l6 3-6 3z" fill="currentColor" stroke="none"/></svg></button>
+    <button class="ib" data-tip="Вперёд по вкладкам"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+    <button class="ib" data-tip="Обновить <kbd>F5</kbd>"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 11-2.34-5.66M20 4v4h-4"/></svg></button>
+    <div class="omni" data-tip="Омнибокс — адрес / поиск / @-команды">lumen.local/docs</div>
+    <button class="ib" data-tip="Новая карта <kbd>Ctrl+T</kbd> — в конец колоды" onclick="addTab()"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+    <button class="ib" data-tip="Все карты — обзор <kbd>Ctrl+Shift+O</kbd>" onclick="openPage('orbit.html')"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="8" height="7" rx="1"/><rect x="13" y="4" width="8" height="7" rx="1"/><rect x="3" y="13" width="8" height="7" rx="1"/><rect x="13" y="13" width="8" height="7" rx="1"/></svg></button>
+    <button class="ib" data-tip="Меню" onclick="openPage('app.html?s=settings')"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/></svg></button>
+  </div>
+
+  <div class="deck-zone" id="zone">
+    <div class="cf-arrow l" data-tip="Предыдущая вкладка <kbd>←</kbd> — колода крутится как в Alt+Tab" onclick="step(-1)"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></div>
+    <div class="cf-arrow r" data-tip="Следующая вкладка <kbd>→</kbd>" onclick="step(1)"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></div>
+    <div class="deck-hint"><span>Клик по центральной карте — открыть · <kbd>←</kbd><kbd>→</kbd> крутить колоду · <kbd>Enter</kbd> открыть · <kbd>Esc</kbd> назад</span><span class="cnt" id="cnt"></span></div>
+  </div>
+  <div class="pageview" id="pageview">
+    <div class="pbar">
+      <button class="ib" data-tip="Назад в колоду <kbd>Esc</kbd>" onclick="toDeck()"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9l6 3-6 3z" fill="currentColor" stroke="none"/></svg></button>
+      <button class="ib" data-tip="Предыдущая вкладка" onclick="step(-1)"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
+      <button class="ib" data-tip="Следующая вкладка" onclick="step(1)"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+      <div class="ttl" id="pttl"></div>
+      <button class="ib" data-tip="Закрыть вкладку <kbd>Ctrl+W</kbd>" onclick="closeTab()"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+    <div class="content" id="pcontent"></div>
+    <div class="filmstrip" id="film"></div>
+  </div>
+
+  <div class="dock">
+    <div class="d" data-tip="Назад"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></div>
+    <div class="d" data-tip="Вперёд"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></div>
+    <div class="d" data-tip="Домой — новая карта"><svg viewBox="0 0 24 24"><path d="M3 10.5L12 3l9 7.5V20a1 1 0 01-1 1h-5v-6h-6v6H4a1 1 0 01-1-1z"/></svg></div>
+    <div class="d" data-tip="Закладки" onclick="openPage('app.html?s=bookmarks')"><svg viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></svg></div>
+    <div class="d" data-tip="Читать позже — 18 статей" onclick="openPage('app.html?s=readlater')"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4z"/><path d="M4 9h16M8 5v4"/></svg><span class="badge">3</span></div>
+    <div class="d" data-tip="Загрузки — 2 активных" onclick="openPage('app.html?s=downloads')"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg><span class="badge">2</span></div>
+    <div class="d" data-tip="История" onclick="openPage('app.html?s=history')"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+    <div class="d" data-tip="Заметки" onclick="openPage('app.html?s=notes')"><svg viewBox="0 0 24 24"><path d="M4 20l1-4L16 5l3 3L8 19z"/></svg></div>
+    <div class="d" data-tip="Пространства" onclick="openPage('app.html?s=workspaces')"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="8" height="7" rx="1"/><rect x="13" y="4" width="8" height="7" rx="1"/><rect x="3" y="13" width="8" height="7" rx="1"/><rect x="13" y="13" width="8" height="7" rx="1"/></svg></div>
+    <div class="d" data-tip="Настройки" onclick="openPage('app.html?s=settings')"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.14-1.4l2-1.5-2-3.4-2.3 1a7 7 0 00-2.4-1.4L14 3h-4l-.36 2.6a7 7 0 00-2.4 1.4l-2.3-1-2 3.4 2 1.5a7 7 0 000 2.8l-2 1.5 2 3.4 2.3-1a7 7 0 002.4 1.4L10 21h4l.36-2.6a7 7 0 002.4-1.4l2.3 1 2-3.4-2-1.5c.09-.46.14-.93.14-1.4z"/></svg></div>
+  </div>
+
+  <div id="tip"></div>
+<script>
+function openPage(p){window.open(p||'app.html?s=home','_blank')}
+const TABS=[
+ {t:'Lumen — движок',u:'lumen.local/docs',c:'#e3a008',desc:'Архитектура движка',body:'<h1>Архитектура движка</h1><p>DOM-арена, layout, paint, V8.</p>'},
+ {t:'GitHub — lumen',u:'github.com/lumen',c:'#4285f4',desc:'Репозиторий · PR',body:'<h1>Репозиторий</h1><p>Код, issues, CI.</p>'},
+ {t:'MDN — CSS Grid',u:'developer.mozilla.org',c:'#d93025',sleep:true,desc:'Справочник · спит',body:'<h1>CSS Grid</h1><p>Вкладка спала — проснулась.</p>'},
+ {t:'Подкаст ep.42',u:'youtube.com/watch',c:'#34a853',live:true,desc:'V8 и JIT · LIVE',body:'<h1>Подкаст</h1><p>Видео · PiP.</p>'},
+ {t:'HTML Spec',u:'whatwg.org',c:'#fbbc05',desc:'Living Standard',body:'<h1>HTML Standard</h1><p>Навигация, bfcache.</p>'},
+ {t:'V8 deep dive',u:'read-later',c:'#8b5cf6',desc:'68% прочитано',body:'<h1>Inside V8</h1><p>42 мин.</p>'},
+ {t:'Новости',u:'news.example.com',c:'#ea4335',desc:'Дайджест дня',body:'<h1>Новости</h1><p>12 материалов.</p>'},
+ {t:'Банк',u:'bank.example.com',c:'#d6453d',desc:'🔒 контейнер',body:'<h1>Банк</h1><p>Изолированные куки.</p>'},
+];
+let cur=0;
+const zone=document.getElementById('zone'),pv=document.getElementById('pageview'),film=document.getElementById('film'),cnt=document.getElementById('cnt');
+function wrap(d){const n=TABS.length;return ((d%n)+n)%n}
+function render(){
+  const N=TABS.length,HALF=Math.floor(N/2);
+  zone.querySelectorAll('.cf').forEach(c=>c.remove());
+  TABS.forEach((tb,i)=>{
+    let d=i-cur;if(d>HALF)d-=N;if(d<-HALF)d+=N; /* кратчайшее смещение */
+    const el=document.createElement('div');
+    el.className='cf'+(d===0?' on':'');
+    el.dataset.i=i;
+    const ad=Math.abs(d);
+    el.style.transform=`translate(-50%,-50%) translateX(${d*300}px) rotateY(${-d*38}deg) scale(${1-ad*0.13})`;
+    el.style.zIndex=100-ad;
+    el.style.opacity=ad>3?0:1-ad*0.22;
+    el.style.pointerEvents=ad>3?'none':'auto';
+    el.innerHTML=`<div class="inner"><div class="hd"><span class="fav" style="background:${tb.c}"></span><span class="url">${tb.u}</span></div>
+      <div class="shot">[превью]</div>
+      <div class="ft"><b>${tb.t}</b><span>${tb.desc||tb.u}</span></div>
+      ${tb.live?'<span class="tag live">LIVE</span>':tb.sleep?'<span class="tag">💤</span>':''}</div>`;
+    el.onclick=()=>{if(d===0)openPageView();else{cur=wrap(i);render()}};
+    zone.appendChild(el);
+  });
+  cnt.textContent=(cur+1)+' / '+TABS.length;
+}
+function openPageView(){
+  const tb=TABS[cur];
+  document.getElementById('pttl').innerHTML=`<span class="fav" style="background:${tb.c};width:14px;height:14px;border-radius:4px"></span><b>${tb.t}</b><span style="color:#9aa3ad">${tb.u}</span>`;
+  document.getElementById('pcontent').innerHTML=`<div class="hero">[живое превью страницы]</div><div class="tx">${tb.body}<p>Открыто из колоды: клик по центральной карте — страница здесь, на весь экран. Esc — назад к картам.</p></div>`;
+  film.innerHTML=TABS.map((x,i)=>`<div class="fm ${i===cur?'on':''}" data-tip="<b>${x.t}</b><br>${x.u}" onclick="stepTo(${i})"><div class="fh"><i style="background:${x.c}"></i></div><div class="fm-t">${x.t}</div></div>`).join('');
+  pv.classList.add('open');
+  film.querySelector('.fm.on')?.scrollIntoView({inline:'center',block:'nearest'});
+}
+function toDeck(){pv.classList.remove('open')}
+function stepTo(i){cur=i;pv.classList.contains('open')?openPageView():render()}
+function step(d){cur=wrap(cur+d);pv.classList.contains('open')?openPageView():render()}
+function addTab(){TABS.push({t:'Новая вкладка',u:'newtab',c:'#8a919c',desc:'speed-dial',body:'<h1>Новая вкладка</h1>'});render()}
+function closeTab(){TABS.splice(cur,1);if(!TABS.length)TABS.push({t:'Новая вкладка',u:'newtab',c:'#8a919c',desc:'',body:'<h1>New tab</h1>'});cur=Math.max(0,cur-1);pv.classList.contains('open')?openPageView():render()}
+addEventListener('keydown',e=>{
+  const inPage=pv.classList.contains('open');
+  if(e.key==='Escape'){if(inPage)toDeck();return}
+  if(e.key==='ArrowLeft'){e.preventDefault();step(-1)}
+  if(e.key==='ArrowRight'){e.preventDefault();step(1)}
+  if(e.key==='Enter'&&!inPage){e.preventDefault();openPageView()}
+  if(e.ctrlKey&&e.key.toLowerCase()==='tab'){e.preventDefault();step(e.shiftKey?-1:1)}
+  if(e.ctrlKey&&e.key.toLowerCase()==='w'){e.preventDefault();closeTab()}
+});
+const tip=document.getElementById('tip');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-300)+'px';tip.style.top=(e.clientY+16)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none';});
+render();
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

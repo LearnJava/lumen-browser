@@ -1523,3 +1523,41 @@ shared 1966 функций — **0 утечек**; CfT 157.0.8103.78: 11741 / 38
 `--mcp-live-port`): челлендж пройден, title «Sign in or create an account |
 Claude.ai», в середине прогона сайт ушёл на accounts.google.com (OAuth-флоу —
 значит, гейт пройден), engine stall нет. Лог: `runs/2026-11-19-ws-a-claude-ai.log`.
+
+## 2026-11-20 — WS-B fingerprint-unification: единый манифест Chrome 157 — Windows 10, dev-release ветки fingerprint-manifest, маршрут home-direct
+
+«Chrome 157» был разнесён по ≥7 местам (H2 SETTINGS, TLS-списки BoringSSL,
+порядок регистрации декодеров на 7 сайтах, порядок заголовков в builder,
+reference-снапшоты JA3/JA4 «Chrome 130»). Теперь один модуль данных
+`crates/network/src/http/chrome_manifest.rs` (`CHROME_157`: major,
+header_order, h2, tls, accept_encoding); UA/Client Hints не дублируются —
+их источник `lumen_core::identity`, согласованность сторожат тесты.
+
+**Переведено на манифест:** `H2Settings::for_profile` (Chrome/Strict/Edge —
+Edge читал те же значения литералами), `tls/boring.rs` (cipher_list,
+sigalgs, groups, ALPN — строки перенесены без изменений),
+`HttpClient::default_content_decoders()` + `with_content_decoders()` — все 7
+сайтов регистрации (page_source ×2, resource_base, download, update,
+driver session, winit_session) теперь один вызов; `Accept-Encoding`
+`gzip, deflate, br, zstd` больше не зависит от порядка вызовов.
+`tls/fingerprint.rs` помечен как исторический снапшот Chrome 130 (JA3/JA4
+регрессионные тесты), live ClientHello — манифест. Найденный дрейф:
+`driver/context.rs` слал UA `Chrome/126.0.0.0` литералом — переведён на
+`identity_variant().user_agent()`.
+
+**Верификация:** header-set'ы `docs/perf/header-sets/` пересняты
+(`header_matrix.py capture`) до и после — byte-identical (у Chrome-наборов
+отличается только эфемерный порт в Host). Self-check
+`scripts/fingerprint_selfcheck.py` (новый, §5.3): peet `/api/all` для Lumen
+и CfT 157, pre `runs/2026-11-20-peet-*-pre-b.json`, post
+`runs/2026-11-20-peet-*.json` — h2 SETTINGS равны, `akamai_fingerprint`
+равен (`1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p`), порядок
+заголовков равен; JA3/JA4 записаны, не гейтятся (BoringSSL vs Chrome
+расходятся в extensions/cipher count — задокументированная дельта;
+ja4 Lumen `t13d912h2_f91f431d341e_0988277d4e88` идентичен pre/post).
+Нюанс пробы: document-навигации Lumen — HTTP/1.1 by design
+(PERF-STREAM-H1), поэтому H2-фингерпринт читается same-origin `fetch()`
+subresource'ом. Drift-guard `scripts/check_fingerprint_literals.py`
+(CI-runnable) — чист после правки driver/context.rs. Тесты:
+`cargo test -p lumen-network --lib http` 46/46 (4 новых манифестных),
+`--test all http_client_fingerprint_profile` 32/32, driver context 8/8.

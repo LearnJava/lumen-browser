@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Колода: плотная</title>
+<style>
+  :root{--bg:#f4f5f7;--panel:#fff;--ink:#1f2328;--mut:#7d8590;--line:#dde2e8;--acc:#0b6fe0;--acc-soft:#e3eefc}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  .top{height:44px;flex:none;display:flex;align-items:center;gap:10px;padding:0 14px;background:var(--panel);border-bottom:1px solid var(--line)}
+  .brand{font-weight:700}.brand span{color:var(--acc)}
+  .omni{flex:1;max-width:460px;margin:0 auto;height:32px;display:flex;align-items:center;padding:0 13px;background:#f4f5f7;border:1px solid var(--line);border-radius:16px;font-size:13px;cursor:pointer}
+  .omni:hover{border-color:#b9c2cc}
+  .ib{height:30px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:none;color:var(--mut);cursor:pointer;font-size:12.5px}
+  .ib:hover{color:var(--ink);border-color:#b9c2cc}
+  /* компактная колода: список + деталь */
+  .split{flex:1;display:flex;min-height:0}
+  .list{width:320px;flex:none;border-right:1px solid var(--line);background:var(--panel);overflow:auto;padding:10px}
+  .card-item{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:10px;cursor:pointer;margin-bottom:3px;border:1.5px solid transparent}
+  .card-item:hover{background:#f0f2f5}
+  .card-item.on{background:var(--acc-soft);border-color:var(--acc)}
+  .card-item .fav{width:16px;height:16px;border-radius:4px;flex:none}
+  .card-item .tx{flex:1;min-width:0}
+  .card-item .tx b{font-size:13px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .card-item .tx span{font-size:11px;color:var(--mut)}
+  .card-item .ord{font-size:10.5px;color:var(--mut);flex:none}
+  .detail{flex:1;display:flex;flex-direction:column;min-width:0}
+  .detail .dh{padding:14px 20px;border-bottom:1px solid #f0f2f4;display:flex;align-items:center;gap:12px;background:#fff}
+  .detail .dh .fav{width:20px;height:20px;border-radius:6px}
+  .detail .dh b{font-size:15px}
+  .detail .dh .u{color:var(--mut);font-size:12px}
+  .detail .dh .acts{margin-left:auto;display:flex;gap:6px}
+  .detail .dh .acts button{border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;color:var(--ink)}
+  .detail .dh .acts button:hover{border-color:var(--acc);color:var(--acc)}
+  .detail .shot{flex:1;background:linear-gradient(140deg,#e8ecf2,#d5dde8);margin:16px 20px;border-radius:12px;display:flex;align-items:center;justify-content:center;color:#8a97a8;font-size:13px}
+  .detail .nav{display:flex;justify-content:space-between;padding:0 20px 16px}
+  .detail .nav button{border:1px solid var(--line);background:#fff;border-radius:9px;padding:8px 18px;font-size:13px;cursor:pointer;color:var(--ink)}
+  .detail .nav button:hover{border-color:var(--acc);color:var(--acc)}
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#1c1f26;color:#e8eaed;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:290px;box-shadow:0 6px 20px rgba(0,0,0,.25);display:none}
+  #tip b{color:#8fb8ec}#tip kbd{background:#33373f;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+</style>
+</head>
+<body>
+  <div class="top">
+    <div class="brand">lumen<span>://</span>deck-dense</div>
+    <div class="omni" data-tip="Адрес / @-команды" onclick="openPage('app.html?s=history')">🔍 lumen.local…</div>
+    <button class="ib" data-tip="Все вкладки" onclick="openPage('app.html?s=home')">▦</button>
+    <button class="ib" data-tip="Настройки" onclick="openPage('app.html?s=settings')">⚙</button>
+  </div>
+  <div class="split">
+    <aside class="list" id="list"></aside>
+    <section class="detail" id="det"></section>
+  </div>
+  <div id="tip"></div>
+<script>
+function openPage(u){window.open(u,'_blank')}
+const P=[
+ {t:'Lumen — движок',u:'lumen.local/docs',c:'#e3a008',d:'Архитектура: DOM-арена, layout, paint, V8.'},
+ {t:'GitHub — lumen',u:'github.com/lumen',c:'#4285f4',d:'Код и issues. Работа в worktree-слотах.'},
+ {t:'MDN — Grid',u:'mozilla.org',c:'#d93025',d:'Справочник · спит (T3).'},
+ {t:'Подкаст',u:'youtube.com',c:'#34a853',d:'V8 и JIT · LIVE.'},
+ {t:'V8 deep dive',u:'read-later',c:'#8b5cf6',d:'68% прочитано.'},
+ {t:'HTML Spec',u:'whatwg.org',c:'#fbbc05',d:'Навигация и bfcache.'},
+ {t:'Новости',u:'news.example.com',c:'#ea4335',d:'Дайджест за день.'},
+ {t:'Банк',u:'bank.example.com',c:'#d6453d',d:'🔒 контейнер «Личное».'},
+];
+let cur=0;
+function render(){
+  document.getElementById('list').innerHTML=P.map((p,i)=>`
+   <div class="card-item ${i===cur?'on':''}" data-tip="<b>${p.t}</b><br>${p.u}<br>№${i+1} в колоде" onclick="cur=${i};render()">
+    <span class="fav" style="background:${p.c}"></span>
+    <div class="tx"><b>${p.t}</b><span>${p.u}</span></div>
+    <span class="ord">${i+1}</span>
+   </div>`).join('');
+  const p=P[cur];
+  document.getElementById('det').innerHTML=`
+   <div class="dh"><span class="fav" style="background:${p.c}"></span><div><b>${p.t}</b><br><span class="u">${p.u}</span></div>
+    <div class="acts"><button data-tip="Открыть в новой вкладке" onclick="openPage('app.html?s=home')">↗</button><button data-tip="В read-later" onclick="openPage('app.html?s=readlater')">⧗</button><button data-tip="Закрыть" onclick="openPage('app.html?s=home')">✕</button></div></div>
+   <div class="shot">[живое превью]</div>
+   <div class="nav"><button data-tip="Предыдущая карта <kbd>←</kbd>" onclick="step(-1)">← Назад</button><span style="font-size:12px;color:var(--mut);align-self:center">карта ${cur+1} из ${P.length}</span><button data-tip="Следующая карта <kbd>→</kbd>" onclick="step(1)">Вперёд →</button></div>`;
+}
+function step(d){cur=(cur+d+P.length)%P.length;render()}
+addEventListener('keydown',e=>{if(e.key==='ArrowLeft')step(-1);if(e.key==='ArrowRight')step(1)});
+const tip=document.getElementById('tip');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-320)+'px';tip.style.top=(e.clientY+16)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none'});
+render();
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

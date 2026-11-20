@@ -692,6 +692,35 @@ fn page_width_is_viewport_when_root_overflow_x_hidden() {
     assert!(page_content_width(&on_body) <= 800.01, "{}", page_content_width(&on_body));
 }
 
+/// HBARS-1: `DrawText.rect.width` — ширина глифов рана (`frag.width`), а не
+/// контейнера. Раньше каждый текст заявлял правый край `frag.x +
+/// container_width` — на контейнере шире viewport короткая строка («About»)
+/// вылезала за правый край страницы и включала лишнюю h-полосу (Wikipedia,
+/// почти все реальные сайты). Текст меряется шейпером — без measurer-а
+/// `layout()` фрагментов не строит и DrawText в dl не попадает.
+#[test]
+fn page_width_text_run_does_not_exceed_container() {
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer");
+    let width_of = |html: &str| {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let vp = Size::new(800.0, 600.0);
+        let layout = lumen_layout::layout_measured_hyp(
+            &doc, &sheet, vp, &measurer, &KnuthLiangHyphenation::new(), false,
+        );
+        let dl = crate::display_list_metrics::paint_ordered_in(&layout, vp);
+        crate::display_list_metrics::content_width_in(&dl, &layout, 800.0)
+    };
+    // Контейнер 1200 px в viewport 800: контент реально шире — h-полоса честная.
+    let w = width_of("<body style='margin:0'><div style='width:1200px;height:40px;background:#eee'><p>About</p></div></body>");
+    assert!(w > 1000.0 && w <= 1200.01, "container overflow should count, got {w}");
+    // Строка с двумя фрагментами в контейнере 0..790: правый край второго
+    // рана — ~780, а не 790 + его x (старый баг давал >800 и h-полосу).
+    let w2 = width_of("<body style='margin:0'><div style='width:790px;height:40px'><p>Hello <b>world</b></p></div></body>");
+    assert!(w2 <= 800.01, "second frag must not overflow viewport, got {w2}");
+}
+
 // ── Scroll-keybindings ────────────────────────────────────────────────────
 
 #[test]

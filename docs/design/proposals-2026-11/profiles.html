@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Профили</title>
+<style>
+  :root{--bg:#f4f5f7;--panel:#fff;--ink:#1f2328;--mut:#7d8590;--line:#dde2e8;--acc:#0066ff;--acc-soft:#e3edfd}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden;transition:--x .2s}
+  body[data-profile="personal"]{--acc:#0066FF;--acc-soft:#e3edfd}
+  body[data-profile="work"]{--acc:#8B5CF6;--acc-soft:#efe9fd}
+  body[data-profile="anonymous"]{--acc:#FF3B30;--acc-soft:#fdeceb}
+  body[data-profile="guest"]{--acc:#8E8E93;--acc-soft:#ececef}
+  .bar{height:48px;display:flex;align-items:center;gap:8px;padding:0 12px;background:var(--panel);border-bottom:1px solid var(--line);flex:none}
+  .ib{height:32px;min-width:32px;padding:0 9px;border:none;background:none;border-radius:8px;color:var(--mut);display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:13px}
+  .ib:hover{background:#eef1f4;color:var(--ink)}
+  .ib svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .omni{flex:1;max-width:600px;margin:0 auto;display:flex;align-items:center;height:34px;padding:0 14px;background:var(--bg);border:1px solid var(--line);border-radius:9px;font-size:13.5px;cursor:text}
+  .omni:hover{border-color:#b9c2cc}
+  /* аватар профиля */
+  .avatar{width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:14px;cursor:pointer;border:2px solid transparent;position:relative;flex:none}
+  .avatar:hover{transform:scale(1.05)}
+  body[data-profile="personal"] .avatar{background:#0066FF}
+  body[data-profile="work"] .avatar{background:#8B5CF6}
+  body[data-profile="anonymous"] .avatar{background:#FF3B30}
+  body[data-profile="guest"] .avatar{background:#8E8E93}
+  .avatar .badge{position:absolute;bottom:-2px;right:-2px;width:12px;height:12px;border-radius:50%;background:#fff;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:8px}
+  /* dropdown профилей */
+  .pmenu{position:absolute;top:54px;right:12px;width:280px;background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.2);padding:8px;display:none;z-index:30}
+  .pmenu.open{display:block}
+  .pmenu .ph{padding:10px 12px 6px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}
+  .prow{display:flex;align-items:center;gap:11px;padding:9px 12px;border-radius:10px;cursor:pointer}
+  .prow:hover{background:#f0f2f5}
+  .prow.on{background:var(--acc-soft)}
+  .prow .av{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:13px;flex:none}
+  .prow .nm{font-weight:600;font-size:13.5px}
+  .prow .ds{font-size:11.5px;color:var(--mut)}
+  .prow .chk{margin-left:auto;color:var(--acc);font-weight:700;display:none}
+  .prow.on .chk{display:block}
+  .pmenu .foot{border-top:1px solid var(--line);margin-top:6px;padding:8px 12px 6px;font-size:11.5px;color:var(--mut)}
+  .pmenu .foot button{border:none;background:none;color:var(--acc);cursor:pointer;font-size:12px;padding:0;font-weight:600}
+  /* контент */
+  .wrap{flex:1;display:flex;align-items:center;justify-content:center}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:34px 40px;max-width:520px;text-align:center;box-shadow:0 10px 34px rgba(0,0,0,.06)}
+  .card .av-big{width:64px;height:64px;border-radius:50%;margin:0 auto 14px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:24px;font-weight:700}
+  body[data-profile="personal"] .av-big{background:#0066FF}
+  body[data-profile="work"] .av-big{background:#8B5CF6}
+  body[data-profile="anonymous"] .av-big{background:#FF3B30}
+  body[data-profile="guest"] .av-big{background:#8E8E93}
+  .card h2{margin:0 0 6px;font-size:19px}
+  .card p{color:var(--mut);font-size:13.5px;margin:0 0 18px}
+  .iso{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
+  .iso span{background:#f0f2f5;border-radius:20px;padding:4px 12px;font-size:11.5px;color:var(--mut)}
+  .iso span b{color:var(--ink)}
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#1c1f26;color:#e8eaed;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:290px;box-shadow:0 6px 20px rgba(0,0,0,.25);display:none}
+  #tip b{color:#8fb8ec}#tip kbd{background:#33373f;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+</style>
+</head>
+<body data-profile="personal">
+  <div class="bar">
+    <button class="ib" data-tip="Назад <kbd>Alt+←</kbd>"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
+    <button class="ib" data-tip="Вперёд <kbd>Alt+→</kbd>"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+    <button class="ib" data-tip="Обновить <kbd>F5</kbd>"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 11-2.34-5.66M20 4v4h-4"/></svg></button>
+    <div class="omni" data-tip="Омнибокс. В каждом профиле — своя история для @history и свои закладки для @bookmarks">lumen.local — личный профиль</div>
+    <div style="position:relative">
+      <div class="avatar" id="av" data-tip="Профиль: <b id="avName">Личный</b><br>Клик — переключить профиль. Акцент хрома и палитра меняются под профиль"><span id="avLetter">Л</span><span class="badge">👤</span></div>
+      <div class="pmenu" id="pm">
+        <div class="ph">Профили браузера</div>
+        <div class="prow on" data-p="personal" data-l="Л" data-n="Личный" data-tip="Личный профиль — синий акцент. Хранилище: отдельный storage_path в profiles.db"><span class="av" style="background:#0066FF">Л</span><span><div class="nm">Личный</div><div class="ds">личное · синхронизация выкл</div></span><span class="chk">✓</span></div>
+        <div class="prow" data-p="work" data-l="Р" data-n="Рабочий" data-tip="Рабочий профиль — фиолетовый акцент. Свои разрешения per-site и контейнеры"><span class="av" style="background:#8B5CF6">Р</span><span><div class="nm">Рабочий</div><div class="ds">работа · корп. политика</div></span><span class="chk">✓</span></div>
+        <div class="prow" data-p="anonymous" data-l="А" data-n="Анонимный" data-tip="Анонимный профиль — красный. Ничего не пишет на диск: история, куки, хранилище только в памяти"><span class="av" style="background:#FF3B30">А</span><span><div class="nm">Анонимный</div><div class="ds">incognito · без записи</div></span><span class="chk">✓</span></div>
+        <div class="prow" data-p="guest" data-l="Г" data-n="Гость" data-tip="Гость — серый. Минимальный профиль без расширений и синхронизации"><span class="av" style="background:#8E8E93">Г</span><span><div class="nm">Гость</div><div class="ds">временный · сессия-only</div></span><span class="chk">✓</span></div>
+        <div class="foot">Управление: Настройки → Профили · импорт из Chrome/Firefox/Edge — <button onclick="openPage('page.html')">открыть</button></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <div class="card">
+      <div class="av-big" id="avBig">Л</div>
+      <h2 id="cardName">Личный профиль</h2>
+      <p id="cardDesc">Акцент хрома, аватар и палитра переключаются под профиль — <code>body[data-profile]</code> в chrome-токенах. Это уже работает в движке: <b>ProfileRegistry</b> (profiles.db) + dropdown <b>#profileMenu</b>.</p>
+      <div class="iso">
+        <span>история: <b id="i1">своя</b></span>
+        <span>куки: <b id="i2">свои</b></span>
+        <span>закладки: <b id="i3">свои</b></span>
+        <span>разрешения: <b id="i4">свои</b></span>
+      </div>
+      <p style="margin-top:14px;font-size:12px" id="cardNote">Хранилище профиля — <code>storage_path</code> в profiles.db; зашифрованный ключ — <code>encrypted_key_blob</code>.</p>
+    </div>
+  </div>
+
+  <div id="tip"></div>
+<script>
+function openPage(p){window.open(p||'page.html','_blank')}
+const NAMES={personal:['Личный','личное · синхронизация выкл','история: своя · куки: свои · закладки: свои · разрешения: свои'],work:['Рабочий','работа · корп. политика','история: своя · куки: свои · разрешения: per-site'],anonymous:['Анонимный','incognito · без записи','история: память · куки: сессия · на диск: ничего'],guest:['Гость','временный · сессия-only','всё стирается при выходе']};
+const tip=document.getElementById('tip');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-300)+'px';tip.style.top=(e.clientY+16)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none';});
+document.getElementById('av').onclick=e=>{e.stopPropagation();document.getElementById('pm').classList.toggle('open')};
+document.querySelectorAll('.prow').forEach(r=>r.onclick=()=>{
+  const p=r.dataset.p,[n,d,iso]=NAMES[p];
+  document.body.dataset.profile=p;
+  document.getElementById('avLetter').textContent=r.dataset.l;
+  document.getElementById('avName').textContent=n;
+  document.getElementById('avBig').textContent=r.dataset.l;
+  document.getElementById('cardName').textContent=n+' профиль';
+  document.getElementById('cardDesc').textContent=(p==='anonymous'?'Ничего не пишется на диск: история, куки и хранилище живут только в памяти — закрытие окна = забвение.':'Акцент хрома, аватар и палитра переключаются под профиль — body[data-profile] в chrome-токенах.');
+  document.getElementById('i1').textContent=iso.split('·')[0].trim().replace('история: ','');
+  document.getElementById('i2').textContent=iso.split('·')[1].trim().replace('куки: ','');
+  document.getElementById('i3').textContent=iso.split('·')[2].trim().replace('закладки: ','');
+  document.getElementById('i4').textContent=iso.split('·')[3].trim().replace('разрешения: ','');
+  document.querySelectorAll('.prow').forEach(x=>x.classList.toggle('on',x===r));
+  document.getElementById('pm').classList.remove('open');
+});
+addEventListener('click',e=>{if(!e.target.closest('.pmenu')&&!e.target.closest('#av'))document.getElementById('pm').classList.remove('open')});
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

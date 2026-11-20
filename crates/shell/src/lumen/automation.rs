@@ -414,8 +414,11 @@ impl Lumen {
             // Сам сдвиг уходит ему следующим кадром: смещение, заданное потоком
             // браузера, помечено `ACK_BROWSER_SET` и главнее его собственного.
             self.adopt_scroll_feedback();
-            self.scroll_x = (self.scroll_x + dx).max(0.0);
-            self.scroll_y = (self.scroll_y + dy).max(0.0);
+            // Те же пределы, что у колеса (`max_scroll`/`max_scroll_x`): без
+            // верхнего зажима automation-скролл уводил страницу за пределы
+            // документа — вьюпорт и CPU-скриншот automation'а белели.
+            self.scroll_x = clamp_scroll(self.scroll_x + dx, self.max_scroll_x());
+            self.scroll_y = clamp_scroll(self.scroll_y + dy, self.max_scroll());
             self.issue_scroll_command();
             if let Some(w) = self.window.as_ref() {
                 w.request_redraw();

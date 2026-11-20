@@ -1,8 +1,8 @@
 {
  "name": "lumen-chrome_unbranded",
- "source": "D:\\RustProjects\\lumen-browser\\.claude\\worktrees\\p2-work\\target\\debug\\lumen.exe --dump-source, LUMEN_IDENTITY=chrome_unbranded",
+ "source": "target/dev-release/lumen.exe --dump-source, LUMEN_IDENTITY=chrome_unbranded",
  "note": "plain HTTP на 127.0.0.1",
- "captured": "2026-10-13",
+ "captured": "2026-11-20",
  "headers": [
   [
    "Host",
@@ -13,12 +13,8 @@
    "keep-alive"
   ],
   [
-   "Cache-Control",
-   "max-age=0"
-  ],
-  [
    "Sec-CH-UA",
-   "\"Chromium\";v=\"153\", \"Not_A Brand\";v=\"8\""
+   "\"Not-A.Brand\";v=\"99\", \"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\""
   ],
   [
    "Sec-CH-UA-Mobile",
@@ -29,20 +25,16 @@
    "\"Windows\""
   ],
   [
+   "Upgrade-Insecure-Requests",
+   "1"
+  ],
+  [
    "User-Agent",
-   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"
+   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36"
   ],
   [
    "Accept",
-   "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
-  ],
-  [
-   "Accept-Encoding",
-   "br, gzip, deflate"
-  ],
-  [
-   "Accept-Language",
-   "en-US,en;q=0.9"
+   "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
   ],
   [
    "Sec-Fetch-Site",
@@ -53,8 +45,24 @@
    "navigate"
   ],
   [
+   "Sec-Fetch-User",
+   "?1"
+  ],
+  [
    "Sec-Fetch-Dest",
    "document"
+  ],
+  [
+   "Accept-Encoding",
+   "gzip, deflate, br, zstd"
+  ],
+  [
+   "Accept-Language",
+   "en-US,en;q=0.9"
+  ],
+  [
+   "Priority",
+   "u=0, i"
   ]
  ]
 }

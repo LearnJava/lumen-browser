@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Входящие</title>
+<style>
+  :root{--bg:#f4f5f7;--panel:#fff;--ink:#1f2328;--mut:#7d8590;--line:#dde2e8;--acc:#0b6fe0;--acc-soft:#e3eefc;--amb:#d8a400;--amb-soft:#fdf3dc;--grn:#1f9d55;--grn-soft:#e6f4ec}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  .bar{height:46px;display:flex;align-items:center;gap:10px;padding:0 16px;background:var(--panel);border-bottom:1px solid var(--line);flex:none}
+  .brand{font-weight:700}.brand span{color:var(--acc)}
+  .omni{flex:1;max-width:460px;margin-left:10px;height:33px;display:flex;align-items:center;padding:0 14px;background:#f4f5f7;border:1px solid var(--line);border-radius:8px;font-size:13.5px;cursor:pointer}
+  .omni:hover{border-color:#b9c2cc}
+  .ib{height:30px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:none;color:var(--mut);cursor:pointer;font-size:12.5px}
+  .ib:hover{color:var(--ink);border-color:#b9c2cc}
+  .mail{flex:1;overflow:auto;padding:22px 30px}
+  .mail h1{font-size:19px;margin:0 0 16px}
+  .mrow{display:flex;align-items:center;gap:14px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:13px 18px;margin-bottom:8px;cursor:pointer;transition:border-color .15s}
+  .mrow:hover{border-color:var(--acc)}
+  .mrow.unread{border-left:3px solid var(--acc);background:#fafbfd}
+  .mrow .fav{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:12px;flex:none}
+  .mrow .tx{flex:1;min-width:0}
+  .mrow .tx .t{font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .mrow .tx .p{font-size:12.5px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .mrow .meta{font-size:11.5px;color:var(--mut);text-align:right;white-space:nowrap}
+  .mrow .acts{display:flex;gap:6px;opacity:0}
+  .mrow:hover .acts{opacity:1}
+  .mrow .acts button{border:1px solid var(--line);background:#fff;border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer;color:var(--ink)}
+  .mrow .acts button:hover{border-color:var(--acc);color:var(--acc)}
+  .mrow.snoozed{opacity:.55}
+  .mrow .tag{font-size:10.5px;border-radius:9px;padding:2px 8px;font-weight:600;white-space:nowrap}
+  .tag.read{background:var(--grn-soft);color:var(--grn)}
+  .tag.snooze{background:var(--amb-soft);color:#9a6d10}
+  .tag.work{background:#efe9fd;color:#7c3aed}
+  .tag.media{background:#fdeceb;color:#d6453d}
+  .filters{display:flex;gap:6px;margin-bottom:14px}
+  .filters span{padding:5px 13px;border-radius:16px;background:var(--panel);border:1px solid var(--line);font-size:12px;cursor:pointer;color:var(--mut)}
+  .filters span.on{background:var(--acc-soft);color:var(--acc);border-color:var(--acc);font-weight:600}
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#1c1f26;color:#e8eaed;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:300px;box-shadow:0 6px 20px rgba(0,0,0,.25);display:none}
+  #tip b{color:#8fb8ec}#tip kbd{background:#33373f;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+  .modal-bg{position:fixed;inset:0;background:rgba(15,18,24,.5);backdrop-filter:blur(4px);display:none;align-items:center;justify-content:center;z-index:200}
+  .modal-bg.open{display:flex}
+  .modal{width:min(380px,90vw);background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:24px;box-shadow:0 24px 70px rgba(0,0,0,.3);animation:pop .18s ease}
+  @keyframes pop{from{transform:scale(.92) translateY(10px);opacity:0}to{transform:none;opacity:1}}
+  .modal h3{margin:0 0 4px;font-size:16px}
+  .modal .sub{font-size:12.5px;color:var(--mut);margin-bottom:16px}
+  .modal .opts{display:flex;flex-direction:column;gap:7px}
+  .modal .opts button{border:1px solid var(--line);background:#fff;border-radius:10px;padding:11px 14px;font-size:13.5px;cursor:pointer;color:var(--ink);text-align:left;display:flex;justify-content:space-between;align-items:center}
+  .modal .opts button:hover{border-color:var(--acc);color:var(--acc)}
+  .modal .opts button .k{font-size:11px;color:var(--mut)}
+  .modal .x{position:absolute;top:14px;right:16px;border:none;background:none;font-size:18px;color:var(--mut);cursor:pointer}
+  .modal{position:relative}
+</style>
+</head>
+<body>
+  <div class="bar">
+    <div class="brand">lumen<span>://</span>inbox</div>
+    <div class="omni" data-tip="Быстрый переход: адрес / @-команды / поиск по вкладкам" onclick="openPage('app.html?s=history')">🔍 адрес, @-команда или вкладка…</div>
+    <button class="ib" data-tip="Новое пространство <kbd>Ctrl+Shift+W</kbd>" onclick="openPage('app.html?s=workspaces')">⬒+</button>
+    <button class="ib" data-tip="Пространства" onclick="openPage('app.html?s=workspaces')">⬒</button>
+    <button class="ib" data-tip="Настройки" onclick="openPage('app.html?s=settings')">⚙</button>
+  </div>
+
+  <div class="mail">
+    <h1>Входящие <span style="color:var(--mut);font-weight:400;font-size:14px">· 9 вкладок как письма</span></h1>
+    <div class="filters" id="f">
+      <span class="on" data-f="all" data-tip="Все вкладки">Все · 9</span>
+      <span data-f="unread" data-tip="Непросмотренные — новая вкладка считается «непрочитанной»">Новые · 4</span>
+      <span data-f="snooze" data-tip="Отложенные — вернутся через заданное время">Отложенные · 1</span>
+      <span data-f="work" data-tip="Вкладки пространства «Работа»">Работа · 3</span>
+      <span data-f="media" data-tip="Вкладки с воспроизводимым медиа">Медиа · 2</span>
+    </div>
+    <div id="list"></div>
+  </div>
+
+  <div class="modal-bg" id="mb"><div class="modal"><button class="x" onclick="closeModal()">✕</button><h3 id="mt">Отложить вкладку</h3><div class="sub" id="ms">Вкладка уснёт и вернётся в «Входящие» через выбранное время</div><div class="opts" id="mo"></div></div></div>
+  <div id="tip"></div>
+<script>
+function openPage(u){window.open(u,'_blank')}
+const T=[
+ ['Lumen — движок','lumen.local/docs · layout, paint, V8','#e3a008','',1,'новая','lumen'],
+ ['GitHub — репозиторий','github.com/lumen · issues, PR','#4285f4','work',0,'прочитано','работа'],
+ ['MDN — CSS Grid','developer.mozilla.org · справочник','#d93025','',0,'💤 спит','справка'],
+ ['Подкаст ep.42','youtube.com · воспроизводится','#34a853','media',1,'LIVE','медиа'],
+ ['PR #412 — ревью','github.com/lumen/pull/412','#7c3aed','work',1,'новая','работа'],
+ ['Read-later: V8','статья · 68%','#8b5cf6','',0,'отложено','чтение'],
+ ['Новости дня','news.example.com · 12 новых','#ea4335','',1,'новая','медиа'],
+ ['Спека HTML','whatwg.org · living standard','#fbbc05','',0,'прочитано','справка'],
+ ['Банк — счета','bank.example.com · контейнер','#d6453d','',0,'🔒 личное','финансы'],
+];
+let filter='all';
+function render(){
+  document.getElementById('list').innerHTML=T.filter(t=>{
+    if(filter==='unread')return t[4];
+    if(filter==='snooze')return t[6].includes('отлож');
+    if(filter==='work')return t[3]==='work';
+    if(filter==='media')return t[3]==='media';
+    return true;
+  }).map(t=>`
+   <div class="mrow ${t[4]?'unread':''} ${t[6].includes('отлож')?'snoozed':''}" data-tip="<b>${t[0]}</b><br>${t[1]}<br>клик — перейти · hover-кнопки — snooze / прочитано / закрыть" onclick="openPage('app.html?s=home')">
+    <div class="fav" style="background:${t[2]}">${t[0][0]}</div>
+    <div class="tx"><div class="t">${t[0]}</div><div class="p">${t[1]}</div></div>
+    <div class="acts" onclick="event.stopPropagation()">
+      <button data-tip="Отложить — модальное окно с выбором времени" onclick="snoozeModal('${t[0]}')">⏰</button>
+      <button data-tip="Отметить прочитанной — сработает на месте, без окон" onclick="markRead(this)">✓</button>
+      <button data-tip="Закрыть вкладку <kbd>Ctrl+W</kbd> — строка исчезнет" onclick="closeRow(this)">✕</button>
+    </div>
+    <div class="meta">${t[5]==='LIVE'?'':t[6].includes('спит')?'':t[6]}<br>${t[5]&&t[5]!=='LIVE'?'<span class="tag read">прочитано</span>':''}${t[4]?'<span class="tag" style="background:#e3eefc;color:#0b6fe0">новая</span>':''}${t[6].includes('отлож')?'<span class="tag snooze">snooze</span>':''}${t[3]==='work'?'<span class="tag work">работа</span>':''}${t[3]==='media'?'<span class="tag media">медиа</span>':''}</div>
+   </div>`).join('');
+}
+function snoozeModal(name){
+  document.getElementById('mt').textContent='Отложить: '+name;
+  document.getElementById('mo').innerHTML=[['30 минут','к затем вернётся'],['2 часа','вечером'],['До завтра','утром'],['Воскресенье','выходной']].map(o=>`<button data-tip="${o[1]} — вкладка уснёт, вернётся к этому времени" onclick="snooze('${o[0]}')">${o[0]}<span class="k">${o[1]}</span></button>`).join('');
+  document.getElementById('mb').classList.add('open');
+}
+function snooze(t){document.getElementById('mb').classList.remove('open');}
+function closeModal(){document.getElementById('mb').classList.remove('open')}
+function markRead(b){const r=b.closest('.mrow');r.classList.remove('unread');b.closest('.meta').insertAdjacentHTML('beforeend','<span class="tag read">прочитано</span>');b.disabled=true;b.style.opacity=.4}
+function closeRow(b){const r=b.closest('.mrow');r.style.transition='all .25s';r.style.opacity=0;r.style.transform='translateX(30px)';setTimeout(()=>r.remove(),250)}
+document.getElementById('mb').addEventListener('click',e=>{if(e.target.id==='mb')closeModal()});
+addEventListener('keydown',e=>{if(e.key==='Escape')closeModal()});
+document.getElementById('f').querySelectorAll('span').forEach(s=>s.onclick=()=>{
+  document.querySelectorAll('#f span').forEach(x=>x.classList.remove('on'));s.classList.add('on');filter=s.dataset.f;render();
+});
+const tip=document.getElementById('tip');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-320)+'px';tip.style.top=(e.clientY+16)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none'});
+render();
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

@@ -3,7 +3,8 @@
 **Status:** C done 2026-11-19 ([BUG-1832](../../bugs/BUG-1832-FIXED.md), branch
 `fingerprint-identity-switch`); A done 2026-11-20 (branch `fingerprint-js-registry`,
 ledger `runs/2026-11-19-native-api-{lumen,chrome}.json` — 0 leaks in page/dedicated/shared);
-B not started · **Date:** 2026-11-19
+B done 2026-11-20 (branch `fingerprint-manifest`, manifest `crates/network/src/http/chrome_manifest.rs`,
+self-check `runs/2026-11-20-peet-*.json`) · **Date:** 2026-11-19
 **Owner:** next session (role/slot assigned by the manager; claim tasks before coding)
 **Evidence:** [ADR-034 §1](../decisions/ADR-034-site-compatibility-strategy.md), A/B matrix
 [2026-10-15](../perf/runs/2026-10-15-ab-matrix.md) (533 sites, token refusals 0.19 %, no must-work),

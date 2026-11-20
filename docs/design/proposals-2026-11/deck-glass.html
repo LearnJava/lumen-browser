@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Колода: стекло</title>
+<style>
+  :root{--bg1:#0b1a2e;--bg2:#16283f;--panel:rgba(255,255,255,.08);--ink:#f0f4f8;--mut:#9db3c8;--line:rgba(255,255,255,.14);--acc:#6ec1ff;--acc2:#a78bfa}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 'Segoe UI',system-ui,sans-serif;background:linear-gradient(135deg,var(--bg1),var(--bg2));color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  .top{height:46px;flex:none;display:flex;align-items:center;gap:10px;padding:0 16px;background:var(--panel);backdrop-filter:blur(20px);border-bottom:1px solid var(--line)}
+  .brand{font-weight:700}.brand span{color:var(--acc)}
+  .omni{flex:1;max-width:480px;margin:0 auto;height:34px;display:flex;align-items:center;padding:0 16px;background:rgba(255,255,255,.06);border:1px solid var(--line);border-radius:17px;font-size:13.5px;color:var(--mut);cursor:pointer;backdrop-filter:blur(10px)}
+  .omni:hover{border-color:rgba(255,255,255,.3)}
+  .ib{height:32px;padding:0 12px;border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.06);color:var(--mut);cursor:pointer;font-size:12.5px;backdrop-filter:blur(10px)}
+  .ib:hover{color:var(--ink);border-color:rgba(255,255,255,.3)}
+  .deck{flex:1;display:flex;align-items:center;justify-content:center;position:relative;min-height:0}
+  .card{width:min(620px,84vw);height:min(460px,76vh);background:rgba(255,255,255,.06);backdrop-filter:blur(30px);border:1px solid rgba(255,255,255,.15);border-radius:20px;overflow:hidden;color:#fff;box-shadow:0 40px 100px rgba(0,0,0,.4),inset 0 1px 0 rgba(255,255,255,.1);transition:transform .3s,opacity .3s}
+  .card .hd{height:38px;background:rgba(255,255,255,.05);display:flex;align-items:center;gap:10px;padding:0 16px;border-bottom:1px solid rgba(255,255,255,.1)}
+  .fav{width:15px;height:15px;border-radius:4px}
+  .card .url{font-size:12px;color:#9db3c8;flex:1}
+  .card .bd{height:calc(100% - 38px);overflow:auto;padding:28px}
+  .card .bd .hero{height:120px;border-radius:14px;background:linear-gradient(120deg,rgba(110,193,255,.2),rgba(167,139,250,.2));border:1px solid rgba(255,255,255,.1);margin-bottom:20px;display:flex;align-items:center;justify-content:center;color:#6ec1ff;font-size:13px}
+  .card .bd h1{font-size:23px;margin:0 0 12px;font-weight:600}
+  .card .bd p{font-size:15px;line-height:1.7;color:#c8d4e0}
+  .neighbors{position:absolute;top:50%;transform:translateY(-50%);width:min(220px,20%);height:min(340px,60vh);background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);border-radius:14px;opacity:.3;backdrop-filter:blur(10px);transition:all .3s;z-index:0}
+  .neighbors.l{left:2%}.neighbors.r{right:2%}
+  .neighbors .fav{position:absolute;top:14px;left:14px;width:14px;height:14px;border-radius:4px}
+  .dots{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);display:flex;gap:7px}
+  .dots span{width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,.2);cursor:pointer;transition:all .2s}
+  .dots span.on{background:var(--acc);transform:scale(1.4);box-shadow:0 0 12px rgba(110,193,255,.5)}
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#0a1628;color:#e8f0f8;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:290px;border:1px solid rgba(255,255,255,.15);box-shadow:0 6px 20px rgba(0,0,0,.4);display:none}
+  #tip b{color:#6ec1ff}#tip kbd{background:#1a2a3d;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+</style>
+</head>
+<body>
+  <div class="top">
+    <div class="brand">lumen<span>://</span>deck-glass</div>
+    <div class="omni" data-tip="Адрес / @-команды" onclick="openPage('app.html?s=history')">🔍 lumen.local…</div>
+    <button class="ib" data-tip="Все вкладки" onclick="openPage('app.html?s=home')">▦</button>
+    <button class="ib" data-tip="Настройки" onclick="openPage('app.html?s=settings')">⚙</button>
+  </div>
+  <div class="deck" id="deck"></div>
+  <div class="dots" id="dots"></div>
+  <div id="tip"></div>
+<script>
+function openPage(u){window.open(u,'_blank')}
+const P=[
+ {t:'Lumen — движок',u:'lumen.local/docs',c:'#e3a008',h:'Архитектура',b:'DOM-арена → layout → paint → V8. Стеклянная колода: полупрозрачные карты над градиентным фоном.'},
+ {t:'GitHub — lumen',u:'github.com/lumen',c:'#4285f4',h:'Репозиторий',b:'Код и issues.'},
+ {t:'MDN — Grid',u:'mozilla.org',c:'#d93025',h:'CSS Grid',b:'Справочник.'},
+ {t:'Подкаст',u:'youtube.com',c:'#34a853',h:'V8 и JIT',b:'Видео.'},
+ {t:'V8 deep dive',u:'read-later',c:'#8b5cf6',h:'Inside V8',b:'68%.'},
+ {t:'HTML Spec',u:'whatwg.org',c:'#fbbc05',h:'Standard',b:'Навигация.'},
+];
+let cur=0;
+const deck=document.getElementById('deck'),dots=document.getElementById('dots');
+function render(){
+  const p=P[cur];
+  deck.innerHTML=`
+   <div class="neighbors l" onclick="step(-1)"><span class="fav" style="background:${P[(cur-1+P.length)%P.length].c}"></span></div>
+   <div class="neighbors r" onclick="step(1)"><span class="fav" style="background:${P[(cur+1)%P.length].c}"></span></div>
+   <div class="card"><div class="hd"><span class="fav" style="background:${p.c}"></span><span class="url">${p.u} · ${cur+1}/${P.length}</span></div><div class="bd"><div class="hero">[живое превью]</div><h1>${p.h}</h1><p>${p.b}</p><p style="color:#9db3c8;font-size:13px">Glassmorphism: backdrop-filter размывает градиентный фон — карта «плывёт» над сценой.</p></div></div>`;
+  dots.innerHTML=P.map((_,i)=>`<span class="${i===cur?'on':''}" onclick="cur=${i};render()"></span>`).join('');
+}
+function step(d){cur=(cur+d+P.length)%P.length;render()}
+addEventListener('keydown',e=>{if(e.key==='ArrowLeft')step(-1);if(e.key==='ArrowRight')step(1)});
+const tip=document.getElementById('tip');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-320)+'px';tip.style.top=(e.clientY+16)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none'});
+render();
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

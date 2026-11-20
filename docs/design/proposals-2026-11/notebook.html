@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Блокнот</title>
+<style>
+  :root{--bg:#f4f5f7;--panel:#fff;--ink:#1f2328;--mut:#7d8590;--line:#dde2e8;--acc:#0b6fe0;--acc-soft:#e3eefc;--paper:#fdfcf8}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  .bar{height:44px;display:flex;align-items:center;gap:8px;padding:0 12px;background:var(--panel);border-bottom:1px solid var(--line);flex:none}
+  .ib{height:30px;min-width:30px;padding:0 8px;border:none;background:none;border-radius:7px;color:var(--mut);display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12.5px}
+  .ib:hover{background:#eef1f4;color:var(--ink)}
+  .brand{font-weight:700}.brand span{color:var(--acc)}
+  .omni{flex:1;max-width:460px;margin-left:8px;height:32px;display:flex;align-items:center;padding:0 12px;background:#f4f5f7;border:1px solid var(--line);border-radius:8px;font-size:13px;cursor:pointer}
+  .omni:hover{border-color:#b9c2cc}
+  /* листы блокнота */
+  .sheets{flex:1;display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:26px 20px;position:relative}
+  .sheet{width:min(700px,88vw);background:var(--paper);border:1px solid #e0ddd2;border-radius:4px 14px 14px 14px;box-shadow:0 10px 34px rgba(0,0,0,.08);min-height:420px;position:relative;padding:0 0 30px}
+  .sheet::before{content:'';position:absolute;top:0;left:0;right:0;height:6px;background:var(--acc);border-radius:14px 14px 0 0;opacity:.85}
+  .sheet .tabs{display:flex;gap:4px;padding:14px 18px 0;position:relative;z-index:2}
+  .stab{padding:7px 16px;background:#eceae0;border-radius:8px 8px 0 0;font-size:12.5px;cursor:pointer;color:var(--mut);border:1px solid transparent;border-bottom:none;white-space:nowrap}
+  .stab.on{background:var(--paper);color:var(--ink);font-weight:600;border-color:#e0ddd2}
+  .sheet .page{padding:30px 44px;font-family:Georgia,serif;font-size:15px;line-height:1.75}
+  .sheet .page h1{font-size:24px;font-family:'Segoe UI',sans-serif;margin:0 0 10px}
+  .sheet .page .by{font-family:'Segoe UI',sans-serif;color:var(--mut);font-size:12px;margin-bottom:24px}
+  .sheet .page p{margin:0 0 1.2em}
+  .sheet .page mark{background:#fff3c4;border-radius:3px;padding:0 2px}
+  /* поля для заметок */
+  .margin{position:absolute;right:0;top:60px;bottom:0;width:210px;border-left:1px dashed #ddd8c8;padding:16px;font-family:'Segoe UI',sans-serif;font-size:12px;color:#6b6550}
+  .margin h5{margin:0 0 10px;font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:#a39c82}
+  .margin .note{background:#fff;border:1px solid #e8e4d4;border-radius:8px;padding:9px 11px;margin-bottom:8px;cursor:pointer}
+  .margin .note:hover{border-color:var(--acc)}
+  .margin .note b{display:block;font-size:12px;color:var(--ink)}
+  .margin .note span{font-size:11px;color:var(--mut)}
+  /* стопка листов сзади */
+  .stack-behind{position:absolute;inset:0;pointer-events:none}
+  .stack-behind div{position:absolute;left:50%;top:26px;width:min(700px,88vw);height:420px;background:#f0eee4;border-radius:4px 14px 14px 14px;transform:translateX(-50%) translateY(10px) scale(.97);opacity:.5}
+  .stack-behind div:nth-child(2){transform:translateX(-50%) translateY(20px) scale(.94);opacity:.3}
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#1c1f26;color:#e8eaed;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:290px;box-shadow:0 6px 20px rgba(0,0,0,.25);display:none}
+  #tip b{color:#8fb8ec}#tip kbd{background:#33373f;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+</style>
+</head>
+<body>
+  <div class="bar">
+    <button class="ib" data-tip="Назад"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15 18l-6-6 6-6"/></svg></button>
+    <button class="ib" data-tip="Вперёд"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 6l6 6-6 6"/></svg></button>
+    <button class="ib" data-tip="Обновить"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 12a8 8 0 11-2.34-5.66M20 4v4h-4"/></svg></button>
+    <div class="brand">lumen<span>://</span>notebook</div>
+    <div class="omni" data-tip="Адрес / поиск / @-команды" onclick="openPage('app.html?s=history')">🔍 lumen.local/article…</div>
+    <button class="ib" data-tip="Новая заметка к странице" onclick="openPage('app.html?s=notes')">✎</button>
+    <button class="ib" data-tip="Настройки" onclick="openPage('app.html?s=settings')">⚙</button>
+  </div>
+  <div class="sheets">
+    <div class="stack-behind"><div></div><div></div></div>
+    <div class="sheet">
+      <div class="tabs">
+        <div class="stab on" data-tip="Активная страница — как лист блокнота с закладкой сверху">Lumen — движок</div>
+        <div class="stab" data-tip="Другая страница — клик переключает лист" onclick="openPage('app.html?s=home')">GitHub — PR</div>
+        <div class="stab" data-tip="Спящая вкладка — лист «заснул», мгновенно просыпается" onclick="openPage('app.html?s=home')">MDN — Grid 💤</div>
+        <div class="stab" data-tip="Новая страница" onclick="openPage('app.html?s=home')">＋</div>
+      </div>
+      <div class="page">
+        <h1>Как устроен движок Lumen</h1>
+        <div class="by">статья · 12 мин · режим чтения</div>
+        <p>Между <mark>HTML</mark> и пикселями — четыре мира: токенизатор, DOM-арена, каскад стилей и растеризатор. Каждый — свой crate, ни один не знает о соседях.</p>
+        <p>Заметки привязаны к фрагментам и живут в правом поле — они переживают перезапуск и находятся через <b>@notes</b> в омнибоксе.</p>
+        <p>Позиция чтения сохраняется: Back, Ctrl+Shift+T или восстановление сессии вернут вас на тот же абзац.</p>
+      </div>
+      <div class="margin">
+        <h5>Заметки на полях · 3</h5>
+        <div class="note" data-tip="Заметка к фрагменту «DOM-арена» — клик прокрутит к ней" onclick="openPage('app.html?s=notes')"><b>Проверить generation</b><span>arena NodeId · сегодня</span></div>
+        <div class="note" data-tip="Заметка ко второму абзацу" onclick="openPage('app.html?s=notes')"><b>Perf: 1.56s repeat</b><span>вчера</span></div>
+        <div class="note" data-tip="Read-later: статья в очереди, 42%" onclick="openPage('app.html?s=readlater')"><b>▤ В очереди</b><span>«async Rust» · 12%</span></div>
+        <h5 style="margin-top:18px">Ссылки · 8</h5>
+        <div class="note" data-tip="Исходящие ссылки страницы — сгруппированы" onclick="openPage('app.html?s=bookmarks')"><b>→ 8 исходящих</b><span>4 внутренние · 2 в закладках</span></div>
+      </div>
+    </div>
+  </div>
+  <div id="tip"></div>
+<script>
+function openPage(u){window.open(u,'_blank')}
+const tip=document.getElementById('tip');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-300)+'px';tip.style.top=(e.clientY+16)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none'});
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Горизонт</title>
+<style>
+  :root{--bg:#f4f5f7;--panel:#fff;--ink:#1f2328;--mut:#7d8590;--line:#dde2e8;--acc:#0b6fe0;--acc-soft:#e3eefc}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  .content{flex:1;overflow:auto;background:#fff;min-height:0}
+  .content .hd{height:150px;background:linear-gradient(120deg,#2c3e50,#4a6fa5)}
+  .content .bd{max-width:620px;margin:26px auto;padding:0 22px;font-size:15px;line-height:1.7}
+  .content .bd h1{font-size:23px}
+  /* всё внизу — зона большого пальца */
+  .dock{flex:none;background:var(--panel);border-top:1px solid var(--line);padding:10px 14px 14px}
+  .omni-row{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+  .omni{flex:1;max-height:40px;display:flex;align-items:center;padding:0 16px;background:#f4f5f7;border:1px solid var(--line);border-radius:20px;font-size:14px;cursor:pointer}
+  .omni:hover{border-color:#b9c2cc}
+  .omni .hint{color:var(--mut)}
+  .navrow{display:flex;align-items:center;gap:6px}
+  .ib{flex:1;height:44px;border:none;background:none;border-radius:12px;color:var(--mut);display:inline-flex;align-items:center;justify-content:center;gap:7px;cursor:pointer;font-size:12.5px;flex-direction:column}
+  .ib:hover{background:#eef1f4;color:var(--ink)}
+  .ib svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .ib .lb{font-size:10px}
+  .ib .badge{position:absolute;margin-top:-16px;margin-left:16px;min-width:15px;height:15px;border-radius:8px;background:var(--acc);color:#fff;font-size:9.5px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 3px}
+  .tabs-row{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px}
+  .tab{flex:none;display:flex;align-items:center;gap:8px;height:34px;padding:0 14px;background:#eef1f4;border-radius:17px;font-size:12.5px;cursor:pointer;border:1.5px solid transparent;white-space:nowrap}
+  .tab.on{background:var(--acc-soft);border-color:var(--acc);font-weight:600;color:var(--acc)}
+  .fav{width:13px;height:13px;border-radius:3px;flex:none}
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#1c1f26;color:#e8eaed;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:300px;box-shadow:0 6px 20px rgba(0,0,0,.25);display:none}
+  #tip b{color:#8fb8ec}#tip kbd{background:#33373f;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+</style>
+</head>
+<body>
+  <div class="content">
+    <div class="hd"></div>
+    <div class="bd">
+      <h1>Горизонт — всё внизу, под большой палец</h1>
+      <p>Весь интерфейс прижат к нижней кромке: адресная строка, полоса вкладок и ряд действий. Контент занимает всё остальное место сверху. Это паттерн мобильных браузеров, перенесённый на десктоп — для ноутбуков с тачпадом и для тех, кто держит руку на колесе мыши у нижнего края.</p>
+      <p>Вкладки — горизонтальная прокручиваемая лента пилюль внизу. Действия — крупные кнопки 44 px. Адресная строка — полноразмерная, по центру.</p>
+    </div>
+  </div>
+  <div class="dock">
+    <div class="omni-row">
+      <button class="ib" style="flex:none;width:44px;height:44px" data-tip="Назад"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
+      <button class="ib" style="flex:none;width:44px;height:44px" data-tip="Вперёд"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+      <div class="omni" data-tip="Адрес / поиск / @-команды" onclick="openPage('app.html?s=history')"><span class="hint">lumen.local/article — адрес или поиск…</span></div>
+      <button class="ib" style="flex:none;width:44px;height:44px" data-tip="Новая вкладка <kbd>Ctrl+T</kbd>" onclick="openPage('app.html?s=home')"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+      <button class="ib" style="flex:none;width:44px;height:44px" data-tip="Меню"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/></svg></button>
+    </div>
+    <div class="tabs-row" id="tabs"></div>
+    <div class="navrow">
+      <button class="ib" data-tip="Закладки" onclick="openPage('app.html?s=bookmarks')"><svg viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></svg><span class="lb">Закладки</span></button>
+      <button class="ib" data-tip="Читать позже" onclick="openPage('app.html?s=readlater')"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4z"/><path d="M4 9h16M8 5v4"/></svg><span class="lb">Read-later</span></button>
+      <button class="ib" data-tip="Загрузки" onclick="openPage('app.html?s=downloads')"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg><span class="lb">Загрузки</span><span class="badge">2</span></button>
+      <button class="ib" data-tip="Щиты" onclick="openPage('app.html?s=privacy')"><svg viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg><span class="lb">Щиты</span><span class="badge">7</span></button>
+      <button class="ib" data-tip="Пространства" onclick="openPage('app.html?s=workspaces')"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="8" height="7" rx="1"/><rect x="13" y="4" width="8" height="7" rx="1"/><rect x="3" y="13" width="8" height="7" rx="1"/><rect x="13" y="13" width="8" height="7" rx="1"/></svg><span class="lb">Простр.</span></button>
+      <button class="ib" data-tip="История" onclick="openPage('app.html?s=history')"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span class="lb">История</span></button>
+      <button class="ib" data-tip="Заметки" onclick="openPage('app.html?s=notes')"><svg viewBox="0 0 24 24"><path d="M4 20l1-4L16 5l3 3L8 19z"/></svg><span class="lb">Заметки</span></button>
+      <button class="ib" data-tip="Настройки" onclick="openPage('app.html?s=settings')"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.14-1.4l2-1.5-2-3.4-2.3 1a7 7 0 00-2.4-1.4L14 3h-4l-.36 2.6a7 7 0 00-2.4 1.4l-2.3-1-2 3.4 2 1.5a7 7 0 000 2.8l-2 1.5 2 3.4 2.3-1a7 7 0 002.4 1.4L10 21h4l.36-2.6a7 7 0 002.4-1.4l2.3 1 2-3.4-2-1.5c.09-.46.14-.93.14-1.4z"/></svg><span class="lb">Настройки</span></button>
+    </div>
+  </div>
+  <div id="tip"></div>
+<script>
+function openPage(u){window.open(u,'_blank')}
+const T=[['Lumen — движок','lumen.local','#e3a008',1],['GitHub','github.com','#4285f4',0],['MDN','#d93025',0],['Подкаст','#34a853',1],['Спека','#fbbc05',0]];
+document.getElementById('tabs').innerHTML=T.map(t=>`<div class="tab ${t[3]?'on':''}" data-tip="<b>${t[0]}</b><br>${t[1]}${t[3]?' · активная':''}" onclick="openPage('app.html?s=home')"><span class="fav" style="background:${t[2]}"></span>${t[0]}</div>`).join('');
+const tip=document.getElementById('tip');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-300)+'px';tip.style.top=(e.clientY+16)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none'});
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

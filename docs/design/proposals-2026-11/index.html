@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — концепции интерфейса</title>
+<style>
+  body{margin:0;font-family:'Segoe UI',system-ui,sans-serif;background:#14161a;color:#e6e8eb;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:48px 20px}
+  h1{font-size:22px;font-weight:600;margin:0 0 6px}
+  p.sub{color:#9aa3ad;margin:0 0 32px;font-size:14px;max-width:640px;text-align:center;line-height:1.5}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;max-width:1100px;width:100%}
+  a.card{display:block;background:#1c1f25;border:1px solid #2a2e36;border-radius:12px;padding:18px;text-decoration:none;color:inherit;transition:border-color .15s,transform .15s}
+  a.card:hover{border-color:#4a90d9;transform:translateY(-2px)}
+  .num{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#7aa7d9;margin-bottom:6px}
+  .card h2{font-size:16px;margin:0 0 8px;font-weight:600}
+  .card p{font-size:13px;color:#a7b0bb;margin:0 0 10px;line-height:1.45}
+  .tags{font-size:11px;color:#6f7a86}
+  .tags span{display:inline-block;background:#262b33;border-radius:4px;padding:2px 7px;margin:2px 3px 0 0}
+  footer{margin-top:36px;font-size:12px;color:#6f7a86}
+</style>
+</head>
+<body>
+<h1>Концепции интерфейса Lumen</h1>
+<p class="sub">44 варианта. Наведите на любой элемент — подсказка с функцией и горячей клавишей. Кнопки открывают разные разделы app.html или переключают состояние макета — не одно и то же окно. Опираются на реальные возможности движка и шелла Lumen.</p>
+<div class="grid">
+  <a class="card" href="zen.html">
+    <div class="num">Вариант 1</div>
+    <h2>Zen — одна строка и палитра</h2>
+    <p>Весь браузер — одна адресная строка. Вкладки, закладки, история, read-later — всё внутри команды Ctrl+K. Ничего лишнего на экране.</p>
+    <div class="tags"><span>Ctrl+K</span><span>@history</span><span>@notes</span><span>@ai</span><span> shields</span></div>
+  </a>
+  <a class="card" href="workbench.html">
+    <div class="num">Вариант 2</div>
+    <h2>Workbench — сайдбар-организатор</h2>
+    <p>Левый сайдбар: рабочие пространства, древовидные вкладки, закладки, история, read-later. Справа — контент со split view.</p>
+    <div class="tags"><span>дерево вкладок</span><span>workspaces</span><span>split view</span><span>vertical tabs</span></div>
+  </a>
+  <a class="card" href="privacy.html">
+    <div class="num">Вариант 3</div>
+    <h2>Privacy Deck — приватность на виду</h2>
+    <p>Щиты, разрешения и трекеры — всегда на экране. Per-site настройки, Tor-режим, GPC-сигнал, отпечаток. Ответ на «покажите, что блокируется».</p>
+    <div class="tags"><span>shields</span><span>per-site permissions</span><span>Tor</span><span>tracker report</span></div>
+  </a>
+  <a class="card" href="command.html">
+    <div class="num">Вариант 4</div>
+    <h2>Command — браузер как командная строка</h2>
+    <p>Адресная строка = командная строка: @-префиксы для истории/заметок/read-later/вкладок/закладок и RAG-ответ @ai. Минимум хрома, максимум действий.</p>
+    <div class="tags"><span>@-команды</span><span>FTS-поиск</span><span>@ai RAG</span><span>keyboard-first</span></div>
+  </a>
+  <a class="card" href="focus.html">
+    <div class="num">Вариант 5</div>
+    <h2>Focus — чтение и восстановление контекста</h2>
+    <p>Новая вкладка со speed-dial, reader view, find-in-page, автопрокрутка к месту чтения, архив и восстановление сессии. Для «дочитать и вернуться».</p>
+    <div class="tags"><span>speed-dial</span><span>reader view</span><span>find-in-page</span><span>bfcache</span></div>
+  </a>
+  <a class="card" href="profiles.html">
+    <div class="num">Вариант 6</div>
+    <h2>Profiles — независимые профили</h2>
+    <p>Аватар-переключатель в тулбаре: Личный / Рабочий / Анонимный / Гость. Акцент хрома, палитра и данные — под профиль (ProfileRegistry, profiles.db).</p>
+    <div class="tags"><span>ProfileRegistry</span><span>4 профиля</span><span>data-profile</span><span>anonymous = no disk</span></div>
+  </a>
+  <a class="card" href="spaces.html">
+    <div class="num">Вариант 7</div>
+    <h2>Spaces — пространства и контейнеры</h2>
+    <p>Нижняя панель workspace bar (Ctrl+Shift+W): именованные группы вкладок с цветом и изоляцией cookie. Цветные полосы контейнеров на вкладках.</p>
+    <div class="tags"><span>#workspaceBar</span><span>Workspaces SQLite</span><span>container-stripe</span><span>Ctrl+Shift+W</span></div>
+  </a>
+  <a class="card" href="edge.html">
+    <div class="num">Вариант 8</div>
+    <h2>Кромка — хром по краям</h2>
+    <p>Контент edge-to-edge. Адресная строка появляется при наведении на верхний край, слева — рельс вкладок, справа — живой щит-манометр, снизу — пространства.</p>
+    <div class="tags"><span>auto-hide chrome</span><span>щит-гейдж</span><span>content-first</span></div>
+  </a>
+  <a class="card" href="deck.html">
+    <div class="num">Вариант 9</div>
+    <h2>Колода — вкладки как карты</h2>
+    <p>Вкладки — колода карточек: текущая крупно, соседние выглядывают сбоку, остальные — стопкой миниатюр. Листание стрелками, как колоду.</p>
+    <div class="tags"><span>spatial tabs</span><span>Ctrl+Tab</span><span>deck UX</span></div>
+  </a>
+  <a class="card" href="orbit.html">
+    <div class="num">Вариант 10</div>
+    <h2>Обзор — mission control</h2>
+    <p>Все вкладки всех пространств живыми превью, сгруппированные по workspace. Видно спящие (T3), контейнеры и воспроизводящиеся страницы.</p>
+    <div class="tags"><span>Ctrl+Shift+O</span><span>workspaces</span><span>live thumbs</span></div>
+  </a>
+  <a class="card" href="pulse.html">
+    <div class="num">Вариант 11</div>
+    <h2>Пульс — дашборд-главная</h2>
+    <p>Новая вкладка как пульт: что играет (PiP), состояние вкладок, очередь read-later, защита за день, загрузки, обновление, фокус-таймер.</p>
+    <div class="tags"><span>glanceable</span><span>widgets</span><span>status hub</span></div>
+  </a>
+  <a class="card" href="margin.html">
+    <div class="num">Вариант 12</div>
+    <h2>Поля — чтение с аннотациями</h2>
+    <p>Узкая колонка текста + правое поле: заметки к фрагментам, очередь read-later, исходящие ссылки, история сайта. Превью ссылки при наведении.</p>
+    <div class="tags"><span>annotations</span><span>link peek</span><span>@notes</span></div>
+  </a>
+  <a class="card" href="switcher.html">
+    <div class="num">Вариант 13</div>
+    <h2>Переключатель — всё в одном оверлее</h2>
+    <p>Профиль → его пространства → создание новых, не выходя из оверлея. Inline-формы: имя, цвет, значок, щиты/Tor по умолчанию, изоляция cookie.</p>
+    <div class="tags"><span>Ctrl+Shift+P</span><span>create profile</span><span>create workspace</span></div>
+  </a>
+  <a class="card" href="manager.html">
+    <div class="num">Вариант 14</div>
+    <h2>Управление — центр контроля</h2>
+    <p>Карточки профилей со статами и удалением, таблица всех пространств по профилям, контейнеры с очисткой данных. Модалки создания и подтверждения.</p>
+    <div class="tags"><span>profiles.db</span><span>workspaces.db</span><span>containers</span></div>
+  </a>
+  <!-- Партия 2: комбинированные концепты -->
+  <a class="card" href="app.html"><div class="num">Приёмник</div><h2>app.html — разделы приложения</h2><p>Общая страница-«приёмник» для кнопок новых концептов: home, settings, history, bookmarks, downloads, privacy, readlater, notes, workspaces — каждый со своим содержимым.</p><div class="tags"><span>?s=</span><span>разделы</span></div></a>
+  <a class="card" href="lens.html"><div class="num">Вариант 15</div><h2>Линза — фокус на одной вкладке</h2><p>Одна вкладка крупно, остальные — узкая лента миниатюр сбоку. Полный фокус на чтении, быстрый доступ к остальным.</p><div class="tags"><span>focus</span><span>split</span><span>minimal chrome</span></div></a>
+  <a class="card" href="ribbon.html"><div class="num">Вариант 16</div><h2>Лента — вкладки сверху лентой</h2><p>Горизонтальная лента вкладок с миниатюрами, контент снизу. Похож на ленту Pinterest, но для вкладок.</p><div class="tags"><span>horizontal tabs</span><span>thumbnails</span></div></a>
+  <a class="card" href="tiles.html"><div class="num">Вариант 17</div><h2>Плитки — сетка как Windows</h2><p>Все вкладки — плитки в сетке. Клик открывает, ПКМ — действия. Максимум информации на экране.</p><div class="tags"><span>grid</span><span>mission control</span></div></a>
+  <a class="card" href="inbox.html"><div class="num">Вариант 18</div><h2>Входящие — вкладки как письма</h2><p>Вкладки сгруппированы по пространствам и времени, как входящие в почте. Прочитано/непрочитано, быстрые действия.</p><div class="tags"><span>grouping</span><span>unread</span><span>actions</span></div></a>
+  <a class="card" href="flows.html"><div class="num">Вариант 19</div><h2>Потоки — диаграмма связей</h2><p>Вкладки как узлы графа: какие из каких открыты, какие связаны ссылками. Визуализация контекста.</p><div class="tags"><span>graph</span><span>context</span><span>links</span></div></a>
+  <a class="card" href="atlas.html"><div class="num">Вариант 20</div><h2>Атлас — карта сайтов</h2><p>Домены как точки на карте, размер = число вкладок, цвет = категория. Кластеризация по темам.</p><div class="tags"><span>map</span><span>domains</span><span>tags</span></div></a>
+  <a class="card" href="columns.html"><div class="num">Вариант 21</div><h2>Колонки — Pinterest-стиль</h2><p>Masonry-сетка карточек: вкладки, закладки, история, read-later — всё в одной ленте. Фильтры сверху.</p><div class="tags"><span>masonry</span><span>feed</span><span>unified</span></div></a>
+  <a class="card" href="strata.html"><div class="num">Вариант 22</div><h2>Пласты — HUD-виджеты</h2><p>Виджеты-статусы плавают поверх контента: вкладки, медиа, защита, загрузки. Появляются по наведению.</p><div class="tags"><span>HUD</span><span>widgets</span><span>overlay</span></div></a>
+  <a class="card" href="floating.html"><div class="num">Вариант 23</div><h2>Пилюля — плавающая капсула</h2><p>Весь хром в одной плавающей пилюле внизу: навигация, адрес, закладки, щиты. Перетаскиваемая.</p><div class="tags"><span>floating</span><span>capsule</span><span>draggable</span></div></a>
+  <a class="card" href="curtain.html"><div class="num">Вариант 24</div><h2>Штора — сайдбар поверх</h2><p>Вертикальный сайдбар вкладок выезжает слева и перекрывает контент. Язычок у края возвращает панель.</p><div class="tags"><span>vertical tabs</span><span>overlay sidebar</span></div></a>
+  <a class="card" href="horizon.html"><div class="num">Вариант 25</div><h2>Горизонт — всё внизу</h2><p>Весь интерфейс прижат к нижней кромке: адрес, вкладки, действия. Контент — сверху. Мобильный паттерн на десктопе.</p><div class="tags"><span>bottom chrome</span><span>thumb zone</span></div></a>
+  <a class="card" href="minimal.html"><div class="num">Вариант 26</div><h2>Волоса — одна строка</h2><p>30px хром + 26px вкладки. Всё остальное — контент. Панель полупрозрачная, проявляется при наведении.</p><div class="tags"><span>ultra-minimal</span><span>30px</span><span>auto-hide</span></div></a>
+  <a class="card" href="statusline.html"><div class="num">Вариант 27</div><h2>Статус — vim-строка</h2><p>Вся информация в нижней строке состояния: режим, вкладка, URL, щиты, загрузки, позиция чтения. Как в Vim.</p><div class="tags"><span>status bar</span><span>vim-style</span><span>Ctrl+F</span></div></a>
+  <a class="card" href="notebook.html"><div class="num">Вариант 28</div><h2>Блокнот — страницы как листы</h2><p>Вкладки — листы блокнота с закладками. Заметки на полях, привязанные к фрагментам. Читательская вёрстка.</p><div class="tags"><span>notebook</span><span>annotations</span><span>paper</span></div></a>
+  <a class="card" href="stage.html"><div class="num">Вариант 29</div><h2>Сцена — одна страница за раз</h2><p>Слайды: одна страница в центре, миниатюры сверху, стрелки ← →. Для презентаций и фокус-чтения.</p><div class="tags"><span>presentation</span><span>slides</span><span>focus</span></div></a>
+  <a class="card" href="splitmix.html"><div class="num">Вариант 30</div><h2>Мастер-деталь — список + превью</h2><p>Слева список вкладок с фильтром, справа живое превью выбранной. Статус: спит/активна/медиа.</p><div class="tags"><span>master-detail</span><span>live preview</span><span>filter</span></div></a>
+  <a class="card" href="gazette.html"><div class="num">Вариант 31</div><h2>Газета — утренний дайджест</h2><p>Новая вкладка как газета: главная история, быстрые ссылки, сетка новостей из истории и read-later.</p><div class="tags"><span>dashboard</span><span>digest</span><span>news</span></div></a>
+  <a class="card" href="timeline.html"><div class="num">Вариант 32</div><h2>Лента времени — хронология</h2><p>История как таймлайн: события по времени, типы (вкладка/закладка/загрузка), клик — открыть.</p><div class="tags"><span>timeline</span><span>history</span><span>chronology</span></div></a>
+  <a class="card" href="cockpit.html"><div class="num">Вариант 33</div><h2>Кокпит — пульт управления</h2><p>Тёмный дашборд: память, CPU, скорость, защита, движок, сеть, приватность. Всё состояние браузера.</p><div class="tags"><span>dashboard</span><span>metrics</span><span>dark</span></div></a>
+  <a class="card" href="vault.html"><div class="num">Вариант 34</div><h2>Сейф — экран блокировки</h2><p>Приветствие с выбором профиля, PIN-точки, биометрия. После разблокировки — пространства и быстрые действия.</p><div class="tags"><span>lock screen</span><span>profiles</span><span>PIN</span></div></a>
+  <!-- Партия 3: варианты Колоды -->
+  <a class="card" href="deck-swipe.html"><div class="num">Колода · свайп</div><h2>Свайп — мобильная колода</h2><p>Карта уходит в сторону при свайпе мышью или пальцем. Space — перевернуть. Дотсы внизу.</p><div class="tags"><span>swipe</span><span>touch</span><span>deck</span></div></a>
+  <a class="card" href="deck-shelf.html"><div class="num">Колода · полка</div><h2>Полка — карточки стоят</h2><p>Карточки стоят на деревянной полке, активная приподнята. Клик по соседней — она встаёт на место.</p><div class="tags"><span>shelf</span><span>physical</span><span>deck</span></div></a>
+  <a class="card" href="deck-3d.html"><div class="num">Колода · карусель</div><h2>3D-карусель</h2><p>Вкладки на 3D-кольце с перспективой. ← → вращают карусель, клик по карте — открыть.</p><div class="tags"><span>3D</span><span>carousel</span><span>perspective</span></div></a>
+  <a class="card" href="deck-focus.html"><div class="num">Колода · фокус</div><h2>Фокус — сцена</h2><p>Одна страница в центре, соседи размыты по бокам. Для чтения и презентаций.</p><div class="tags"><span>focus</span><span>blur</span><span>stage</span></div></a>
+  <a class="card" href="deck-ws.html"><div class="num">Колода · пространства</div><h2>Пространства — колода по workspace</h2><p>Колода показывает только вкладки выбранного пространства. Переключение пространства меняет и колоду, и панель.</p><div class="tags"><span>workspaces</span><span>deck</span><span>sidebar</span></div></a>
+  <a class="card" href="deck-media.html"><div class="num">Колода · медиа</div><h2>Медиа — плеер в карте</h2><p>Активная вкладка — медиа-плеер: обложка, прогресс, контролы. PiP, соседние треки миниатюрами.</p><div class="tags"><span>media</span><span>player</span><span>PiP</span></div></a>
+  <a class="card" href="deck-map.html"><div class="num">Колода · карта</div><h2>Карта — мини-навигатор</h2><p>Слева мини-карта всей колоды, справа большая карта. Клик по строке — мгновенное переключение.</p><div class="tags"><span>minimap</span><span>navigation</span><span>deck</span></div></a>
+  <a class="card" href="deck-dense.html"><div class="num">Колода · плотная</div><h2>Плотная — список + деталь</h2><p>Компактный список карт слева, деталь справа. Для тех, кто хочет видеть все вкладки сразу.</p><div class="tags"><span>dense</span><span>list</span><span>master-detail</span></div></a>
+  <a class="card" href="deck-min.html"><div class="num">Колода · минимал</div><h2>Минимал — чистая карта</h2><p>Одна белая страница на чистом фоне. Хром проявляется при наведении. Ноль отвлечений.</p><div class="tags"><span>minimal</span><span>clean</span><span>auto-hide</span></div></a>
+  <a class="card" href="deck-glass.html"><div class="num">Колода · стекло</div><h2>Стекло — glassmorphism</h2><p>Полупрозрачные карты над градиентным фоном. backdrop-filter размывает сцену — карта «плывёт».</p><div class="tags"><span>glass</span><span>frosted</span><span>deck</span></div></a>
+</div>
+<footer>Прототипы собраны из реальных возможностей lumen-shell (CAPABILITIES.md). Не являются финальным дизайном.</footer>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Плитки</title>
+<style>
+  :root{--bg:#0d1014;--panel:#151920;--ink:#e8eaed;--mut:#8a919c;--line:#262c35;--acc:#5b9dff}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  .bar{height:44px;display:flex;align-items:center;gap:10px;padding:0 16px;background:var(--panel);border-bottom:1px solid var(--line);flex:none}
+  .brand{font-weight:700}.brand span{color:var(--acc)}
+  .omni{flex:1;max-width:480px;margin-left:12px;height:32px;display:flex;align-items:center;padding:0 14px;background:#0b0d10;border:1px solid var(--line);border-radius:16px;font-size:13px;color:var(--mut);cursor:pointer}
+  .omni:hover{border-color:#3a4250}
+  .ib{height:30px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:none;color:var(--mut);cursor:pointer;font-size:12.5px}
+  .ib:hover{color:var(--ink);border-color:#3a4250}
+  .tiles{flex:1;overflow:auto;padding:26px;display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px;align-content:start}
+  .tile{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;cursor:pointer;position:relative;transition:border-color .15s,transform .15s}
+  .tile:hover{border-color:var(--acc);transform:translateY(-2px)}
+  .tile.on{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
+  .tile .shot{height:110px;background:linear-gradient(140deg,#232a33,#1a2029);position:relative}
+  .tile .shot .b{position:absolute;left:12px;right:12px;height:9px;border-radius:4px;background:#2f3742}
+  .tile .hd{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--line);font-size:12px}
+  .fav{width:13px;height:13px;border-radius:3px;flex:none}
+  .u{margin-left:auto;font-size:10px;color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:90px}
+  .tile .info{padding:9px 12px;font-size:12.5px}
+  .tile .info .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tile .info .d{color:var(--mut);font-size:11px;margin-top:2px}
+  .tile .live{position:absolute;top:8px;right:8px;font-size:9.5px;background:#0f2a1a;color:#3fb96f;border-radius:10px;padding:2px 8px;font-weight:600}
+  .tile .sleep{position:absolute;top:8px;right:8px;font-size:9.5px;background:#262c35;color:var(--mut);border-radius:10px;padding:2px 8px}
+  .tile .x{position:absolute;top:6px;right:6px;width:22px;height:22px;border-radius:6px;background:rgba(0,0,0,.4);color:#fff;border:none;cursor:pointer;font-size:11px;display:none;z-index:2}
+  .tile:hover .x{display:flex;align-items:center;justify-content:center}
+  .newtile{border-style:dashed;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:210px;color:var(--mut);cursor:pointer}
+  .newtile:hover{color:var(--acc);border-color:var(--acc)}
+  .newtile .p{font-size:32px;font-weight:300}
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#0d1117;color:#e6e9ee;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:300px;border:1px solid #2a313c;box-shadow:0 6px 20px rgba(0,0,0,.5);display:none}
+  #tip b{color:#8fb8ec}#tip kbd{background:#262b33;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+</style>
+</head>
+<body>
+  <div class="bar">
+    <div class="brand">lumen<span>://</span>tiles</div>
+    <div class="omni" data-tip="Поиск по вкладкам и страницам — @tabs ищет по содержимому" onclick="openPage('app.html?s=history')">🔍 вкладка или страница…</div>
+    <button class="ib" data-tip="Пространства — фильтр плиток" onclick="openPage('app.html?s=workspaces')">⬒</button>
+    <button class="ib" data-tip="Новая вкладка <kbd>Ctrl+T</kbd>" onclick="openPage('app.html?s=home')">＋</button>
+  </div>
+  <div class="tiles" id="g"></div>
+  <div id="tip"></div>
+<script>
+function openPage(u){window.open(u,'_blank')}
+const T=[
+ ['Lumen — движок','lumen.local/docs','#e3a008',1,'движок · layout · paint'],
+ ['GitHub — lumen','github.com/lumen','#4285f4',0,'репозиторий · issues'],
+ ['MDN — CSS Grid','developer.mozilla.org','#d93025',0,'справочник · спит'],
+ ['Подкаст ep.42','youtube.com','#34a853',1,'воспроизводится'],
+ ['PR #412','github.com/lumen/pull','#7c3aed',0,'ревью · работа'],
+ ['Read-later: V8','read-later','#8b5cf6',0,'68% прочитано'],
+ ['Новости','news.example.com','#ea4335',0,'сегодня'],
+ ['Спека HTML','whatwg.org','#fbbc05',0,'living standard'],
+];
+const g=document.getElementById('g');
+g.innerHTML=T.map((t,i)=>`
+ <div class="tile ${i===0?'on':''}" data-tip="<b>${t[0]}</b><br>${t[1]}${t[3]?' · воспроизводится медиа':''}${t[4]==='справочник · спит'?' · спит (T3)':''}<br><kbd>Enter</kbd> — перейти · <kbd>Ctrl+W</kbd> — закрыть">
+  ${t[3]?'<span class="live">LIVE</span>':t[4].includes('спит')?'<span class="sleep">💤</span>':''}
+  <button class="x" data-tip="Закрыть вкладку">✕</button>
+  <div class="shot"><div class="b" style="top:18px"></div><div class="b" style="top:36px;width:60%"></div><div class="b" style="top:54px;width:80%"></div></div>
+  <div class="hd"><span class="fav" style="background:${t[2]}"></span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t[0]}</span><span class="u">${t[1]}</span></div>
+  <div class="info"><div class="t">${t[0]}</div><div class="d">${t[4]} · ${['Работа','Дом','Default'][i%3]}</div></div>
+ </div>`).join('')+`<div class="tile newtile" data-tip="Новая вкладка или новое пространство — <kbd>Ctrl+T</kbd> / <kbd>Ctrl+Shift+W</kbd>" onclick="openPage('app.html?s=home')"><div class="p">＋</div><div>Новая вкладка</div><div style="font-size:11px">или пространство</div></div>`;
+g.querySelectorAll('.tile:not(.newtile)').forEach(t=>t.onclick=e=>{if(e.target.classList.contains('x'))return;openPage('app.html?s=home')});
+g.querySelectorAll('.x').forEach(x=>x.onclick=e=>{e.stopPropagation()});
+const tip=document.getElementById('tip');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-320)+'px';tip.style.top=(e.clientY+16)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none'});
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

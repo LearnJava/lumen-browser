@@ -12752,6 +12752,27 @@ FontFaceSet.prototype.load = function(font, text) {
     });
     return Promise.all(promises).then(function() { return loaded; });
 };
+// CSS Font Loading §4.3 `check(font, text)`: true when every family in the
+// shorthand is usable without triggering a load — i.e. either no member of
+// this set claims the family (system fonts are assumed available) or at
+// least one matching member finished loading. `text` is reserved for
+// unicode-range filtering, same as `load()` above.
+FontFaceSet.prototype.check = function(font, text) {
+    void text;
+    var families = _lumen_parse_font_shorthand_families(font);
+    var self = this;
+    return families.every(function(fam) {
+        var found = false;
+        var ok = false;
+        self._members.forEach(function(face) {
+            if (face._family.toLowerCase() === fam) {
+                found = true;
+                if (face._status === 'loaded') ok = true;
+            }
+        });
+        return !found || ok;
+    });
+};
 
 function _lumen_make_font_face_set() {
     var set = Object.create(FontFaceSet.prototype);

@@ -941,18 +941,7 @@ impl BrowserSession for WinitSession {
             let profile = self.context.fingerprint_profile();
             let client = lumen_network::HttpClient::new()
                 .with_sink(sink)
-                .with_content_decoder(std::sync::Arc::new(
-                    lumen_network::GzipContentDecoder::new(),
-                ))
-                .with_content_decoder(std::sync::Arc::new(
-                    lumen_network::DeflateContentDecoder::new(),
-                ))
-                .with_content_decoder(std::sync::Arc::new(
-                    lumen_network::BrotliContentDecoder::new(),
-                ))
-                .with_content_decoder(std::sync::Arc::new(
-                    lumen_network::ZstdContentDecoder::new(),
-                ))
+                .with_content_decoders(lumen_network::default_content_decoders())
                 .with_fingerprint_profile(profile.to_http_profile());
             // BUG-402: HSTS-store — общий на процесс, как и в шелле.
             let client = crate::types::with_shared_hsts(client, profile);

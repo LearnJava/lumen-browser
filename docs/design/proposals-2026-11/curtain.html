@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Штора</title>
+<style>
+  :root{--bg:#f4f5f7;--panel:#fff;--ink:#1f2328;--mut:#7d8590;--line:#dde2e8;--acc:#0b6fe0;--acc-soft:#e3eefc}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  .bar{height:44px;display:flex;align-items:center;gap:8px;padding:0 12px;background:var(--panel);border-bottom:1px solid var(--line);flex:none}
+  .ib{height:30px;min-width:30px;padding:0 8px;border:none;background:none;border-radius:7px;color:var(--mut);display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12.5px}
+  .ib:hover{background:#eef1f4;color:var(--ink)}
+  .brand{font-weight:700}.brand span{color:var(--acc)}
+  .omni{flex:1;max-width:480px;margin-left:8px;height:32px;display:flex;align-items:center;padding:0 12px;background:#f4f5f7;border:1px solid var(--line);border-radius:8px;font-size:13px;cursor:pointer}
+  .omni:hover{border-color:#b9c2cc}
+  .layout{flex:1;display:flex;min-height:0;position:relative}
+  /* шторка */
+  .curtain{width:280px;flex:none;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden;transition:margin-left .25s}
+  body.closed .curtain{margin-left:-280px}
+  .curtain .hd{padding:14px 16px 10px;border-bottom:1px solid var(--line)}
+  .curtain .hd .ws{display:flex;align-items:center;gap:9px;font-weight:700;font-size:15px;cursor:pointer}
+  .curtain .hd .ws .dot{width:11px;height:11px;border-radius:3px;background:var(--acc)}
+  .curtain .tabs{flex:1;overflow:auto;padding:10px}
+  .tab{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:9px;cursor:pointer;font-size:13px;margin-bottom:3px}
+  .tab:hover{background:#f0f2f5}
+  .tab.on{background:var(--acc-soft);font-weight:600}
+  .fav{width:15px;height:15px;border-radius:4px;flex:none}
+  .tab .u{margin-left:auto;font-size:10.5px;color:var(--mut)}
+  .tab .acts{display:none;gap:3px}
+  .tab:hover .acts{display:flex}
+  .tab .acts button{border:none;background:none;color:var(--mut);cursor:pointer;font-size:11px;padding:1px 4px;border-radius:4px}
+  .tab .acts button:hover{background:#dde2e8;color:var(--ink)}
+  .curtain .ft{padding:10px 14px;border-top:1px solid var(--line);display:flex;gap:6px}
+  .curtain .ft button{flex:1;border:1px solid var(--line);background:#fff;border-radius:8px;padding:7px 0;font-size:12px;cursor:pointer;color:var(--ink)}
+  .curtain .ft button:hover{border-color:var(--acc);color:var(--acc)}
+  main{flex:1;background:#fff;overflow:auto;min-width:0}
+  main .hd{height:120px;background:linear-gradient(115deg,#3a4a5c,#5a7a9c)}
+  main .bd{max-width:620px;margin:24px auto;padding:0 22px;font-size:15px;line-height:1.7}
+  main .bd h1{font-size:22px}
+  /* язычок шторки */
+  .tab-edge{position:absolute;left:280px;top:50%;transform:translateY(-50%);width:14px;height:64px;background:var(--panel);border:1px solid var(--line);border-left:none;border-radius:0 8px 8px 0;display:flex;align-items:center;justify-content:center;color:var(--mut);cursor:pointer;font-size:11px;transition:left .25s;z-index:20}
+  body.closed .tab-edge{left:0}
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#1c1f26;color:#e8eaed;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:290px;box-shadow:0 6px 20px rgba(0,0,0,.25);display:none}
+  #tip b{color:#8fb8ec}#tip kbd{background:#33373f;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+</style>
+</head>
+<body>
+  <div class="bar">
+    <button class="ib" data-tip="Назад"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15 18l-6-6 6-6"/></svg></button>
+    <button class="ib" data-tip="Вперёд"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 6l6 6-6 6"/></svg></button>
+    <button class="ib" data-tip="Обновить"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 12a8 8 0 11-2.34-5.66M20 4v4h-4"/></svg></button>
+    <div class="brand">lumen<span>://</span>curtain</div>
+    <div class="omni" data-tip="Адрес / поиск / @-команды" onclick="openPage('app.html?s=history')">🔍 lumen.local/article…</div>
+    <button class="ib" data-tip="Настройки" onclick="openPage('app.html?s=settings')">⚙</button>
+  </div>
+  <div class="layout">
+    <aside class="curtain">
+      <div class="hd">
+        <div class="ws" data-tip="Пространство «Работа» — клик: переключить пространство · Ctrl+Shift+W"><span class="dot"></span>Работа <span style="color:var(--mut);font-size:11px;font-weight:400">▾</span></div>
+        <div style="font-size:11.5px;color:var(--mut);margin-top:4px">5 вкладок · изоляция cookie</div>
+      </div>
+      <div class="tabs" id="tabs"></div>
+      <div class="ft">
+        <button data-tip="Новая вкладка <kbd>Ctrl+T</kbd>" onclick="openPage('app.html?s=home')">＋ Вкладка</button>
+        <button data-tip="Новое пространство" onclick="openPage('app.html?s=workspaces')">⬒</button>
+        <button data-tip="Библиотека: закладки/история/read-later" onclick="openPage('app.html?s=bookmarks')">📚</button>
+      </div>
+    </aside>
+    <div class="tab-edge" data-tip="Скрыть/показать шторку <kbd>Ctrl+Shift+S</kbd>" onclick="document.body.classList.toggle('closed')">◀</div>
+    <main>
+      <div class="hd"></div>
+      <div class="bd">
+        <h1>Штора — сайдбар поверх контента</h1>
+        <p>Вертикальный сайдбар со вкладками выезжает слева и перекрывает контент — не сжимает его. Когда не нужен — прячется за язычок у левого края. Контент всегда на всю ширину.</p>
+        <p>В шторке: переключатель пространства, список вкладок с действиями при наведении, быстрые кнопки «новая вкладка / пространство / библиотека». Это знакомый паттерн Firefox Quantum и Arc — вертикальные вкладки как основной способ навигации.</p>
+        <p>Язычок-шторка у края — 14 px, всегда виден: клик возвращает панель.</p>
+      </div>
+    </main>
+  </div>
+  <div id="tip"></div>
+<script>
+function openPage(u){window.open(u,'_blank')}
+const T=[['Lumen — движок','lumen.local','#e3a008',1],['GitHub — PR','github.com','#4285f4',0],['MDN — Grid','mozilla.org','#d93025',0],['Подкаст','youtube.com','#34a853',1],['Спека HTML','whatwg.org','#fbbc05',0]];
+document.getElementById('tabs').innerHTML=T.map(t=>`
+ <div class="tab ${t[3]?'on':''}" data-tip="<b>${t[0]}</b><br>${t[1]}${t[3]?' · активная':''}<br>клик — переключить · hover — действия" onclick="openPage('app.html?s=home')">
+  <span class="fav" style="background:${t[2]}"></span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t[0]}</span>
+  ${t[3]?'<span class="u">LIVE</span>':''}
+  <span class="acts"><button data-tip="Закрыть">✕</button><button data-tip="В новую вкладку">↗</button></span>
+ </div>`).join('');
+const tip=document.getElementById('tip');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-300)+'px';tip.style.top=(e.clientY+16)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none'});
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

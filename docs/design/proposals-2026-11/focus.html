@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Focus</title>
+<style>
+  :root{--bg:#fafaf7;--panel:#fff;--ink:#23262b;--mut:#8a919c;--line:#e6e4de;--acc:#b3541e;--acc-soft:#fbeadd;--chip:#f1efe9}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  .bar{height:46px;display:flex;align-items:center;gap:8px;padding:0 14px;background:var(--panel);border-bottom:1px solid var(--line);flex:none}
+  .ib{height:32px;min-width:32px;padding:0 9px;border:none;background:none;border-radius:8px;color:var(--mut);display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:13px}
+  .ib:hover{background:var(--chip);color:var(--ink)}
+  .ib svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .omni{flex:1;max-width:580px;margin:0 auto;display:flex;align-items:center;height:34px;padding:0 14px;background:var(--bg);border:1px solid var(--line);border-radius:9px;font-size:13.5px;color:var(--mut);cursor:text}
+  .omni:hover{border-color:#cfcabb}
+  .session{margin:10px 16px 0;background:#fff8ec;border:1px solid #f0dfc0;border-radius:10px;padding:9px 14px;display:flex;align-items:center;gap:12px;font-size:13px;flex:none}
+  .session .grow{flex:1}
+  .session button{border:none;background:var(--acc);color:#fff;border-radius:7px;padding:5px 12px;font-weight:600;cursor:pointer;font-size:12.5px}
+  .session button.ghost{background:none;color:var(--acc);border:1px solid #ecd3b8}
+  /* ===== Скоростная панель новой вкладки ===== */
+  .nt{flex:1;overflow:auto;display:flex;flex-direction:column;align-items:center;padding:44px 20px 30px}
+  .nt h1{font-size:20px;font-weight:600;margin:0 0 4px}
+  .nt .sub{color:var(--mut);font-size:13px;margin-bottom:26px}
+  .clock{font-size:44px;font-weight:300;letter-spacing:.5px;margin-bottom:28px;font-variant-numeric:tabular-nums}
+  .grid{display:grid;grid-template-columns:repeat(4,150px);gap:14px;max-width:680px;width:100%}
+  .tile{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 14px;text-align:center;cursor:pointer;transition:box-shadow .15s,transform .15s;position:relative}
+  .tile:hover{box-shadow:0 8px 24px rgba(0,0,0,.09);transform:translateY(-2px)}
+  .tile .fav{width:34px;height:34px;border-radius:9px;margin:0 auto 10px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:15px}
+  .tile .nm{font-weight:600;font-size:13.5px}
+  .tile .ds{color:var(--mut);font-size:11.5px;margin-top:3px}
+  .tile .pin{position:absolute;top:8px;right:8px;color:#c9c2b4;font-size:13px;opacity:0}
+  .tile:hover .pin{opacity:1}
+  .tile .pin.on{opacity:1;color:var(--acc)}
+  .search{display:flex;align-items:center;gap:9px;width:min(560px,90%);height:42px;padding:0 16px;background:var(--panel);border:1px solid var(--line);border-radius:21px;margin-bottom:30px;cursor:text;font-size:14px;color:var(--mut)}
+  .search:hover{border-color:#cfcabb;box-shadow:0 4px 14px rgba(0,0,0,.05)}
+  .search svg{width:16px;height:16px;stroke:var(--mut);fill:none;stroke-width:2}
+  /* ===== Find bar ===== */
+  .findbar{position:absolute;top:56px;right:16px;width:320px;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 14px 40px rgba(0,0,0,.16);padding:10px 12px;display:none;z-index:20}
+  .findbar.open{display:block}
+  .findbar .row{display:flex;align-items:center;gap:8px}
+  .findbar input{flex:1;border:1px solid var(--line);border-radius:8px;padding:6px 10px;font:inherit;font-size:13px;outline:none}
+  .findbar input:focus{border-color:var(--acc)}
+  .findbar button{border:1px solid var(--line);background:none;border-radius:7px;width:28px;height:28px;cursor:pointer;color:var(--ink);font-size:13px}
+  .findbar button:hover{background:var(--chip)}
+  .findbar .cnt{font-size:11.5px;color:var(--mut);min-width:56px;text-align:center}
+  .mark{background:#ffe9a8;border-radius:2px;padding:0 1px}
+  .mark.cur{background:#ffb84d;outline:1px solid #e09a2b}
+  /* подсказки */
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#23262b;color:#eef0f2;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:290px;box-shadow:0 6px 20px rgba(0,0,0,.3);display:none}
+  #tip b{color:#f0b98a}#tip kbd{background:#3a3e45;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+</style>
+</head>
+<body>
+  <div class="bar">
+    <button class="ib" data-tip="Назад — мгновенно из bfcache, без запроса к сети <kbd>Alt+←</kbd>"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
+    <button class="ib" data-tip="Вперёд <kbd>Alt+→</kbd>"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+    <button class="ib" data-tip="Обновить <kbd>F5</kbd> · во время загрузки становится «Стоп» <kbd>Esc</kbd>"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 11-2.34-5.66M20 4v4h-4"/></svg></button>
+    <div class="omni" data-tip="Омнибокс: адрес, поиск, @-команды">lumen.local — новая вкладка</div>
+    <button class="ib" id="findBtn" data-tip="Поиск по странице <kbd>Ctrl+F</kbd><br>Живой поиск, счётчик совпадений, активное — оранжевым"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg></button>
+    <button class="ib" data-tip="Режим чтения: убрать рекламу и лишнее, настраиваемая ширина колонки" onclick="openPage('page.html')"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg></button>
+    <button class="ib" data-tip="Слушать позже / PiP: вынести видео в плавающее окно поверх всех окон"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9l5 3-5 3z"/></svg></button>
+    <button class="ib" data-tip="Меню: загрузки · закладки · история · архив · настройки" onclick="openPage('workbench.html')"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/></svg></button>
+  </div>
+
+  <!-- Баннер восстановления сессии -->
+  <div class="session">
+    <span>🕘</span>
+    <div class="grow">Прошлая сессия не была закрыта корректно — <b>12 вкладок</b> можно восстановить.</div>
+    <button data-tip="Восстановить все вкладки и позиции прокрутки (сессия хранится кросс-рестарт)" onclick="openPage('workbench.html')">Восстановить</button>
+    <button class="ghost" data-tip="Начать чистую сессию — архив старых вкладок сохранится" onclick="this.parentElement.remove()">Не надо</button>
+  </div>
+
+  <div style="position:relative;flex:1;display:flex;min-height:0">
+    <div class="nt">
+      <div class="clock" id="clock">--:--</div>
+      <div class="search" data-tip="Строка быстрого перехода: введите адрес или поиск — Enter откроет первую подсказку из истории"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>Адрес или поиск…</div>
+      <div class="grid">
+        <div class="tile" data-tip="Закреплённый тайл: хранится в NewtabTiles (SQLite), не зависит от истории" onclick="openPage('page.html')">
+          <span class="pin on" title="закреплён">📌</span><div class="fav" style="background:#1f9d55">G</div><div class="nm">Документация</div><div class="ds">docs.lumen.local</div></div>
+        <div class="tile" data-tip="Топ-сайт по частоте визитов за последние 30 дней — автозаполнение" onclick="openPage('page.html')">
+          <div class="fav" style="background:#4285f4">H</div><div class="nm">Новости</div><div class="ds">news.example.com</div></div>
+        <div class="tile" data-tip="Read-later: 3 непрочитанных — тайл показывает прогресс чтения" onclick="openPage('page.html')">
+          <div class="fav" style="background:#8b5cf6">▤</div><div class="nm">Читать позже</div><div class="ds">3 статьи</div></div>
+        <div class="tile" data-tip="Заметки, привязанные к текущему контексту — @notes в омнибоксе" onclick="openPage('page.html')">
+          <div class="fav" style="background:#d8a400">✎</div><div class="nm">Заметки</div><div class="ds">6 заметок</div></div>
+        <div class="tile" data-tip="История с FTS-поиском: bm25, сниппеты, сворачивание диакритики — @history" onclick="openPage('page.html')">
+          <div class="fav" style="background:#0b6fe0">🕘</div><div class="nm">История</div><div class="ds">за сегодня: 24</div></div>
+        <div class="tile" data-tip="Загрузки: менеджер загрузок с паузой/продолжением — Ctrl+J" onclick="openPage('page.html')">
+          <div class="fav" style="background:#34a853">⬇</div><div class="nm">Загрузки</div><div class="ds">2 активных</div></div>
+        <div class="tile" data-tip="Архив усыплённых вкладок — вернуть с сохранением позиции" onclick="openPage('page.html')">
+          <div class="fav" style="background:#7d8590">🗄</div><div class="nm">Архив</div><div class="ds">9 вкладок</div></div>
+        <div class="tile" data-tip="Настройки: тема, щиты, обновления, разрешения per-site — about:settings" onclick="openPage('page.html')">
+          <div class="fav" style="background:#555">⚙</div><div class="nm">Настройки</div><div class="ds">about:settings</div></div>
+        <div class="tile" data-tip="Восстановить закрытую вкладку — Ctrl+Shift+T, стек до 25 шт, URL+скролл+пин+контейнер" onclick="openPage('page.html')">
+          <div class="fav" style="background:#e0342b">↩</div><div class="nm">Недавние</div><div class="ds">закрыто: 3</div></div>
+        <div class="tile" data-tip="Переводчик страниц — встроенный, по выбору домена" onclick="openPage('page.html')">
+          <div class="fav" style="background:#1f9d55"></div><div class="nm">Перевод</div><div class="ds">включён для 2 сайтов</div></div>
+        <div class="tile" data-tip="Почта и календарь — открываются в отдельных контейнерах" onclick="openPage('page.html')">
+          <div class="fav" style="background:#0b6fe0">✉</div><div class="nm">Почта</div><div class="ds">work container</div></div>
+        <div class="tile" data-tip="＋ Закрепить текущую страницу на эту панель" onclick="openPage('page.html')">
+          <div class="fav" style="background:#c9c2b4;color:#666">＋</div><div class="nm">Добавить</div><div class="ds">pin текущую</div></div>
+      </div>
+      <div style="margin-top:26px;color:var(--mut);font-size:12px">Клик по тайлу открывает сайт в новой вкладке · наведите — подсказка с источником данных</div>
+    </div>
+
+    <!-- Find-in-page -->
+    <div class="findbar" id="fb">
+      <div class="row">
+        <input id="fq" placeholder="Найти на странице…" oninput="markAll(this.value)">
+        <span class="cnt" id="fc">0/0</span>
+        <button data-tip="Предыдущее совпадение <kbd>Shift+Enter</kbd>" onclick="step(-1)">↑</button>
+        <button data-tip="Следующее совпадение <kbd>Enter</kbd>" onclick="step(1)">↓</button>
+        <button data-tip="Закрыть <kbd>Esc</kbd>" onclick="document.getElementById('fb').classList.remove('open')">✕</button>
+      </div>
+      <div style="font-size:11px;color:var(--mut);margin-top:7px">Активное совпадение — оранжевое · страница прокручивается к нему · <kbd>Ctrl+G</kbd>/<kbd>Ctrl+Shift+G</kbd></div>
+    </div>
+  </div>
+
+  <div id="tip"></div>
+<script>
+function openPage(p){window.open(p||'page.html','_blank')}
+/* часы */
+function tick(){const d=new Date();document.getElementById('clock').textContent=d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'})}
+tick();setInterval(tick,10000);
+/* find bar */
+document.getElementById('findBtn').onclick=()=>{document.getElementById('fb').classList.toggle('open');document.getElementById('fq').focus()};
+addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='f'){e.preventDefault();document.getElementById('fb').classList.add('open');document.getElementById('fq').focus()}});
+let marks=[];
+function markAll(q){
+  document.querySelectorAll('.mark').forEach(m=>{m.outerHTML=m.textContent});
+  marks=[];if(!q)return;
+  const w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
+  const nodes=[];let n;while(n=w.nextNode())if(n.nodeValue.toLowerCase().includes(q.toLowerCase()))nodes.push(n);
+  nodes.forEach(tn=>{const r=document.createRange();const i=tn.nodeValue.toLowerCase().indexOf(q.toLowerCase());r.setStart(tn,i);r.setEnd(tn,i+q.length);const s=document.createElement('span');s.className='mark';s.textContent=q;r.surroundContents(s);marks.push(s);});
+  document.getElementById('fc').textContent=marks.length?('1/'+marks.length):'0/0';
+  marks[0]&&marks[0].classList.add('cur');
+}
+function step(d){if(!marks.length)return;const cur=document.querySelector('.mark.cur');cur&&cur.classList.remove('cur');let i=marks.indexOf(cur);i=(i+d+marks.length)%marks.length;marks[i].classList.add('cur');marks[i].scrollIntoView({block:'center'});document.getElementById('fc').textContent=(i+1)+'/'+marks.length;}
+document.getElementById('fq').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();step(e.shiftKey?-1:1)}});
+/* подсказки */
+const tip=document.getElementById('tip');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-300)+'px';tip.style.top=(e.clientY+16)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none';});
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

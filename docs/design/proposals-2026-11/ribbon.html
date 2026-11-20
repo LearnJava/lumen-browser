@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Лента</title>
+<style>
+  :root{--bg:#f4f5f7;--panel:#fff;--ink:#1f2328;--mut:#7d8590;--line:#dde2e8;--acc:#0b6fe0}
+  *{box-sizing:border-box}
+  body{margin:0;font:13.5px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  /* лента команд — как в Office */
+  .ribbon{background:var(--panel);border-bottom:1px solid var(--line);flex:none}
+  .r-tabs{display:flex;align-items:center;gap:2px;padding:6px 14px 0}
+  .r-tabs span{padding:6px 14px;font-size:12.5px;color:var(--mut);cursor:pointer;border-radius:7px 7px 0 0}
+  .r-tabs span.on{color:var(--ink);font-weight:600;background:#eef1f4;border:1px solid var(--line);border-bottom-color:var(--panel);margin-bottom:-1px}
+  .r-body{display:flex;gap:4px;padding:8px 14px 10px;align-items:stretch}
+  .grp{display:flex;flex-direction:column;align-items:center;gap:3px;padding:4px 12px;border-right:1px solid var(--line);cursor:pointer;min-width:74px}
+  .grp:last-child{border-right:none}
+  .grp:hover{background:#f0f2f5}
+  .grp .ic{width:22px;height:22px;border-radius:6px;background:var(--acc-soft,#e3eefc);color:var(--acc);display:flex;align-items:center;justify-content:center;font-size:12px}
+  .grp .lb{font-size:10.5px;color:var(--mut)}
+  .grp .arr{font-size:8px;color:#b9c2cc}
+  .omni{flex:1;margin:0 20px;height:34px;display:flex;align-items:center;padding:0 14px;background:#f4f5f7;border:1px solid var(--line);border-radius:8px;font-size:13.5px;cursor:pointer}
+  .omni:hover{border-color:#b9c2cc}
+  .content{flex:1;display:flex;min-height:0}
+  .side{width:200px;flex:none;background:var(--panel);border-right:1px solid var(--line);padding:12px}
+  .side h4{margin:0 0 8px;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut)}
+  .side .it{padding:6px 10px;border-radius:7px;font-size:12.8px;cursor:pointer;display:flex;gap:8px;align-items:center}
+  .side .it:hover{background:#eef1f4}
+  .side .it.on{background:#e3eefc;color:var(--acc);font-weight:600}
+  main{flex:1;background:#fff;overflow:auto}
+  main .hd{height:110px;background:linear-gradient(115deg,#3a4a5c,#5a7a9c)}
+  main .bd{max-width:600px;margin:22px auto;padding:0 22px;font-size:14.5px;line-height:1.65}
+  main .bd h1{font-size:21px}
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#1c1f26;color:#e8eaed;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:290px;box-shadow:0 6px 20px rgba(0,0,0,.25);display:none}
+  #tip b{color:#8fb8ec}#tip kbd{background:#33373f;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+</style>
+</head>
+<body>
+  <div class="ribbon">
+    <div class="r-tabs" id="rtabs">
+      <span class="on" data-tip="Вкладка ленты «Страница»: команды для текущей страницы">Страница</span>
+      <span data-tip="Вкладка ленты «Вкладки»: группы, контейнеры, пространства">Вкладки</span>
+      <span data-tip="Вкладка ленты «Приватность»: щиты, разрешения, Tor">Приватность</span>
+      <span data-tip="Вкладка ленты «Сервис»: загрузки, обновления, импорт">Сервис</span>
+    </div>
+    <div class="r-body" id="rbody"></div>
+    <div class="omni" style="margin:0 14px 10px" data-tip="Адресная строка внутри ленты — как в Word: URL + поиск + @-команды" onclick="openPage('app.html?s=history')">lumen.local/article · поиск и команды…</div>
+  </div>
+  <div class="content">
+    <div class="side">
+      <h4>Библиотека</h4>
+      <div class="it on" data-tip="Активная вкладка — клик переключает" onclick="openPage('app.html?s=home')">▤ Вкладки · 7</div>
+      <div class="it" data-tip="Закладки — FTS и cosine-rerank" onclick="openPage('app.html?s=bookmarks')">📌 Закладки · 42</div>
+      <div class="it" data-tip="История — полнотекстовый поиск" onclick="openPage('app.html?s=history')">🕘 История · 1.2k</div>
+      <div class="it" data-tip="Читать позже — очередь статей" onclick="openPage('app.html?s=readlater')">⧗ Read-later · 18</div>
+      <div class="it" data-tip="Заметки — привязаны к страницам" onclick="openPage('app.html?s=notes')">✎ Заметки · 6</div>
+      <h4 style="margin-top:16px">Профиль</h4>
+      <div class="it" data-tip="Переключить профиль — Ctrl+Shift+P" onclick="openPage('profiles.html')">👤 Личный ▾</div>
+    </div>
+    <main><div class="hd"></div><div class="bd"><h1>Лента — все команды под рукой</h1><p>Как лента в Word: вкладки сверху («Страница», «Вкладки», «Приватность», «Сервис»), внутри — группы команд с иконками и подписями. Редкие действия не прячутся в меню — они в соседней вкладке ленты в одном клике.</p><p>Адресная строка встроена в ленту — не отнимает отдельный ряд. Библиотека слева всегда под рукой.</p></div></main>
+  </div>
+  <div id="tip"></div>
+<script>
+function openPage(u){window.open(u,'_blank')}
+const RIBBONS={
+ 'Страница':[['↺','Назад','Alt+←'],['↻','Вперёд','Alt+→'],['⟳','Обновить','F5'],['⌂','Домой','Alt+Home'],['Aa','Чтение','Ctrl+Shift+R'],['🔍','Найти','Ctrl+F'],['☆','В закладки','Ctrl+D']],
+ 'Вкладки':[['＋','Новая','Ctrl+T'],['⊟','Закрыть','Ctrl+W'],['▤','Обзор','Ctrl+Shift+O'],['⬒','Пространства','Ctrl+Shift+W'],['▦','Группа',''],['📌','Закрепить','Ctrl+Shift+P'],['💤','Уснуть все','']],
+ 'Приватность':[['🛡','Щиты','Ctrl+Shift+U'],['🎭','Tor','--tor'],['👁','Разрешения',''],['🌐','GPC',''],['🖐','Отпечаток','fingerprint.toml'],['🧹','Очистить куки','']],
+ 'Сервис':[['⬇','Загрузки','Ctrl+J'],['⬆','Обновить браузер',''],['⇩','Импорт',''],['⇧','Экспорт',''],['⚙','Настройки','F10'],['❓','О браузере','']],
+};
+function draw(name){
+  document.getElementById('rbody').innerHTML=RIBBONS[name].map(g=>`
+    <div class="grp" data-tip="<b>${g[1]}</b><br>${g[2]||'без горячей клавиши'}<br>клик — выполнить"><div class="ic">${g[0]}</div><div class="lb">${g[1]}</div>${g[2]?'<div class="arr">▾</div>':''}</div>`).join('');
+}
+document.getElementById('rtabs').querySelectorAll('span').forEach(t=>t.onclick=()=>{
+  document.querySelectorAll('#rtabs span').forEach(x=>x.classList.remove('on'));t.classList.add('on');draw(t.textContent);
+});
+document.querySelectorAll('#rbody .grp').forEach(g=>g.onclick=()=>openPage('app.html?s=home'));
+draw('Страница');
+const tip=document.getElementById('tip');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-300)+'px';tip.style.top=(e.clientY+16)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none'});
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>
