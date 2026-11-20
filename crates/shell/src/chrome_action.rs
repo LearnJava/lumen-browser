@@ -994,7 +994,12 @@ impl Lumen {
             // включён через настройки (без памяти) — возвращается "default".
             ChromeAction::ToggleZen => {
                 let target = if self.chrome_skin == "zen" {
-                    self.chrome_skin_before_zen.take().unwrap_or_else(|| "default".to_owned())
+                    // Нет памяти о предыдущем скине (zen был включён через
+                    // настройки и пережил рестарт) — возвращаемся к дефолту
+                    // из settings, а не к «Стандарту».
+                    self.chrome_skin_before_zen
+                        .take()
+                        .unwrap_or_else(|| lumen_storage::browser_settings::DEFAULT_SKIN.to_owned())
                 } else {
                     "zen".to_owned()
                 };

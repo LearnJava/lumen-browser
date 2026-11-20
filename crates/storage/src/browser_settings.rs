@@ -67,7 +67,9 @@ const DEFAULT_TAB_LAYOUT: &str = "horizontal";
 const DEFAULT_PANEL_LAYOUT: &str = "";
 const DEFAULT_TRANSLATE_LANGUAGE: &str = "ru";
 const DEFAULT_TRANSLATE_MODEL: &str = "";
-const DEFAULT_SKIN: &str = "default";
+/// «Полночь» — дефолтный скин (решение пользователя 2026-11): OLED-тёмная и
+/// тёплая светлая темы; «default» остаётся доступным как «Стандарт» в пикере.
+pub const DEFAULT_SKIN: &str = "midnight";
 
 /// All browser settings in a single value type for easy read/write.
 #[derive(Debug, Clone, PartialEq)]
