@@ -1296,6 +1296,10 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     if model.skin == "deck" {
         bind_deck(doc, model);
     }
+    // Подпись текущей раскладки у «Раскладка вкладок» в настройках.
+    if let Some(label) = doc.find_by_id(crate::ids::SET_LAYOUT_LABEL) {
+        set_text(doc, label, if model.layout_vertical { "Вертикальные" } else { "Горизонтальные" });
+    }
     if let Some(container) = find_by_attr(doc, "data-testid", "workspace-switcher") {
         rebuild_workspace_list(doc, container, &model.workspaces);
     }
@@ -2769,6 +2773,12 @@ fn bind_omnibox(doc: &mut Document, omnibox: &OmniboxModel) {
     if let Some(input) = doc.find_by_id(crate::ids::OMNI_INPUT) {
         set_attr(doc, input, "value", &omnibox.value);
     }
+    // Deck skin's own omnibox — same editing state (`address_bar`), separate
+    // node because the classic `#omniInput` lives under the hidden
+    // `.app-frame`. Harmless for other skins: the input simply isn't visible.
+    if let Some(input) = doc.find_by_id(crate::ids::DECK_OMNI_INPUT) {
+        set_attr(doc, input, "value", &omnibox.value);
+    }
     if let Some(btn) = doc.find_by_id(crate::ids::ZOOM_BTN) {
         set_class_token(doc, btn, "show", omnibox.zoom_percent.is_some());
     }
@@ -2888,9 +2898,6 @@ const DECK_CARD_REACH: i32 = 3;
 /// `model.skin == "deck"` — у остальных скинов этих контейнеров нет в DOM
 /// (точнее, они есть, но скрыты; перепривязка безвредна, но лишняя).
 fn bind_deck(doc: &mut Document, model: &ChromeModel) {
-    if let Some(t) = doc.find_by_id(crate::ids::DECK_OMNI_TEXT) {
-        set_text(doc, t, &model.omnibox.value);
-    }
     if let Some(film) = doc.find_by_id(crate::ids::DECK_FILM) {
         rebuild_deck_film(doc, film, &model.tabs);
     }

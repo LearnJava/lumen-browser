@@ -1046,7 +1046,12 @@ body[data-skin="deck"] .demo-bar{display:none;}
   color:#8A90A5; font-size:13px; overflow:hidden;
 }
 .deck-omni .icon{width:13px; height:13px; flex:none;}
-.deck-omni-text{white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.deck-omni:focus-within{border-color:#6C8CFF;}
+.deck-omni-input{
+  flex:1; min-width:0; background:none; border:none; outline:none;
+  color:#Dfe3ee; font-size:13px; font-family:inherit;
+}
+.deck-omni-input::placeholder{color:#8A90A5;}
 .deck-stage{flex:1; position:relative; overflow:hidden; perspective:1600px;}
 .deck-page{position:absolute; inset:0; background:#fff;}
 .deck-cards{
@@ -1814,7 +1819,7 @@ body[data-deck-cards] .deck-cards{display:block;}
                     <label class="radio-card"><input type="radio" name="start"><div><div class="rc-title">Восстановить сессию</div><div class="rc-desc">Открыть вкладки с прошлого раза.</div></div></label>
                   </div>
                   <div class="set-block"><h3>Поиск по умолчанию</h3>
-                    <div class="set-row"><div class="st-text"><div class="st-title">Поисковый движок</div><div class="st-desc">Используется в омнибоксе</div></div><a class="link" href="javascript:void(0)">DuckDuckGo ▾</a></div>
+                    <div class="set-row"><div class="st-text"><div class="st-title">Поисковый движок</div><div class="st-desc">Используется в омнибоксе, когда запрос не похож на адрес. Сейчас — Google; выбор движка в разработке.</div></div><span class="st-desc">Google</span></div>
                   </div>
                   <div class="set-block"><h3>Обновления</h3><div class="desc">Проверка не чаще раза в сутки, без cookies и идентификаторов.</div>
                     <div class="set-row"><div class="st-text"><div class="st-title">Проверять обновления автоматически</div><div class="st-desc">Раз в сутки при запуске</div></div><div class="toggle on" id="updAutoToggle" data-action="toggle-auto-update"><div class="thumb"></div></div></div>
@@ -1850,7 +1855,7 @@ body[data-deck-cards] .deck-cards{display:block;}
                     <div class="toggle on" data-action="toggle-fingerprint-mode"><div class="thumb"></div></div>
                   </div>
                   <div class="set-row">
-                    <div class="st-text"><div class="st-title">Принудительный HTTPS</div><div class="st-desc">Автоматический апгрейд: Выкл</div></div>
+                    <div class="st-text"><div class="st-title">Принудительный HTTPS</div><div class="st-desc">Автоматический апгрейд http→https. Функция в разработке — переключатель пока не применяется.</div></div>
                     <div class="toggle" data-action="toggle-switch"><div class="thumb"></div></div>
                   </div>
                 </div>
@@ -1874,7 +1879,7 @@ body[data-deck-cards] .deck-cards{display:block;}
                     <label class="radio-card"><input type="radio" name="thm"><div><div class="rc-title">Тёмная</div></div></label>
                   </div>
                   <div class="set-block"><h3>Вкладки</h3>
-                    <div class="set-row"><div class="st-text"><div class="st-title">Раскладка</div><div class="st-desc">Вертикальный сайдбар или горизонтальная лента</div></div><a class="link" href="javascript:void(0)">Вертикальные ▾</a></div>
+                    <div class="set-row"><div class="st-text"><div class="st-title">Раскладка вкладок</div><div class="st-desc">Вертикальный сайдбар или горизонтальная лента — клик переключает</div></div><a class="link" href="javascript:void(0)" data-action="toggle-layout"><span id="setLayoutLabel">Вертикальные</span> ▾</a></div>
                     <div class="set-row"><div class="st-text"><div class="st-title">Скругления</div><div class="st-desc">Макс. 6px — без пилюль (правило дизайн-системы)</div></div><span class="st-desc" style="font-family:var(--font-mono)">2/4/6px</span></div>
                   </div>
                   <div class="set-block"><h3>Скин</h3><div class="desc">Оформление и раскладка хрома. Применяется сразу и запоминается. «Колода» — отдельный макет: топ-бар, карточки вкладок внизу и обзор-«колода» по кнопке с сеткой; «Дзен» — минимализм без боковых панелей, включается также кнопкой-луной в тулбаре.</div>
@@ -1930,7 +1935,7 @@ body[data-deck-cards] .deck-cards{display:block;}
                 </div>
 
                 <div class="set-section" data-set="sync">
-                  <div class="set-block"><h3>Синхронизация</h3><div class="desc">Только локальная P2P или ваш WebDAV/S3 — без принудительного облака.</div>
+                  <div class="set-block"><h3>Синхронизация</h3><div class="desc">Только локальная P2P или ваш WebDAV/S3 — без принудительного облака. Секция в разработке — выбор пока не применяется.</div>
                     <label class="radio-card"><input type="radio" name="sync" checked><div><div class="rc-title">Локальная P2P</div><div class="rc-desc">Устройства в одной сети синхронизируются напрямую.</div></div></label>
                     <label class="radio-card"><input type="radio" name="sync"><div><div class="rc-title">Свой WebDAV / S3</div><div class="rc-desc">Укажите endpoint — данные шифруются на клиенте.</div></div></label>
                     <label class="radio-card"><input type="radio" name="sync"><div><div class="rc-title">Выключена</div></div></label>
@@ -1938,7 +1943,7 @@ body[data-deck-cards] .deck-cards{display:block;}
                 </div>
 
                 <div class="set-section" data-set="ext">
-                  <div class="set-block"><h3>Расширения</h3><div class="desc">Установленные дополнения.</div>
+                  <div class="set-block"><h3>Расширения</h3><div class="desc">Демо-список макета — управление расширениями в разработке, переключатели пока не применяются.</div>
                     <div class="set-row"><div class="st-text"><div class="st-title">uBlock Origin</div><div class="st-desc">Активно · 1.54</div></div><div class="toggle on" data-action="toggle-switch"><div class="thumb"></div></div></div>
                     <div class="set-row"><div class="st-text"><div class="st-title">Bitwarden</div><div class="st-desc">Активно · 2024.6</div></div><div class="toggle on" data-action="toggle-switch"><div class="thumb"></div></div></div>
                   </div>
@@ -1947,8 +1952,8 @@ body[data-deck-cards] .deck-cards{display:block;}
                 <div class="set-section" data-set="qa">
                   <div class="set-block"><h3>QA / Тестировщикам</h3><div class="desc">Инструменты для ручного и авто-тестирования. Полная панель — по кнопке ниже или «QA-панель» на демо-полосе.</div>
                     <div class="set-row"><div class="st-text"><div class="st-title">Открыть панель тестировщика</div><div class="st-desc">FPS/кадр, test-id оверлей, эмуляция сети и вьюпорта, feature-flags, экспорт состояния</div></div><a class="link" href="javascript:void(0)" data-action="show-view" data-view="page">Открыть →</a></div>
-                    <div class="set-row"><div class="st-text"><div class="st-title">Режим сборки</div><div class="st-desc">Стабильные функции скрывают экспериментальные флаги</div></div><a class="link" href="javascript:void(0)">Nightly ▾</a></div>
-                    <div class="set-row"><div class="st-text"><div class="st-title">Стабильные test-id</div><div class="st-desc">Гарантия неизменных <span style="font-family:var(--font-mono)">data-testid</span> для автотестов</div></div><div class="toggle on" data-action="toggle-switch"><div class="thumb"></div></div></div>
+                    <div class="set-row"><div class="st-text"><div class="st-title">Режим сборки</div><div class="st-desc">Стабильные функции скрывают экспериментальные флаги — в разработке</div></div><span class="st-desc">Nightly</span></div>
+                    <div class="set-row"><div class="st-text"><div class="st-title">Стабильные test-id</div><div class="st-desc">Гарантия неизменных <span style="font-family:var(--font-mono)">data-testid</span> для автотестов — в разработке</div></div><div class="toggle on" data-action="toggle-switch"><div class="thumb"></div></div></div>
                   </div>
                 </div>
               </div>
@@ -2292,7 +2297,7 @@ body[data-deck-cards] .deck-cards{display:block;}
   <div class="deck-top">
     <button class="deck-ib" data-action="reload" aria-label="Обновить"><svg class="icon"><use href="#i-reload"/></svg></button>
     <button class="deck-ib" data-action="new-tab" aria-label="Новая вкладка"><svg class="icon"><use href="#i-plus"/></svg></button>
-    <div class="deck-omni"><svg class="icon"><use href="#i-lock"/></svg><span class="deck-omni-text" id="deckOmniText"></span></div>
+    <div class="deck-omni"><svg class="icon"><use href="#i-lock"/></svg><input class="deck-omni-input" id="deckOmniInput" type="text" placeholder="Поиск или адрес"></div>
     <button class="deck-ib" id="deckCardsBtn" data-action="toggle-deck-cards" aria-label="Обзор вкладок — колода"><svg class="icon"><use href="#i-grid"/></svg></button>
     <button class="deck-ib" data-action="show-view" data-view="settings" aria-label="Настройки"><svg class="icon"><use href="#i-gear"/></svg></button>
   </div>

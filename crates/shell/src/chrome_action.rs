@@ -45,11 +45,15 @@ impl Lumen {
             // the legacy `toolbar::ToolbarHit::Omnibox` branch it mirrors: a
             // no-op while already open so an in-progress edit/dropdown
             // selection isn't reset.
-            let omni_input = self
-                .chrome_doc
-                .as_ref()
-                .and_then(|(doc, _)| doc.find_by_id(lumen_chrome::ids::OMNI_INPUT));
-            if omni_input.is_some_and(|id| hit.path.contains(&id)) {
+            // `#deckOmniInput` — та же роль для скина "deck" (классический
+            // `#omniInput` там скрыт вместе с `.app-frame`).
+            let omni_hit = [lumen_chrome::ids::OMNI_INPUT, lumen_chrome::ids::DECK_OMNI_INPUT]
+                .into_iter()
+                .filter_map(|id| {
+                    self.chrome_doc.as_ref().and_then(|(doc, _)| doc.find_by_id(id))
+                })
+                .any(|id| hit.path.contains(&id));
+            if omni_hit {
                 if !self.address_bar.is_open() {
                     self.hint.close();
                     let current = self.current_display_url().to_owned();
@@ -1050,6 +1054,16 @@ impl Lumen {
                     self.vertical_tabs.visible = layout == "vertical";
                     self.relayout_chrome_host();
                 }
+            }
+            // «Раскладка вкладок» в настройках: то же переключение
+            // vertical/horizontal, что `SetLayout`, но с флипом текущего
+            // значения (ссылка не знает состояние) + персист в settings.db.
+            ChromeAction::ToggleLayout => {
+                self.vertical_tabs.visible = !self.vertical_tabs.visible;
+                let _ = self.settings_store.set_tab_layout(
+                    if self.vertical_tabs.visible { "vertical" } else { "horizontal" },
+                );
+                self.relayout_chrome_host();
             }
             // CC-18: the "Фокус" button, the pill's exit button and
             // `KeyCommand::ToggleFocusMode` all flip `self.focus.active`;
