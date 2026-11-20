@@ -64,9 +64,10 @@ fn web_api_shim_splices_its_parts_in_source_order() {
         // Web Crypto — своя часть (BUG-1688; её исполняет и воркер) между IDB и хвостом.
         "function getRandomValues(typedArray)",
         "g._lumen_crypto_expose_secure = exposeSecure",
-        // Native-фасад toString (BUG-1826 срез 3) — самый последний кусок:
-        // маркировка поверхности возможна только когда страничного кода ещё нет.
-        "Function.prototype.toString = function toString",
+        // Native-реестр (BUG-1826 / FINGERPRINT-JS-REGISTRY) — самый
+        // последний кусок: фасад toString и хуки ставятся, когда страничного
+        // кода ещё нет; сам обход делает Rust после всех install_*.
+        "Function.prototype.toString = maskedToString",
     ] {
         assert_eq!(
             shim.matches(marker).count(),
@@ -283,6 +284,8 @@ mod v8_url_abort_clone_blob;
 
 #[cfg(feature = "v8-backend")]
 mod v8_native_mask;
+#[cfg(feature = "v8-backend")]
+mod v8_native_registry;
 
 #[cfg(feature = "v8-backend")]
 mod v8_page_visibility_beacon;

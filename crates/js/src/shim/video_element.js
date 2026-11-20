@@ -373,6 +373,12 @@
       _tracks: tracks,
     };
     for (var i = 0; i < tracks.length; i++) listObj[i] = tracks[i];
+    // FINGERPRINT-JS-REGISTRY: список создаётся при каждом чтении геттера
+    // (в т.ч. на прототипе во время обходов), поэтому функция регистрируется
+    // хуком в момент создания — sweep до неё не дотягивается.
+    if (typeof _lumen_native_register === 'function') {
+      _lumen_native_register(listObj.getTrackById, 'function');
+    }
     return listObj;
   }
 
@@ -841,7 +847,14 @@
         var jsLen = (nid && _lumen_track_media_lists[nid]) ? _lumen_track_media_lists[nid].length : 0;
         var cached = this.__lumen_text_tracks;
         if (!cached || cached.length === 0 || (jsLen > 0 && cached._jsLen !== jsLen)) {
-          cached = this.__lumen_text_tracks = buildTextTracks(this, nid);
+          var built = buildTextTracks(this, nid);
+          // this может оказаться прототипом: обходы реестра нативных и
+          // probe-native-api дёргают геттеры на объектах прототипной формы, и
+          // кэш на прототипе оставил бы own-prop `__lumen_text_tracks` с
+          // shim-функциями, печатающими исходник. Кэшируем только на
+          // настоящем элементе (у него есть `__nid__`).
+          if (this.__nid__ !== undefined) this.__lumen_text_tracks = built;
+          cached = built;
         }
         return cached;
       },

@@ -3173,13 +3173,21 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
           // toString даёт '[native code]'; кловер моста печатал исходник и
           // выдавал подмену (challenge-VM читала cw.eval и стопорилась на
           // его печати). Имя — как у оригинала, печать — через маркировку.
-          // Хук читается через globalThis: после глобального seal (BUG-378)
-          // динамический лукап голого имени поздние свойства не видит.
+          // Хук FINGERPRINT-JS-REGISTRY живёт на внутреннем контейнере
+          // `__lumen_C` (BUG-753): замыкание создано под `with (container)`,
+          // поэтому лукап работает и после глобального seal (BUG-378).
           try {
             Object.defineProperty(f, 'name', { value: String(prop), configurable: true });
           } catch (e2) {}
-          var mk = typeof globalThis !== 'undefined' ? globalThis._lumen_tostring_mark : undefined;
-          if (typeof mk === 'function') mk(f);
+          var mk;
+          try {
+            mk = (typeof __lumen_C !== 'undefined' && __lumen_C !== null)
+              ? __lumen_C._lumen_native_register : undefined;
+          } catch (e3) { mk = undefined; }
+          if (typeof mk !== 'function' && typeof globalThis !== 'undefined') {
+            mk = globalThis._lumen_native_register;
+          }
+          if (typeof mk === 'function') mk(f, 'function');
           return f;
         }
         return undefined;

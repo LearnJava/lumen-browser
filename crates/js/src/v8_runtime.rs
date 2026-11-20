@@ -1417,22 +1417,12 @@ impl V8JsRuntime {
         // now; move them onto `Navigator.prototype` in one pass. Before the
         // BUG-378 seal, which must stay last.
         install_v8!(navigator_bindings::finalize_navigator_interface_v8);
-        // BUG-1826 срез 3: страничная программа замаскировала поверхность
-        // большого шима, но каждый модуль выше поставил свои JS-шимы ПОСЛЕ
-        // неё (Worker, SharedWorker, WebCodecs, WebGPU…). Повторный проход —
-        // идемпотентный (свежая WeakMap, цепочка toString растёт на звено) —
-        // покрывает их всех до BiDi-preload и seal BUG-378.
-        if let Err(e) = self.eval(crate::dom::NATIVE_TO_STRING_SHIM) {
-            eprintln!("v8: native toString mask failed: {e}");
-        }
-        // BUG-1826: Web API functions are JS shims, so `Function.prototype.
-        // toString` leaks their source where a real browser reports `[native
-        // code]` — anti-bot fingerprinting (Cloudflare) treats that as a fake
-        // browser. The mask snapshots every reachable function as native; it
-        // must run after all interface installs above and before preload/page
-        // scripts, which is exactly this point.
-        if let Err(e) = self.eval(crate::dom::NATIVE_MASK_SHIM) {
-            eprintln!("v8: native_mask_shim eval failed: {e}");
+        // BUG-1826 / FINGERPRINT-JS-REGISTRY: единый реестр нативных функций —
+        // единственный обход `_lumen_native_sweep()` после всех install_*
+        // (Worker, SharedWorker, WebCodecs, WebGPU, Intl…), но до BiDi-preload
+        // и seal BUG-378. Фасад поставила склейка шима в начале install_dom.
+        if let Err(e) = self.eval(crate::dom::NATIVE_REGISTRY_SWEEP) {
+            eprintln!("v8: native registry sweep failed: {e}");
         }
         // BUG-1811: WebDriver BiDi preload scripts (`script.addPreloadScript`)
         // run once per new document — after every shim that registered above

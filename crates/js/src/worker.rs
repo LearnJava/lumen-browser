@@ -1036,6 +1036,13 @@ fn run_worker_thread_v8(
         eprintln!("[worker-{id}] v8 websocket bind failed: {e:?}");
     }
 
+    // FINGERPRINT-JS-REGISTRY: единственный обход реестра нативных этого
+    // реалма — после ВСЕХ install (globals, nested Worker, OffscreenCanvas,
+    // WebSocket), до worker-скрипта. Фасад поставила `worker_exposed_shim`.
+    if let Err(e) = rt.eval(crate::dom::NATIVE_REGISTRY_SWEEP) {
+        eprintln!("[worker-{id}] v8 native registry sweep failed: {e:?}");
+    }
+
     // A module worker evaluates its script under its own URL (BUG-777), so a
     // relative `import './dep.js'` resolves against the worker script rather
     // than against the page — the same reason `eval_module_at` exists for an
@@ -1472,6 +1479,10 @@ fn install_worker_globals_v8(
     // BUG-1781: this thread's blob store backs `fetch`/`XHR` of a `blob:` URL
     // (worker_net.rs), the same entries `importScripts('blob:…')` reads.
     crate::worker_net::install_worker_net_v8(rt, net_provider, &blob_store)?;
+    // FINGERPRINT-JS-REGISTRY: обход реестра нативных здесь НЕ делаем —
+    // `run_worker_thread_v8` после этой функции ставит ещё nested `Worker`,
+    // `OffscreenCanvas` и WebSocket, и единственный `_lumen_native_sweep()`
+    // идёт последним шагом перед worker-скриптом.
     Ok(())
 }
 

@@ -103,6 +103,9 @@ fn v8_natives_and_tostring_contract_unchanged() {
 fn worker_scope_shim_functions_print_as_native() {
     let rt = crate::v8_runtime::V8JsRuntime::new().unwrap();
     crate::worker::install_worker_scope_globals_v8(&rt, None).unwrap();
+    // FINGERPRINT-JS-REGISTRY: обход реестра — отдельный шаг после install
+    // (у dedicated/shared/service worker он в хвосте install_*_globals_v8).
+    rt.eval(crate::dom::NATIVE_REGISTRY_SWEEP).unwrap();
     let r = rt
         .eval(
             "[TextEncoder.prototype.encode.toString(), TextDecoder.prototype.decode.toString(),\
