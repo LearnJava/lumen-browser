@@ -15,7 +15,7 @@ use lumen_core::{ColorSpace, Size};
 use crate::box_tree::{BoxKind, LayoutBox, SvgBaselineShift};
 use crate::ruby::{RubyAlign, RubyMerge};
 use crate::style::{
-    SvgColorInterpolation,
+    SvgColorInterpolation, SvgColorInterpolationFilters,
     matches_complex, AlignValue, AnimationComposition, AnimationDirection, AnimationFillMode, AnimationPlayState,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin,
     BackgroundRepeat, BackgroundSize, BgSizeAxis, RepeatStyle, BlockStepAlign, BlockStepInsert, BlockStepRound,
@@ -2596,6 +2596,17 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         SvgColorInterpolation::Auto => "auto",
         SvgColorInterpolation::Srgb => "srgb",
         SvgColorInterpolation::LinearRgb => "linearrgb",
+    }.into());
+    // Filter Effects L1 — `flood-color`/`lighting-color` resolve `currentcolor`
+    // against the element's own `color` (WPT flood-color-computed), the enum
+    // serialises lowercase (color-interpolation-filters-parsing-valid).
+    m.insert("flood-color".into(), used_css_color(&style.flood_color, style.color));
+    m.insert("lighting-color".into(), used_css_color(&style.lighting_color, style.color));
+    m.insert("flood-opacity".into(), format!("{}", style.flood_opacity));
+    m.insert("color-interpolation-filters".into(), match style.svg_color_interpolation_filters {
+        SvgColorInterpolationFilters::Auto => "auto",
+        SvgColorInterpolationFilters::Srgb => "srgb",
+        SvgColorInterpolationFilters::LinearRgb => "linearrgb",
     }.into());
     m.insert("path-length".into(), match style.svg_path_length {
         Some(n) => format!("{}", n),

@@ -387,6 +387,10 @@ impl ComputedStyle {
             svg_ry: LengthOrAuto::Auto,
             svg_color_interpolation: SvgColorInterpolation::Srgb,
             svg_path_length: None,
+            flood_color: CssColor::Rgba(Color::BLACK),
+            flood_opacity: 1.0,
+            lighting_color: CssColor::Rgba(Color::WHITE),
+            svg_color_interpolation_filters: SvgColorInterpolationFilters::default(),
             // CSS Logical Properties L1 — initial values.
             inline_size: None,
             block_size: None,
@@ -869,6 +873,13 @@ impl ComputedStyle {
             svg_ry: LengthOrAuto::Auto,
             svg_color_interpolation: inherited.svg_color_interpolation,
             svg_path_length: None,
+            // Filter Effects L1: flood-color/flood-opacity/lighting-color are
+            // NOT inherited — reset to initial each element.
+            flood_color: CssColor::Rgba(Color::BLACK),
+            flood_opacity: 1.0,
+            lighting_color: CssColor::Rgba(Color::WHITE),
+            // color-interpolation-filters IS inherited.
+            svg_color_interpolation_filters: inherited.svg_color_interpolation_filters,
             // CSS Logical Properties L1 — not inherited. Initial values.
             inline_size: None,
             block_size: None,

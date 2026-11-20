@@ -12,9 +12,10 @@
 //! `feImage href="#id"` раскрывается в картинку-элемент ([`FePrimitive::Element`]).
 //!
 //! Свойства `flood-color`/`flood-opacity`/`lighting-color`/
-//! `color-interpolation-filters` читаются из presentation-атрибута и
-//! inline-`style` примитива: правила таблицы стилей не учитываются (в
-//! `ComputedStyle` этих свойств пока нет).
+//! `color-interpolation-filters` — каскадные (SVG-FILTER-10-S1): граф читает
+//! их из вычисленного стиля примитива — правила таблицы стилей, inline
+//! `style` и presentation-атрибуты в порядке приоритета каскада,
+//! `color-interpolation-filters` наследуется от `<filter>` и предков.
 
 use std::sync::Arc;
 
@@ -26,8 +27,8 @@ use super::svg::SvgTransform;
 use super::svg_clip::user_bbox_of;
 use super::LayoutBox;
 use crate::style::{FilterFn, SvgClipPlacement, 
-    Color, ComputedStyle, FeBlendMode, FeColorMatrix, FeCompositeOp, FeEdgeMode, FeImageFit, FeInput, FeLight,
-    FeElementPicture, FeLighting, FePrimitive, FeTransfer, SvgFilter, SvgFilterPrimitive, compute_style, parse_color,
+    Color, ComputedStyle, CssColor, FeBlendMode, FeColorMatrix, FeCompositeOp, FeEdgeMode, FeImageFit, FeInput, FeLight,
+    FeElementPicture, FeLighting, FePrimitive, FeTransfer, SvgColorInterpolationFilters, SvgFilter, SvgFilterPrimitive, compute_style,
 };
 
 /// Разворачивает `url(#id)` в граф. `None` — элемента нет или это не `<filter>`.
@@ -43,7 +44,15 @@ pub(crate) fn resolve_filter_url(
     if !is_tag(doc, f, "filter") {
         return None;
     }
-    let filter_style = compute_style(doc, f, sheet, &ComputedStyle::root(), viewport, dark_mode);
+    // Вложенное раскрытие (например, `filter="url(#f)"` на самом примитиве
+    // этого же `<filter>`: каскад его стиля снова дошёл бы сюда) — разрываем.
+    if ElementGuard::busy(f) {
+        return None;
+    }
+    // Весь цикл раскрытия (стиль `<filter>`, стили примитивов, `feImage`)
+    // держит фильтр занятым — вложенные `resolve_filter_url` на него дают None.
+    let _expanding = ElementGuard::enter(f);
+    let filter_style = node_style(doc, f, sheet, viewport, dark_mode);
     // `<filter>` не входит в список SVG-элементов с presentation-атрибутами, поэтому
     // `font-size="10px"` на нём каскад не видит: `em` в `width="1em"` читаем сами.
     let em = svg_prop(doc, f, "font-size")
@@ -60,7 +69,6 @@ pub(crate) fn resolve_filter_url(
     };
     let filter_units_obb = obb("filterUnits", true);
     let primitive_units_obb = obb("primitiveUnits", false);
-
     // Проценты `userSpaceOnUse` считаются от ближайшего SVG viewport ссылающегося
     // элемента; у HTML-бокса (`None`) база — его border box, известный только paint.
     let svg_basis = nearest_svg_viewport(doc, node, viewport);
@@ -79,8 +87,6 @@ pub(crate) fn resolve_filter_url(
     let region = (rx.0, ry.0, rw.0, rh.0);
     let region_pct = [rx.1, ry.1, rw.1, rh.1];
 
-    let filter_linear = interpolation_is_linear(doc, f, None);
-
     let mut primitives: Vec<SvgFilterPrimitive> = Vec::new();
     let mut results: Vec<(String, usize)> = Vec::new();
     for &child in &doc.get(f).children {
@@ -90,6 +96,13 @@ pub(crate) fn resolve_filter_url(
             continue;
         }
         let idx = primitives.len();
+        // Стиль примитива — каскад узла поверх стиля `<filter>` (обычный
+        // случай: примитив — прямой ребёнок; иначе поднимаемся по цепочке).
+        let st = if doc.get(child).parent == Some(f) {
+            compute_style(doc, child, sheet, &filter_style, viewport, dark_mode)
+        } else {
+            node_style(doc, child, sheet, viewport, dark_mode)
+        };
         let ctx = Ctx {
             doc,
             node: child,
@@ -99,7 +112,7 @@ pub(crate) fn resolve_filter_url(
             svg_size: svg_basis.unwrap_or(viewport),
             sheet,
             dark_mode,
-            filter_style: &filter_style,
+            style: &st,
         };
         let kind = build_primitive(&ctx, &tag);
         let sub = |attr: &str, axis: usize| {
@@ -115,10 +128,16 @@ pub(crate) fn resolve_filter_url(
             width: sw.map(|v| v.0),
             height: sh.map(|v| v.0),
             pct: [sx, sy, sw, sh].map(|v| v.is_some_and(|v| v.1)),
-            linear_rgb: interpolation_is_linear(doc, child, Some(filter_linear)),
+            linear_rgb: interpolation_is_linear(&st),
             tainted: match tag.as_str() {
-                "feflood" | "fedropshadow" => uses_current_color(doc, child, "flood-color"),
-                "fediffuselighting" | "fespecularlighting" => uses_current_color(doc, child, "lighting-color"),
+                "feflood" | "fedropshadow" => {
+                    uses_current_color(doc, child, "flood-color")
+                        || st.flood_color == CssColor::CurrentColor
+                }
+                "fediffuselighting" | "fespecularlighting" => {
+                    uses_current_color(doc, child, "lighting-color")
+                        || st.lighting_color == CssColor::CurrentColor
+                }
                 _ => false,
             },
         });
@@ -141,9 +160,12 @@ struct Ctx<'a> {
     viewport: Size,
     /// Размер ближайшего `<svg>` ссылающегося элемента (база процентов картинки-элемента).
     svg_size: Size,
+    /// Таблица стилей и dark mode — для раскрытия `feImage href="#id"`.
     sheet: &'a Stylesheet,
     dark_mode: bool,
-    filter_style: &'a ComputedStyle,
+    /// Вычисленный стиль примитива (каскад: правила, inline `style`,
+    /// presentation-атрибуты; наследование от `<filter>` и предков).
+    style: &'a ComputedStyle,
 }
 
 impl Ctx<'_> {
@@ -172,34 +194,9 @@ impl Ctx<'_> {
         }
     }
 
-    /// `flood-color` + `flood-opacity` (presentation-атрибут / inline `style`).
+    /// `flood-color` + `flood-opacity` из каскада.
     fn flood(&self) -> (Color, f32) {
-        let color = self.color_prop("flood-color", Color::BLACK);
-        let opacity = svg_prop(self.doc, self.node, "flood-opacity")
-            .and_then(|v| parse_number_or_percent(&v))
-            .unwrap_or(1.0)
-            .clamp(0.0, 1.0);
-        (color, opacity)
-    }
-
-    /// Цветовое свойство (`flood-color`, `lighting-color`) с `currentColor`.
-    fn color_prop(&self, name: &str, default: Color) -> Color {
-        let raw = svg_prop(self.doc, self.node, name);
-        match raw.as_deref().map(str::trim) {
-            None => default,
-            Some(v) if v.eq_ignore_ascii_case("currentcolor") => {
-                let st = compute_style(
-                    self.doc,
-                    self.node,
-                    self.sheet,
-                    self.filter_style,
-                    self.viewport,
-                    self.dark_mode,
-                );
-                st.color
-            }
-            Some(v) => parse_color(v).unwrap_or(default),
-        }
+        (self.style.flood_color.resolve(self.style.color), self.style.flood_opacity)
     }
 
     fn num_pair(&self, name: &str, default: f32) -> (f32, f32) {
@@ -378,10 +375,16 @@ thread_local! {
 struct ElementGuard;
 
 impl ElementGuard {
+    /// Фильтр уже раскрывается (вложенный вызов) — раскрытие разорвать.
+    fn busy(filter: NodeId) -> bool {
+        EXPANDING.with(|s| s.borrow().contains(&filter))
+    }
+
+    /// Входит в раскрытие; `None` — потолок глубины (8 вложенных раскрытий).
     fn enter(filter: NodeId) -> Option<Self> {
         EXPANDING.with(|s| {
             let mut s = s.borrow_mut();
-            if s.contains(&filter) || s.len() >= 8 {
+            if s.len() >= 8 {
                 return None;
             }
             s.push(filter);
@@ -529,7 +532,7 @@ fn lighting(c: &Ctx<'_>, specular: bool) -> FePrimitive {
         input: c.input("in"),
         kind,
         surface_scale: c.num("surfaceScale", 1.0),
-        color: c.color_prop("lighting-color", Color::WHITE),
+        color: c.style.lighting_color.resolve(c.style.color),
         light: if valid { light } else { None },
     }
 }
@@ -597,19 +600,27 @@ fn is_tag(doc: &Document, n: NodeId, tag: &str) -> bool {
     doc.get(n).element_name().is_some_and(|q| q.local.as_str().eq_ignore_ascii_case(tag))
 }
 
-/// `color-interpolation-filters`: `linearRGB` (по умолчанию) или `sRGB`/`auto`.
-/// У примитива без значения наследуется значение `<filter>` (`inherited`); у самого
-/// `<filter>` (`inherited == None`) — значение ближайшего предка (свойство наследуемое).
-fn interpolation_is_linear(doc: &Document, n: NodeId, inherited: Option<bool>) -> bool {
-    match svg_prop(doc, n, "color-interpolation-filters").as_deref().map(str::trim) {
-        Some("linearRGB") => true,
-        Some("sRGB" | "auto") => false,
-        _ => match (inherited, doc.get(n).parent) {
-            (Some(v), _) => v,
-            (None, Some(parent)) if doc.get(parent).element_name().is_some() => interpolation_is_linear(doc, parent, None),
-            (None, _) => true,
-        },
-    }
+/// `color-interpolation-filters` из вычисленного стиля: линейный тракт только
+/// при `linearRGB` (`sRGB`/`auto` — нет). Наследование делает каскад.
+fn interpolation_is_linear(st: &ComputedStyle) -> bool {
+    st.svg_color_interpolation_filters == SvgColorInterpolationFilters::LinearRgb
+}
+
+/// Вычисленный стиль узла вне раскладки (`<filter>`, его примитивы): каскад
+/// узла поверх рекурсивного стиля родителя, до корня документа.
+fn node_style(
+    doc: &Document,
+    n: NodeId,
+    sheet: &Stylesheet,
+    viewport: Size,
+    dark_mode: bool,
+) -> ComputedStyle {
+    let inherited = doc
+        .get(n)
+        .parent
+        .filter(|&p| doc.get(p).element_name().is_some())
+        .map_or_else(ComputedStyle::root, |p| node_style(doc, p, sheet, viewport, dark_mode));
+    compute_style(doc, n, sheet, &inherited, viewport, dark_mode)
 }
 
 /// Значение SVG-свойства узла: inline-`style` приоритетнее presentation-атрибута.
@@ -631,14 +642,6 @@ fn parse_number_list(s: &str) -> Vec<f32> {
         .filter(|t| !t.is_empty())
         .map_while(|t| t.parse::<f32>().ok())
         .collect()
-}
-
-fn parse_number_or_percent(s: &str) -> Option<f32> {
-    let s = s.trim();
-    match s.strip_suffix('%') {
-        Some(p) => p.trim().parse::<f32>().ok().map(|v| v / 100.0),
-        None => s.parse::<f32>().ok(),
-    }
 }
 
 /// Длина области/подобласти: число (`px`) или `%`. В единицах `objectBoundingBox`
@@ -730,8 +733,12 @@ mod tests {
     use super::*;
 
     fn graph(html: &str, referrer: &str) -> Arc<SvgFilter> {
+        graph_css(html, "", referrer)
+    }
+
+    fn graph_css(html: &str, css: &str, referrer: &str) -> Arc<SvgFilter> {
         let doc = lumen_html_parser::parse(html);
-        let sheet = lumen_css_parser::parse("");
+        let sheet = lumen_css_parser::parse(css);
         let node = doc.find_by_id(referrer).expect("referrer");
         resolve_filter_url(&doc, &sheet, "f", node, Size::new(800.0, 600.0), false).expect("filter")
     }
@@ -790,5 +797,83 @@ mod tests {
         assert!(g.primitives[1].linear_rgb);
         let g = graph(r#"<svg width="0" height="0"><filter id="f"><feFlood/></filter></svg><div id="d"></div>"#, "d");
         assert!(g.primitives[0].linear_rgb, "умолчание — linearRGB");
+    }
+
+    /// Правило таблицы стилей побеждает presentation-атрибут (нулевой специфичности).
+    #[test]
+    fn stylesheet_rule_beats_presentation_attribute() {
+        let g = graph_css(
+            r#"<svg width="0" height="0"><filter id="f"><feFlood flood-color="red"/></filter></svg><div id="d"></div>"#,
+            "feFlood{flood-color:green}",
+            "d",
+        );
+        match &g.primitives[0].kind {
+            FePrimitive::Flood { color, .. } => {
+                assert_eq!(*color, Color { r: 0, g: 128, b: 0, a: 255 }, "green из правила");
+            }
+            other => panic!("ожидался feFlood, получен {other:?}"),
+        }
+    }
+
+    /// Inline `style` побеждает правило таблицы стилей.
+    #[test]
+    fn inline_style_beats_stylesheet_rule() {
+        let g = graph_css(
+            r#"<svg width="0" height="0"><filter id="f"><feFlood style="flood-color:blue"/></filter></svg><div id="d"></div>"#,
+            "feFlood{flood-color:green}",
+            "d",
+        );
+        match &g.primitives[0].kind {
+            FePrimitive::Flood { color, .. } => {
+                assert_eq!(*color, Color { r: 0, g: 0, b: 255, a: 255 }, "blue из inline style");
+            }
+            other => panic!("ожидался feFlood, получен {other:?}"),
+        }
+    }
+
+    /// `color-interpolation-filters:sRGB` из правила на `<filter>` наследуется
+    /// примитивом без собственного значения.
+    #[test]
+    fn color_interpolation_filters_rule_inherits_to_primitive() {
+        let g = graph_css(
+            r#"<svg width="0" height="0"><filter id="f"><feFlood/></filter></svg><div id="d"></div>"#,
+            "filter{color-interpolation-filters:sRGB}",
+            "d",
+        );
+        assert!(!g.primitives[0].linear_rgb);
+    }
+
+    /// `lighting-color` из правила таблицы стилей попадает в `FeLighting`.
+    #[test]
+    fn lighting_color_from_rule_reaches_fe_lighting() {
+        let g = graph_css(
+            r#"<svg width="0" height="0"><filter id="f"><feDiffuseLighting/></filter></svg><div id="d"></div>"#,
+            "feDiffuseLighting{lighting-color:#00f}",
+            "d",
+        );
+        match &g.primitives[0].kind {
+            FePrimitive::Lighting { color, .. } => {
+                assert_eq!(*color, Color { r: 0, g: 0, b: 255, a: 255 }, "#00f из правила");
+            }
+            other => panic!("ожидался feDiffuseLighting, получен {other:?}"),
+        }
+    }
+
+    /// `filter="url(#f)"` на самом примитиве этого же `<filter>` не зацикливает
+    /// раскрытие: каскадный стиль примитива разворачивает ссылку, вложенный
+    /// `resolve_filter_url` даёт `None`, граф строится как без неё (WPT
+    /// `feflood-with-filter-reference`).
+    #[test]
+    fn primitive_filter_url_to_same_filter_does_not_recurse() {
+        let g = graph(
+            r#"<svg width="0" height="0"><filter id="f"><feFlood flood-color="green" filter="url(#f)"/></filter></svg><div id="d"></div>"#,
+            "d",
+        );
+        match &g.primitives[0].kind {
+            FePrimitive::Flood { color, .. } => {
+                assert_eq!(*color, Color { r: 0, g: 128, b: 0, a: 255 });
+            }
+            other => panic!("ожидался feFlood, получен {other:?}"),
+        }
     }
 }

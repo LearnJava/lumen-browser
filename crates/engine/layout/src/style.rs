@@ -76,7 +76,7 @@ mod zoom;
 // Это центральный тип публичной поверхности крейта: `lib.rs` реэкспортирует его
 // наружу, а по репозиторию его зовут по старому пути `lumen_layout::style::
 // ComputedStyle`, поэтому реэкспорт обязателен (правило §2.1).
-pub use computed::{ComputedStyle, CqLengthProp, SvgColorInterpolation};
+pub use computed::{ComputedStyle, CqLengthProp, SvgColorInterpolation, SvgColorInterpolationFilters};
 // SPLIT-ST8: сама `apply_declaration` вместе со своим `match prop` уехала в
 // `style::apply`; вызыватели в этом файле остались на прежнем имени.
 use apply::apply_declaration;

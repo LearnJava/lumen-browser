@@ -3053,6 +3053,9 @@ var _LUMEN_COLOR_PROPERTIES = {
     'color': 1, 'background-color': 1, 'border-top-color': 1,
     'border-bottom-color': 1, 'border-left-color': 1, 'border-right-color': 1,
     'outline-color': 1, 'text-decoration-color': 1,
+    // Filter Effects L1 §11 (SVG-FILTER-10-S1): `<color>` longhands of the
+    // filter primitives, `currentcolor` allowed and kept lowercase.
+    'flood-color': 1, 'lighting-color': 1,
 };
 
 // CSS Box §8 / CSS Position §6 / CSSOM §Change-a-computed-value
@@ -3246,6 +3249,8 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     'empty-cells': ['show', 'hide'],
     'table-layout': ['auto', 'fixed'],
     'color-interpolation': ['auto', 'srgb', 'linearrgb'],
+    // Filter Effects L1 §11 (SVG-FILTER-10-S1): keywords serialize lowercase.
+    'color-interpolation-filters': ['auto', 'srgb', 'linearrgb'],
     // CSS Images L3 §5.3 (BUG-1408): plain keyword longhand.
     'image-rendering': ['auto', 'smooth', 'high-quality', 'crisp-edges', 'pixelated'],
     // CSS UI L4 §6.2 — `caret-shape` / `caret-animation` (inherited keyword longhands).
