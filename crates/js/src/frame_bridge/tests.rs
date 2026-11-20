@@ -162,6 +162,52 @@
         );
     }
 
+    /// Фасадные `getElementsByTagName(NS)`/`getElementsByClassName` и
+    /// `addEventListener` на документе: без них страницы с iframe получали
+    /// `TypeError: … is not a function` (meduza, codepen, osm в аудите).
+    #[test]
+    fn facade_get_elements_by_and_doc_listeners() {
+        with_frame(
+            "<html><body><div class='x y'><span class='y'>s</span></div>\
+             <p class='x'>p</p></body></html>",
+            true,
+            |rt| {
+                assert!(eval_bool(
+                    rt,
+                    "var d = _lumen_frame_content_document(7); \
+                     d.getElementsByTagName('DIV').length === 1 \
+                     && d.getElementsByTagName('div').length === 1 \
+                     && d.getElementsByTagName('*').length >= 5 \
+                     && d.getElementsByTagName('SPAN')[0].textContent === 's'"
+                ));
+                assert!(eval_bool(
+                    rt,
+                    "var d = _lumen_frame_content_document(7); \
+                     d.getElementsByTagNameNS('*', '*').length >= 5 \
+                     && d.getElementsByTagNameNS('http://www.w3.org/1999/xhtml', 'div').length === 1 \
+                     && d.getElementsByTagNameNS('', 'div').length === 0"
+                ));
+                assert!(eval_bool(
+                    rt,
+                    "var d = _lumen_frame_content_document(7); \
+                     d.getElementsByClassName('y').length === 2 \
+                     && d.getElementsByClassName('x y').length === 1 \
+                     && d.getElementsByClassName('').length === 0"
+                ));
+                assert!(eval_bool(
+                    rt,
+                    "var d = _lumen_frame_content_document(7); \
+                     var body = d.body; \
+                     body.getElementsByTagName('p').length === 1 \
+                     && body.getElementsByClassName('x').length === 2 \
+                     && typeof d.addEventListener === 'function' \
+                     && typeof d.removeEventListener === 'function' \
+                     && typeof body.addEventListener === 'function'"
+                ));
+            },
+        );
+    }
+
     #[test]
     fn facades_are_interned_and_cross_linked() {
         with_frame("<html><body></body></html>", true, |rt| {
