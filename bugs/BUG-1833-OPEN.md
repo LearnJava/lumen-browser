@@ -1,28 +1,30 @@
-# BUG-1833-OPEN: shared-worker реалм — shim-функции печатают исходник, top-level failure не доходит до клиента
+# BUG-1833-OPEN: shared-worker реалм — shim-функции печатают исходник вместо `[native code]` (тест не повторяет run-путь)
 
-- **Статус:** OPEN
+- **Статус:** OPEN (актуальность проверена 2026-11-20 на `c6d618cf9`: симптом 2 закрылся, симптом 1 остаётся)
 - **Область:** js (`crates/js/src/shared_worker.rs` — `install_shared_worker_globals_v8`, run-путь shared worker; реестр `shim/native_registry_shim.js`)
-- **Приоритет:** P3 (фингерпринт-дивергенция в SharedWorker-реалме; детерминированные падения `cargo test -p lumen-js --lib --features v8-backend`)
+- **Приоритет:** P3 (фингерпринт-дивергенция в SharedWorker-реалме; детерминированное падение `cargo test -p lumen-js --lib --features v8-backend`)
 
 ## Симптом
 
-Два теста `shared_worker::tests_v8` стабильно красные на main `3a8243af5` (WS-A влит,
-js-дерево с тех пор не менялось — дифф WS-B js не трогает):
+`shared_worker::tests_v8::shared_worker_shim_functions_print_as_native` стабильно
+красный на main `c6d618cf9`: `TextEncoder.prototype.encode`, `performance.now`,
+`fetch` в shared-worker реалме печатают исходник шима вместо `[native code]`
+(паника в `shared_worker.rs:1311`).
 
-1. `shared_worker_shim_functions_print_as_native` — `TextEncoder.prototype.encode`,
-   `performance.now`, `fetch` в shared-worker реалме печатают исходник шима вместо
-   `[native code]` (паника в `shared_worker.rs:1311`, дамп трёх функций в assert).
-   То есть фасад `Function.prototype.toString` либо не установлен, либо эти функции
-   установлены после `_lumen_native_sweep()` внутри
-   `install_shared_worker_globals_v8` / run-пути.
-2. `v8_shared_worker_top_level_failure_reaches_the_first_client` — клиент не получает
-   событие ошибки top-level скрипта (`client never heard the failure: []`,
-   `shared_worker.rs:2033`).
+**Диагноз (2026-11-20):** тест вызывает `install_shared_worker_globals_v8`
+напрямую, а sweep `_lumen_native_sweep()` по дизайну живёт не внутри install,
+а в run-пути (`shared_worker.rs:927`) — после бинда WebSocket, последним шагом
+перед worker-скриптом (комментарий `shared_worker.rs:1201-1203`). Тест sweep не
+выполняет → функции, поставленные install'ом, фасадом не покрыты. Похоже на
+дефект теста (не повторяет run-путь), а не рантайма: вживую sweep отрабатывает.
 
-Примечание: живая проба `scripts/probe_native_api.py` (WS-A) показывала 0 утечек в
-shared worker — вероятно, проба покрывает другой набор/порядок установки, чем
-прямой вызов `install_shared_worker_globals_v8` в тесте. Расхождение пробы и
-юнит-теста — часть диагноза.
+Второй симптом исходной записи — `v8_shared_worker_top_level_failure_reaches_the_first_client` —
+на `c6d618cf9` **зелёный** (на `3a8243af5` падал детерминированно; вероятно,
+закрыт upstream-фиксом `dc3df124b` или флаки — зафиксировать при повторном
+падении).
+
+Примечание: живая проба `scripts/probe_native_api.py` (WS-A) показывала 0 утечек
+в shared worker — согласуется с диагнозом «тест не повторяет run-путь».
 
 ## Воспроизведение
 

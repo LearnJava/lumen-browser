@@ -30,6 +30,16 @@ cargo test -p lumen-shell --bin lumen
 # … crash 0xc0000374 после platform::audio_player::tests::probe_duration_mp3_is_finite
 ```
 
+## Актуальность (2026-11-20, main `c6d618cf9`)
+
+Третий прогон того же бинаря — **без краша**: 2567 passed / 1 failed
+(`page_load::css_pending::tests::deadline_releases_pending_once` — тайминговый
+флак на дедлайне 1999 мс, к теме бага не относится). `platform::`-подмножество
+зелёное и в прошлый раз. Два краша подряд при заполненном на 100 % диске D:
+и параллельной компиляции — правдоподобная env-причина (pagefile/память);
+доказательств дефекта в коде нет. Если следующий полный прогон снова упадёт
+0xc0000374 — возвращаться к бисекту; иначе закрывать как env.
+
 ## Гипотеза
 
 Unsafe/FFI в platform-слое (audio capture/player, msaa_wndproc, screen_capture,
