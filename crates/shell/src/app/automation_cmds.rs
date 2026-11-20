@@ -104,27 +104,47 @@ impl Lumen {
                         // `Target::Selector`/`Target::NodeId`, which never
                         // resolve into the chrome document in the first
                         // place, so this can't shadow a legitimate page miss.
-                        Some(resolved)
-                            if self.try_dispatch_chrome_click(resolved.x, resolved.y, event_loop) =>
-                        {
-                            let _ = reply_tx.send(AutomationReply::Ack);
+                        Some(resolved) => {
+                            // BUG-934: a raw `Target::Point` may land on engine
+                            // chrome (toolbar/tab strip/sidebar) rather than page
+                            // content — dispatch chrome-first, exactly like a
+                            // real mouse click (`on_mouse_input`) does.
+                            // `resolved.node` is only `Some` for
+                            // `Target::Selector`/`Target::NodeId`, which never
+                            // resolve into the chrome document in the first
+                            // place, so this can't shadow a legitimate page miss.
+                            // BUG-1044: a `Dead` chrome hit is reported, not
+                            // `Ack`ed — the point was over chrome furniture but
+                            // nothing actionable sits under it.
+                            match self.dispatch_chrome_click(resolved.x, resolved.y, event_loop) {
+                                crate::chrome_action::ChromeClickOutcome::Actioned => {
+                                    let _ = reply_tx.send(AutomationReply::Ack);
+                                }
+                                crate::chrome_action::ChromeClickOutcome::Dead => {
+                                    let _ = reply_tx.send(AutomationReply::Error(
+                                        "Click hit chrome but no actionable element".to_string(),
+                                    ));
+                                }
+                                crate::chrome_action::ChromeClickOutcome::NotChrome => {
+                                    // BUG-1044: a resolved point is not yet a delivered
+                                    // click — check that the hit test at that point really
+                                    // reaches the named element (or its subtree) before
+                                    // dispatching, and report the miss instead of `Ack`.
+                                    // Answering `success` for a click that landed on the
+                                    // parent `<form>` is the "succeeds but does nothing"
+                                    // signature a caller cannot recover from.
+                                    match self.automation_hit_mismatch(&resolved) {
+                                        Some(err) => {
+                                            let _ = reply_tx.send(AutomationReply::Error(err));
+                                        }
+                                        None => {
+                                            self.handle_click_at(resolved.x, resolved.y);
+                                            let _ = reply_tx.send(AutomationReply::Ack);
+                                        }
+                                    }
+                                }
+                            }
                         }
-                        // BUG-1044: a resolved point is not yet a delivered
-                        // click — check that the hit test at that point really
-                        // reaches the named element (or its subtree) before
-                        // dispatching, and report the miss instead of `Ack`.
-                        // Answering `success` for a click that landed on the
-                        // parent `<form>` is the "succeeds but does nothing"
-                        // signature a caller cannot recover from.
-                        Some(resolved) => match self.automation_hit_mismatch(&resolved) {
-                            Some(err) => {
-                                let _ = reply_tx.send(AutomationReply::Error(err));
-                            }
-                            None => {
-                                self.handle_click_at(resolved.x, resolved.y);
-                                let _ = reply_tx.send(AutomationReply::Ack);
-                            }
-                        },
                         None => {
                             let _ = reply_tx
                                 .send(AutomationReply::Error("Element not found".to_string()));

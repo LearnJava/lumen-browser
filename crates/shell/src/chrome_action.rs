@@ -8,6 +8,22 @@
 use crate::*;
 use crate::chrome_ui::ChromeModalKind;
 
+/// Result of a chrome click dispatch — lets automation tell "the click was
+/// consumed by chrome" apart from "the point was over chrome but nothing
+/// actionable sits under it" (BUG-1044's silent-success signature).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ChromeClickOutcome {
+    /// The point is over page content — the caller falls through to the page
+    /// hit-test path, exactly like a real mouse click.
+    NotChrome,
+    /// The omnibox or a `data-action` element consumed the click.
+    Actioned,
+    /// Over chrome furniture, but the hit resolved to no actionable element —
+    /// a real mouse click would also do nothing here, so automation reports it
+    /// instead of `Ack`-ing a click that changed nothing.
+    Dead,
+}
+
 impl Lumen {
     /// BUG-934: the CC-5 chrome hit-test + `data-action` dispatch (originally
     /// inline in `on_mouse_input`'s `Pressed` branch), shared with automation
@@ -31,8 +47,22 @@ impl Lumen {
         y_css: f32,
         event_loop: &crate::browser_thread::MainHandle<'_>,
     ) -> bool {
+        !matches!(
+            self.dispatch_chrome_click(x_css, y_css, event_loop),
+            ChromeClickOutcome::NotChrome
+        )
+    }
+
+    /// [`Self::try_dispatch_chrome_click`] with the outcome spelled out for
+    /// automation callers that must not report success for a dead hit.
+    pub(crate) fn dispatch_chrome_click(
+        &mut self,
+        x_css: f32,
+        y_css: f32,
+        event_loop: &crate::browser_thread::MainHandle<'_>,
+    ) -> ChromeClickOutcome {
         if !self.point_over_chrome(x_css, y_css) {
-            return false;
+            return ChromeClickOutcome::NotChrome;
         }
         let hit = self.chrome_hit_test(x_css, y_css);
         self.chrome_active_nid = hit.as_ref().map(|r| r.node);
@@ -52,6 +82,7 @@ impl Lumen {
             eprintln!("[chrome-click] ({x_css},{y_css}) -> {desc:?}");
         }
         self.relayout_chrome_host();
+        let mut actioned = false;
         if let Some(hit) = hit {
             // CC-7: `.omnibox`/`#omniInput` carries no `data-action` (nothing
             // to translate an `onfocus` handler from — the frozen design
@@ -69,6 +100,7 @@ impl Lumen {
                 })
                 .any(|id| hit.path.contains(&id));
             if omni_hit {
+                actioned = true;
                 if !self.address_bar.is_open() {
                     self.hint.close();
                     let current = self.current_display_url().to_owned();
@@ -88,11 +120,16 @@ impl Lumen {
                     self.relayout_chrome_host();
                 }
             } else if let Some((nid, action)) = self.chrome_action_at(&hit) {
+                actioned = true;
                 self.dispatch_chrome_action(nid, action, event_loop);
             }
         }
         self.request_redraw();
-        true
+        if actioned {
+            ChromeClickOutcome::Actioned
+        } else {
+            ChromeClickOutcome::Dead
+        }
     }
 
     /// Applies a chrome skin id: normalises it, remembers the previous skin
