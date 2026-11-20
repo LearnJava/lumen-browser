@@ -144,6 +144,17 @@ pub(crate) struct Lumen {
     /// `visible` flag — that one picks vertical vs. horizontal layout,
     /// this one narrows the vertical sidebar without hiding it.
     pub(crate) chrome_sidebar_collapsed: bool,
+    /// Active chrome skin id (`body[data-skin]`, `lumen_chrome::SKINS`) —
+    /// persisted in `settings.db` (`BrowserSettings::skin`), switched live by
+    /// `ChromeAction::SetSkin` from the settings "Внешний вид" section.
+    pub(crate) chrome_skin: String,
+    /// Skin to restore when leaving `"zen"` via `ChromeAction::ToggleZen` —
+    /// session-only memory filled by `apply_chrome_skin` on zen entry.
+    pub(crate) chrome_skin_before_zen: Option<String>,
+    /// `true` shows the deck skin's coverflow tab overview
+    /// (`body[data-deck-cards]`) — toggled by `ChromeAction::ToggleDeckCards`
+    /// (the grid button in `.deck-top`). Session-only UI state.
+    pub(crate) deck_cards_open: bool,
     /// CC-10b (docs/tasks/p1-css-chrome.md): `data-section` slug of the
     /// active `#view-settings` tab (`"general"`/`"privacy"`/`"appearance"`/
     /// `"sync"`/`"ext"`/`"qa"`). Engine-chrome-only UI state — the design's 6

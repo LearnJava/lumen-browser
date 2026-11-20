@@ -503,6 +503,27 @@ tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/mai
   indent rule, so `ChromeTabModel::is_child` collapses `tabs::tree::depth_of`'s full depth to a single
   boolean — a grandchild renders at the same indent as its parent's direct children. Would need a new
   CSS construct in the reference (out of scope for CC-8/CC-CSS-*, this is a markup gap not an engine one).
+- **Скины хрома** (`body[data-skin]`): `lumen_chrome::SKINS` (`default`/`midnight`/`contrast`/
+  `compact`/`zen`/`deck`) — token-override blocks in `assets/chrome/chrome.html`'s own `<style>`;
+  `ChromeModel::skin` binds the attribute like `data-theme`, `ChromeAction::SetSkin`/`ToggleZen`
+  go through `Lumen::apply_chrome_skin` (normalise → prev-skin memory for zen → persist via
+  `BrowserSettings::skin`/`set_skin` → `relayout_chrome_host`). Zen is the odd one out: its CSS
+  `display:none`s `#sidebar`/`#hbarTabs`/`.hbar-ws`/`#workspaceBar`/`#demoBar` rather than
+  overriding tokens, and the `.tb-right` moon button toggles it with restore of the previous
+  skin (`chrome_skin_before_zen`, session-only). `deck` is the first *layout* skin
+  (docs/design/proposals-2026-11/deck.html): its own `#chromeDeck` root (top bar, filmstrip
+  `#deckFilm`, coverflow `#deckCards`, dock) replaces `.app-frame`/`#demoBar` via
+  `display:none`, and `#contentAreaDeck` is a **second page-host** — `relayout_chrome_host`
+  tries `CONTENT_AREA` then `CONTENT_AREA_DECK` and takes whichever has a layout box.
+  `bind_deck` (model.rs, runs only for `skin=="deck"`) rebuilds filmstrip `.deck-fc` and
+  coverflow `.deck-cf` cards from `model.tabs` (circular offset ≤ `DECK_CARD_REACH`, transform
+  inlined per card); `ToggleDeckCards` flips `body[data-deck-cards]` (`deck_cards_open`,
+  session-only), `DeckPrev`/`DeckNext` step `tab_strip.active` circularly. NB: the checked-in
+  `chrome.html` has
+  drifted from `scripts/gen_chrome_assets.py` + `lumen-v3_3.html` (the asset carries ~235 ids the
+  frozen reference lacks — recent commits edit the asset directly), so skin markup/CSS went into the
+  asset by hand, same as the rest of the post-generator additions; running the generator today would
+  drop them.
 
 ## Invariants
 

@@ -45,6 +45,7 @@ const KEY_COMPAT_CHIP: &str = "compat_chip_limiter";
 const KEY_COMPAT_REPORTED: &str = "compat_reported_sites";
 const KEY_NUC_CONSENT: &str = "nuc_consent_hosts";
 const KEY_NO_PROXY_SITES: &str = "no_proxy_sites";
+const KEY_SKIN: &str = "skin";
 
 /// The compat-pack change journal keeps only the newest this-many lines.
 pub const COMPAT_JOURNAL_MAX: usize = 50;
@@ -66,6 +67,12 @@ const DEFAULT_TAB_LAYOUT: &str = "horizontal";
 const DEFAULT_PANEL_LAYOUT: &str = "";
 const DEFAULT_TRANSLATE_LANGUAGE: &str = "ru";
 const DEFAULT_TRANSLATE_MODEL: &str = "";
+/// «Колода» — дефолтный скин (решение пользователя 2026-11): layout-вариант
+/// с топ-баром, filmstrip карточек вкладок и 3D-обзор-«колодой»; остальные
+/// скины остаются доступными в пикере настроек. Записанный в БД выбор
+/// пользователя не перезаписывается — дефолт действует только при отсутствии
+/// ключа `skin`.
+pub const DEFAULT_SKIN: &str = "deck";
 
 /// All browser settings in a single value type for easy read/write.
 #[derive(Debug, Clone, PartialEq)]
@@ -436,6 +443,18 @@ impl BrowserSettings {
             sites.push(site.to_owned());
         }
         self.set_str(KEY_NO_PROXY_SITES, &sites.join(","))
+    }
+
+    /// Chrome skin id (`body[data-skin]` in the engine chrome): `"default"`,
+    /// `"midnight"`, `"contrast"`, or `"compact"`. Unknown values fall back to
+    /// `"default"` at the shell boundary.
+    pub fn skin(&self) -> String {
+        self.get_str(KEY_SKIN, DEFAULT_SKIN)
+    }
+
+    /// Persist the chrome skin id.
+    pub fn set_skin(&self, skin: &str) -> Result<()> {
+        self.set_str(KEY_SKIN, skin)
     }
 
     /// Read all settings into a snapshot value.

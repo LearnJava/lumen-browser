@@ -45,11 +45,15 @@ impl Lumen {
             // the legacy `toolbar::ToolbarHit::Omnibox` branch it mirrors: a
             // no-op while already open so an in-progress edit/dropdown
             // selection isn't reset.
-            let omni_input = self
-                .chrome_doc
-                .as_ref()
-                .and_then(|(doc, _)| doc.find_by_id(lumen_chrome::ids::OMNI_INPUT));
-            if omni_input.is_some_and(|id| hit.path.contains(&id)) {
+            // `#deckOmniInput` — та же роль для скина "deck" (классический
+            // `#omniInput` там скрыт вместе с `.app-frame`).
+            let omni_hit = [lumen_chrome::ids::OMNI_INPUT, lumen_chrome::ids::DECK_OMNI_INPUT]
+                .into_iter()
+                .filter_map(|id| {
+                    self.chrome_doc.as_ref().and_then(|(doc, _)| doc.find_by_id(id))
+                })
+                .any(|id| hit.path.contains(&id));
+            if omni_hit {
                 if !self.address_bar.is_open() {
                     self.hint.close();
                     let current = self.current_display_url().to_owned();
@@ -74,6 +78,36 @@ impl Lumen {
         }
         self.request_redraw();
         true
+    }
+
+    /// Applies a chrome skin id: normalises it, remembers the previous skin
+    /// when entering `"zen"` (so [`ChromeAction::ToggleZen`] can restore it),
+    /// persists to `settings.db` and relayouts. No-op on the current skin.
+    fn apply_chrome_skin(&mut self, skin: &str) {
+        let skin = lumen_chrome::skin_or_default(skin);
+        if skin == self.chrome_skin {
+            return;
+        }
+        if skin == "zen" {
+            self.chrome_skin_before_zen = Some(self.chrome_skin.clone());
+        } else {
+            self.chrome_skin_before_zen = None;
+        }
+        self.chrome_skin = skin.to_owned();
+        let _ = self.settings_store.set_skin(skin);
+        self.relayout_chrome_host();
+    }
+
+    /// `deck-prev`/`deck-next`: circular step through `tab_strip` — used by
+    /// the coverflow arrows of the "deck" chrome skin.
+    fn deck_step(&mut self, delta: isize) {
+        let n = self.tab_strip.tabs.len();
+        if n == 0 {
+            return;
+        }
+        let cur = self.tab_strip.active.min(n - 1);
+        let next = (cur as isize + delta).rem_euclid(n as isize) as usize;
+        self.switch_tab(next);
     }
 
     pub(crate) fn dispatch_chrome_action(
@@ -956,6 +990,46 @@ impl Lumen {
                     self.relayout_chrome_host();
                 }
             }
+            // Settings "Внешний вид" skin picker: `data-skin` carries the
+            // target id; unknown ids are refused so a stale asset can't
+            // persist a skin the CSS doesn't define. Switching is a pure
+            // `body[data-skin]` attribute change + one chrome relayout —
+            // the same live-mutation path `SetDemoVariant` uses.
+            ChromeAction::SetSkin => {
+                let skin = self
+                    .chrome_doc
+                    .as_ref()
+                    .and_then(|(doc, _)| doc.get(nid).get_attr("data-skin"))
+                    .map(str::to_owned);
+                if let Some(skin) = skin {
+                    self.apply_chrome_skin(&skin);
+                }
+            }
+            // Zen-режим: кнопка в `.tb-right` тулбара. Вход запоминает текущий
+            // скин (`apply_chrome_skin`), выход возвращает его; если zen был
+            // включён через настройки (без памяти) — возвращается "default".
+            ChromeAction::ToggleZen => {
+                let target = if self.chrome_skin == "zen" {
+                    // Нет памяти о предыдущем скине (zen был включён через
+                    // настройки и пережил рестарт) — возвращаемся к дефолту
+                    // из settings, а не к «Стандарту».
+                    self.chrome_skin_before_zen
+                        .take()
+                        .unwrap_or_else(|| lumen_storage::browser_settings::DEFAULT_SKIN.to_owned())
+                } else {
+                    "zen".to_owned()
+                };
+                self.apply_chrome_skin(&target);
+            }
+            // Deck skin: grid button in `.deck-top` toggles the coverflow
+            // tab overview (`body[data-deck-cards]`); arrows step the
+            // active tab circularly through `tab_strip`.
+            ChromeAction::ToggleDeckCards => {
+                self.deck_cards_open = !self.deck_cards_open;
+                self.relayout_chrome_host();
+            }
+            ChromeAction::DeckPrev => self.deck_step(-1),
+            ChromeAction::DeckNext => self.deck_step(1),
             ChromeAction::ToggleDemoMini => {
                 self.control_panel_mini_open = !self.control_panel_mini_open;
                 self.relayout_chrome_host();
@@ -980,6 +1054,16 @@ impl Lumen {
                     self.vertical_tabs.visible = layout == "vertical";
                     self.relayout_chrome_host();
                 }
+            }
+            // «Раскладка вкладок» в настройках: то же переключение
+            // vertical/horizontal, что `SetLayout`, но с флипом текущего
+            // значения (ссылка не знает состояние) + персист в settings.db.
+            ChromeAction::ToggleLayout => {
+                self.vertical_tabs.visible = !self.vertical_tabs.visible;
+                let _ = self.settings_store.set_tab_layout(
+                    if self.vertical_tabs.visible { "vertical" } else { "horizontal" },
+                );
+                self.relayout_chrome_host();
             }
             // CC-18: the "Фокус" button, the pill's exit button and
             // `KeyCommand::ToggleFocusMode` all flip `self.focus.active`;

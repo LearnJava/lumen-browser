@@ -947,6 +947,214 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
 .set-section{ display:none; }
 .set-section.active{ display:block; }
 
+/* ============================================================
+   СКИНЫ ХРОМА (body[data-skin])
+   ============================================================
+   Переопределяют дизайн-токены :root/body[data-theme]. Идентификаторы
+   должны совпадать с lumen_chrome::SKINS и кнопками .skin-btn ниже. */
+
+/* Кнопки выбора скина (секция настроек «Внешний вид»). */
+.skin-row{display:flex;gap:6px;flex-wrap:wrap;}
+.skin-btn{
+  padding:4px 10px; border:1px solid var(--stroke); border-radius:var(--radius-md);
+  background:var(--surface-1); color:var(--text-secondary);
+  font-size:12px; line-height:16px; cursor:pointer;
+}
+.skin-btn:hover{color:var(--text-primary); border-color:var(--text-secondary);}
+body[data-skin="midnight"] .skin-btn[data-skin="midnight"],
+body[data-skin="contrast"] .skin-btn[data-skin="contrast"],
+body[data-skin="compact"] .skin-btn[data-skin="compact"],
+body[data-skin="zen"] .skin-btn[data-skin="zen"],
+body[data-skin="deck"] .skin-btn[data-skin="deck"]{
+  background:var(--accent-soft); border-color:var(--accent); color:var(--accent);
+}
+
+/* ── «Полночь»: OLED-чёрный для тёмной темы, тёплая бумага для светлой. ── */
+body[data-skin="midnight"][data-theme="dark"]{
+  --surface-0:#000000; --surface-1:#050505; --surface-2:#0D0D0D;
+  --stroke:#1F1F1F; --text-primary:#F2F2F2; --text-secondary:#7C7C7C;
+  --overlay-bg:rgba(0,0,0,.65);
+}
+body[data-skin="midnight"][data-theme="light"]{
+  --surface-0:#FDFBF7; --surface-1:#F7F4EE; --surface-2:#EFEAE0;
+  --stroke:#E2DACB; --text-primary:#221E18; --text-secondary:#6E675C;
+  --overlay-bg:rgba(40,32,20,.35);
+}
+
+/* ── «Контраст»: максимальный контраст текста и границ в обеих темах. ── */
+body[data-skin="contrast"][data-theme="dark"]{
+  --surface-0:#000000; --surface-1:#0A0A0A; --surface-2:#1C1C1C;
+  --stroke:#FFFFFF; --text-primary:#FFFFFF; --text-secondary:#D0D0D0;
+  --overlay-bg:rgba(0,0,0,.7);
+}
+body[data-skin="contrast"][data-theme="light"]{
+  --surface-0:#FFFFFF; --surface-1:#FFFFFF; --surface-2:#F0F0F0;
+  --stroke:#000000; --text-primary:#000000; --text-secondary:#2E2E2E;
+  --overlay-bg:rgba(0,0,0,.45);
+}
+
+/* ── «Компакт»: уменьшенная плотность — высоты панелей и сайдбара.
+   Только геометрические токены: отступы/радиусы не трогаем, чтобы не
+   ломать сетки, рассчитанные на --space-*/--radius-*. */
+body[data-skin="compact"]{
+  --tab-h:24px; --toolbar-h:30px;
+  --sidebar-w:208px; --sidebar-w-collapsed:40px;
+}
+
+/* ── «Дзен»: минималистичный режим — прячем боковые панели, полосы вкладок
+   и демо-панель; остаются тулбар с омнибоксом и контент. Переключается
+   кнопкой в .tb-right (data-action="toggle-zen"), выбор помнит предыдущий
+   скин и возвращает его при повторном нажатии. ── */
+body[data-skin="zen"] #sidebar{display:none;}
+body[data-skin="zen"] #hbarTabs{display:none;}
+body[data-skin="zen"] .hbar-ws{display:none;}
+body[data-skin="zen"] #workspaceBar{display:none;}
+body[data-skin="zen"] #demoBar{display:none;}
+body[data-skin="zen"] #zenBtn{color:var(--accent);}
+
+/* ── «Колода» (deck): layout-вариант из docs/design/proposals-2026-11/
+   deck.html — топ-бар, страница на весь экран, filmstrip вкладок,
+   coverflow-обзор (body[data-deck-cards]) и нижний dock. #chromeDeck —
+   отдельный корень, виден только при data-skin="deck"; классический
+   каркас (.app-frame, #demoBar) при этом скине скрыт. #contentAreaDeck —
+   второй page-host: chrome_ui.rs берёт его rect, когда #contentArea
+   скрыт display:none и layout-бокса не имеет. ── */
+#chromeDeck{display:none;}
+body[data-skin="deck"] #chromeDeck{
+  display:flex; flex-direction:column; height:100vh;
+  background:#0B0D12; color:#E8EAF0;
+  font-family:var(--font-ui,"Segoe UI",system-ui,sans-serif);
+}
+body[data-skin="deck"] .app-frame,
+body[data-skin="deck"] .demo-bar{display:none;}
+.deck-top{
+  display:flex; align-items:center; gap:8px; height:42px; flex:none;
+  padding:0 14px; background:rgba(17,20,28,.9);
+  border-bottom:1px solid rgba(255,255,255,.07);
+}
+.deck-ib{
+  width:32px; height:32px; flex:none; display:flex; align-items:center;
+  justify-content:center; border:none; border-radius:8px;
+  background:transparent; color:#AAB0C0; cursor:pointer;
+}
+.deck-ib:hover{background:rgba(255,255,255,.08); color:#fff;}
+.deck-ib .icon{width:16px; height:16px;}
+.deck-omni{
+  flex:1; max-width:560px; margin:0 auto; height:30px; display:flex;
+  align-items:center; gap:8px; padding:0 14px; border-radius:15px;
+  background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.08);
+  color:#8A90A5; font-size:13px; overflow:hidden;
+}
+.deck-omni .icon{width:13px; height:13px; flex:none;}
+.deck-omni:focus-within{border-color:#6C8CFF;}
+.deck-omni-input{
+  flex:1; min-width:0; background:none; border:none; outline:none;
+  color:#Dfe3ee; font-size:13px; font-family:inherit;
+}
+.deck-omni-input::placeholder{color:#8A90A5;}
+.deck-stage{flex:1; position:relative; overflow:hidden; perspective:1600px;}
+.deck-page{position:absolute; inset:0; background:#fff;}
+.deck-cards{
+  position:absolute; inset:0; display:none;
+  background:rgba(11,13,18,.94);
+}
+body[data-deck-cards] .deck-cards{display:block;}
+.deck-cf{
+  position:absolute; left:50%; top:50%; width:340px; height:220px;
+  cursor:pointer; transition:transform .35s cubic-bezier(.2,.8,.2,1),opacity .3s;
+}
+.deck-cf-in{
+  width:100%; height:100%; display:flex; flex-direction:column;
+  background:#fff; border-radius:12px; border:1px solid #E2E5EE;
+  box-shadow:0 18px 50px rgba(0,0,0,.45); overflow:hidden;
+}
+.deck-cf.on .deck-cf-in{
+  border-color:#6C8CFF;
+  box-shadow:0 0 0 2px rgba(108,140,255,.35),0 18px 50px rgba(0,0,0,.5);
+}
+.deck-cf-hd{
+  display:flex; align-items:center; gap:6px; padding:8px 10px;
+  font-size:11px; color:#6B7280; flex:none;
+}
+.deck-cf-fav{
+  width:14px; height:14px; flex:none; border-radius:4px;
+  background:#6C8CFF; color:#fff; font-size:9px;
+  display:flex; align-items:center; justify-content:center;
+}
+.deck-cf-url{flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.deck-cf-x{
+  border:none; background:none; color:#9AA0B4; cursor:pointer;
+  font-size:14px; padding:0 2px; line-height:1;
+}
+.deck-cf-shot{
+  flex:1; display:flex; align-items:center; justify-content:center;
+  padding:10px; background:linear-gradient(135deg,#F2F4FA,#E8EBF5);
+}
+.deck-cf-title{
+  font-size:12px; color:#4B5165; text-align:center;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%;
+}
+.deck-cf-ft{
+  display:flex; align-items:center; gap:6px; padding:7px 10px;
+  font-size:11px; color:#4B5165; border-top:1px solid #EEF0F6; flex:none;
+}
+.deck-cf-name{white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.deck-cf-tag{
+  margin-left:auto; flex:none; font-size:9px; padding:1px 6px;
+  border-radius:8px; background:#E8F5E9; color:#2E7D32;
+}
+.deck-film{
+  display:flex; gap:8px; height:86px; flex:none; align-items:center;
+  padding:0 14px; overflow-x:auto;
+  background:rgba(13,16,24,.9); border-top:1px solid rgba(255,255,255,.07);
+}
+.deck-fc{
+  position:relative; flex:none; width:150px; height:64px; padding:0 10px;
+  display:flex; align-items:center; gap:8px; text-align:left;
+  border-radius:9px; border:1px solid rgba(255,255,255,.1);
+  background:rgba(255,255,255,.05); color:#Dfe3ee; cursor:pointer;
+}
+.deck-fc.active{
+  border-color:#6C8CFF; background:rgba(108,140,255,.12);
+}
+.deck-fc.sleeping{opacity:.55;}
+.deck-fc-fav{
+  width:18px; height:18px; flex:none; border-radius:5px;
+  background:#6C8CFF; color:#fff; font-size:10px;
+  display:flex; align-items:center; justify-content:center;
+}
+.deck-fc-title{
+  flex:1; font-size:12px; white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis;
+}
+.deck-fc-x{
+  position:absolute; top:3px; right:4px; border:none; background:none;
+  color:#8A90A5; cursor:pointer; font-size:12px; padding:0 2px; opacity:0;
+}
+.deck-fc:hover .deck-fc-x{opacity:1;}
+.deck-dock{
+  display:flex; justify-content:center; gap:6px; height:44px; flex:none;
+  align-items:center; background:rgba(13,16,24,.95);
+  border-top:1px solid rgba(255,255,255,.07);
+}
+.deck-d{
+  width:34px; height:30px; display:flex; align-items:center;
+  justify-content:center; border:none; border-radius:8px;
+  background:transparent; color:#AAB0C0; cursor:pointer;
+}
+.deck-d:hover{background:rgba(255,255,255,.08); color:#fff;}
+.deck-d .icon{width:15px; height:15px;}
+.deck-cf-arrow{
+  position:absolute; top:50%; transform:translateY(-50%); z-index:20;
+  width:44px; height:44px; border:none; border-radius:50%;
+  background:rgba(255,255,255,.08); color:#Dfe3ee; cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+}
+.deck-cf-arrow:hover{background:rgba(255,255,255,.16);}
+.deck-cf-arrow .icon{width:18px; height:18px;}
+.deck-cf-arrow.l{left:18px;}
+.deck-cf-arrow.r{right:18px;}
+
 </style>
 </head>
 <body data-theme="light" data-profile="personal" data-layout="vertical" data-demo="card">
@@ -1467,6 +1675,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
           <button class="tb-btn" data-action="translate-page" aria-label="Перевести страницу"><svg class="icon"><use href="#i-translate"/></svg></button>
           <button class="tb-btn" data-action="open-print-dialog"><svg class="icon"><use href="#i-printer"/></svg></button>
           <button class="tb-btn" id="devtoolsBtn" data-action="toggle-devtools" aria-label="DevTools"><svg class="icon"><use href="#i-code"/></svg></button>
+          <button class="tb-btn" id="zenBtn" data-action="toggle-zen" aria-label="Дзен-режим — минималистичный хром"><svg class="icon"><use href="#i-moon"/></svg></button>
           <button class="tb-btn" data-action="show-view" data-view="settings" aria-label="Настройки"><svg class="icon"><use href="#i-gear"/></svg></button>
         </div>
       </div>
@@ -1610,7 +1819,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                     <label class="radio-card"><input type="radio" name="start"><div><div class="rc-title">Восстановить сессию</div><div class="rc-desc">Открыть вкладки с прошлого раза.</div></div></label>
                   </div>
                   <div class="set-block"><h3>Поиск по умолчанию</h3>
-                    <div class="set-row"><div class="st-text"><div class="st-title">Поисковый движок</div><div class="st-desc">Используется в омнибоксе</div></div><a class="link" href="javascript:void(0)">DuckDuckGo ▾</a></div>
+                    <div class="set-row"><div class="st-text"><div class="st-title">Поисковый движок</div><div class="st-desc">Используется в омнибоксе, когда запрос не похож на адрес. Сейчас — Google; выбор движка в разработке.</div></div><span class="st-desc">Google</span></div>
                   </div>
                   <div class="set-block"><h3>Обновления</h3><div class="desc">Проверка не чаще раза в сутки, без cookies и идентификаторов.</div>
                     <div class="set-row"><div class="st-text"><div class="st-title">Проверять обновления автоматически</div><div class="st-desc">Раз в сутки при запуске</div></div><div class="toggle on" id="updAutoToggle" data-action="toggle-auto-update"><div class="thumb"></div></div></div>
@@ -1646,7 +1855,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                     <div class="toggle on" data-action="toggle-fingerprint-mode"><div class="thumb"></div></div>
                   </div>
                   <div class="set-row">
-                    <div class="st-text"><div class="st-title">Принудительный HTTPS</div><div class="st-desc">Автоматический апгрейд: Выкл</div></div>
+                    <div class="st-text"><div class="st-title">Принудительный HTTPS</div><div class="st-desc">Автоматический апгрейд http→https. Функция в разработке — переключатель пока не применяется.</div></div>
                     <div class="toggle" data-action="toggle-switch"><div class="thumb"></div></div>
                   </div>
                 </div>
@@ -1670,8 +1879,18 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                     <label class="radio-card"><input type="radio" name="thm"><div><div class="rc-title">Тёмная</div></div></label>
                   </div>
                   <div class="set-block"><h3>Вкладки</h3>
-                    <div class="set-row"><div class="st-text"><div class="st-title">Раскладка</div><div class="st-desc">Вертикальный сайдбар или горизонтальная лента</div></div><a class="link" href="javascript:void(0)">Вертикальные ▾</a></div>
+                    <div class="set-row"><div class="st-text"><div class="st-title">Раскладка вкладок</div><div class="st-desc">Вертикальный сайдбар или горизонтальная лента — клик переключает</div></div><a class="link" href="javascript:void(0)" data-action="toggle-layout"><span id="setLayoutLabel">Вертикальные</span> ▾</a></div>
                     <div class="set-row"><div class="st-text"><div class="st-title">Скругления</div><div class="st-desc">Макс. 6px — без пилюль (правило дизайн-системы)</div></div><span class="st-desc" style="font-family:var(--font-mono)">2/4/6px</span></div>
+                  </div>
+                  <div class="set-block"><h3>Скин</h3><div class="desc">Оформление и раскладка хрома. Применяется сразу и запоминается. «Колода» — отдельный макет: топ-бар, карточки вкладок внизу и обзор-«колода» по кнопке с сеткой; «Дзен» — минимализм без боковых панелей, включается также кнопкой-луной в тулбаре.</div>
+                    <div class="skin-row">
+                      <button class="skin-btn" data-action="set-skin" data-skin="default" title="Стандартный вид Lumen v3.3 без изменений">Стандарт</button>
+                      <button class="skin-btn" data-action="set-skin" data-skin="midnight" title="Тёмная тема — чистый чёрный OLED, светлая — тёплая «бумага»">Полночь</button>
+                      <button class="skin-btn" data-action="set-skin" data-skin="contrast" title="Максимальный контраст текста и границ в обеих темах">Контраст</button>
+                      <button class="skin-btn" data-action="set-skin" data-skin="compact" title="Уменьшенная плотность: ниже вкладки, тулбар и сайдбар">Компакт</button>
+                      <button class="skin-btn" data-action="set-skin" data-skin="zen" title="Минимализм: только тулбар и страница, без панелей и ленты вкладок">Дзен</button>
+                      <button class="skin-btn" data-action="set-skin" data-skin="deck" title="Макет «Колода»: топ-бар, страница на весь экран, карточки вкладок внизу и 3D-обзор по кнопке с сеткой">Колода</button>
+                    </div>
                   </div>
                 </div>
 
@@ -1716,7 +1935,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                 </div>
 
                 <div class="set-section" data-set="sync">
-                  <div class="set-block"><h3>Синхронизация</h3><div class="desc">Только локальная P2P или ваш WebDAV/S3 — без принудительного облака.</div>
+                  <div class="set-block"><h3>Синхронизация</h3><div class="desc">Только локальная P2P или ваш WebDAV/S3 — без принудительного облака. Секция в разработке — выбор пока не применяется.</div>
                     <label class="radio-card"><input type="radio" name="sync" checked><div><div class="rc-title">Локальная P2P</div><div class="rc-desc">Устройства в одной сети синхронизируются напрямую.</div></div></label>
                     <label class="radio-card"><input type="radio" name="sync"><div><div class="rc-title">Свой WebDAV / S3</div><div class="rc-desc">Укажите endpoint — данные шифруются на клиенте.</div></div></label>
                     <label class="radio-card"><input type="radio" name="sync"><div><div class="rc-title">Выключена</div></div></label>
@@ -1724,7 +1943,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                 </div>
 
                 <div class="set-section" data-set="ext">
-                  <div class="set-block"><h3>Расширения</h3><div class="desc">Установленные дополнения.</div>
+                  <div class="set-block"><h3>Расширения</h3><div class="desc">Демо-список макета — управление расширениями в разработке, переключатели пока не применяются.</div>
                     <div class="set-row"><div class="st-text"><div class="st-title">uBlock Origin</div><div class="st-desc">Активно · 1.54</div></div><div class="toggle on" data-action="toggle-switch"><div class="thumb"></div></div></div>
                     <div class="set-row"><div class="st-text"><div class="st-title">Bitwarden</div><div class="st-desc">Активно · 2024.6</div></div><div class="toggle on" data-action="toggle-switch"><div class="thumb"></div></div></div>
                   </div>
@@ -1733,8 +1952,8 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                 <div class="set-section" data-set="qa">
                   <div class="set-block"><h3>QA / Тестировщикам</h3><div class="desc">Инструменты для ручного и авто-тестирования. Полная панель — по кнопке ниже или «QA-панель» на демо-полосе.</div>
                     <div class="set-row"><div class="st-text"><div class="st-title">Открыть панель тестировщика</div><div class="st-desc">FPS/кадр, test-id оверлей, эмуляция сети и вьюпорта, feature-flags, экспорт состояния</div></div><a class="link" href="javascript:void(0)" data-action="show-view" data-view="page">Открыть →</a></div>
-                    <div class="set-row"><div class="st-text"><div class="st-title">Режим сборки</div><div class="st-desc">Стабильные функции скрывают экспериментальные флаги</div></div><a class="link" href="javascript:void(0)">Nightly ▾</a></div>
-                    <div class="set-row"><div class="st-text"><div class="st-title">Стабильные test-id</div><div class="st-desc">Гарантия неизменных <span style="font-family:var(--font-mono)">data-testid</span> для автотестов</div></div><div class="toggle on" data-action="toggle-switch"><div class="thumb"></div></div></div>
+                    <div class="set-row"><div class="st-text"><div class="st-title">Режим сборки</div><div class="st-desc">Стабильные функции скрывают экспериментальные флаги — в разработке</div></div><span class="st-desc">Nightly</span></div>
+                    <div class="set-row"><div class="st-text"><div class="st-title">Стабильные test-id</div><div class="st-desc">Гарантия неизменных <span style="font-family:var(--font-mono)">data-testid</span> для автотестов — в разработке</div></div><div class="toggle on" data-action="toggle-switch"><div class="thumb"></div></div></div>
                   </div>
                 </div>
               </div>
@@ -2065,6 +2284,40 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
     </div>
   </div>
 </div>
+</div>
+
+<!-- ================= DECK SKIN («Колода») =================
+     docs/design/proposals-2026-11/deck.html → engine chrome. Виден только
+     при body[data-skin="deck"] (см. CSS выше). #deckCards перестраивается
+     bind_deck (crates/chrome/src/model.rs) — здесь только статичные
+     контейнеры; #contentAreaDeck — второй page-host, его rect забирает
+     chrome_ui.rs, когда #contentArea скрыт. Стрелки .deck-cf-arrow
+     перемещают активную вкладку (data-action deck-prev/deck-next). -->
+<div class="deck-ui" id="chromeDeck">
+  <div class="deck-top">
+    <button class="deck-ib" data-action="reload" aria-label="Обновить"><svg class="icon"><use href="#i-reload"/></svg></button>
+    <button class="deck-ib" data-action="new-tab" aria-label="Новая вкладка"><svg class="icon"><use href="#i-plus"/></svg></button>
+    <div class="deck-omni"><svg class="icon"><use href="#i-lock"/></svg><input class="deck-omni-input" id="deckOmniInput" type="text" placeholder="Поиск или адрес"></div>
+    <button class="deck-ib" id="deckCardsBtn" data-action="toggle-deck-cards" aria-label="Обзор вкладок — колода"><svg class="icon"><use href="#i-grid"/></svg></button>
+    <button class="deck-ib" data-action="show-view" data-view="settings" aria-label="Настройки"><svg class="icon"><use href="#i-gear"/></svg></button>
+  </div>
+  <div class="deck-stage">
+    <div class="deck-cards" id="deckCards">
+      <button class="deck-cf-arrow l" data-action="deck-prev" aria-label="Предыдущая вкладка"><svg class="icon"><use href="#i-chevleft"/></svg></button>
+      <button class="deck-cf-arrow r" data-action="deck-next" aria-label="Следующая вкладка"><svg class="icon"><use href="#i-chevright"/></svg></button>
+    </div>
+    <div class="deck-page" id="contentAreaDeck"></div>
+  </div>
+  <div class="deck-film" id="deckFilm"></div>
+  <div class="deck-dock">
+    <button class="deck-d" data-action="show-view" data-view="history" aria-label="История"><svg class="icon"><use href="#i-clock"/></svg></button>
+    <button class="deck-d" data-action="show-view" data-view="bookmarks" aria-label="Закладки"><svg class="icon"><use href="#i-star"/></svg></button>
+    <button class="deck-d" data-action="toggle-downloads" aria-label="Загрузки"><svg class="icon"><use href="#i-download"/></svg></button>
+    <button class="deck-d" data-action="toggle-archive" aria-label="Архив"><svg class="icon"><use href="#i-clock"/></svg></button>
+    <button class="deck-d" data-action="open-ai-sidebar" aria-label="ИИ-ассистент"><svg class="icon"><use href="#i-spark"/></svg></button>
+    <button class="deck-d" data-action="toggle-devtools" aria-label="DevTools"><svg class="icon"><use href="#i-code"/></svg></button>
+    <button class="deck-d" data-action="toggle-zen" aria-label="Дзен-режим"><svg class="icon"><use href="#i-moon"/></svg></button>
+  </div>
 </div>
 
 </body>
