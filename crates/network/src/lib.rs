@@ -118,6 +118,22 @@ pub use flate::{DeflateContentDecoder, GzipContentDecoder};
 pub use zstd::ZstdContentDecoder;
 pub use filter::{DefaultFilterList, EasyListFilter, HostsFilter, CompositeFilter};
 
+/// Декодеры `Content-Encoding` в каноническом порядке Chrome 157
+/// (`http::chrome_manifest::CHROME_157.accept_encoding` =
+/// `gzip, deflate, br, zstd`). Единственная точка регистрации для
+/// production-клиентов (FINGERPRINT-MANIFEST): shell/driver должны
+/// подключать их через [`HttpClient::with_content_decoders`], чтобы
+/// `Accept-Encoding` не зависел от порядка вызовов на конкретном сайте.
+#[must_use]
+pub fn default_content_decoders() -> Vec<Arc<dyn ContentDecoder>> {
+    vec![
+        Arc::new(GzipContentDecoder::new()),
+        Arc::new(DeflateContentDecoder::new()),
+        Arc::new(BrotliContentDecoder::new()),
+        Arc::new(ZstdContentDecoder::new()),
+    ]
+}
+
 // Реэкспорт HTTP/1.1-ядра (SPLIT-NW0), чтобы `do_request` в этом файле
 // продолжал ссылаться на голые имена без правки call-site-ов — механический
 // перенос, публичная поверхность не растёт (все элементы ниже `pub(crate)`,
@@ -4134,6 +4150,14 @@ impl HttpClient {
     #[must_use]
     pub fn with_content_decoder(mut self, decoder: Arc<dyn ContentDecoder>) -> Self {
         self.decoders.push(decoder);
+        self
+    }
+
+    /// Подключить набор декодеров разом (см. [`default_content_decoders`]).
+    /// Порядок вектора = порядок в `Accept-Encoding`.
+    #[must_use]
+    pub fn with_content_decoders(mut self, decoders: Vec<Arc<dyn ContentDecoder>>) -> Self {
+        self.decoders.extend(decoders);
         self
     }
 

@@ -35,25 +35,13 @@ use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use super::{LumenVerifier, TlsProfile, cert_error, ct, nuc, ocsp};
 use crate::{Error, NetErrorCode, net_failure};
 
-/// TLS 1.2 + 1.3 AEAD suites in Chrome's preference order (the TLS 1.3
-/// suites are implicit in BoringSSL; this list orders the ≤1.2 half).
-const CHROME_CIPHER_LIST: &str = "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:\
-TLS_CHACHA20_POLY1305_SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:\
-ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:\
-ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305";
-
-/// Chrome's `signature_algorithms` (no `rsa_pkcs1_sha1`, no PQ schemes —
-/// BoringSSL's defaults add ML-DSA ids this stack does not want to offer).
-const CHROME_SIGALGS: &str = "ecdsa_secp256r1_sha256:rsa_pss_rsae_sha256:rsa_pkcs1_sha256:\
-ecdsa_secp384r1_sha384:rsa_pss_rsae_sha384:rsa_pkcs1_sha384:\
-rsa_pss_rsae_sha512:rsa_pkcs1_sha512";
-
-/// Chrome's `supported_groups`: X25519MLKEM768 hybrid first (Chrome ≥124),
-/// then X25519, P-256, P-384.
-const CHROME_GROUPS: &str = "X25519MLKEM768:X25519:P-256:P-384";
-
-const ALPN_H2_H1: &[u8] = b"\x02h2\x08http/1.1";
-const ALPN_H1: &[u8] = b"\x08http/1.1";
+/// TLS ClientHello-списки Chrome берутся из `crate::http::chrome_manifest::CHROME_157.tls`
+/// (FINGERPRINT-MANIFEST): cipher_list (TLS 1.2 + 1.3 AEAD в порядке
+/// предпочтения Chrome; TLS 1.3 suites в BoringSSL неявные), sigalgs
+/// (без `rsa_pkcs1_sha1` и PQ-схем), groups (X25519MLKEM768 первым,
+/// Chrome ≥124), ALPN. Значения перенесены без изменений — рефакторинг
+/// WS-B не должен двигать wire.
+const TLS: &crate::http::chrome_manifest::TlsSpec = &crate::http::chrome_manifest::CHROME_157.tls;
 
 /// Connector + verifier bundle for one `(profile, h1_only)` pair.
 struct Endpoint {
@@ -79,8 +67,8 @@ fn endpoint(profile: TlsProfile, h1_only: bool) -> Result<Arc<Endpoint>, Error> 
 fn build_endpoint(profile: TlsProfile, h1_only: bool) -> Result<Endpoint, Error> {
     let mut b = SslConnector::builder(SslMethod::tls())
         .map_err(|e| net_failure(NetErrorCode::SslProtocolError, format!("BoringSSL init: {e}")))?;
-    let _ = b.set_cipher_list(CHROME_CIPHER_LIST);
-    let _ = b.set_sigalgs_list(CHROME_SIGALGS);
+    let _ = b.set_cipher_list(TLS.cipher_list);
+    let _ = b.set_sigalgs_list(TLS.sigalgs);
     // Handshake-time chain validation stays OFF: `LumenVerifier` re-runs the
     // full policy (webpki + AIA + NUC + OCSP + bypass) on the DER chain after
     // the handshake — see module docs. `set_default_verify_paths` from
@@ -92,11 +80,11 @@ fn build_endpoint(profile: TlsProfile, h1_only: bool) -> Result<Endpoint, Error>
 
     match profile {
         TlsProfile::Standard => {
-            let _ = b.set_curves_list(CHROME_GROUPS);
+            let _ = b.set_curves_list(TLS.groups);
             let _ = b.set_min_proto_version(Some(SslVersion::TLS1_2));
         }
         TlsProfile::Strict => {
-            let _ = b.set_curves_list(CHROME_GROUPS);
+            let _ = b.set_curves_list(TLS.groups);
             let _ = b.set_min_proto_version(Some(SslVersion::TLS1_3));
         }
         TlsProfile::Tor => {
@@ -105,8 +93,8 @@ fn build_endpoint(profile: TlsProfile, h1_only: bool) -> Result<Endpoint, Error>
         }
     }
     let alpn: &[u8] = match (profile, h1_only) {
-        (TlsProfile::Tor, _) | (_, true) => ALPN_H1,
-        _ => ALPN_H2_H1,
+        (TlsProfile::Tor, _) | (_, true) => TLS.alpn_h1,
+        _ => TLS.alpn,
     };
     b.set_alpn_protos(alpn)
         .map_err(|e| net_failure(NetErrorCode::SslProtocolError, format!("BoringSSL ALPN: {e}")))?;

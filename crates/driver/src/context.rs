@@ -258,7 +258,9 @@ impl Default for SessionContext {
 fn default_user_agent(profile: FingerprintProfile) -> String {
     match profile {
         FingerprintProfile::Standard => {
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36".to_string()
+            // Единый источник UA — lumen_core::Identity (BUG-1832/FINGERPRINT-MANIFEST):
+            // хардкод Chrome/x.y здесь был вторым источником версии.
+            lumen_core::identity_variant().user_agent().to_string()
         }
         FingerprintProfile::Strict => {
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0".to_string()

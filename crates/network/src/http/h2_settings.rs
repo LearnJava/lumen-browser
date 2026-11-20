@@ -43,19 +43,22 @@ impl H2Settings {
     pub fn for_profile(profile: HttpProfile) -> Self {
         match profile {
             HttpProfile::Chrome | HttpProfile::Strict => {
-                // Chrome 157+ HTTP/2 SETTINGS — измерено tls.peet.ws/api/all
-                // (akamai `1:65536;2:0;4:6291456;6:262144`): Chrome больше не
-                // шлёт ENABLE_PUSH=1, MAX_CONCURRENT_STREAMS и MAX_FRAME_SIZE,
-                // зато добавил MAX_HEADER_LIST_SIZE=256 KiB (BUG-1826).
+                // Chrome 157+ HTTP/2 SETTINGS — значения живут в
+                // `chrome_manifest::CHROME_157` (FINGERPRINT-MANIFEST);
+                // измерено tls.peet.ws/api/all (akamai `1:65536;2:0;4:6291456;6:262144`),
+                // BUG-1826: Chrome больше не шлёт ENABLE_PUSH=1,
+                // MAX_CONCURRENT_STREAMS и MAX_FRAME_SIZE, зато добавил
+                // MAX_HEADER_LIST_SIZE=256 KiB.
+                let m = &super::chrome_manifest::CHROME_157.h2;
                 Self {
-                    header_table_size: 65536,
-                    enable_push: false,
-                    max_concurrent_streams: None,
-                    initial_window_size: 6291456,   // 6 MB
-                    max_frame_size: None,
-                    max_header_list_size: Some(262144),
+                    header_table_size: m.header_table_size,
+                    enable_push: m.enable_push,
+                    max_concurrent_streams: m.max_concurrent_streams,
+                    initial_window_size: m.initial_window_size,
+                    max_frame_size: m.max_frame_size,
+                    max_header_list_size: m.max_header_list_size,
                     header_compression_size_limit: None,
-                    connection_window_increment: 15_663_105,  // 15 MB connection window
+                    connection_window_increment: m.connection_window_increment,
                 }
             }
             HttpProfile::Firefox => {
@@ -85,17 +88,8 @@ impl H2Settings {
                 }
             }
             HttpProfile::Edge => {
-                // Edge 130+ HTTP/2 SETTINGS (same as Chrome)
-                Self {
-                    header_table_size: 65536,
-                    enable_push: false,
-                    max_concurrent_streams: None,
-                    initial_window_size: 6291456,   // 6 MB (same as Chrome)
-                    max_frame_size: None,
-                    max_header_list_size: Some(262144),
-                    header_compression_size_limit: None,
-                    connection_window_increment: 15_663_105,  // 15 MB connection window
-                }
+                // Edge — тот же Chromium-стек: читает тот же манифест Chrome 157.
+                H2Settings::for_profile(HttpProfile::Chrome)
             }
             HttpProfile::TorBrowser => {
                 // Tor Browser HTTP/2 SETTINGS (conservative to avoid unique fingerprint)

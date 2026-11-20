@@ -267,17 +267,12 @@ impl PageSource {
             }
             PageSource::Url { url, body, upgrade_insecure_requests, referrer } => {
                 use lumen_core::url::Url;
-                use lumen_network::{
-                    BrotliContentDecoder, DeflateContentDecoder, GzipContentDecoder, HttpClient, ZstdContentDecoder,
-                };
+                use lumen_network::HttpClient;
 
                 let lumen_url = Url::parse(url)?;
                 let mut builder = HttpClient::new()
                     .with_sink(Arc::clone(&sink))
-                    .with_content_decoder(std::sync::Arc::new(GzipContentDecoder::new()))
-                    .with_content_decoder(std::sync::Arc::new(DeflateContentDecoder::new()))
-                    .with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new()))
-                    .with_content_decoder(std::sync::Arc::new(ZstdContentDecoder::new()));
+                    .with_content_decoders(lumen_network::default_content_decoders());
                 let warm_jar = cookie_jar.clone();
                 if let Some(jar) = cookie_jar {
                     builder = builder.with_cookie_jar(
@@ -423,17 +418,12 @@ impl PageSource {
             return self.load_bytes(sink, cookie_jar, tab);
         };
         use lumen_core::url::Url;
-        use lumen_network::{
-            BrotliContentDecoder, DeflateContentDecoder, GzipContentDecoder, HttpClient, ZstdContentDecoder,
-        };
+        use lumen_network::HttpClient;
 
         let lumen_url = Url::parse(url)?;
         let mut builder = HttpClient::new()
             .with_sink(Arc::clone(&sink))
-            .with_content_decoder(std::sync::Arc::new(GzipContentDecoder::new()))
-            .with_content_decoder(std::sync::Arc::new(DeflateContentDecoder::new()))
-            .with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new()))
-            .with_content_decoder(std::sync::Arc::new(ZstdContentDecoder::new()));
+            .with_content_decoders(lumen_network::default_content_decoders());
         let warm_jar = cookie_jar.clone();
         if let Some(jar) = cookie_jar {
             builder = builder.with_cookie_jar(
