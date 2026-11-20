@@ -250,14 +250,14 @@ impl Lumen {
         // BUG-341 S22: the detachment record is kept, not discarded — it is
         // what lets the next pass rebuild this tree's pristine form instead of
         // this pass copying one aside.
-        let pruned = doc.find_by_id(lumen_chrome::ids::CONTENT_AREA).and_then(|id| {
-            take_content_area(
-                &mut layout,
-                id,
-                &SALVAGED_POPOVER_IDS,
-                doc,
-            )
-        });
+        // Skin "deck" hides the classic `#contentArea` (display:none → no
+        // layout box), so fall back to its own `#contentAreaDeck` host —
+        // whichever yields a box first wins; in every other skin the first
+        // candidate matches exactly as before.
+        let pruned = [lumen_chrome::ids::CONTENT_AREA, lumen_chrome::ids::CONTENT_AREA_DECK]
+            .iter()
+            .filter_map(|&id| doc.find_by_id(id))
+            .find_map(|id| take_content_area(&mut layout, id, &SALVAGED_POPOVER_IDS, doc));
         let (page_host_rect, detached) = match pruned {
             Some((rect, detached)) => (Some(rect), Some(detached)),
             None => (None, None),
@@ -901,6 +901,7 @@ impl Lumen {
             layout_vertical: self.vertical_tabs.visible || self.tree_tabs.visible,
             profile_slug,
             skin: self.chrome_skin.clone(),
+            deck_cards_open: self.deck_cards_open,
             profile_menu_open: self.profile_menu.visible,
             control_panel: lumen_chrome::ChromeControlPanelModel {
                 shape: self.control_panel_shape,

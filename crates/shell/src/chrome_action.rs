@@ -94,6 +94,18 @@ impl Lumen {
         self.relayout_chrome_host();
     }
 
+    /// `deck-prev`/`deck-next`: circular step through `tab_strip` — used by
+    /// the coverflow arrows of the "deck" chrome skin.
+    fn deck_step(&mut self, delta: isize) {
+        let n = self.tab_strip.tabs.len();
+        if n == 0 {
+            return;
+        }
+        let cur = self.tab_strip.active.min(n - 1);
+        let next = (cur as isize + delta).rem_euclid(n as isize) as usize;
+        self.switch_tab(next);
+    }
+
     pub(crate) fn dispatch_chrome_action(
         &mut self,
         nid: NodeId,
@@ -1005,6 +1017,15 @@ impl Lumen {
                 };
                 self.apply_chrome_skin(&target);
             }
+            // Deck skin: grid button in `.deck-top` toggles the coverflow
+            // tab overview (`body[data-deck-cards]`); arrows step the
+            // active tab circularly through `tab_strip`.
+            ChromeAction::ToggleDeckCards => {
+                self.deck_cards_open = !self.deck_cards_open;
+                self.relayout_chrome_host();
+            }
+            ChromeAction::DeckPrev => self.deck_step(-1),
+            ChromeAction::DeckNext => self.deck_step(1),
             ChromeAction::ToggleDemoMini => {
                 self.control_panel_mini_open = !self.control_panel_mini_open;
                 self.relayout_chrome_host();

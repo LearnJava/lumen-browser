@@ -244,6 +244,82 @@ fn skin_or_default_normalises_to_known_ids() {
     }
 }
 
+fn deck_tab(id: usize, title: &str, active: bool) -> ChromeTabModel {
+    ChromeTabModel {
+        id, title: title.to_owned(), active, sleeping: false, loading: false,
+        is_child: false, tree: None, container_color: None, group: None,
+    }
+}
+
+#[test]
+fn deck_skin_rebuilds_film_and_coverflow_from_tabs() {
+    let mut doc = parse_asset();
+    let model = ChromeModel {
+        skin: "deck".to_owned(),
+        deck_cards_open: true,
+        tabs: vec![
+            deck_tab(1, "Alpha", false),
+            deck_tab(2, "Beta", true),
+            deck_tab(3, "Gamma", false),
+        ],
+        ..ChromeModel::default()
+    };
+    bind_model(&mut doc, &model);
+    let body = doc.body().expect("asset has <body>");
+    assert_eq!(doc.get(body).get_attr("data-deck-cards"), Some(""));
+
+    let film = doc.find_by_id(crate::ids::DECK_FILM).expect("asset has #deckFilm");
+    let film_cards: Vec<NodeId> = doc
+        .get(film)
+        .children
+        .iter()
+        .copied()
+        .filter(|&c| has_class(&doc, c, "deck-fc"))
+        .collect();
+    assert_eq!(film_cards.len(), 3, "filmstrip shows every tab");
+    assert!(has_class(&doc, film_cards[1], "active"));
+
+    let cards = doc.find_by_id(crate::ids::DECK_CARDS).expect("asset has #deckCards");
+    // Стрелки .deck-cf-arrow — статичная разметка, в счёт не идут.
+    let cf: Vec<NodeId> = doc
+        .get(cards)
+        .children
+        .iter()
+        .copied()
+        .filter(|&c| has_class(&doc, c, "deck-cf"))
+        .collect();
+    assert_eq!(cf.len(), 3, "3 tabs → all within coverflow reach");
+    // Центральная (d=0) карточка — активная, transform без смещения.
+    let on = cf.iter().find(|&&c| has_class(&doc, c, "on")).expect("one .on card");
+    assert_eq!(doc.get(*on).get_attr("data-tab-id"), Some("2"));
+    let style = doc.get(*on).get_attr("style").unwrap_or_default();
+    assert!(style.contains("translateX(0px)"), "active card centred: {style}");
+
+    // Закрытый обзор: атрибут снимается.
+    bind_model(&mut doc, &ChromeModel { deck_cards_open: false, ..model });
+    assert_eq!(doc.get(body).get_attr("data-deck-cards"), None);
+}
+
+#[test]
+fn deck_coverflow_skips_tabs_beyond_reach() {
+    let mut doc = parse_asset();
+    // 9 вкладок, активна средняя (index 4): |d| ≤ 3 → 7 карточек, края (d=±4) скрыты.
+    let tabs: Vec<ChromeTabModel> = (0..9)
+        .map(|i| deck_tab(i, &format!("T{i}"), i == 4))
+        .collect();
+    let model = ChromeModel { skin: "deck".to_owned(), tabs, ..ChromeModel::default() };
+    bind_model(&mut doc, &model);
+    let cards = doc.find_by_id(crate::ids::DECK_CARDS).expect("asset has #deckCards");
+    let cf: Vec<NodeId> = doc
+        .get(cards)
+        .children
+        .iter()
+        .copied()
+        .filter(|&c| has_class(&doc, c, "deck-cf"))
+        .collect();
+    assert_eq!(cf.len(), 7, "only neighbours within reach render");
+}
+
 #[test]
 fn tab_list_is_rebuilt_from_the_model() {
     let mut doc = parse_asset();

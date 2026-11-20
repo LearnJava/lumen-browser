@@ -67,9 +67,12 @@ const DEFAULT_TAB_LAYOUT: &str = "horizontal";
 const DEFAULT_PANEL_LAYOUT: &str = "";
 const DEFAULT_TRANSLATE_LANGUAGE: &str = "ru";
 const DEFAULT_TRANSLATE_MODEL: &str = "";
-/// «Полночь» — дефолтный скин (решение пользователя 2026-11): OLED-тёмная и
-/// тёплая светлая темы; «default» остаётся доступным как «Стандарт» в пикере.
-pub const DEFAULT_SKIN: &str = "midnight";
+/// «Колода» — дефолтный скин (решение пользователя 2026-11): layout-вариант
+/// с топ-баром, filmstrip карточек вкладок и 3D-обзор-«колодой»; остальные
+/// скины остаются доступными в пикере настроек. Записанный в БД выбор
+/// пользователя не перезаписывается — дефолт действует только при отсутствии
+/// ключа `skin`.
+pub const DEFAULT_SKIN: &str = "deck";
 
 /// All browser settings in a single value type for easy read/write.
 #[derive(Debug, Clone, PartialEq)]

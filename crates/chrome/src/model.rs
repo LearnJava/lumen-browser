@@ -34,7 +34,7 @@ pub use update_bar::{ChromeUpdateAction, ChromeUpdateModel};
 /// Chrome skin ids known to the engine chrome — must stay in sync with the
 /// `body[data-skin="…"]` blocks in `assets/chrome/skins.css` and the
 /// `set-skin` buttons in the settings "Внешний вид" section.
-pub const SKINS: &[&str] = &["default", "midnight", "contrast", "compact", "zen"];
+pub const SKINS: &[&str] = &["default", "midnight", "contrast", "compact", "zen", "deck"];
 
 /// Returns `s` when it names a known skin, `"default"` otherwise — the single
 /// normalisation point for persisted/UI-provided skin ids.
@@ -63,6 +63,10 @@ pub struct ChromeModel {
     /// token overrides live in `assets/chrome/skins.css` (inlined into the
     /// generated `chrome.html`). Empty/`"default"` removes the attribute.
     pub skin: String,
+    /// `true` shows the deck skin's coverflow tab overview
+    /// (`body[data-deck-cards]` → `#deckCards` visible) — mirrors
+    /// `Lumen::deck_cards_open`, toggled by `data-action="toggle-deck-cards"`.
+    pub deck_cards_open: bool,
     /// `true` shows the profile dropdown (`#profileMenu`/`#profileMenuH`,
     /// UX-CHROME-PANELS) — mirrors `ProfileMenuPanel::visible`.
     pub profile_menu_open: bool,
@@ -1271,6 +1275,11 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
             "" | "default" => remove_attr(doc, body, "data-skin"),
             skin => set_attr(doc, body, "data-skin", skin),
         }
+        if model.deck_cards_open {
+            set_attr(doc, body, "data-deck-cards", "");
+        } else {
+            remove_attr(doc, body, "data-deck-cards");
+        }
     }
     bind_control_panel(doc, model);
     bind_profile_menu(doc, model);
@@ -1283,6 +1292,9 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     if let Some(container) = doc.find_by_id(crate::ids::HBAR_TABS) {
         rebuild_hbar_tab_list(doc, container, &model.tabs);
         apply_hbar_tab_freeze(doc, container, model.hbar_tab_width);
+    }
+    if model.skin == "deck" {
+        bind_deck(doc, model);
     }
     if let Some(container) = find_by_attr(doc, "data-testid", "workspace-switcher") {
         rebuild_workspace_list(doc, container, &model.workspaces);
@@ -2861,6 +2873,176 @@ fn reconcile_row_list<T>(
 
 fn rebuild_tab_list(doc: &mut Document, container: NodeId, tabs: &[ChromeTabModel]) {
     reconcile_row_list(doc, container, "tab-row", tabs, build_tab_row, update_tab_row, None);
+}
+
+// ── «Колода» (deck) ──────────────────────────────────────────────────────
+// Вкладки для скина deck: filmstrip (`#deckFilm`) — все вкладки по порядку;
+// coverflow (`#deckCards`) — только «соседи» активной (|d| ≤ DECK_CARD_REACH),
+// позиция по кругу, как в прототипе proposals-2026-11/deck.html. Порядок —
+// `model.tabs` (тот же, что у сайдбара/ленты).
+
+/// Сколько карточек в каждую сторону от активной показывает колода.
+const DECK_CARD_REACH: i32 = 3;
+
+/// «Колода»: omnibox-текст, filmstrip и coverflow. Вызывается только при
+/// `model.skin == "deck"` — у остальных скинов этих контейнеров нет в DOM
+/// (точнее, они есть, но скрыты; перепривязка безвредна, но лишняя).
+fn bind_deck(doc: &mut Document, model: &ChromeModel) {
+    if let Some(t) = doc.find_by_id(crate::ids::DECK_OMNI_TEXT) {
+        set_text(doc, t, &model.omnibox.value);
+    }
+    if let Some(film) = doc.find_by_id(crate::ids::DECK_FILM) {
+        rebuild_deck_film(doc, film, &model.tabs);
+    }
+    if let Some(cards) = doc.find_by_id(crate::ids::DECK_CARDS) {
+        rebuild_deck_cards(doc, cards, &model.tabs);
+    }
+}
+
+/// Удаляет всех потомков `container` — filmstrip содержит только
+/// сгенерированные `.deck-fc`, статичной разметки там нет.
+fn clear_children(doc: &mut Document, container: NodeId) {
+    let children: Vec<NodeId> = doc.get(container).children.clone();
+    for c in children {
+        detach_node(doc, c);
+    }
+}
+
+fn rebuild_deck_film(doc: &mut Document, container: NodeId, tabs: &[ChromeTabModel]) {
+    clear_children(doc, container);
+    for tab in tabs {
+        let card = build_deck_film_card(doc, tab);
+        attach_child(doc, container, card);
+    }
+}
+
+fn build_deck_film_card(doc: &mut Document, tab: &ChromeTabModel) -> NodeId {
+    let card = doc.create_element(QualName::html("div"));
+    let mut class = "deck-fc".to_owned();
+    if tab.active {
+        class.push_str(" active");
+    }
+    if tab.sleeping {
+        class.push_str(" sleeping");
+    }
+    set_attr(doc, card, "class", &class);
+    set_attr(doc, card, "data-action", "select-tab");
+    set_attr(doc, card, "data-tab-id", &tab.id.to_string());
+
+    let fav = doc.create_element(QualName::html("span"));
+    set_attr(doc, fav, "class", "deck-fc-fav");
+    append_text(doc, fav, &fav_text(tab));
+    attach_child(doc, card, fav);
+
+    let title = doc.create_element(QualName::html("span"));
+    set_attr(doc, title, "class", "deck-fc-title");
+    append_text(doc, title, &tab.title);
+    attach_child(doc, card, title);
+
+    if !tab.sleeping {
+        let x = doc.create_element(QualName::html("button"));
+        set_attr(doc, x, "class", "deck-fc-x");
+        set_attr(doc, x, "data-action", "close-tab");
+        set_attr(doc, x, "data-tab-id", &tab.id.to_string());
+        append_text(doc, x, "\u{00d7}");
+        attach_child(doc, card, x);
+    }
+    card
+}
+
+/// Перестраивает coverflow: удаляет только `.deck-cf` (стрелки
+/// `.deck-cf-arrow` — статичная разметка контейнера, их не трогаем),
+/// затем добавляет карточки в пределах [`DECK_CARD_REACH`] от активной.
+fn rebuild_deck_cards(doc: &mut Document, container: NodeId, tabs: &[ChromeTabModel]) {
+    remove_children_with_class(doc, container, "deck-cf");
+    let n = tabs.len() as i32;
+    if n == 0 {
+        return;
+    }
+    let active = tabs.iter().position(|t| t.active).unwrap_or(0) as i32;
+    for (i, tab) in tabs.iter().enumerate() {
+        // Круговой сдвиг, как в прототипе: d ∈ [-n/2, n/2].
+        let mut d = i as i32 - active;
+        if d > n / 2 {
+            d -= n;
+        }
+        if d < -(n / 2) {
+            d += n;
+        }
+        if d.abs() > DECK_CARD_REACH {
+            continue;
+        }
+        let card = build_deck_card(doc, tab, d);
+        attach_child(doc, container, card);
+    }
+}
+
+fn build_deck_card(doc: &mut Document, tab: &ChromeTabModel, d: i32) -> NodeId {
+    let ad = d.abs();
+    let scale = (1.0 - ad as f32 * 0.13).max(0.6);
+    let opacity = (1.0 - ad as f32 * 0.22).max(0.0);
+    let z = 10 - ad;
+    let card = doc.create_element(QualName::html("div"));
+    let mut class = "deck-cf".to_owned();
+    if d == 0 {
+        class.push_str(" on");
+    }
+    set_attr(doc, card, "class", &class);
+    set_attr(doc, card, "data-action", "select-tab");
+    set_attr(doc, card, "data-tab-id", &tab.id.to_string());
+    // Позиция coverflow — формула прототипа deck.html (translateX по кругу,
+    // rotateY к центру, scale/opacity/z-index по удалённости).
+    set_attr(
+        doc,
+        card,
+        "style",
+        &format!(
+            "transform:translate(-50%,-50%) translateX({}px) rotateY({}deg) scale({scale:.2});opacity:{opacity:.2};z-index:{z}",
+            d * 280,
+            -d * 36,
+        ),
+    );
+
+    let inner = doc.create_element(QualName::html("div"));
+    set_attr(doc, inner, "class", "deck-cf-in");
+    attach_child(doc, card, inner);
+
+    let hd = doc.create_element(QualName::html("div"));
+    set_attr(doc, hd, "class", "deck-cf-hd");
+    attach_child(doc, inner, hd);
+    let fav = doc.create_element(QualName::html("span"));
+    set_attr(doc, fav, "class", "deck-cf-fav");
+    append_text(doc, fav, &fav_text(tab));
+    attach_child(doc, hd, fav);
+    let url = doc.create_element(QualName::html("span"));
+    set_attr(doc, url, "class", "deck-cf-url");
+    append_text(doc, url, &tab.title);
+    attach_child(doc, hd, url);
+    let x = doc.create_element(QualName::html("button"));
+    set_attr(doc, x, "class", "deck-cf-x");
+    set_attr(doc, x, "data-action", "close-tab");
+    set_attr(doc, x, "data-tab-id", &tab.id.to_string());
+    append_text(doc, x, "\u{00d7}");
+    attach_child(doc, hd, x);
+
+    let shot = doc.create_element(QualName::html("div"));
+    set_attr(doc, shot, "class", "deck-cf-shot");
+    attach_child(doc, inner, shot);
+    let shot_title = doc.create_element(QualName::html("div"));
+    set_attr(doc, shot_title, "class", "deck-cf-title");
+    append_text(doc, shot_title, &tab.title);
+    attach_child(doc, shot, shot_title);
+
+    if tab.active || tab.sleeping {
+        let ft = doc.create_element(QualName::html("div"));
+        set_attr(doc, ft, "class", "deck-cf-ft");
+        attach_child(doc, inner, ft);
+        let tag = doc.create_element(QualName::html("span"));
+        set_attr(doc, tag, "class", "deck-cf-tag");
+        append_text(doc, tag, if tab.active { "текущая" } else { "спит" });
+        attach_child(doc, ft, tag);
+    }
+    card
 }
 
 fn build_tab_row(doc: &mut Document, tab: &ChromeTabModel) -> NodeId {
