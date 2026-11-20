@@ -8,8 +8,8 @@ self-check `runs/2026-11-20-peet-*.json`) · **Date:** 2026-11-19
 **Owner:** next session (role/slot assigned by the manager; claim tasks before coding)
 **Evidence:** [ADR-034 §1](../decisions/ADR-034-site-compatibility-strategy.md), A/B matrix
 [2026-10-15](../perf/runs/2026-10-15-ab-matrix.md) (533 sites, token refusals 0.19 %, no must-work),
-[BUG-1826](../../bugs/BUG-1826-FIXED.md) (fixed P6 + Devin), [BUG-1829](../../bugs/BUG-1829-OPEN.md) (open
-fingerprint divergences).
+[BUG-1826](../../bugs/BUG-1826-FIXED.md) (fixed P6 + Devin), [BUG-1829](../../bugs/BUG-1829-FIXED.md) (fixed
+2026-11-20 — fingerprint divergences).
 
 This plan covers three workstreams. They are independently shippable and must go **C → A → B**:
 
@@ -44,7 +44,7 @@ fiverr.com; removing rustls for h3/DoT.
 3. Read before touching code:
    - `crates/js/CLAUDE.md` (required for WS-A)
    - `AGENTS.md`, `docs/commands.md`, `docs/git-workflow.md`, `docs/doc-sync.md`
-   - `bugs/BUG-1826-FIXED.md`, `bugs/BUG-1829-OPEN.md`
+   - `bugs/BUG-1826-FIXED.md`, `bugs/BUG-1829-FIXED.md`
    - `docs/invariants.md` (no layer cycles)
 4. Traps that bite unconditionally:
    - PowerShell has no `tail`/`grep`/`sed`; use `Select-Object -Last`, `Select-String`, `-replace`.

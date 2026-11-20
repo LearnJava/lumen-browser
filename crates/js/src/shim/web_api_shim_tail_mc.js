@@ -514,3 +514,166 @@ function _lumen_cancel_lazy_media_load(el) {
     var io = _lazy_media_io[nid];
     if (io) { io.disconnect(); delete _lazy_media_io[nid]; }
 }
+
+// ── RTCPeerConnection (WebRTC) — BUG-1829 ──────────────────────────────────
+// Lumen has no ICE/DTLS/SCTP stack, so the interface object and prototype
+// shape are installed for feature detection while every operation that would
+// need the stack fails honestly: async methods reject with NotSupportedError,
+// the synchronous transceiver surface throws it. That is still a large step
+// up from the whole interface being absent (`undefined`), which was a
+// deterministic anti-bot tell. [SecureContext] + [Exposed=Window], like Chrome.
+(function() {
+    if (typeof _lumen_secure_context === 'undefined' || _lumen_secure_context === false) return;
+    if (typeof EventTarget !== 'function') return;
+
+    var _rtcStates = new WeakMap();
+
+    var _rtc_pc = function RTCPeerConnection() {
+        if (!(this instanceof _rtc_pc)) {
+            throw new TypeError("Failed to construct 'RTCPeerConnection': "
+                + "Please use the 'new' operator, this object constructor cannot be called as a function.");
+        }
+        EventTarget.call(this);
+        _rtcStates.set(this, {
+            signalingState: 'stable',
+            iceConnectionState: 'new',
+            iceGatheringState: 'new',
+            connectionState: 'new',
+            localDescription: null,
+            remoteDescription: null,
+            pendingLocalDescription: null,
+            pendingRemoteDescription: null,
+            currentLocalDescription: null,
+            currentRemoteDescription: null,
+            sctp: null,
+            closed: false,
+            handlers: Object.create(null)
+        });
+    };
+    Object.setPrototypeOf(_rtc_pc.prototype, EventTarget.prototype);
+    var _rtcProto = _rtc_pc.prototype;
+    Object.defineProperty(_rtcProto, 'constructor', { value: _rtc_pc, writable: true, configurable: true });
+    Object.defineProperty(_rtcProto, Symbol.toStringTag, { value: 'RTCPeerConnection', configurable: true });
+
+    function _rtcCheck(self, name) {
+        if (_rtcStates.get(self) === undefined) {
+            throw new TypeError("Failed to execute '" + name + "' on 'RTCPeerConnection': Illegal invocation");
+        }
+    }
+
+    // Readonly attributes — prototype getters over the per-instance state.
+    var _rtcAttrs = ['signalingState', 'iceConnectionState', 'iceGatheringState',
+        'connectionState', 'localDescription', 'remoteDescription',
+        'pendingLocalDescription', 'pendingRemoteDescription',
+        'currentLocalDescription', 'currentRemoteDescription', 'sctp'];
+    for (var _ri = 0; _ri < _rtcAttrs.length; _ri++) {
+        (function(name) {
+            Object.defineProperty(_rtcProto, name, {
+                get: function() {
+                    _rtcCheck(this, name);
+                    return _rtcStates.get(this)[name];
+                },
+                enumerable: true, configurable: true
+            });
+        })(_rtcAttrs[_ri]);
+    }
+    Object.defineProperty(_rtcProto, 'canTrickleIceCandidates', {
+        get: function() { _rtcCheck(this, 'canTrickleIceCandidates'); return true; },
+        enumerable: true, configurable: true
+    });
+
+    // `on*` IDL attributes — accessor pair storing the listener.
+    var _rtcEvents = ['onicecandidate', 'onicecandidateerror', 'onnegotiationneeded',
+        'ontrack', 'onconnectionstatechange', 'oniceconnectionstatechange',
+        'onsignalingstatechange', 'onicegatheringstatechange'];
+    for (var _ei = 0; _ei < _rtcEvents.length; _ei++) {
+        (function(name) {
+            Object.defineProperty(_rtcProto, name, {
+                get: function() {
+                    var s = _rtcStates.get(this);
+                    return s ? (s.handlers[name] || null) : null;
+                },
+                set: function(v) {
+                    var s = _rtcStates.get(this);
+                    if (s === undefined) {
+                        throw new TypeError("Failed to set '" + name + "' on 'RTCPeerConnection': Illegal invocation");
+                    }
+                    if (v !== null && typeof v !== 'function') {
+                        throw new TypeError('The provided value is not of type function.');
+                    }
+                    s.handlers[name] = v;
+                },
+                enumerable: true, configurable: true
+            });
+        })(_rtcEvents[_ei]);
+    }
+
+    // Async operations that would need ICE/DTLS/SCTP: rejected promises with
+    // the correct `name`/`length` so `pc.createOffer.name === 'createOffer'`
+    // and `.length === 0` hold like in Chrome.
+    function _rtcReject(name) {
+        var f = function() {
+            _rtcCheck(this, name);
+            return Promise.reject(new DOMException(
+                'RTCPeerConnection.' + name + ': WebRTC is not supported',
+                'NotSupportedError'));
+        };
+        Object.defineProperty(f, 'name', { value: name });
+        Object.defineProperty(f, 'length', { value: 0 });
+        return f;
+    }
+    var _rtcAsync = ['createOffer', 'createAnswer', 'setLocalDescription',
+        'setRemoteDescription', 'addIceCandidate', 'getStats'];
+    for (var _ai = 0; _ai < _rtcAsync.length; _ai++) {
+        _rtcProto[_rtcAsync[_ai]] = _rtcReject(_rtcAsync[_ai]);
+    }
+
+    // Synchronous queries that have an honest empty answer.
+    _rtcProto.getSenders = function getSenders() { _rtcCheck(this, 'getSenders'); return []; };
+    _rtcProto.getReceivers = function getReceivers() { _rtcCheck(this, 'getReceivers'); return []; };
+    _rtcProto.getTransceivers = function getTransceivers() { _rtcCheck(this, 'getTransceivers'); return []; };
+
+    // Synchronous operations that would need the media stack: honest throw.
+    function _rtcThrow(name, len) {
+        var f = function() {
+            _rtcCheck(this, name);
+            throw new DOMException(
+                'RTCPeerConnection.' + name + ': WebRTC is not supported',
+                'NotSupportedError');
+        };
+        Object.defineProperty(f, 'name', { value: name });
+        Object.defineProperty(f, 'length', { value: len });
+        return f;
+    }
+    _rtcProto.addTrack = _rtcThrow('addTrack', 1);
+    _rtcProto.removeTrack = _rtcThrow('removeTrack', 1);
+    _rtcProto.addTransceiver = _rtcThrow('addTransceiver', 0);
+    _rtcProto.restartIce = _rtcThrow('restartIce', 0);
+
+    _rtcProto.close = function close() {
+        var s = _rtcStates.get(this);
+        if (s === undefined) {
+            throw new TypeError("Failed to execute 'close' on 'RTCPeerConnection': Illegal invocation");
+        }
+        if (s.closed) return;
+        s.closed = true;
+        s.signalingState = 'closed';
+        s.connectionState = 'closed';
+        s.iceConnectionState = 'disconnected';
+        s.iceGatheringState = 'complete';
+    };
+
+    // Static operation — also needs the (absent) key-generation stack.
+    _rtc_pc.generateCertificate = function generateCertificate() {
+        return Promise.reject(new DOMException(
+            'RTCPeerConnection.generateCertificate: WebRTC is not supported',
+            'NotSupportedError'));
+    };
+
+    Object.defineProperty(globalThis, 'RTCPeerConnection', {
+        value: _rtc_pc,
+        writable: true,
+        enumerable: false,
+        configurable: true
+    });
+})();

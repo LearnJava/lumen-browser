@@ -551,6 +551,25 @@ fn cross_origin_isolated_is_false() {
     assert!(bool_eval(&rt, "window.crossOriginIsolated === false"));
 }
 
+/// BUG-1829: Chrome hides `SharedArrayBuffer` outside crossOriginIsolated
+/// contexts — the same `typeof` answer, not just a shadowed value.
+#[test]
+fn shared_array_buffer_hidden_without_cross_origin_isolation() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt, "typeof SharedArrayBuffer === 'undefined'"));
+    assert!(bool_eval(&rt, "!('SharedArrayBuffer' in globalThis)"));
+    assert!(bool_eval(&rt, "typeof Atomics === 'object'"));
+}
+
+#[test]
+fn shared_array_buffer_visible_when_cross_origin_isolated() {
+    let rt = V8JsRuntime::new().unwrap();
+    rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, None, true, None)
+        .unwrap();
+    assert!(bool_eval(&rt, "window.crossOriginIsolated === true"));
+    assert!(bool_eval(&rt, "typeof SharedArrayBuffer === 'function'"));
+}
+
 #[test]
 fn navigator_clipboard_read_asks_and_returns_items() {
     let rt = v8_runtime_with_url("https://example.com/");
@@ -577,4 +596,55 @@ fn navigator_clipboard_write_accepts_text_plain_item() {
     .unwrap();
     assert!(bool_eval(&rt, "done"));
     assert!(bool_eval(&rt, "bad === 'NotAllowedError'"));
+}
+
+// ── RTCPeerConnection (BUG-1829) ────────────────────────────────────────────
+
+/// Chrome exposes the interface on secure origins: constructible, methods on
+/// the prototype, honest state — and every operation needing the absent
+/// WebRTC stack fails with NotSupportedError instead of pretending.
+#[test]
+fn rtcpeerconnection_interface_shape() {
+    let rt = v8_runtime_with_url("https://example.com/");
+    assert!(bool_eval(&rt, "typeof RTCPeerConnection === 'function'"));
+    assert!(bool_eval(&rt,
+        "typeof RTCPeerConnection.prototype.createOffer === 'function'
+         && typeof RTCPeerConnection.prototype.setLocalDescription === 'function'
+         && typeof RTCPeerConnection.prototype.getStats === 'function'"));
+    assert!(bool_eval(&rt, "new RTCPeerConnection() instanceof EventTarget"));
+    assert!(bool_eval(&rt,
+        "var pc = new RTCPeerConnection();
+         pc.signalingState === 'stable' && pc.connectionState === 'new'
+         && pc.getSenders().length === 0 && pc.getReceivers().length === 0
+         && pc.getTransceivers().length === 0"));
+    assert!(bool_eval(&rt,
+        "var pc2 = new RTCPeerConnection(); pc2.close();
+         pc2.signalingState === 'closed' && pc2.connectionState === 'closed'"));
+    assert!(bool_eval(&rt,
+        "var threw = false;
+         try { RTCPeerConnection.prototype.getSenders.call({}); }
+         catch (e) { threw = e instanceof TypeError; }
+         threw"));
+    // Synchronous op that needs the media stack: honest DOMException.
+    assert!(bool_eval(&rt,
+        "var threw2 = false;
+         try { new RTCPeerConnection().addTrack(null, null); }
+         catch (e) { threw2 = e.name === 'NotSupportedError'; }
+         threw2"));
+    // Async op: rejected promise, not a synchronous throw.
+    rt.eval(
+        "var __rtc_rej = '';
+         new RTCPeerConnection().createOffer().then(function() { __rtc_rej = 'resolved'; })
+             .catch(function(e) { __rtc_rej = e.name; });",
+    )
+    .unwrap();
+    assert!(bool_eval(&rt, "__rtc_rej === 'NotSupportedError'"));
+}
+
+/// [SecureContext]: an insecure origin sees no interface at all — matching
+/// Chrome, where `RTCPeerConnection` is gated the same way.
+#[test]
+fn rtcpeerconnection_absent_on_insecure_origin() {
+    let rt = v8_runtime_with_url("http://example.com/");
+    assert!(bool_eval(&rt, "typeof RTCPeerConnection === 'undefined'"));
 }

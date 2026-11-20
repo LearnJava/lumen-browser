@@ -582,6 +582,15 @@ pub(crate) const MESSAGE_CHANNEL_SHIM: &str = include_str!("shim/message_channel
 /// `web_api_shim_splices_its_parts_in_source_order`.
 const WEB_API_SHIM_TAIL_MC: &str = include_str!("shim/web_api_shim_tail_mc.js");
 
+/// BUG-1829: `SharedArrayBuffer` is `[SecureContext]` + crossOriginIsolated-gated
+/// in Chrome — V8 installs the intrinsic unconditionally, so this piece deletes
+/// it on non-isolated realms. Spliced into both the page program and
+/// [`worker_exposed_shim`]: page reads `_LUMEN_CROSS_ORIGIN_ISOLATED` (bound to
+/// the internal container like every other `_LUMEN_*` name), workers never carry
+/// the flag and always take the non-isolated branch.
+#[cfg(feature = "v8-backend")]
+pub(crate) const SAB_GATE_SHIM: &str = include_str!("shim/sab_gate_shim.js");
+
 /// IndexedDB (W3C Indexed Database API 3.0) — вырезан из хвоста страничного
 /// шима отдельной частью по той же причине, что `EVENT_TARGET_SHIM` и
 /// `URL_SHIM`: интерфейс `[Exposed=(Window,Worker)]`, и области сервис-воркера
@@ -674,7 +683,7 @@ pub(crate) const CONSOLE_SHIM: &str = include_str!("shim/console_shim.js");
 /// split is invisible to the shim's own code.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn web_api_shim() -> String {
-    format!("{WEB_API_SHIM_HEAD}{EVENT_SHIM}{EVENT_TARGET_SHIM}{CONSOLE_SHIM}{WEB_API_SHIM_MID}{URL_PARSE_SHIM}{WEB_API_SHIM_MID_B}{ABORT_SHIM}{STREAMS_SHIM}{HEADERS_SHIM}{FETCH_BODY_SHIM}{FORM_DATA_SHIM}{TEXT_ENCODING_SHIM}{WEB_API_SHIM_MID_B3}{WEBSOCKET_SHIM}{WEB_API_SHIM_MID_B4}{GEOMETRY_SHIM}{PSEUDO_ELEMENT_SHIM}{URL_SHIM}{ORIGIN_SHIM}{WEB_API_SHIM_MID_C}{FILE_API_SHIM}{WEB_API_SHIM_MID_C2}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}{MESSAGE_CHANNEL_SHIM}{WEB_API_SHIM_TAIL_MC}{IDB_SHIM}{CRYPTO_SHIM}{WEB_API_SHIM_TAIL_B}{NATIVE_REGISTRY_SHIM}")
+    format!("{WEB_API_SHIM_HEAD}{EVENT_SHIM}{EVENT_TARGET_SHIM}{CONSOLE_SHIM}{WEB_API_SHIM_MID}{URL_PARSE_SHIM}{WEB_API_SHIM_MID_B}{ABORT_SHIM}{STREAMS_SHIM}{HEADERS_SHIM}{FETCH_BODY_SHIM}{FORM_DATA_SHIM}{TEXT_ENCODING_SHIM}{WEB_API_SHIM_MID_B3}{WEBSOCKET_SHIM}{WEB_API_SHIM_MID_B4}{GEOMETRY_SHIM}{PSEUDO_ELEMENT_SHIM}{URL_SHIM}{ORIGIN_SHIM}{WEB_API_SHIM_MID_C}{FILE_API_SHIM}{WEB_API_SHIM_MID_C2}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}{MESSAGE_CHANNEL_SHIM}{WEB_API_SHIM_TAIL_MC}{SAB_GATE_SHIM}{IDB_SHIM}{CRYPTO_SHIM}{WEB_API_SHIM_TAIL_B}{NATIVE_REGISTRY_SHIM}")
 }
 
 /// The subset of the page shim that WHATWG also exposes in a
@@ -700,7 +709,7 @@ pub(crate) fn worker_exposed_shim() -> String {
     format!(
         "{EVENT_SHIM}{EVENT_TARGET_SHIM}{CONSOLE_SHIM}{PERFORMANCE_SHIM}{URL_PARSE_SHIM}{URL_SHIM}{ORIGIN_SHIM}\
          \n{URL_PATTERN_SHIM}\n{TEXT_ENCODING_SHIM}{ABORT_SHIM}{STREAMS_SHIM}{HEADERS_SHIM}{FETCH_BODY_SHIM}{FORM_DATA_SHIM}{FILE_API_SHIM}{WEBSOCKET_SHIM}\
-         {WORKER_LOCATION_NAVIGATOR_SHIM}{NATIVE_REGISTRY_SHIM}\nundefined;\n"
+         {WORKER_LOCATION_NAVIGATOR_SHIM}{SAB_GATE_SHIM}{NATIVE_REGISTRY_SHIM}\nundefined;\n"
     )
 }
 
