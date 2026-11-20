@@ -3032,11 +3032,20 @@ impl Renderer {
                 // scrolling ancestor's scrollport (BUG-336: previously always the
                 // full viewport, so a sticky element nested in an overflow:auto/
                 // scroll container just scrolled away with it instead of pinning).
-                DisplayCommand::BeginStickyLayer { flow_rect, top, bottom, left, right } => {
+                // BUG-1825: the containing block rides the command; the stuck
+                // value space carries -scroll, so the page-space rect is shifted
+                // by the same scroll before the clamp.
+                DisplayCommand::BeginStickyLayer { flow_rect, top, bottom, left, right, containing } => {
                     if !is_overlay {
                         let bound = sticky_bound(&clip_stack, &transform_stack, viewport_css_w, viewport_css_h);
-                        let sdy = sticky_offset_dy(flow_rect, *top, *bottom, scroll_y, bound);
-                        let sdx = sticky_offset_dx(flow_rect, *left, *right, scroll_x, bound);
+                        let containing = Rect::new(
+                            containing.x - scroll_x,
+                            containing.y - scroll_y,
+                            containing.width,
+                            containing.height,
+                        );
+                        let sdy = sticky_offset_dy(flow_rect, *top, *bottom, scroll_y, bound, containing);
+                        let sdx = sticky_offset_dx(flow_rect, *left, *right, scroll_x, bound, containing);
                         sticky_stack.push((sdy, sdx));
                     }
                 }

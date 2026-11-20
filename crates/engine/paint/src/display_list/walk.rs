@@ -981,6 +981,10 @@ struct Frame<'a> {
     /// Whether `b` or an ancestor is the containing block of `position: fixed`
     /// descendants — a `fixed` child of this frame is not viewport-pinned.
     in_fixed_cb: bool,
+    /// The containing block (nearest block/flow-root ancestor border-box) of
+    /// this frame's children — threaded for the sticky constraint-rectangle
+    /// clamp (BUG-1825), same rule as layout's `collect_sticky_boxes`.
+    sticky_cb: lumen_core::geom::Rect,
     epilogue: Epilogue,
     /// This frame's children in the order they must be walked — already
     /// depth-sorted for a `preserve-3d` container, plain DOM order otherwise.
@@ -1028,7 +1032,7 @@ fn run<'a>(frame: Box<Frame<'a>>, out: &mut DisplayList, dpr: f32) {
         }
         let child = current.children[current.next_idx];
         current.next_idx += 1;
-        match dispatch(child, current.in_fixed_cb, out, dpr) {
+        match dispatch(child, current.in_fixed_cb, current.sticky_cb, out, dpr) {
             WalkOutcome::Done => {}
             WalkOutcome::NeedsLoop(child_frame) => {
                 stack.push(current);
@@ -1132,7 +1136,7 @@ fn finish_block_epilogue(b: &LayoutBox, out: &mut DisplayList, e: &BlockEpilogue
 /// then drives that (and every further non-tail-recursive container it
 /// meets) on an explicit heap stack instead.
 pub(crate) fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
-    if let WalkOutcome::NeedsLoop(frame) = dispatch(b, false, out, dpr) {
+    if let WalkOutcome::NeedsLoop(frame) = dispatch(b, false, b.rect, out, dpr) {
         run(frame, out, dpr);
     }
 }
@@ -1146,6 +1150,7 @@ pub(crate) fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
 fn dispatch<'a>(
     b: &'a LayoutBox,
     in_fixed_cb: bool,
+    sticky_cb: lumen_core::geom::Rect,
     out: &mut DisplayList,
     dpr: f32,
 ) -> WalkOutcome<'a> {
@@ -1165,6 +1170,8 @@ fn dispatch<'a>(
     // CSS Positioning L3 §6.3 — position:sticky. Wraps the entire box in a
     // BeginStickyLayer/EndStickyLayer pair so the renderer can apply a
     // scroll-clamped offset at draw time without rebuilding the display list.
+    // `sticky_cb` — this box's containing block (nearest block/flow-root
+    // ancestor), threaded for BUG-1825's constraint-rectangle clamp.
     let is_sticky = matches!(b.style.position, Position::Sticky);
     if is_sticky {
         let s = &b.style;
@@ -1174,6 +1181,7 @@ fn dispatch<'a>(
             bottom: s.bottom.to_px_opt(),
             left:   s.left.to_px_opt(),
             right:  s.right.to_px_opt(),
+            containing: sticky_cb,
         });
     }
     // CSS Positioning L3 §6.1 — position:fixed. Brackets the box (and subtree)
@@ -1188,6 +1196,14 @@ fn dispatch<'a>(
         && !in_fixed_cb
         && !b.anchor_scroll.as_ref().is_some_and(|a| a.page);
     let child_in_fixed_cb = in_fixed_cb || contains_fixed_descendants(&b.style);
+    // Blocks and flow roots establish a new sticky-containment boundary for
+    // the children (same rule as layout's `collect_sticky_boxes`); the box's
+    // own sticky layer above used the incoming `sticky_cb`.
+    let child_sticky_cb = if matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot) {
+        b.rect
+    } else {
+        sticky_cb
+    };
     if is_fixed {
         out.push(DisplayCommand::BeginFixedLayer);
     }
@@ -1431,6 +1447,7 @@ fn dispatch<'a>(
                 };
                 return WalkOutcome::NeedsLoop(Box::new(Frame {
                     b, is_fixed, is_sticky, in_fixed_cb: child_in_fixed_cb,
+                    sticky_cb: child_sticky_cb,
                     epilogue: Epilogue::Full(epilogue),
                     children,
                     next_idx: 0,
@@ -1487,6 +1504,7 @@ fn dispatch<'a>(
             // Просто рекурсивно рисуем всех дочерних (BoxKind::Block).
             return WalkOutcome::NeedsLoop(Box::new(Frame {
                 b, is_fixed, is_sticky, in_fixed_cb: child_in_fixed_cb,
+                sticky_cb: child_sticky_cb,
                 epilogue: Epilogue::None,
                 children: b.children.iter().collect(),
                 next_idx: 0,
@@ -1746,6 +1764,7 @@ fn dispatch<'a>(
             out.push(DisplayCommand::PushClipRect { rect: clip });
             return WalkOutcome::NeedsLoop(Box::new(Frame {
                 b, is_fixed, is_sticky, in_fixed_cb: child_in_fixed_cb,
+                sticky_cb: child_sticky_cb,
                 epilogue: Epilogue::SvgViewportClip,
                 children: b.children.iter().collect(),
                 next_idx: 0,

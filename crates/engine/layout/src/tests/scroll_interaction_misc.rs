@@ -698,6 +698,8 @@ fn sticky_bottom_inset() {
 fn sticky_correction_sticks_at_top_inside_scrolled_container() {
     use lumen_core::geom::Rect;
     // Probe from BUG-1468: flow y=200, top:100, container scroll_y=250, scrollport 250×150.
+    // Sentinel containing block — this test exercises the inset clamp only.
+    let big = Rect::new(-1.0e6, -1.0e6, 2.0e6, 2.0e6);
     let (cdx, cdy) = sticky_correction(
         Rect::new(0.0, 200.0, 100.0, 40.0),
         Some(100.0),
@@ -707,6 +709,7 @@ fn sticky_correction_sticks_at_top_inside_scrolled_container() {
         0.0,
         250.0,
         Rect::new(0.0, 0.0, 250.0, 150.0),
+        big,
     );
     assert_eq!(cdx, 0.0);
     assert!((cdy - 150.0).abs() < 0.001, "expected cdy=150, got {cdy}");
@@ -724,8 +727,54 @@ fn sticky_correction_zero_when_not_stuck() {
         0.0,
         50.0,
         Rect::new(0.0, 0.0, 250.0, 150.0),
+        Rect::new(-1.0e6, -1.0e6, 2.0e6, 2.0e6),
     );
     assert_eq!(cdy, 0.0, "scroll_y=50 keeps flow y at 150, above top:100");
+}
+
+/// BUG-1825: a stuck box is clamped to its containing block (CSS Position L3
+/// §2.2) — the card's probe: container 300×300 at y=100, sticky `top:50`
+/// height 100 in flow y=200, scroll 300. The inset alone sticks the box at
+/// document y=350, past the container's bottom edge (400 − 100 = 300).
+#[test]
+fn sticky_correction_clamps_to_containing_block_bottom() {
+    use lumen_core::geom::Rect;
+    let (cdx, cdy) = sticky_correction(
+        Rect::new(0.0, 200.0, 100.0, 100.0),
+        Some(50.0),
+        None,
+        None,
+        None,
+        0.0,
+        300.0,
+        Rect::new(0.0, 0.0, 100.0, 200.0),
+        Rect::new(0.0, 100.0, 300.0, 300.0),
+    );
+    assert_eq!(cdx, 0.0);
+    // flow 200 + cdy = 300 → offsetTop 300, not the unclamped 350.
+    assert!((cdy - 100.0).abs() < 0.001, "expected cdy=100 (stuck at container bottom), got {cdy}");
+}
+
+/// BUG-1825: the containing clamp applies only to a genuinely stuck axis — an
+/// unstuck box scrolls with the content even when its flow rect lies outside
+/// the containing block's clamp range.
+#[test]
+fn sticky_correction_unstuck_axis_ignores_containing_block() {
+    use lumen_core::geom::Rect;
+    // top:50 never fires (screen y=350 ≥ 50 at scroll 0), so the box stays at
+    // flow y=350 — outside [100, 100+300−100] — without any correction.
+    let (_, cdy) = sticky_correction(
+        Rect::new(0.0, 350.0, 100.0, 100.0),
+        Some(50.0),
+        None,
+        None,
+        None,
+        0.0,
+        0.0,
+        Rect::new(0.0, 0.0, 100.0, 200.0),
+        Rect::new(0.0, 100.0, 300.0, 300.0),
+    );
+    assert_eq!(cdy, 0.0, "unstuck box must scroll free of the containing block");
 }
 
 #[test]

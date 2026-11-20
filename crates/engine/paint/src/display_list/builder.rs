@@ -27,7 +27,7 @@ pub fn build_display_list_with_anim(
 ) -> DisplayList {
     let _vp = FixedBgViewportGuard::install(root);
     let mut list = Vec::new();
-    walk_with_anim(root, anim, &mut list, 1.0);
+    walk_with_anim(root, anim, root.rect, &mut list, 1.0);
     list
 }
 

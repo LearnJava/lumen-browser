@@ -8,6 +8,11 @@ use super::*;
 /// the sticky element isn't nested in one), already mapped back into this
 /// layer's pre-transform page-space by [`sticky_bound`].
 ///
+/// `containing` is the box's containing block in the SAME space the stuck
+/// position `flow_rect.y + dy` lives in (BUG-1825) — the caller shifts the
+/// page-space rect by the scroll its `dy` baseline carries. A stuck axis is
+/// clamped inside it (CSS Position L3 §2.2); an unstuck axis scrolls free.
+///
 /// Returns the `dy` to apply instead of `-scroll_y` for this layer's content.
 pub(crate) fn sticky_offset_dy(
     flow_rect: &lumen_core::geom::Rect,
@@ -15,14 +20,17 @@ pub(crate) fn sticky_offset_dy(
     bottom: Option<f32>,
     scroll_y: f32,
     bound: Rect,
+    containing: Rect,
 ) -> f32 {
     let mut dy = -scroll_y;
+    let mut stuck = false;
     // top: clamp screen_y to be at least `top` px from the scrollport's top edge.
     if let Some(t) = top {
         let screen_y = flow_rect.y + dy;
         let min_y = bound.y + t;
         if screen_y < min_y {
             dy += min_y - screen_y;
+            stuck = true;
         }
     }
     // bottom: clamp so the element's bottom edge is at most `bottom` px from
@@ -32,7 +40,14 @@ pub(crate) fn sticky_offset_dy(
         let actual_screen_y = flow_rect.y + dy;
         if actual_screen_y > max_screen_y {
             dy -= actual_screen_y - max_screen_y;
+            stuck = true;
         }
+    }
+    if stuck {
+        let stuck_pos = flow_rect.y + dy;
+        let clamped =
+            lumen_layout::clamp_stuck_to_containing(stuck_pos, flow_rect.height, containing.y, containing.height);
+        dy += clamped - stuck_pos;
     }
     dy
 }
@@ -44,13 +59,16 @@ pub(crate) fn sticky_offset_dx(
     right: Option<f32>,
     scroll_x: f32,
     bound: Rect,
+    containing: Rect,
 ) -> f32 {
     let mut dx = -scroll_x;
+    let mut stuck = false;
     if let Some(l) = left {
         let screen_x = flow_rect.x + dx;
         let min_x = bound.x + l;
         if screen_x < min_x {
             dx += min_x - screen_x;
+            stuck = true;
         }
     }
     if let Some(r) = right {
@@ -58,7 +76,14 @@ pub(crate) fn sticky_offset_dx(
         let actual_screen_x = flow_rect.x + dx;
         if actual_screen_x > max_screen_x {
             dx -= actual_screen_x - max_screen_x;
+            stuck = true;
         }
+    }
+    if stuck {
+        let stuck_pos = flow_rect.x + dx;
+        let clamped =
+            lumen_layout::clamp_stuck_to_containing(stuck_pos, flow_rect.width, containing.x, containing.width);
+        dx += clamped - stuck_pos;
     }
     dx
 }

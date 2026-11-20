@@ -1287,6 +1287,8 @@ fn page_level_sticky_sticks_at_top() {
             bottom: None,
             left: None,
             right: None,
+            // Far-away sentinel: this test exercises the inset clamp only.
+            containing: rect(-1.0e6, -1.0e6, 2.0e6, 2.0e6),
         },
         DisplayCommand::FillRect { rect: rect(0.0, 80.0, 100.0, 20.0), color: green },
         DisplayCommand::EndStickyLayer,

@@ -297,14 +297,15 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
             DisplayCommand::PopBackdropFilter => {
                 out.push_str("PopBackdropFilter\n");
             }
-            DisplayCommand::BeginStickyLayer { flow_rect, top, bottom, left, right } => {
+            DisplayCommand::BeginStickyLayer { flow_rect, top, bottom, left, right, containing } => {
                 out.push_str(&format!(
-                    "BeginStickyLayer flow=({:.0},{:.0},{:.0},{:.0}) top={} bottom={} left={} right={}\n",
+                    "BeginStickyLayer flow=({:.0},{:.0},{:.0},{:.0}) top={} bottom={} left={} right={} containing=({:.0},{:.0},{:.0},{:.0})\n",
                     flow_rect.x, flow_rect.y, flow_rect.width, flow_rect.height,
                     top.map_or("auto".to_string(), |v| format!("{v:.0}")),
                     bottom.map_or("auto".to_string(), |v| format!("{v:.0}")),
                     left.map_or("auto".to_string(), |v| format!("{v:.0}")),
                     right.map_or("auto".to_string(), |v| format!("{v:.0}")),
+                    containing.x, containing.y, containing.width, containing.height,
                 ));
             }
             DisplayCommand::EndStickyLayer => {

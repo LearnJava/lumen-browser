@@ -1161,14 +1161,21 @@ fn emit_wavy_line(
 /// When a node has an animated opacity or transform, the overridden values replace
 /// the style values in the emitted Push* commands. All other paint (FillRect, DrawText,
 /// borders, shadows) uses the base style unchanged.
-pub(crate) fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut DisplayList, dpr: f32) {
+pub(crate) fn walk_with_anim(
+    b: &LayoutBox,
+    anim: Option<&CompositorAnimFrame>,
+    sticky_cb: lumen_core::geom::Rect,
+    out: &mut DisplayList,
+    dpr: f32,
+) {
     let ov = anim.and_then(|a| a.get(b.node));
 
     // CSS Transforms L2 §5.1 — backface culling (same rule as `walk`).
     if is_backface_hidden(b) {
         return;
     }
-    // CSS Positioning L3 §6.3 — position:sticky (same as in walk).
+    // CSS Positioning L3 §6.3 — position:sticky (same as in walk; `sticky_cb`
+    // is this box's containing block, BUG-1825).
     let is_sticky = matches!(b.style.position, Position::Sticky);
     if is_sticky {
         let s = &b.style;
@@ -1178,6 +1185,7 @@ pub(crate) fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, 
             bottom: s.bottom.to_px_opt(),
             left:   s.left.to_px_opt(),
             right:  s.right.to_px_opt(),
+            containing: sticky_cb,
         });
     }
     // CSS Positioning L3 §6.1 — position:fixed (same as in walk; ANCHOR-SCROLL-3-S3:
@@ -1279,17 +1287,24 @@ pub(crate) fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, 
             }
             // CSS Transforms L2 §6.2 — depth-sort children of a 3D rendering
             // context (preserve-3d); else document order. Mirrors `walk`.
+            // Same sticky-containment rule as walk: block/flow-root children
+            // start a new containing block (BUG-1825).
+            let child_sticky_cb = if matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot) {
+                b.rect
+            } else {
+                sticky_cb
+            };
             if establishes_3d_rendering_context(b) {
                 for i in depth_sorted_child_order(&b.children) {
-                    walk_with_anim(&b.children[i], anim, out, dpr);
+                    walk_with_anim(&b.children[i], anim, child_sticky_cb, out, dpr);
                 }
             } else if let Some(order) = lumen_layout::paint_child_order(b) {
                 for i in order {
-                    walk_with_anim(&b.children[i], anim, out, dpr);
+                    walk_with_anim(&b.children[i], anim, child_sticky_cb, out, dpr);
                 }
             } else {
                 for child in &b.children {
-                    walk_with_anim(child, anim, out, dpr);
+                    walk_with_anim(child, anim, child_sticky_cb, out, dpr);
                 }
             }
             if self_visible {
@@ -1304,8 +1319,13 @@ pub(crate) fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, 
             }
         }
         BoxKind::InlineBlockRow => {
+            let child_sticky_cb = if matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot) {
+                b.rect
+            } else {
+                sticky_cb
+            };
             for child in &b.children {
-                walk_with_anim(child, anim, out, dpr);
+                walk_with_anim(child, anim, child_sticky_cb, out, dpr);
             }
         }
         BoxKind::InlineSpace => {}

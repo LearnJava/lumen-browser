@@ -106,8 +106,15 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>, dpr: f32, stick
             post.push(DisplayCommand::PopClip);
             post.push(DisplayCommand::PopTransform);
         }
-        Some(StickyEmit::Page { top, bottom, left, right }) => {
-            pre.push(DisplayCommand::BeginStickyLayer { flow_rect: b.rect, top, bottom, left, right });
+        Some(StickyEmit::Page { top, bottom, left, right, containing }) => {
+            pre.push(DisplayCommand::BeginStickyLayer {
+                flow_rect: b.rect,
+                top,
+                bottom,
+                left,
+                right,
+                containing,
+            });
             post.push(DisplayCommand::EndStickyLayer);
         }
         None => {}
@@ -405,6 +412,14 @@ struct ContinueFrame<'a> {
     /// carried untouched through every `Continue` visit until the last
     /// child is done and it moves into `b`'s own [`LeaveFill`].
     leave_payload: LeavePayload,
+    /// The containing block (nearest block/flow-root ancestor border-box) of
+    /// `b`'s children — threaded for the sticky constraint-rectangle clamp
+    /// (BUG-1825), same rule as layout's `collect_sticky_boxes`.
+    sticky_cb: lumen_core::geom::Rect,
+    /// Whether `sticky_cb` was established at-or-below the nearest scroll
+    /// container (it scrolls with the content, so the baked clamp shifts it by
+    /// the container's scroll); `false` — it frames the scroller.
+    sticky_cb_in_content: bool,
 }
 
 /// Closing state captured at `Enter` time, replayed by [`leave_fill`] once
@@ -505,11 +520,15 @@ pub(crate) fn fill_buckets_cached(
         abs_cb_clips: inherited_clips.len(),
         sticky_offset: None,
     }];
+    // Root convention of layout's `collect_sticky_boxes`: the root box is its
+    // own initial containing block.
+    let root_sticky_cb = b.rect;
     while let Some(frame) = stack.pop() {
         match frame {
             FillFrame::Enter { b, current_sc, is_sc_root, inherited_clips, fixed_cb_clips, abs_cb_clips, sticky_offset } => {
                 enter_fill(
-                    b, current_sc, is_sc_root, &inherited_clips, fixed_cb_clips, abs_cb_clips, sticky_offset, anim, dpr,
+                    b, current_sc, is_sc_root, &inherited_clips, fixed_cb_clips, abs_cb_clips, sticky_offset,
+                    root_sticky_cb, false, anim, dpr,
                     buckets, split, raw_spans, &mut stack,
                 );
             }
@@ -538,6 +557,8 @@ fn enter_fill<'a>(
     fixed_cb_clips: Option<usize>,
     abs_cb_clips: usize,
     sticky_offset: Option<StickyEmit>,
+    sticky_cb: lumen_core::geom::Rect,
+    sticky_cb_in_content: bool,
     anim: Option<&CompositorAnimFrame>,
     dpr: f32,
     buckets: &mut [ScBucket],
@@ -548,6 +569,20 @@ fn enter_fill<'a>(
     let ov = anim.and_then(|a| a.get(b.node));
     let ops = box_layer_ops(b, ov, dpr, sticky_offset);
     let own_fixed_cb = contains_fixed_descendants(&b.style);
+    // Same sticky-containment rule as `walk`/`collect_sticky_boxes`: block and
+    // flow-root boxes establish a new containing block for their children. The
+    // cb scrolls with the content once a scroll container sits at-or-above it
+    // (and `b` itself is not that scroller — a scroller frames its own cb).
+    let b_emits_scroll_layer = ops.overflow_pre.iter().any(|c| matches!(c, DisplayCommand::PushScrollLayer { .. }));
+    let (child_sticky_cb, child_cb_in_content) = if matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot) {
+        (
+            b.rect,
+            !b_emits_scroll_layer
+                && inherited_clips.iter().any(|c| matches!(c, DisplayCommand::PushScrollLayer { .. })),
+        )
+    } else {
+        (sticky_cb, sticky_cb_in_content)
+    };
 
     if is_sc_root {
         split.sc_entries += 1;
@@ -645,6 +680,8 @@ fn enter_fill<'a>(
             abs_cb_clips: layer_child_clips.len(),
             child_clips: layer_child_clips,
             leave_payload: LeavePayload::ScRoot,
+            sticky_cb: child_sticky_cb,
+            sticky_cb_in_content: child_cb_in_content,
         }));
     } else {
         // Non-SC box: inline Push/Pop в contents текущего SC. Это нужно для
@@ -709,6 +746,8 @@ fn enter_fill<'a>(
                 post: ops.post,
                 split_span_start,
             },
+            sticky_cb: child_sticky_cb,
+            sticky_cb_in_content: child_cb_in_content,
         }));
     }
 }
@@ -729,6 +768,7 @@ fn continue_fill<'a>(
 ) {
     let ContinueFrame {
         b, current_sc, is_sc_root, next_idx, child_order, child_clips, fixed_cb_clips, abs_cb_clips, leave_payload,
+        sticky_cb, sticky_cb_in_content,
     } = cf;
     // WICG html-in-canvas (BUG-1798): children of `<canvas layoutsubtree>` are
     // painted only via drawElementImage — the page paint skips them, exactly
@@ -800,7 +840,17 @@ fn continue_fill<'a>(
             Lookup::Skip => {}
         }
     }
-    let sticky_offset = sticky_offset_for(child, &child_clips);
+    // Same sticky-containment rule as `walk`/`enter_fill` (BUG-1825): `b`'s
+    // children inherit its containing block unless `b` is a block/flow-root.
+    // Same sticky-containment rule as `walk`/`enter_fill` (BUG-1825): `b`'s
+    // children inherit its containing block unless `b` is a block/flow-root
+    // (whose flag `sticky_cb_in_content` enter_fill already computed for them).
+    let child_sticky_cb = if matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot) {
+        b.rect
+    } else {
+        sticky_cb
+    };
+    let sticky_offset = sticky_offset_for(child, &child_clips, child_sticky_cb, sticky_cb_in_content);
     stack.push(FillFrame::Continue(ContinueFrame {
         b,
         current_sc,
@@ -811,6 +861,8 @@ fn continue_fill<'a>(
         fixed_cb_clips,
         abs_cb_clips,
         leave_payload,
+        sticky_cb,
+        sticky_cb_in_content,
     }));
     if replayed {
         return;
@@ -921,7 +973,14 @@ enum StickyEmit {
     /// `BeginStickyLayer`/`EndStickyLayer` and let the renderer apply the
     /// page-scroll clamp at draw time (the page scroll is a render-time
     /// parameter, not baked into the display list).
-    Page { top: Option<f32>, bottom: Option<f32>, left: Option<f32>, right: Option<f32> },
+    Page {
+        top: Option<f32>,
+        bottom: Option<f32>,
+        left: Option<f32>,
+        right: Option<f32>,
+        /// The box's containing block (BUG-1825), page coordinates.
+        containing: Rect,
+    },
 }
 
 /// CSS Positioning L3 §6.3 — how to emit a `position: sticky` box. A box nested
@@ -936,7 +995,12 @@ enum StickyEmit {
 /// offset is `(0, 0)` (scroll 0 / not stuck — the flow position is already
 /// correct, and an identity `PushTransform` would only waste an off-screen layer
 /// and risk an AA seam).
-fn sticky_offset_for(b: &LayoutBox, inherited_clips: &[DisplayCommand]) -> Option<StickyEmit> {
+fn sticky_offset_for(
+    b: &LayoutBox,
+    inherited_clips: &[DisplayCommand],
+    containing: Rect,
+    containing_in_content: bool,
+) -> Option<StickyEmit> {
     if b.style.position != Position::Sticky {
         return None;
     }
@@ -955,6 +1019,7 @@ fn sticky_offset_for(b: &LayoutBox, inherited_clips: &[DisplayCommand]) -> Optio
             bottom: s.bottom.to_px_opt(),
             left: s.left.to_px_opt(),
             right: s.right.to_px_opt(),
+            containing,
         });
     };
     let s = &b.style;
@@ -969,12 +1034,19 @@ fn sticky_offset_for(b: &LayoutBox, inherited_clips: &[DisplayCommand]) -> Optio
             lumen_layout::LengthOrAuto::Length(l) => l.resolve(em, Some(basis), vp),
         }
     };
+    // The baked offset already compensates the container's scroll (the box
+    // escapes its `PushScrollLayer`), so the stuck value space is
+    // client-equivalent: a cb that scrolls with the content shifts by that
+    // scroll, one that frames the scroller stays doc-static (BUG-1825).
+    let (sx, sy) = if containing_in_content { (scroll_x, scroll_y) } else { (0.0, 0.0) };
+    let containing = Rect::new(containing.x - sx, containing.y - sy, containing.width, containing.height);
     let dy = sticky_dy(
         &b.rect,
         inset(&s.top, scrollport.height),
         inset(&s.bottom, scrollport.height),
         scroll_y,
         scrollport,
+        containing,
     );
     let dx = sticky_dx(
         &b.rect,
@@ -982,6 +1054,7 @@ fn sticky_offset_for(b: &LayoutBox, inherited_clips: &[DisplayCommand]) -> Optio
         inset(&s.right, scrollport.width),
         scroll_x,
         scrollport,
+        containing,
     );
     (dx != 0.0 || dy != 0.0).then_some(StickyEmit::Baked { dx, dy, clip: scrollport })
 }
@@ -989,13 +1062,17 @@ fn sticky_offset_for(b: &LayoutBox, inherited_clips: &[DisplayCommand]) -> Optio
 /// CSS Positioning L3 §6.3 — clamped vertical sticky offset. Mirror of
 /// `renderer/sticky_geom.rs::sticky_offset_dy`, kept local because that module is
 /// gated behind `backend-wgpu` (and `display_list` builds without it on the CPU path).
-fn sticky_dy(flow_rect: &Rect, top: Option<f32>, bottom: Option<f32>, scroll_y: f32, bound: Rect) -> f32 {
+/// `containing` — the box's containing block in the same page coordinates
+/// (BUG-1825): a stuck axis is clamped inside it, an unstuck axis scrolls free.
+fn sticky_dy(flow_rect: &Rect, top: Option<f32>, bottom: Option<f32>, scroll_y: f32, bound: Rect, containing: Rect) -> f32 {
     let mut dy = -scroll_y;
+    let mut stuck = false;
     if let Some(t) = top {
         let screen_y = flow_rect.y + dy;
         let min_y = bound.y + t;
         if screen_y < min_y {
             dy += min_y - screen_y;
+            stuck = true;
         }
     }
     if let Some(b) = bottom {
@@ -1003,19 +1080,27 @@ fn sticky_dy(flow_rect: &Rect, top: Option<f32>, bottom: Option<f32>, scroll_y: 
         let actual_screen_y = flow_rect.y + dy;
         if actual_screen_y > max_screen_y {
             dy -= actual_screen_y - max_screen_y;
+            stuck = true;
         }
+    }
+    if stuck {
+        let stuck_pos = flow_rect.y + dy;
+        let clamped = lumen_layout::clamp_stuck_to_containing(stuck_pos, flow_rect.height, containing.y, containing.height);
+        dy += clamped - stuck_pos;
     }
     dy
 }
 
 /// CSS Positioning L3 §6.3 — clamped horizontal sticky offset (see [`sticky_dy`]).
-fn sticky_dx(flow_rect: &Rect, left: Option<f32>, right: Option<f32>, scroll_x: f32, bound: Rect) -> f32 {
+fn sticky_dx(flow_rect: &Rect, left: Option<f32>, right: Option<f32>, scroll_x: f32, bound: Rect, containing: Rect) -> f32 {
     let mut dx = -scroll_x;
+    let mut stuck = false;
     if let Some(l) = left {
         let screen_x = flow_rect.x + dx;
         let min_x = bound.x + l;
         if screen_x < min_x {
             dx += min_x - screen_x;
+            stuck = true;
         }
     }
     if let Some(r) = right {
@@ -1023,7 +1108,13 @@ fn sticky_dx(flow_rect: &Rect, left: Option<f32>, right: Option<f32>, scroll_x: 
         let actual_screen_x = flow_rect.x + dx;
         if actual_screen_x > max_screen_x {
             dx -= actual_screen_x - max_screen_x;
+            stuck = true;
         }
+    }
+    if stuck {
+        let stuck_pos = flow_rect.x + dx;
+        let clamped = lumen_layout::clamp_stuck_to_containing(stuck_pos, flow_rect.width, containing.x, containing.width);
+        dx += clamped - stuck_pos;
     }
     dx
 }
