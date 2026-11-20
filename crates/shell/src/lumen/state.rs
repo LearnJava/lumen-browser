@@ -148,6 +148,9 @@ pub(crate) struct Lumen {
     /// persisted in `settings.db` (`BrowserSettings::skin`), switched live by
     /// `ChromeAction::SetSkin` from the settings "Внешний вид" section.
     pub(crate) chrome_skin: String,
+    /// Skin to restore when leaving `"zen"` via `ChromeAction::ToggleZen` —
+    /// session-only memory filled by `apply_chrome_skin` on zen entry.
+    pub(crate) chrome_skin_before_zen: Option<String>,
     /// CC-10b (docs/tasks/p1-css-chrome.md): `data-section` slug of the
     /// active `#view-settings` tab (`"general"`/`"privacy"`/`"appearance"`/
     /// `"sync"`/`"ext"`/`"qa"`). Engine-chrome-only UI state — the design's 6

@@ -76,6 +76,24 @@ impl Lumen {
         true
     }
 
+    /// Applies a chrome skin id: normalises it, remembers the previous skin
+    /// when entering `"zen"` (so [`ChromeAction::ToggleZen`] can restore it),
+    /// persists to `settings.db` and relayouts. No-op on the current skin.
+    fn apply_chrome_skin(&mut self, skin: &str) {
+        let skin = lumen_chrome::skin_or_default(skin);
+        if skin == self.chrome_skin {
+            return;
+        }
+        if skin == "zen" {
+            self.chrome_skin_before_zen = Some(self.chrome_skin.clone());
+        } else {
+            self.chrome_skin_before_zen = None;
+        }
+        self.chrome_skin = skin.to_owned();
+        let _ = self.settings_store.set_skin(skin);
+        self.relayout_chrome_host();
+    }
+
     pub(crate) fn dispatch_chrome_action(
         &mut self,
         nid: NodeId,
@@ -962,17 +980,25 @@ impl Lumen {
             // `body[data-skin]` attribute change + one chrome relayout —
             // the same live-mutation path `SetDemoVariant` uses.
             ChromeAction::SetSkin => {
-                if let Some(skin) = self
+                let skin = self
                     .chrome_doc
                     .as_ref()
                     .and_then(|(doc, _)| doc.get(nid).get_attr("data-skin"))
-                    .map(lumen_chrome::skin_or_default)
-                    && skin != self.chrome_skin
-                {
-                    self.chrome_skin = skin.to_owned();
-                    let _ = self.settings_store.set_skin(skin);
-                    self.relayout_chrome_host();
+                    .map(str::to_owned);
+                if let Some(skin) = skin {
+                    self.apply_chrome_skin(&skin);
                 }
+            }
+            // Zen-режим: кнопка в `.tb-right` тулбара. Вход запоминает текущий
+            // скин (`apply_chrome_skin`), выход возвращает его; если zen был
+            // включён через настройки (без памяти) — возвращается "default".
+            ChromeAction::ToggleZen => {
+                let target = if self.chrome_skin == "zen" {
+                    self.chrome_skin_before_zen.take().unwrap_or_else(|| "default".to_owned())
+                } else {
+                    "zen".to_owned()
+                };
+                self.apply_chrome_skin(&target);
             }
             ChromeAction::ToggleDemoMini => {
                 self.control_panel_mini_open = !self.control_panel_mini_open;

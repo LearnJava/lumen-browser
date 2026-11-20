@@ -963,7 +963,8 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
 .skin-btn:hover{color:var(--text-primary); border-color:var(--text-secondary);}
 body[data-skin="midnight"] .skin-btn[data-skin="midnight"],
 body[data-skin="contrast"] .skin-btn[data-skin="contrast"],
-body[data-skin="compact"] .skin-btn[data-skin="compact"]{
+body[data-skin="compact"] .skin-btn[data-skin="compact"],
+body[data-skin="zen"] .skin-btn[data-skin="zen"]{
   background:var(--accent-soft); border-color:var(--accent); color:var(--accent);
 }
 
@@ -998,6 +999,17 @@ body[data-skin="compact"]{
   --tab-h:24px; --toolbar-h:30px;
   --sidebar-w:208px; --sidebar-w-collapsed:40px;
 }
+
+/* ── «Дзен»: минималистичный режим — прячем боковые панели, полосы вкладок
+   и демо-панель; остаются тулбар с омнибоксом и контент. Переключается
+   кнопкой в .tb-right (data-action="toggle-zen"), выбор помнит предыдущий
+   скин и возвращает его при повторном нажатии. ── */
+body[data-skin="zen"] #sidebar{display:none;}
+body[data-skin="zen"] #hbarTabs{display:none;}
+body[data-skin="zen"] .hbar-ws{display:none;}
+body[data-skin="zen"] #workspaceBar{display:none;}
+body[data-skin="zen"] #demoBar{display:none;}
+body[data-skin="zen"] #zenBtn{color:var(--accent);}
 
 </style>
 </head>
@@ -1519,6 +1531,7 @@ body[data-skin="compact"]{
           <button class="tb-btn" data-action="translate-page" aria-label="Перевести страницу"><svg class="icon"><use href="#i-translate"/></svg></button>
           <button class="tb-btn" data-action="open-print-dialog"><svg class="icon"><use href="#i-printer"/></svg></button>
           <button class="tb-btn" id="devtoolsBtn" data-action="toggle-devtools" aria-label="DevTools"><svg class="icon"><use href="#i-code"/></svg></button>
+          <button class="tb-btn" id="zenBtn" data-action="toggle-zen" aria-label="Дзен-режим — минималистичный хром"><svg class="icon"><use href="#i-moon"/></svg></button>
           <button class="tb-btn" data-action="show-view" data-view="settings" aria-label="Настройки"><svg class="icon"><use href="#i-gear"/></svg></button>
         </div>
       </div>
@@ -1731,6 +1744,7 @@ body[data-skin="compact"]{
                       <button class="skin-btn" data-action="set-skin" data-skin="midnight">Полночь</button>
                       <button class="skin-btn" data-action="set-skin" data-skin="contrast">Контраст</button>
                       <button class="skin-btn" data-action="set-skin" data-skin="compact">Компакт</button>
+                      <button class="skin-btn" data-action="set-skin" data-skin="zen">Дзен</button>
                     </div>
                   </div>
                 </div>

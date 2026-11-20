@@ -34,7 +34,7 @@ pub use update_bar::{ChromeUpdateAction, ChromeUpdateModel};
 /// Chrome skin ids known to the engine chrome — must stay in sync with the
 /// `body[data-skin="…"]` blocks in `assets/chrome/skins.css` and the
 /// `set-skin` buttons in the settings "Внешний вид" section.
-pub const SKINS: &[&str] = &["default", "midnight", "contrast", "compact"];
+pub const SKINS: &[&str] = &["default", "midnight", "contrast", "compact", "zen"];
 
 /// Returns `s` when it names a known skin, `"default"` otherwise — the single
 /// normalisation point for persisted/UI-provided skin ids.
