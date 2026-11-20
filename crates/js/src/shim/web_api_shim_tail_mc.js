@@ -677,3 +677,93 @@ function _lumen_cancel_lazy_media_load(el) {
         configurable: true
     });
 })();
+
+// ── Chrome-exposed interface objects Lumen lacked (Ozon abt parity) ──────────
+// Presence + prototype shape only; every operation rejects/throws
+// NotSupportedError — same honesty rule as the RTCPeerConnection stub above.
+(function() {
+    function _iface(name, protoMethods, ctor) {
+        var f = ctor || function() { throw new TypeError('Illegal constructor'); };
+        var p = {};
+        (protoMethods || []).forEach(function(m) {
+            p[m] = function() {
+                return Promise.reject(new DOMException(name + '.' + m + ': not supported', 'NotSupportedError'));
+            };
+        });
+        f.prototype = Object.assign(Object.create(Object.prototype), p);
+        Object.defineProperty(f.prototype, Symbol.toStringTag, { value: name, configurable: true });
+        Object.defineProperty(globalThis, name, { value: f, writable: true, enumerable: false, configurable: true });
+        return f;
+    }
+    var _notSupported = function(name, method, args) {
+        return function() {
+            if (!(this instanceof Object)) {}
+            return Promise.reject(new DOMException(name + '.' + method + ': not supported', 'NotSupportedError'));
+        };
+    };
+
+    // WebCodecs — VideoDecoder/AudioDecoder are constructible in Chrome.
+    ['VideoDecoder', 'AudioDecoder'].forEach(function(n) {
+        var f = function() {
+            if (new.target === undefined) throw new TypeError("Failed to construct '" + n + "': Please use the 'new' operator.");
+            var self = Object.create(f.prototype);
+            Object.defineProperty(self, 'state', { get: function() { return 'unconfigured'; }, enumerable: true, configurable: true });
+            Object.defineProperty(self, 'decodeQueueSize', { get: function() { return 0; }, enumerable: true, configurable: true });
+            return self;
+        };
+        var proto = f.prototype;
+        ['configure', 'decode', 'flush', 'reset', 'close'].forEach(function(m) {
+            proto[m] = function() {
+                return Promise.reject(new DOMException(n + '.' + m + ': not supported', 'NotSupportedError'));
+            };
+        });
+        Object.defineProperty(f, 'prototype', { writable: false });
+        Object.defineProperty(proto, Symbol.toStringTag, { value: n, configurable: true });
+        Object.defineProperty(globalThis, n, { value: f, writable: true, enumerable: false, configurable: true });
+    });
+
+    // WebSocketStream — constructible, closed promise + close().
+    var _wss = function WebSocketStream() {
+        if (new.target === undefined) throw new TypeError("Failed to construct 'WebSocketStream': Please use the 'new' operator.");
+        throw new DOMException('WebSocketStream: not supported', 'NotSupportedError');
+    };
+    Object.defineProperty(_wss.prototype, 'closed', { get: function() { return Promise.reject(new DOMException('WebSocketStream.closed: not supported', 'NotSupportedError')); }, enumerable: true, configurable: true });
+    _wss.prototype.close = function() { return Promise.reject(new DOMException('WebSocketStream.close: not supported', 'NotSupportedError')); };
+    _wss.prototype.getReader = function() { return Promise.reject(new DOMException('WebSocketStream.getReader: not supported', 'NotSupportedError')); };
+    Object.defineProperty(_wss, 'prototype', { writable: false });
+    Object.defineProperty(_wss.prototype, Symbol.toStringTag, { value: 'WebSocketStream', configurable: true });
+    Object.defineProperty(globalThis, 'WebSocketStream', { value: _wss, writable: true, enumerable: false, configurable: true });
+
+    // window.webkitRTCPeerConnection — legacy alias Chrome keeps.
+    if (typeof RTCPeerConnection === 'function') {
+        Object.defineProperty(globalThis, 'webkitRTCPeerConnection', {
+            value: RTCPeerConnection, writable: true, enumerable: false, configurable: true });
+    }
+
+    // DocumentPictureInPicture — window instance + interface.
+    if (typeof window !== 'undefined') {
+        var _dppif = { window: null,
+            requestWindow: function() { return Promise.reject(new DOMException('DocumentPictureInPicture.requestWindow: not supported', 'NotSupportedError')); },
+            onenter: null };
+        Object.defineProperty(window, 'documentPictureInPicture', { value: _dppif, writable: false, enumerable: true, configurable: true });
+    }
+
+    // LaunchQueue — PWA launch handler consumer registry.
+    var _lq = { setConsumer: function() {}, files: [] };
+    Object.defineProperty(globalThis, 'launchQueue', { value: _lq, writable: false, enumerable: false, configurable: true });
+
+    // Navigator device-request interfaces — [SecureContext] in Chrome.
+    if (typeof navigator !== 'undefined' && _lumen_secure_context !== false) {
+        function _navIface(name, methods) {
+            var o = {};
+            methods.forEach(function(m) {
+                o[m] = function() { return Promise.reject(new DOMException('Navigator' + name + '.' + m + ': not supported', 'NotSupportedError')); };
+            });
+            return o;
+        }
+        try { Object.defineProperty(navigator, 'serial', { value: _navIface('Serial', ['requestPort', 'getPorts']), enumerable: true, configurable: true }); } catch(_) {}
+        try { Object.defineProperty(navigator, 'usb', { value: _navIface('USB', ['getDevices', 'requestDevice']), enumerable: true, configurable: true }); } catch(_) {}
+        try { Object.defineProperty(navigator, 'bluetooth', { value: _navIface('Bluetooth', ['getAvailability', 'requestDevice', 'getDevices']), enumerable: true, configurable: true }); } catch(_) {}
+        try { Object.defineProperty(navigator, 'hid', { value: _navIface('HID', ['getDevices', 'requestDevice']), enumerable: true, configurable: true }); } catch(_) {}
+    }
+})();

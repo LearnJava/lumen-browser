@@ -1540,7 +1540,16 @@ var navigator = Object.assign(Object.create(Navigator.prototype), {
     // lumen_core::Identity — the one source shared with the HTTP headers (BUG-1614).
     userAgent: '',
     language: 'en-US',
-    onLine: false,
+    // Chrome reports `true` whenever the network stack is up — a hardcoded
+    // `false` is an impossible state for a browser that just loaded a page
+    // (Ozon abt challenge reads it). No offline-event machinery exists, so
+    // the honest steady-state value is `true`.
+    onLine: true,
+    // [Exposed=Window] NavigatorID members Chrome always defines; `undefined`
+    // reads as "not a browser" to fingerprint probes.
+    maxTouchPoints: 0,
+    pdfViewerEnabled: true,
+    vendorSub: '',
     // Beacon API (W3C Beacon §3.1): fire-and-forget POST to url.
     // data may be string | URLSearchParams | FormData | Blob | ArrayBuffer | null.
     sendBeacon: function(url, data) {

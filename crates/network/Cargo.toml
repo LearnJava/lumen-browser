@@ -26,6 +26,10 @@ rustls = { version = "0.23", features = ["std"] }
 # Graduation criterion: не планируется — это и есть TLS-стек Chrome.
 # Требует cmake + nasm + MSVC на машине сборки (boring-sys собирает BoringSSL).
 boring = "5.5.1"
+# FFI для ClientHello-расширений без публичной обёртки в `boring`
+# (trust_anchors, server_padding) — та же мажорная линия, что у `boring`.
+boring-sys = { version = "=5.5.1", default-features = false }
+foreign-types = "0.5"
 webpki-roots = "0.26"
 # Exception #3 (§5): X.509 PEM decode. Partner-crate to rustls (same org) for
 # parsing the extra-CA PEM file (BUG-785) — hand-rolling base64/PEM parsing of

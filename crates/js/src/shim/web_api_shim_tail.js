@@ -586,7 +586,15 @@ function _lumen_deliver_perf_entry(entry_type, name, start_ms, duration_ms, deta
     }
     // `performance.timing`/`performance.navigation` (BUG-767) read this same
     // entry rather than a second channel — see performance_shim.js.
-    if (entry.entryType === 'navigation') _perf_last_navigation_entry = entry;
+    if (entry.entryType === 'navigation') {
+        _perf_last_navigation_entry = entry;
+        // The entry is delivered twice for one navigation — once before the
+        // first script (BUG-OZON, Chrome's commit-time populate) and once
+        // after `load` with the final DOM milestones. Keep exactly one
+        // 'navigation' entry in the buffer, as Chrome does; the post-load
+        // delivery is the one that survives.
+        _perf_entries = _perf_entries.filter(function(e) { return e.entryType !== 'navigation'; });
+    }
     _perf_entries.push(entry);
     _perf_observer_notify([entry]);
 }

@@ -28,7 +28,12 @@ use std::io;
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use boring::ssl::{HandshakeError, SslConnector, SslMethod, SslStream, SslVerifyMode, SslVersion, StatusType};
+use boring::ssl::{
+    CertificateCompressionAlgorithm, CertificateCompressor, HandshakeError, SslConnector, SslMethod,
+    SslStream, SslVerifyMode, SslVersion, StatusType,
+};
+use boring_sys as ffi;
+use foreign_types::ForeignType;
 use rustls::client::danger::ServerCertVerifier;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 
@@ -42,6 +47,23 @@ use crate::{Error, NetErrorCode, net_failure};
 /// Chrome ≥124), ALPN. Значения перенесены без изменений — рефакторинг
 /// WS-B не должен двигать wire.
 const TLS: &crate::http::chrome_manifest::TlsSpec = &crate::http::chrome_manifest::CHROME_157.tls;
+
+/// brotli (alg_id 2) certificate decompression for the clienthello
+/// `compress_certificate` extension — Chrome advertises exactly this one.
+/// Decompress-only: a client never compresses the server's certificate.
+struct BrotliCertDecompress;
+
+impl CertificateCompressor for BrotliCertDecompress {
+    const ALGORITHM: CertificateCompressionAlgorithm = CertificateCompressionAlgorithm::BROTLI;
+    const CAN_COMPRESS: bool = false;
+    const CAN_DECOMPRESS: bool = true;
+
+    fn decompress<W: io::Write>(&self, input: &[u8], output: &mut W) -> io::Result<()> {
+        let mut d = brotli_decompressor::Decompressor::new(input, 4096);
+        io::copy(&mut d, output)?;
+        Ok(())
+    }
+}
 
 /// Connector + verifier bundle for one `(profile, h1_only)` pair.
 struct Endpoint {
@@ -77,6 +99,30 @@ fn build_endpoint(profile: TlsProfile, h1_only: bool) -> Result<Endpoint, Error>
     // TLS 1.3 session resumption, matching rustls' in-memory client cache —
     // a resumed session skips re-verification, exactly as before.
     b.set_session_cache_mode(boring::ssl::SslSessionCacheMode::CLIENT);
+
+    // Chrome-grade ClientHello (BUG-ozon): BoringSSL defaults all of these
+    // OFF (`ssl_lib.cc`: `grease_enabled(false)`, `permute_extensions(false)`,
+    // `signed_cert_timestamps_enabled(false)`, `ocsp_stapling_enabled(false)`),
+    // while real Chrome turns every one on. Without GREASE values inside the
+    // cipher/extension/group/sigalg lists and a permuted extension order the
+    // hello is a deterministic non-Chrome tell — Ozon's edge serves its hard
+    // refuse page instead of the solvable challenge. Tor keeps BoringSSL
+    // defaults: Tor Browser is Firefox-based and must not look like Chrome.
+    if !matches!(profile, TlsProfile::Tor) {
+        b.set_grease_enabled(true);
+        b.set_permute_extensions(true);
+        b.enable_signed_cert_timestamps();
+        b.enable_ocsp_stapling();
+        // compress_certificate (27): Chrome advertises brotli only. We can
+        // decompress (brotli-decompressor is already a dep for HTTP bodies)
+        // but never compress — servers only compress when asked to.
+        let _ = b.add_certificate_compression_algorithm(BrotliCertDecompress);
+        // trust_anchors (51764): an empty requested-anchors list still makes
+        // BoringSSL emit the extension, like Chrome's populated one does.
+        unsafe {
+            ffi::SSL_CTX_set1_requested_trust_anchors(b.as_ptr(), std::ptr::null(), 0);
+        }
+    }
 
     match profile {
         TlsProfile::Standard => {
@@ -132,6 +178,18 @@ pub(crate) fn connect(
     // Ask for the stapled OCSP response like rustls does — without it
     // `ocsp_status()` stays empty and the `Revoked` hard-fail can never fire.
     let _ = ssl.set_status_type(StatusType::OCSP);
+    // ECH GREASE — Chrome always sends the outer `encrypted_client_hello`
+    // extension with a GREASE'd payload even without real ECH keys
+    // (`SSL_set_enable_ech_grease`). Tor skips it with the rest of the
+    // Chrome-only ClientHello dressing.
+    if !matches!(profile, TlsProfile::Tor) {
+        ssl.set_enable_ech_grease(true);
+        // server_padding (4832): Chrome sends the extension with a zero
+        // requested size — BoringSSL only emits it when configured.
+        unsafe {
+            ffi::SSL_set_server_padding_request(ssl.as_ptr(), 0);
+        }
+    }
 
     let mut hs = ssl.setup_connect(tcp);
     let stream = loop {

@@ -153,7 +153,7 @@ fn sec_fetch_site(initiator: Option<&Url>, target: &Url) -> &'static str {
 /// a profile whose navigation block has none (Firefox/Safari/Lumen as they
 /// are modelled today) would itself make the subresource requests stand out
 /// from the navigation that preceded them.
-fn sends_fetch_metadata(profile: HttpProfile) -> bool {
+pub(crate) fn sends_fetch_metadata(profile: HttpProfile) -> bool {
     matches!(
         profile,
         HttpProfile::Chrome | HttpProfile::Strict | HttpProfile::Edge | HttpProfile::TorBrowser
@@ -199,14 +199,40 @@ pub fn fetch_metadata_headers(
     // на document-запросах и никогда на fetch/XHR/ресурсах (BUG-1826).
     // Профиль добавляет его в navigation-блок, поэтому здесь он снимается
     // через X-Lumen-Drop — тот же механизм, что у cache-control в fetch().
-    // Upgrade-Insecure-Requests, наоборот, Chrome шлёт на всех запросах —
-    // профильный дефолт на сабресурсах остаётся.
+    // Upgrade-Insecure-Requests — тоже только навигация: на проводе Chrome
+    // 157 не шлёт его ни на одном subresource-запросе (проверено на
+    // httpbin.org GET/POST и на локальных img/css/script — и по http, и по
+    // https), вопреки прежнему комментарию «Chrome шлёт на всех запросах».
     format!(
         "Sec-Fetch-Site: {}\r\nSec-Fetch-Mode: {}\r\nSec-Fetch-Dest: {dest}\r\n\
-         X-Lumen-Drop: sec-fetch-user\r\nX-Lumen-Drop: priority\r\n",
+         X-Lumen-Drop: sec-fetch-user\r\nX-Lumen-Drop: priority\r\n\
+         X-Lumen-Drop: upgrade-insecure-requests\r\n",
         sec_fetch_site(initiator, target),
         mode.as_header_value(),
     )
+}
+
+/// Chrome's per-destination `Accept` header value for a page-issued
+/// `fetch()`/XHR/element load (Fetch §"determine request's header list" —
+/// the empty destination defaults to `*/*`; image/style keep their own
+/// lists). `None` for destinations that are really navigations
+/// (`document`/`frame`/`iframe`): the profile's navigation `Accept` is
+/// already the right value there.
+///
+/// Measured on Chrome 157.0.8103.78 against a local header-echo server:
+/// `fetch()`/XHR/beacon/worker/script/font/media → `*/*`,
+/// `<link rel=stylesheet>` → `text/css,*/*;q=0.1`, `<img>`/favicon →
+/// `image/jxl,image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8`.
+#[must_use]
+pub fn subresource_accept(destination: &str) -> Option<&'static str> {
+    match destination {
+        "document" | "frame" | "iframe" => None,
+        "style" => Some("text/css,*/*;q=0.1"),
+        "image" => {
+            Some("image/jxl,image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
+        }
+        _ => Some("*/*"),
+    }
 }
 
 /// Extra request headers (`Name: value\r\n` lines) that carry `mode` and
@@ -266,7 +292,8 @@ mod tests {
         assert_eq!(
             h,
             "Sec-Fetch-Site: same-origin\r\nSec-Fetch-Mode: cors\r\nSec-Fetch-Dest: font\r\n\
-             X-Lumen-Drop: sec-fetch-user\r\nX-Lumen-Drop: priority\r\n"
+             X-Lumen-Drop: sec-fetch-user\r\nX-Lumen-Drop: priority\r\n\
+             X-Lumen-Drop: upgrade-insecure-requests\r\n"
         );
     }
 
@@ -299,7 +326,8 @@ mod tests {
         assert_eq!(
             h,
             "Sec-Fetch-Site: same-site\r\nSec-Fetch-Mode: no-cors\r\nSec-Fetch-Dest: image\r\n\
-             X-Lumen-Drop: sec-fetch-user\r\nX-Lumen-Drop: priority\r\n"
+             X-Lumen-Drop: sec-fetch-user\r\nX-Lumen-Drop: priority\r\n\
+             X-Lumen-Drop: upgrade-insecure-requests\r\n"
         );
         let other = url("http://img.example.com/a.png");
         let h = subresource_request_headers(

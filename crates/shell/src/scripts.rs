@@ -986,6 +986,25 @@ pub(crate) fn run_scripts_with_dom(
                 if let Some(ancestry) = ancestry {
                     ancestry.register(&doc_arc, &rt);
                 }
+                // BUG-OZON: top-level documents only (`ancestry` is `None`
+                // for them — frames must not grow a 'navigation' entry).
+                // Deliver the navigation timing entry and pin `_perf_origin_ms`
+                // to the real navigation start before the first script line —
+                // Chrome populates `performance.timing` at commit; ours used
+                // to arrive only after `load`, so parse-time/anti-bot scripts
+                // read zeros (the Ozon `/abt/result` fingerprint payload did).
+                if ancestry.is_none() {
+                    match crate::nav_timing::early_delivery_js(!deterministic.enabled) {
+                        Some(js) => {
+                            eprintln!("[nav-timing] early delivery eval starting");
+                            match rt.eval(&js) {
+                                Ok(_) => eprintln!("[nav-timing] early entry delivered"),
+                                Err(e) => eprintln!("[nav-timing] early delivery eval failed: {e}"),
+                            }
+                        }
+                        None => eprintln!("[nav-timing] early_delivery_js returned None"),
+                    }
+                }
                 // CSSOM-1 срез 3: seed document.styleSheets/element.sheet
                 // before the first script line runs (BUG-443 spec order —
                 // see the parse_time_layout push below for the rationale).

@@ -63,7 +63,24 @@ impl JsFetchProvider for HttpClient {
     /// одноимённый заголовок нашего fingerprint-набора (`Accept`,
     /// `Accept-Language`, `Cache-Control`, `User-Agent`), а не дублирует его.
     fn fetch_request(&self, req: &JsFetchRequest<'_>) -> Result<JsFetchResult> {
-        self.fetch_request_impl(req, true)
+        // Временная диагностика Ozon `/abt/result`: LUMEN_DUMP_FETCH=1 печатает
+        // method+url+тело каждого JS-запроса в stderr.
+        if std::env::var_os("LUMEN_DUMP_FETCH").is_some() {
+            let body = req
+                .body
+                .as_ref()
+                .map(|b| String::from_utf8_lossy(b.bytes).into_owned())
+                .unwrap_or_default();
+            eprintln!("[fetch-dump] {} {} ct={:?} body={}", req.method, req.url, req.body.as_ref().map(|b| b.content_type), body);
+        }
+        let result = self.fetch_request_impl(req, true);
+        if std::env::var_os("LUMEN_DUMP_FETCH").is_some() {
+            match &result {
+                Ok(r) => eprintln!("[fetch-dump] -> {} {} status={} final={}", req.method, req.url, r.status, r.url),
+                Err(e) => eprintln!("[fetch-dump] -> {} {} ERR {}", req.method, req.url, e),
+            }
+        }
+        result
     }
 
     /// Сеть самого service worker-а: тот же путь, но перехватчик пропускается,
@@ -1179,6 +1196,24 @@ impl HttpClient {
             fetch_metadata::dest_token(req.destination),
             mode,
         ));
+        // Chrome's per-destination `Accept` on subresource requests: the
+        // profile block only models the *navigation* value, which every
+        // `fetch()`/XHR/element load then leaks on the wire — `*/*` for
+        // fetch/XHR/script/worker/media, `text/css,*/*;q=0.1` for stylesheets,
+        // the image list for `<img>` (measured on Chrome 157). An author
+        // `Accept` always wins (it is already in `author_headers`).
+        if fetch_metadata::sends_fetch_metadata(self.fingerprint_profile)
+            && mode != fetch_metadata::RequestMode::Navigate
+            && !req
+                .headers
+                .iter()
+                .any(|(n, _)| n.eq_ignore_ascii_case("accept"))
+            && let Some(accept) = fetch_metadata::subresource_accept(req.destination)
+        {
+            author_headers.push_str("Accept: ");
+            author_headers.push_str(accept);
+            author_headers.push_str("\r\n");
+        }
         // Request lines of the cache mode (Fetch §4.5) and, when revalidating,
         // the stored entry's validators. Only a page `fetch()` (empty
         // destination) has a mode; an element's own load keeps the profile's.

@@ -105,6 +105,15 @@ pub(crate) fn render_bytes(
     // COMPAT-PACK-CSS: записи пакета для хоста этого документа (пусто — не применяется).
     compat_inject: crate::compat_inject::CompatInject,
 ) -> Result<RenderedPage, Box<dyn Error>> {
+    // BUG-OZON: the response facts are already known — stash them so
+    // `run_scripts_with_dom` can deliver the navigation timing entry (and
+    // pin `timeOrigin`) before the first script, the way Chrome populates
+    // `performance.timing` at navigation commit.
+    crate::nav_timing::fill_early_meta(crate::nav_timing::NavResponseMeta {
+        status: response_status,
+        redirected,
+        decoded_body_size: bytes.len() as u64,
+    });
     let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, push_backend, target, false, csp_header, report_to_endpoints, sync_xhr_document_policy, sync_xhr_permissions_policy, referrer_policy_header, document_referrer, dynamic_image_hook_ctx, compat_inject)?;
     let display_list = crate::display_list_metrics::paint_ordered_in(&parsed.layout, viewport);
     println!(

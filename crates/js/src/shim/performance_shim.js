@@ -529,9 +529,12 @@ PerformanceTiming.prototype.toJSON = function() {
 function _perf_make_timing() {
     var nav = _perf_last_navigation_entry;
     var origin = Math.round(_perf_origin_ms);
-    // Spec fallback for a milestone that hasn't happened yet is 0, same as
-    // every other not-yet-fired PerformanceTiming attribute in real browsers.
-    function ms(key) { return nav ? _perf_l2_to_l1(nav[key] || 0) : 0; }
+    // Spec fallback for a milestone that hasn't happened yet is literal 0 —
+    // same as every other not-yet-fired PerformanceTiming attribute in real
+    // browsers. Mapping a `0` detail value through `_perf_l2_to_l1` would
+    // wrongly report `navigationStart` (unloadEvent*/redirect* on a fresh
+    // navigation, domInteractive before DOMContentLoaded, …).
+    function ms(key) { var v = nav ? nav[key] : 0; return v ? _perf_l2_to_l1(v) : 0; }
     var t = Object.create(PerformanceTiming.prototype);
     var fields = {
         navigationStart: origin,
@@ -550,9 +553,10 @@ function _perf_make_timing() {
         responseEnd: ms('responseEnd'),
         // `domLoading` was removed from Navigation Timing L2 (no L2 attribute
         // answers it, so no key exists on `nav` for it either) — kept here
-        // only for L1 back-compat, honestly stubbed to `navigationStart`
-        // rather than a fabricated sub-phase timestamp.
-        domLoading: origin,
+        // only for L1 back-compat. Parsing starts when the response body is
+        // in, so `responseEnd` is the closest real milestone; `navigationStart`
+        // remains the fallback when no navigation entry exists at all.
+        domLoading: ms('responseEnd') || origin,
         domInteractive: ms('domInteractive'),
         domContentLoadedEventStart: ms('domContentLoadedEventStart'),
         domContentLoadedEventEnd: ms('domContentLoadedEventEnd'),
@@ -628,6 +632,17 @@ Performance.prototype.toJSON = function() {
 // initialiser because the constructor above deliberately throws for script.
 var performance = Object.create(Performance.prototype);
 EventTarget.call(performance);
+
+// Blink-only non-standard `performance.memory` — Chrome always exposes it;
+// its absence is an engine tell. Values are plausible mid-session heap
+// numbers; they vary per run in Chrome anyway.
+Object.defineProperty(Performance.prototype, 'memory', {
+    get: function() {
+        if (!(this instanceof Performance)) throw new TypeError('Illegal invocation');
+        return { jsHeapSizeLimit: 4395630592, totalJSHeapSize: 15728640, usedJSHeapSize: 8388608 };
+    },
+    enumerable: true, configurable: true,
+});
 
 function _perf_entries_by_name(name, type) {
     return _perf_entries.filter(function(e) {

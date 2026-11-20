@@ -332,7 +332,7 @@ pub(crate) fn worker_navigator_id_shim_for(p: &NavigatorProfile, id: &lumen_core
            appVersion: {app_version},\
            product: 'Gecko',\
            userAgent: {user_agent},\
-           onLine: false,\
+           onLine: true,\
            platform: {platform},\
            language: {primary_language},\
            languages: {languages}{user_agent_data}\
@@ -420,6 +420,8 @@ fn build_navigator_shim(p: &NavigatorProfile, id: &lumen_core::Identity) -> Stri
     height: {screen_height},
     availWidth: {screen_width},
     availHeight: {screen_height},
+    availLeft: 0,
+    availTop: 0,
     colorDepth: {color_depth},
     pixelDepth: {color_depth},
     orientation: {{ type: 'landscape-primary', angle: 0 }}

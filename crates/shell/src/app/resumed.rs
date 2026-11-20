@@ -93,8 +93,16 @@ impl Lumen {
         self.stream_sheet = lumen_css_parser::Stylesheet::default();
         self.stream_layout_seeded = false;
         // Record navigation start for the initial streaming load.
-        self.nav_start = Some(std::time::Instant::now());
-        self.load_marks.reset(std::time::Instant::now());
+        let nav_start = std::time::Instant::now();
+        self.nav_start = Some(nav_start);
+        self.load_marks.reset(nav_start);
+        // BUG-OZON: same pre-script nav-timing context `Lumen::reload()`
+        // records — the first load is a navigation too.
+        let nav_unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64() * 1000.0)
+            .unwrap_or(0.0);
+        nav_timing::begin(nav_start, nav_unix_ms, self.source.url_str().unwrap_or_default());
         // A fresh navigation supersedes any prior settled error (BUG-308).
         self.load_failed = false;
         self.load_error_message = None;

@@ -2787,6 +2787,15 @@ fn fetch_with_redirect(
     // completed = network failure»; явный RequestFailed добавим, когда
     // увидим, что наблюдателям этого мало.
     let (host_ascii, port, is_tls) = require_http_scheme(url)?;
+    // Host header value per RFC 9110 §7.2: `host` alone only when the port is
+    // the scheme default — Chrome sends `Host: example.com:8443` on a
+    // non-default port and anti-bot checks compare the raw value. Used ONLY
+    // as `request_host_header` (HTTP/1.1 `Host:` / H2 `:authority`); every
+    // logic consumer below keeps the bare `host_ascii`.
+    let host_header = match (is_tls, port) {
+        (false, 80) | (true, 443) => host_ascii.clone(),
+        _ => format!("{host_ascii}:{port}"),
+    };
 
     // BUG-295: process-global offline simulation (`network.setOfflineStatus`) —
     // right after scheme validation (no point simulating "no network" for an
@@ -2945,7 +2954,7 @@ fn fetch_with_redirect(
                 port,
                 is_tls,
                 "OPTIONS",
-                &host_ascii,
+                &host_header,
                 &url.path_and_query(),
                 None,
                 None,
@@ -3087,7 +3096,7 @@ fn fetch_with_redirect(
             port,
             is_tls,
             actual_method,
-            &host_ascii,
+            &host_header,
             &url.path_and_query(),
             range,
             if_range,
@@ -3123,7 +3132,7 @@ fn fetch_with_redirect(
                     port,
                     is_tls,
                     actual_method,
-                    &host_ascii,
+                    &host_header,
                     &url.path_and_query(),
                     range,
                     if_range,
@@ -4733,7 +4742,19 @@ impl HttpClient {
             destination,
             fetch_metadata::RequestMode::for_destination(destination),
         );
-        let referer_header = format!("{referer_header}{mode_headers}");
+        // Chrome's per-destination `Accept` on subresource requests — same
+        // table the page-`fetch()` path uses (`fetch_metadata::
+        // subresource_accept`); `None` for document navigations, whose
+        // profile `Accept` is already correct.
+        let accept_header = if fetch_metadata::sends_fetch_metadata(self.fingerprint_profile)
+            && let Some(accept) =
+                fetch_metadata::subresource_accept(destination.as_fetch_dest())
+        {
+            format!("Accept: {accept}\r\n")
+        } else {
+            String::new()
+        };
+        let referer_header = format!("{referer_header}{accept_header}{mode_headers}");
         let url_str = url.to_string();
         let accept_encoding = self.accept_encoding_header();
         // BUG-839: Resource Timing needs the two ends of the request. Wall

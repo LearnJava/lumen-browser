@@ -34,15 +34,20 @@
 //!   sit on a different zero point (`timeOrigin` is captured at `install_dom`,
 //!   strictly after `nav_start`; mixing the two clocks would make the entry's
 //!   own timeline non-monotonic).
+//! - **Synthesized once, then frozen:** `fetchStart`/`domainLookupStart/End`/
+//!   `connectStart/End`/`secureConnectionStart`/`requestStart`/`responseStart`/
+//!   `responseEnd`. `lumen-network` exposes no DNS/connect/TLS/request
+//!   sub-phase breakdown (the same limitation `_lumen_record_resource_timing`
+//!   documents for subresources), so [`fill_early_meta`] derives a monotonic
+//!   ladder anchored on the *real* elapsed time to response completion and
+//!   stores it in [`EARLY`] — the pre-script and post-`load` deliveries then
+//!   report identical values, the way Chrome fixes them at commit. Without an
+//!   early context (frames, tests) they stay the honest `0` stub.
 //! - **Honestly stubbed to `0`:** `redirectStart`/`redirectEnd` (no per-hop
-//!   timestamp exists anywhere in `lumen-network`), `domainLookupStart/End`/
-//!   `connectStart/End`/`secureConnectionStart`/`requestStart`/`fetchStart`/
-//!   `responseStart`/`responseEnd` (no DNS/connect/TLS/request sub-phase
-//!   breakdown is exposed by `lumen-network`'s HTTP client at all — the exact
-//!   same limitation `_lumen_record_resource_timing` already documents for
-//!   subresources), `unloadEventStart/End` (no previous-document unload is
-//!   timed), `workerStart` (no service-worker-intercepted navigation timing),
-//!   and `activationStart` (no prerendering).
+//!   timestamp exists anywhere in `lumen-network`), `unloadEventStart/End`
+//!   (no previous-document unload is timed), `workerStart` (no
+//!   service-worker-intercepted navigation timing), and `activationStart`
+//!   (no prerendering).
 //! - **`type`:** always `"navigate"`. Every navigation kind (`navigate_to`/
 //!   `navigate_replace`/`navigate_back`/`navigate_forward`/an actual reload)
 //!   converges on the single `Lumen::reload()` entry point with no tag
@@ -96,12 +101,167 @@ fn marks() -> &'static Mutex<Marks> {
     MARKS.get_or_init(|| Mutex::new(Marks::default()))
 }
 
+/// The network sub-phases `lumen-network` cannot measure — see the module
+/// doc comment for why they are synthesized once and frozen.
+#[derive(Debug, Clone, Copy)]
+struct NetPhases {
+    fetch_start: f64,
+    domain_lookup_start: f64,
+    domain_lookup_end: f64,
+    connect_start: f64,
+    secure_connection_start: f64,
+    connect_end: f64,
+    request_start: f64,
+    response_start: f64,
+    response_end: f64,
+}
+
+/// Pre-script navigation context: everything [`early_delivery_js`] needs to
+/// hand `run_scripts_with_dom` a ready-made eval snippet that runs after
+/// `install_dom` but before the first script line — the point where Chrome
+/// has already populated `performance.timing`/`PerformanceNavigationTiming`
+/// (navigation commit), while Lumen used to deliver the entry only after
+/// `load`, leaving every field `0` for parse-time/anti-bot scripts.
+struct EarlyNav {
+    /// Same [`Instant`] `Lumen::nav_start` carries — `detail_json`'s `nav_start`.
+    start: Instant,
+    /// `start` on the `_lumen_now_ms()` clock (Unix-epoch ms). The JS
+    /// `timeOrigin`/`navigationStart` must equal the real navigation start —
+    /// pinning it at shim-install time (post-response) would shift every
+    /// `performance.now()`/timing value by the whole fetch+parse duration.
+    unix_ms: f64,
+    url: String,
+    /// Filled by [`fill_early_meta`] once `render_bytes` knows the response
+    /// facts; `None` until then (and forever for a load that never reaches
+    /// `render_bytes`, e.g. a network error page — no early entry then,
+    /// matching the no-`LoadedPage` no-late-delivery behaviour).
+    meta: Option<NavResponseMeta>,
+    /// The frozen network-phase ladder — computed once at `fill`, reused by
+    /// both the early and the post-`load` `detail_json` calls.
+    net: Option<NetPhases>,
+}
+
+static EARLY: OnceLock<Mutex<Option<EarlyNav>>> = OnceLock::new();
+
+fn early() -> &'static Mutex<Option<EarlyNav>> {
+    EARLY.get_or_init(|| Mutex::new(None))
+}
+
+/// Record the navigation start where `Lumen::reload()` sets `nav_start`.
+/// Called right after [`clear`] so a stale context can never survive into
+/// the incoming navigation.
+pub(crate) fn begin(start: Instant, unix_ms: f64, url: &str) {
+    if let Ok(mut g) = early().lock() {
+        *g = Some(EarlyNav {
+            start,
+            unix_ms,
+            url: url.to_owned(),
+            meta: None,
+            net: None,
+        });
+    }
+}
+
+/// Snapshot the response facts `render_bytes` already holds — before
+/// `parse_and_layout` runs the document's scripts. First call wins: a
+/// re-entrant `render_bytes` must not recompute the ladder, or the early
+/// and final deliveries would disagree.
+pub(crate) fn fill_early_meta(meta: NavResponseMeta) {
+    let Ok(mut g) = early().lock() else {
+        return;
+    };
+    let Some(e) = g.as_mut() else {
+        return;
+    };
+    if e.meta.is_some() {
+        return;
+    }
+    e.meta = Some(meta);
+    // Anchor the ladder on the real elapsed time to "response complete"
+    // (this runs right before parsing, i.e. right after the body arrived).
+    // Shape measured on Chrome 157 through the same CONNECT proxy (Ozon
+    // `/abt/result` payload, 2026-11-20): DNS/connect collapse onto
+    // `fetchStart`, `secureConnectionStart` stays `0` (no TLS phase is
+    // reported for a tunneled connection), `requestStart` follows
+    // `fetchStart` by ~2 ms, and `responseStart`/`responseEnd` sit at the
+    // real tail. Every phase stays strictly ordered for any elapsed value.
+    let elapsed = e.start.elapsed().as_secs_f64() * 1000.0;
+    let resp_end = (elapsed * 0.97).max(1.0);
+    let resp_start = (resp_end - (resp_end * 0.08).min(60.0)).max(resp_end * 0.5);
+    let fetch_start = 2.0_f64.min(resp_start * 0.2);
+    let request_start = (fetch_start + 2.0).min(resp_start * 0.6);
+    e.net = Some(NetPhases {
+        fetch_start,
+        domain_lookup_start: fetch_start,
+        domain_lookup_end: fetch_start,
+        connect_start: fetch_start,
+        connect_end: fetch_start,
+        secure_connection_start: 0.0,
+        request_start,
+        response_start: resp_start,
+        response_end: resp_end,
+    });
+}
+
+/// The frozen ladder for *this* navigation — `None` for callers without an
+/// early context (frames, headless tests) or a mismatched `nav_start`, both
+/// of which keep the honest `0` stubs.
+fn early_net_phases(nav_start: Instant) -> Option<NetPhases> {
+    let g = early().lock().ok()?;
+    let e = g.as_ref()?;
+    if e.start != nav_start {
+        return None;
+    }
+    e.net
+}
+
+/// JS snippet `run_scripts_with_dom` evals after `install_dom`, before the
+/// first script line: pins `_perf_origin_ms` to the real navigation start
+/// (unless `deterministic`, whose `_lumen_now_ms` is a frozen/monotonic test
+/// clock a Unix-epoch pin would break) and delivers the navigation entry.
+/// `None` when there is no top-level navigation context or the response
+/// facts were never filled — frames/workers/tests are unaffected.
+#[cfg(feature = "v8")]
+pub(crate) fn early_delivery_js(pin_origin: bool) -> Option<String> {
+    // Snapshot under the lock, then DROP the guard before `detail_json` —
+    // it re-locks `EARLY` via `early_net_phases`, and `std::sync::Mutex` is
+    // not reentrant: holding `g` across the call deadlocked the pipeline
+    // thread (the page never finished loading).
+    let (meta, start, unix_ms, url) = {
+        let g = early().lock().ok()?;
+        let Some(e) = g.as_ref() else {
+            eprintln!("[nav-timing] early delivery skipped: no begin()");
+            return None;
+        };
+        let Some(meta) = e.meta else {
+            eprintln!("[nav-timing] early delivery skipped: response meta not filled");
+            return None;
+        };
+        (meta, e.start, e.unix_ms, e.url.clone())
+    };
+    let detail = detail_json(meta, start);
+    let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let url = crate::js_escape::js_string_literal(&url);
+    let detail = crate::js_escape::js_string_literal(&detail);
+    let pin = if pin_origin {
+        format!("_perf_origin_ms = {unix_ms:.3}; ")
+    } else {
+        String::new()
+    };
+    Some(format!(
+        "{pin}_lumen_deliver_perf_entry('navigation', {url}, 0.0, {duration_ms}, {detail});"
+    ))
+}
+
 /// Reset at the start of every navigation (`Lumen::reload()`), mirroring
 /// `resource_timing::clear()` — a mark from the outgoing document must never
 /// leak into the incoming one's entry.
 pub(crate) fn clear() {
     if let Ok(mut m) = marks().lock() {
         *m = Marks::default();
+    }
+    if let Ok(mut e) = early().lock() {
+        *e = None;
     }
 }
 
@@ -156,6 +316,8 @@ pub(crate) fn detail_json(meta: NavResponseMeta, nav_start: Instant) -> String {
     let dom_content_loaded_start_ms = relative_ms(m.dom_content_loaded_start, nav_start);
     let load_start_ms = relative_ms(m.load_start, nav_start);
     let transfer_size = if meta.status == 0 { 0 } else { meta.decoded_body_size + 300 };
+    let net = early_net_phases(nav_start);
+    let phase = |f: fn(NetPhases) -> f64| net.map(f).unwrap_or(0.0);
     serde_json::json!({
         // §Real (redirect / response).
         "redirectCount": u32::from(meta.redirected),
@@ -172,19 +334,20 @@ pub(crate) fn detail_json(meta: NavResponseMeta, nav_start: Instant) -> String {
         "domComplete": load_start_ms,
         "loadEventStart": load_start_ms,
         "loadEventEnd": relative_ms(m.load_end, nav_start),
-        // §Honestly stubbed — see module doc comment.
+        // §Redirect — real-ish only for a redirected navigation (Chrome
+        // reports the hop window; `redirectEnd` coincides with `fetchStart`).
         "type": "navigate",
-        "redirectStart": 0,
-        "redirectEnd": 0,
-        "fetchStart": 0,
-        "domainLookupStart": 0,
-        "domainLookupEnd": 0,
-        "connectStart": 0,
-        "connectEnd": 0,
-        "secureConnectionStart": 0,
-        "requestStart": 0,
-        "responseStart": 0,
-        "responseEnd": 0,
+        "redirectStart": if meta.redirected { phase(|n| n.fetch_start) * 0.75 } else { 0.0 },
+        "redirectEnd": if meta.redirected { phase(|n| n.fetch_start) } else { 0.0 },
+        "fetchStart": phase(|n| n.fetch_start),
+        "domainLookupStart": phase(|n| n.domain_lookup_start),
+        "domainLookupEnd": phase(|n| n.domain_lookup_end),
+        "connectStart": phase(|n| n.connect_start),
+        "connectEnd": phase(|n| n.connect_end),
+        "secureConnectionStart": phase(|n| n.secure_connection_start),
+        "requestStart": phase(|n| n.request_start),
+        "responseStart": phase(|n| n.response_start),
+        "responseEnd": phase(|n| n.response_end),
         "unloadEventStart": 0,
         "unloadEventEnd": 0,
         "workerStart": 0,
@@ -283,8 +446,8 @@ mod tests {
         let meta = NavResponseMeta { status: 200, redirected: false, decoded_body_size: 0 };
         let json = detail_json(meta, Instant::now());
         assert_eq!(value(&json, "redirectCount"), 0);
-        assert_eq!(value(&json, "redirectStart"), 0);
-        assert_eq!(value(&json, "redirectEnd"), 0);
+        assert_eq!(value(&json, "redirectStart").as_f64().unwrap(), 0.0);
+        assert_eq!(value(&json, "redirectEnd").as_f64().unwrap(), 0.0);
     }
 
     #[test]
@@ -328,5 +491,50 @@ mod tests {
         // (BUG-829's failure mode for a different call site).
         let json = detail_json(NavResponseMeta::default(), Instant::now());
         serde_json::from_str::<serde_json::Value>(&json).expect("must parse as JSON");
+    }
+
+    #[test]
+    fn early_ladder_is_ordered_real_and_frozen() {
+        let _guard = exclusive();
+        clear();
+        let start = Instant::now();
+        begin(start, 1_700_000_000_000.0, "https://example.com/");
+        let meta = NavResponseMeta { status: 200, redirected: false, decoded_body_size: 100 };
+        fill_early_meta(meta);
+        // A second fill must not recompute — early and final deliveries
+        // have to report the same frozen values.
+        fill_early_meta(NavResponseMeta { status: 500, redirected: true, decoded_body_size: 1 });
+        let json = detail_json(meta, start);
+        let f = |k: &str| value(&json, k).as_f64().unwrap_or(f64::NAN);
+        let (fetch, dns_s, dns_e, conn_s, conn_e, req, resp_s, resp_e) = (
+            f("fetchStart"), f("domainLookupStart"), f("domainLookupEnd"),
+            f("connectStart"), f("connectEnd"),
+            f("requestStart"), f("responseStart"), f("responseEnd"),
+        );
+        // Chrome-through-proxy shape: DNS/connect collapse onto fetchStart,
+        // secureConnectionStart stays 0 for a tunneled connection.
+        assert_eq!(value(&json, "secureConnectionStart"), 0.0);
+        assert_eq!(dns_s, fetch);
+        assert_eq!(dns_e, fetch);
+        assert_eq!(conn_s, fetch);
+        assert_eq!(conn_e, fetch);
+        for v in [fetch, req, resp_s, resp_e] {
+            assert!(v > 0.0, "phase must be a real positive ms value");
+        }
+        assert!(fetch < req && req < resp_s && resp_s < resp_e);
+        // responseEnd anchors on the real elapsed time — never beyond it
+        // (plus scheduling slack between fill and this read).
+        assert!(resp_e <= start.elapsed().as_secs_f64() * 1000.0 + 50.0);
+        // http:// carries no TLS phase.
+        clear();
+        let start2 = Instant::now();
+        begin(start2, 0.0, "http://example.com/");
+        fill_early_meta(meta);
+        let json2 = detail_json(meta, start2);
+        assert_eq!(value(&json2, "secureConnectionStart"), 0.0);
+        // A mismatched nav_start (frame/test caller) keeps the honest zeros.
+        let json3 = detail_json(meta, Instant::now());
+        assert_eq!(value(&json3, "fetchStart"), 0.0);
+        clear();
     }
 }

@@ -534,12 +534,21 @@ impl Lumen {
             return;
         }
         // Record navigation start for PerformanceNavigationTiming (Navigation Timing L2 §4.2).
-        self.nav_start = Some(std::time::Instant::now());
-        self.load_marks.reset(std::time::Instant::now());
+        let nav_start = std::time::Instant::now();
+        self.nav_start = Some(nav_start);
+        self.load_marks.reset(nav_start);
         // BUG-640: a DOM-milestone mark from the outgoing document must never
         // leak into the incoming one's entry — same reasoning as
         // `resource_timing::clear()` below.
         nav_timing::clear();
+        // BUG-OZON: stash the same start (plus its wall-clock form and the
+        // URL) for the pre-script navigation-timing delivery — Chrome
+        // populates `performance.timing` at commit, before any page script.
+        let nav_unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64() * 1000.0)
+            .unwrap_or(0.0);
+        nav_timing::begin(nav_start, nav_unix_ms, self.source.url_str().unwrap_or_default());
         // A fresh navigation supersedes any prior settled error (BUG-308).
         self.load_failed = false;
         self.load_error_message = None;
@@ -1593,15 +1602,25 @@ impl Lumen {
         {
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                 crate::nav_timing::record_load_start();
+                // BUG-OZON: the navigation entry must exist while `load`
+                // handlers run — Chrome populates it at commit. This
+                // pre-dispatch delivery carries every milestone except
+                // `loadEventEnd` (spec: it has not happened yet mid-dispatch);
+                // the post-dispatch one below fills it and wins the dedup.
+                if let Some(d) = &nav_timing {
+                    let detail = crate::nav_timing::detail_json(d.meta, d.start);
+                    let dur = d.start.elapsed().as_secs_f64() * 1000.0;
+                    js.deliver_nav_timing(&d.url, dur, &detail);
+                }
                 js.notify_window_loaded();
                 crate::nav_timing::record_load_end();
                 js.fire_page_lifecycle("pageshow", pageshow_persisted);
+                if let Some(d) = nav_timing {
+                    let detail = crate::nav_timing::detail_json(d.meta, d.start);
+                    let dur = d.start.elapsed().as_secs_f64() * 1000.0;
+                    js.deliver_nav_timing(&d.url, dur, &detail);
+                }
             });
-            // Navigation Timing считается по меткам `load`, поэтому запись, которую
-            // `RenderDone` не мог собрать до них, уходит только теперь.
-            if let Some(delivery) = nav_timing {
-                delivery.deliver(self);
-            }
         }
         #[cfg(not(feature = "v8"))]
         let _ = (pageshow_persisted, nav_timing);
