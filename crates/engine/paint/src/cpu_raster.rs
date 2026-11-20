@@ -991,9 +991,17 @@ pub(crate) fn rasterize_cpu_pixmap(
             // scroll was already baked into the list; add the clamped correction
             // so the subtree sticks to its inset instead of scrolling away.
             // `(0, 0)` = not sticking → no layer, the close is a no-op.
-            DisplayCommand::BeginStickyLayer { flow_rect, top, bottom, left, right } => {
+            // BUG-1825: the containing block rides the command; the stuck value
+            // space already carries the baked page scroll, so shift by it here.
+            DisplayCommand::BeginStickyLayer { flow_rect, top, bottom, left, right, containing } => {
+                let containing = Rect::new(
+                    containing.x - scroll_x,
+                    containing.y - scroll_y,
+                    containing.width,
+                    containing.height,
+                );
                 let (cdx, cdy) = sticky_correction(
-                    flow_rect, *top, *bottom, *left, *right, width as f32, height as f32,
+                    flow_rect, *top, *bottom, *left, *right, width as f32, height as f32, containing,
                 );
                 let Some(end) = matching_pop_sticky(commands, cmd_idx) else {
                     sticky_shifted.push(false);
@@ -2422,9 +2430,12 @@ fn matching_pop_fixed(commands: &[DisplayCommand], start: usize) -> Option<usize
 /// element in the CPU raster's already-scrolled (screen) space. `flow_rect` is
 /// the border box after `(-scroll_x, -scroll_y)` was baked into the list;
 /// `top`/`bottom`/`left`/`right` are the resolved insets; the scrollport is the
-/// full viewport `(width, height)`. `(0, 0)` means "not sticking" — no offset
+/// full viewport `(width, height)`. `containing` is the box's containing block
+/// in the same already-scrolled space (the caller shifts the page-space rect by
+/// the baked scroll, BUG-1825). `(0, 0)` means "not sticking" — no offset
 /// transform is emitted. Mirror of the femtovg backend's 0-baseline
 /// `sticky_offset_dy`/`dx` (`backends/femtovg_backend.rs`).
+#[allow(clippy::too_many_arguments)] // mirror of the layout sticky_correction, one fn for both axes
 fn sticky_correction(
     flow_rect: &Rect,
     top: Option<f32>,
@@ -2433,32 +2444,49 @@ fn sticky_correction(
     right: Option<f32>,
     width: f32,
     height: f32,
+    containing: Rect,
 ) -> (f32, f32) {
     let mut dy = 0.0;
+    let mut stuck_y = false;
     if let Some(t) = top
         && flow_rect.y < t
     {
         dy += t - flow_rect.y;
+        stuck_y = true;
     }
     if let Some(b) = bottom {
         let max_y = height - b - flow_rect.height;
         let actual = flow_rect.y + dy;
         if actual > max_y {
             dy -= actual - max_y;
+            stuck_y = true;
         }
     }
+    if stuck_y {
+        let stuck_pos = flow_rect.y + dy;
+        let clamped = lumen_layout::clamp_stuck_to_containing(stuck_pos, flow_rect.height, containing.y, containing.height);
+        dy += clamped - stuck_pos;
+    }
     let mut dx = 0.0;
+    let mut stuck_x = false;
     if let Some(l) = left
         && flow_rect.x < l
     {
         dx += l - flow_rect.x;
+        stuck_x = true;
     }
     if let Some(r) = right {
         let max_x = width - r - flow_rect.width;
         let actual = flow_rect.x + dx;
         if actual > max_x {
             dx -= actual - max_x;
+            stuck_x = true;
         }
+    }
+    if stuck_x {
+        let stuck_pos = flow_rect.x + dx;
+        let clamped = lumen_layout::clamp_stuck_to_containing(stuck_pos, flow_rect.width, containing.x, containing.width);
+        dx += clamped - stuck_pos;
     }
     (dx, dy)
 }

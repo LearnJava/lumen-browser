@@ -886,7 +886,9 @@ fn sticky_offset_dy_unclamped_is_zero() {
     // femtovg's `ambient` already carries all scroll on its own).
     let flow_rect = Rect::new(0.0, 200.0, 300.0, 50.0);
     let bound = Rect::new(0.0, 0.0, 800.0, 600.0);
-    let dy = sticky_offset_dy(&flow_rect, Some(0.0), None, bound);
+    // Far-away sentinel containing block — the inset clamp is under test.
+    let containing = Rect::new(-1.0e6, -1.0e6, 2.0e6, 2.0e6);
+    let dy = sticky_offset_dy(&flow_rect, Some(0.0), None, bound, containing);
     assert!(dy.abs() < 0.01, "expected unclamped dy=0, got {dy}");
 }
 
@@ -908,7 +910,11 @@ fn sticky_nested_in_scroll_container_pins_within_local_scrollport() {
     // position would be ambient(flow.y) = 150 - 120 = 30, above the panel's
     // visible top (40), i.e. scrolled out of view without the sticky clamp.
     let flow_rect = Rect::new(0.0, 150.0, 400.0, 24.0);
-    let dy = sticky_offset_dy(&flow_rect, Some(0.0), None, bound);
+    // The table (containing block) fills the panel: bottom edge at 40+240=280,
+    // so the clamp range in pre-ambient page space is [160, 256] and the stuck
+    // position 160 stays inside — the inset clamp alone decides here.
+    let containing = Rect::new(0.0, 160.0, 400.0, 120.0);
+    let dy = sticky_offset_dy(&flow_rect, Some(0.0), None, bound, containing);
 
     // Final on-screen position = ambient(flow.y + dy), same as the real
     // `self.canvas.translate(sdx, sdy)` composition BeginStickyLayer does.

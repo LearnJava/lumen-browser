@@ -13,7 +13,9 @@ fn sticky_offset_dy_unclamped_matches_plain_page_scroll() {
     // No insets fire yet — behaves exactly like non-sticky content: dy = -scroll_y.
     let flow_rect = Rect::new(0.0, 200.0, 300.0, 50.0);
     let bound = Rect::new(0.0, 0.0, 800.0, 600.0);
-    let dy = sticky_offset_dy(&flow_rect, Some(0.0), None, 100.0, bound);
+    // Far-away sentinel containing block — the inset clamp is under test.
+    let containing = Rect::new(-1.0e6, -1.0e6, 2.0e6, 2.0e6);
+    let dy = sticky_offset_dy(&flow_rect, Some(0.0), None, 100.0, bound, containing);
     assert!((dy - (-100.0)).abs() < 0.01, "expected -100 (unclamped page scroll), got {dy}");
 }
 
@@ -22,7 +24,9 @@ fn sticky_offset_dy_sticks_to_bound_top() {
     // Scrolled past the top inset — dy pins screen_y at bound.y + top.
     let flow_rect = Rect::new(0.0, 200.0, 300.0, 50.0);
     let bound = Rect::new(0.0, 0.0, 800.0, 600.0);
-    let dy = sticky_offset_dy(&flow_rect, Some(10.0), None, 250.0, bound);
+    // Far-away sentinel containing block — the inset clamp is under test.
+    let containing = Rect::new(-1.0e6, -1.0e6, 2.0e6, 2.0e6);
+    let dy = sticky_offset_dy(&flow_rect, Some(10.0), None, 250.0, bound, containing);
     let screen_y = flow_rect.y + dy;
     assert!((screen_y - 10.0).abs() < 0.01, "expected pinned screen_y=10, got {screen_y}");
 }
@@ -70,7 +74,11 @@ fn sticky_nested_in_scroll_container_pins_within_local_scrollport() {
     // position would be flow.y + ty = 150 - 120 = 30, above the panel's
     // visible top (40), i.e. scrolled out of view without the sticky clamp.
     let flow_rect = Rect::new(0.0, 150.0, 400.0, 24.0);
-    let dy = sticky_offset_dy(&flow_rect, Some(0.0), None, 0.0, bound);
+    // The table (containing block) fills the panel: bottom edge at 40+240=280
+    // on screen, i.e. [160, 256] in the pre-transform space the dy lives in —
+    // the stuck position 160 stays inside, the inset clamp alone decides.
+    let containing = Rect::new(0.0, 160.0, 400.0, 120.0);
+    let dy = sticky_offset_dy(&flow_rect, Some(0.0), None, 0.0, bound, containing);
 
     // Final on-screen position = (flow.y + dy) transformed by the same
     // ambient ty the renderer applies afterward (transform_stack.last()) —

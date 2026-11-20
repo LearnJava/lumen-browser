@@ -56,8 +56,9 @@ pub use clickable::{collect_clickable_elements, ClickableElement, ClickableKind}
 use clickable::inline_element_ancestors;
 mod sticky_snap;
 pub use sticky_snap::{
-    collect_snap_containers, collect_sticky_boxes, collect_sticky_geoms, compute_sticky_offset, find_snap_target,
-    find_snapped_nodes, sticky_correction, SnapContainer, SnapPoint, SnapTargets, StickyBox, StickyGeom,
+    clamp_stuck_to_containing, collect_snap_containers, collect_sticky_boxes, collect_sticky_geoms,
+    compute_sticky_offset, find_snap_target, find_snapped_nodes, sticky_correction, SnapContainer,
+    SnapPoint, SnapTargets, StickyBox, StickyGeom,
 };
 #[cfg(test)]
 use sticky_snap::{snap_offset_x, snap_offset_y};

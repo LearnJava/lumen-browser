@@ -276,19 +276,24 @@ fn linear_gradient_endpoints(
 /// CSS Positioning L3 §6.3 — смещение dy для sticky-элемента: 0, если
 /// естественная прокрученная позиция укладывается в `bound` (уже отображённый
 /// назад в page-пространство этого уровня scrollport), иначе — компенсация,
-/// прижимающая край к `top`/`bottom` инсету.
+/// прижимающая край к `top`/`bottom` инсету. `containing` — containing block
+/// бокса в тех же page-координатах (BUG-1825): застрявшая ось зажимается в нём
+/// (CSS Position L3 §2.2), незастявшая свободно скроллится.
 fn sticky_offset_dy(
     flow_rect: &lumen_core::geom::Rect,
     top: Option<f32>,
     bottom: Option<f32>,
     bound: Rect,
+    containing: Rect,
 ) -> f32 {
     let mut dy = 0.0;
+    let mut stuck = false;
     if let Some(t) = top {
         let screen_y = flow_rect.y + dy;
         let min_y = bound.y + t;
         if screen_y < min_y {
             dy += min_y - screen_y;
+            stuck = true;
         }
     }
     if let Some(b) = bottom {
@@ -296,7 +301,14 @@ fn sticky_offset_dy(
         let actual = flow_rect.y + dy;
         if actual > max_screen_y {
             dy -= actual - max_screen_y;
+            stuck = true;
         }
+    }
+    if stuck {
+        let stuck_pos = flow_rect.y + dy;
+        let clamped =
+            lumen_layout::clamp_stuck_to_containing(stuck_pos, flow_rect.height, containing.y, containing.height);
+        dy += clamped - stuck_pos;
     }
     dy
 }
@@ -307,13 +319,16 @@ fn sticky_offset_dx(
     left: Option<f32>,
     right: Option<f32>,
     bound: Rect,
+    containing: Rect,
 ) -> f32 {
     let mut dx = 0.0;
+    let mut stuck = false;
     if let Some(l) = left {
         let screen_x = flow_rect.x + dx;
         let min_x = bound.x + l;
         if screen_x < min_x {
             dx += min_x - screen_x;
+            stuck = true;
         }
     }
     if let Some(r) = right {
@@ -321,7 +336,14 @@ fn sticky_offset_dx(
         let actual = flow_rect.x + dx;
         if actual > max_screen_x {
             dx -= actual - max_screen_x;
+            stuck = true;
         }
+    }
+    if stuck {
+        let stuck_pos = flow_rect.x + dx;
+        let clamped =
+            lumen_layout::clamp_stuck_to_containing(stuck_pos, flow_rect.width, containing.x, containing.width);
+        dx += clamped - stuck_pos;
     }
     dx
 }
@@ -5103,14 +5125,16 @@ impl FemtovgBackend {
             // the clamped screen position, with no manual "undo the old scroll"
             // arithmetic needed (that was only correct for a non-nested sticky,
             // which is why it missed the nested case).
-            DisplayCommand::BeginStickyLayer { flow_rect, top, bottom, left, right } => {
+            DisplayCommand::BeginStickyLayer { flow_rect, top, bottom, left, right, containing } => {
                 let ambient = self.canvas.transform();
                 let bound = sticky_bound(
                     &self.sticky_bound_stack, &ambient,
                     self.viewport_css_w, self.viewport_css_h,
                 );
-                let sdy = sticky_offset_dy(flow_rect, *top, *bottom, bound);
-                let sdx = sticky_offset_dx(flow_rect, *left, *right, bound);
+                // `containing` is page-space, the space `flow_rect`/`bound` and
+                // the 0-baseline stuck position live in (BUG-1825) — no shift.
+                let sdy = sticky_offset_dy(flow_rect, *top, *bottom, bound, *containing);
+                let sdx = sticky_offset_dx(flow_rect, *left, *right, bound, *containing);
                 self.sticky_stack.push((sdy, sdx));
                 self.canvas.save();
                 self.canvas.translate(sdx, sdy);

@@ -439,6 +439,7 @@ mod tests {
             bottom: None,
             left: None,
             right: None,
+            containing: Rect::new(0.0, 0.0, 10.0, 10.0),
         }
     }
 

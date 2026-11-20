@@ -195,6 +195,16 @@ pub struct StickyGeom {
     pub container: u32,
     /// That container's scrollport `[x, y, width, height]` in document coords.
     pub scrollport: [f32; 4],
+    /// The box's containing block — nearest block/flow-root ancestor's
+    /// border-box `[x, y, width, height]` in document coords (BUG-1825: the
+    /// stuck box is clamped inside it, CSS Position L3 §2.2).
+    pub containing: [f32; 4],
+    /// `true` when the containing block sits at-or-above the nearest scroll
+    /// container (it *frames* the scroller instead of scrolling with the
+    /// content): its clamp range then moves with the scroller's own scroll,
+    /// which [`StickyGeom::correction`] adds. `false` — the cb is inside the
+    /// scrolled content and the range is doc-static.
+    pub containing_frames_scroller: bool,
 }
 
 impl StickyGeom {
@@ -203,6 +213,11 @@ impl StickyGeom {
     /// scrolls). `[0, 0]` = not stuck. Mirrors paint's `sticky_dy`/`sticky_dx`
     /// (`display_list/box_layer.rs`) and `renderer/sticky_geom.rs`.
     pub fn correction(&self, flow: [f32; 4], scroll_x: f32, scroll_y: f32) -> [f32; 2] {
+        // A cb that frames the scroller does not scroll with the content: its
+        // clamp range in the shifted-box's coordinate space moves by the
+        // scroller's own scroll. A cb inside the content scrolls identically
+        // to the box, so its range stays doc-static (BUG-1825).
+        let (sx, sy) = if self.containing_frames_scroller { (scroll_x, scroll_y) } else { (0.0, 0.0) };
         let (cdx, cdy) = sticky_correction(
             lumen_core::geom::Rect::new(flow[0], flow[1], flow[2], flow[3]),
             self.top,
@@ -217,15 +232,36 @@ impl StickyGeom {
                 self.scrollport[2],
                 self.scrollport[3],
             ),
+            lumen_core::geom::Rect::new(
+                self.containing[0] + sx,
+                self.containing[1] + sy,
+                self.containing[2],
+                self.containing[3],
+            ),
         );
         [cdx, cdy]
     }
 }
 
+/// CSS Position L3 §2.2 — the sticky-constraint-rectangle edge clamp shared by
+/// the geometry reader and all paint paths (BUG-1825): a stuck box may not
+/// leave its containing block. `pos` is the inset-corrected stuck position,
+/// `size` the box extent on the axis, `cb_pos`/`cb_size` the containing
+/// block's start edge and extent — every operand in one shared space (each
+/// caller passes them in the space its own inset math uses). Clamps `pos` into
+/// `[cb_pos, cb_pos + cb_size - size]`; the start edge wins when the
+/// containing block is shorter than the element, matching
+/// `compute_sticky_offset`'s "top wins" convention.
+pub fn clamp_stuck_to_containing(pos: f32, size: f32, cb_pos: f32, cb_size: f32) -> f32 {
+    pos.min(cb_pos + cb_size - size).max(cb_pos)
+}
+
 /// CSS Positioning L3 §6.3 — the extra shift a stuck `position: sticky` box gets
 /// beyond `-scroll` (the plain ancestor-scroll translation). `flow` is the box's
 /// document-space flow rect, `bound` the nearest scroll container's scrollport,
-/// `scroll_x`/`scroll_y` that container's own scroll offset. Returns `(cdx, cdy)`
+/// `scroll_x`/`scroll_y` that container's own scroll offset, `containing` the
+/// document-space border-box of the box's containing block (BUG-1825: without
+/// the clamp a sticky box escaped its container's far edge). Returns `(cdx, cdy)`
 /// in CSS px; `(0, 0)` when not stuck. Exact mirror of paint's `sticky_dy`/`sticky_dx`.
 #[allow(clippy::too_many_arguments)] // mirror of the two paint helpers, one fn for both axes
 pub fn sticky_correction(
@@ -237,13 +273,16 @@ pub fn sticky_correction(
     scroll_x: f32,
     scroll_y: f32,
     bound: lumen_core::geom::Rect,
+    containing: lumen_core::geom::Rect,
 ) -> (f32, f32) {
     let mut cdy = 0.0;
+    let mut stuck_y = false;
     if let Some(t) = top {
         let screen_y = flow.y - scroll_y;
         let min_y = bound.y + t;
         if screen_y < min_y {
             cdy += min_y - screen_y;
+            stuck_y = true;
         }
     }
     if let Some(b) = bottom {
@@ -251,14 +290,24 @@ pub fn sticky_correction(
         let actual_screen_y = flow.y - scroll_y;
         if actual_screen_y > max_screen_y {
             cdy -= actual_screen_y - max_screen_y;
+            stuck_y = true;
         }
     }
+    // BUG-1825: clamp only a genuinely stuck axis — an unstuck box scrolls with
+    // the content and may legitimately sit outside the containing block's range.
+    if stuck_y {
+        let stuck = flow.y + cdy;
+        let clamped = clamp_stuck_to_containing(stuck, flow.height, containing.y, containing.height);
+        cdy += clamped - stuck;
+    }
     let mut cdx = 0.0;
+    let mut stuck_x = false;
     if let Some(l) = left {
         let screen_x = flow.x - scroll_x;
         let min_x = bound.x + l;
         if screen_x < min_x {
             cdx += min_x - screen_x;
+            stuck_x = true;
         }
     }
     if let Some(r) = right {
@@ -266,7 +315,13 @@ pub fn sticky_correction(
         let actual_screen_x = flow.x - scroll_x;
         if actual_screen_x > max_screen_x {
             cdx -= actual_screen_x - max_screen_x;
+            stuck_x = true;
         }
+    }
+    if stuck_x {
+        let stuck = flow.x + cdx;
+        let clamped = clamp_stuck_to_containing(stuck, flow.width, containing.x, containing.width);
+        cdx += clamped - stuck;
     }
     (cdx, cdy)
 }
@@ -276,12 +331,19 @@ pub fn sticky_correction(
 /// Page-level sticky boxes (no scroll container) are omitted — their stuck offset
 /// depends on the page scroll, tracked separately (BUG-1166).
 pub fn collect_sticky_geoms(root: &LayoutBox) -> std::collections::HashMap<u32, StickyGeom> {
+    use box_tree::BoxKind;
     use style::{Overflow, Position};
 
     let mut out = std::collections::HashMap::new();
-    // (box, nearest ancestor scroll container: (scrollport, node index))
-    let mut stack: Vec<(&LayoutBox, Option<(lumen_core::geom::Rect, u32)>)> = vec![(root, None)];
-    while let Some((b, nearest)) = stack.pop() {
+    // (box, nearest ancestor scroll container: (scrollport, node index),
+    //  containing block: (nearest block/flow-root ancestor border-box — same
+    //  rule as `collect_sticky_boxes` —, whether the cb was established
+    //  at-or-below the nearest scroller))
+    type ScrollContainer = Option<(lumen_core::geom::Rect, u32)>;
+    type ContainingBlock = (lumen_core::geom::Rect, bool);
+    let mut stack: Vec<(&LayoutBox, ScrollContainer, ContainingBlock)> =
+        vec![(root, None, (root.rect, false))];
+    while let Some((b, nearest, (containing, cb_in_content))) = stack.pop() {
         let is_sc = matches!(
             b.style.overflow_x,
             Overflow::Scroll | Overflow::Auto | Overflow::Hidden
@@ -305,10 +367,21 @@ pub fn collect_sticky_geoms(root: &LayoutBox) -> std::collections::HashMap<u32, 
                 right: inset(&b.style.right, bound.width),
                 container,
                 scrollport: [bound.x, bound.y, bound.width, bound.height],
+                containing: [containing.x, containing.y, containing.width, containing.height],
+                containing_frames_scroller: !cb_in_content,
             });
         }
+        // Blocks and flow roots establish a new sticky-containment boundary.
+        // A cb established at-or-below the nearest scroller scrolls with the
+        // content (`cb_in_content`); one established by the scroller itself or
+        // above it frames the scroller.
+        let next_cb = if matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot) {
+            (b.rect, nearest.is_some() && !is_sc)
+        } else {
+            (containing, cb_in_content)
+        };
         for child in b.children.iter().rev() {
-            stack.push((child, next));
+            stack.push((child, next, next_cb));
         }
     }
     out

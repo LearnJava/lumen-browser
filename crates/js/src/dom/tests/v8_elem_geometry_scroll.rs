@@ -57,6 +57,8 @@ fn get_bounding_client_rect_sticky_sticks_inside_scrolled_container() {
             right: None,
             container: body_nid,
             scrollport: [0.0, 0.0, 250.0, 150.0],
+            containing: [0.0, 0.0, 250.0, 400.0],
+            containing_frames_scroller: true,
         })]
         .into_iter()
         .collect(),

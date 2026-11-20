@@ -467,6 +467,10 @@ pub enum DisplayCommand {
     ///   the display list).
     /// `top` / `bottom` / `left` / `right` — resolved sticky insets in CSS px
     ///   (`None` = `auto`, no constraint on that side).
+    /// `containing` — the box's containing block (nearest block/flow-root
+    ///   ancestor) border-box in the same page coordinates (BUG-1825): a stuck
+    ///   box must not leave it (CSS Position L3 §2.2, sticky constraint
+    ///   rectangle = scrollport ∩ containing block).
     ///
     /// Renderer computes `sticky_dy = clamp(-scroll_y, top - flow_y, …)` at
     /// draw time so the layer stays viewport-relative.
@@ -481,6 +485,8 @@ pub enum DisplayCommand {
         left: Option<f32>,
         /// Distance from the right of the viewport to stick at. `None` = auto.
         right: Option<f32>,
+        /// Containing block border-box in page coordinates (BUG-1825).
+        containing: lumen_core::geom::Rect,
     },
     /// Closes the sticky layer opened by `BeginStickyLayer`.
     EndStickyLayer,
@@ -1051,6 +1057,7 @@ mod tests {
                 bottom: None,
                 left: Some(5.0),
                 right: None,
+                containing: rect,
             },
             DisplayCommand::EndStickyLayer,
             DisplayCommand::BeginFixedLayer,
