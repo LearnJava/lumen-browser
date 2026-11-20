@@ -21,8 +21,9 @@
 use std::cell::RefCell;
 #[cfg(feature = "v8-backend")]
 use std::cell::Cell;
+use std::sync::{Arc, Mutex, OnceLock};
 #[cfg(feature = "v8-backend")]
-use std::sync::{Arc, Mutex, atomic::Ordering};
+use std::sync::atomic::Ordering;
 use std::collections::HashMap;
 #[cfg(feature = "v8-backend")]
 use std::collections::HashSet;
@@ -31,6 +32,7 @@ use std::collections::HashSet;
 use crate::img_bitmap_store;
 
 use lumen_canvas::Context2D;
+use lumen_core::{FontProvider as _, FontStyle};
 // The rest of `lumen_canvas`'s paint model (gradients/patterns/paths/composite
 // ops/text color) is reachable only from `install_canvas2d_bindings_v8` — the
 // rquickjs installer that used to reach it too was removed in S12b-B30.
@@ -180,6 +182,134 @@ pub(crate) fn parse_canvas_font_size(font: &str) -> f32 {
     10.0
 }
 
+/// Part of a canvas font string after the `<size>` token — the family list.
+/// CSS font grammar puts style/variant/weight before the size (`bold 16px/1.5
+/// Arial, sans-serif`), so families are everything past the first `Npx` token
+/// (an optional `/line-height` may trail it).
+fn canvas_family_list(font_str: &str) -> &str {
+    let bytes = font_str.as_bytes();
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        if bytes[i] == b'p' && bytes[i + 1] == b'x' {
+            let mut s = i;
+            while s > 0 && !bytes[s - 1].is_ascii_whitespace() {
+                s -= 1;
+            }
+            let tok = &font_str[s..i];
+            let numeric = !tok.is_empty()
+                && tok.bytes().all(|b| b.is_ascii_digit() || matches!(b, b'.' | b'+' | b'-'))
+                && tok.bytes().any(|b| b.is_ascii_digit());
+            if numeric {
+                let mut e = i + 2;
+                if e < bytes.len() && bytes[e] == b'/' {
+                    e += 1;
+                    while e < bytes.len() && (bytes[e].is_ascii_digit() || bytes[e] == b'.') {
+                        e += 1;
+                    }
+                }
+                while e < bytes.len() && bytes[e].is_ascii_whitespace() {
+                    e += 1;
+                }
+                return &font_str[e..];
+            }
+        }
+        i += 1;
+    }
+    font_str
+}
+
+/// `(weight, style)` requested by a canvas font string — `bold`/`700`,
+/// `italic`/`oblique` keywords and numeric weights.
+fn canvas_font_weight_style(font_str: &str) -> (u16, FontStyle) {
+    let lower = font_str.to_ascii_lowercase();
+    let (mut weight, mut italic, mut oblique) = (400u16, false, false);
+    for tok in lower.split(|c: char| c.is_whitespace() || c == '/') {
+        match tok {
+            "bold" | "bolder" => weight = weight.max(700),
+            "lighter" => weight = weight.saturating_sub(300).max(100),
+            "italic" => italic = true,
+            "oblique" => oblique = true,
+            _ => {
+                if let Ok(w) = tok.parse::<u16>()
+                    && (100..=900).contains(&w)
+                {
+                    weight = w;
+                }
+            }
+        }
+    }
+    let style = if italic {
+        FontStyle::Italic
+    } else if oblique {
+        FontStyle::Oblique
+    } else {
+        FontStyle::Normal
+    };
+    (weight, style)
+}
+
+/// Resolve one family name to a face record — generic families go through the
+/// platform candidate list (`sans-serif` → Arial on Windows), named families
+/// through a direct lookup.
+fn pick_canvas_face(
+    family: &str,
+    weight: u16,
+    style: FontStyle,
+) -> Option<lumen_core::FaceRecord> {
+    let idx = lumen_font::shared_system_index();
+    const GENERIC: [&str; 13] = [
+        "serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui",
+        "ui-serif", "ui-sans-serif", "ui-monospace", "ui-rounded", "math",
+        "emoji", "fangsong",
+    ];
+    if GENERIC.contains(&family.to_ascii_lowercase().as_str()) {
+        idx.pick_generic_face(family, weight, style, lumen_core::NORMAL_STRETCH_PERCENT)
+            .or_else(|| idx.pick_face(family, weight, style, lumen_core::NORMAL_STRETCH_PERCENT))
+    } else {
+        idx.pick_face(family, weight, style, lumen_core::NORMAL_STRETCH_PERCENT)
+    }
+}
+
+/// Font bytes for a canvas font string, resolved through the system font stack
+/// the way Chrome does (`ctx.font = "16px Arial"` measures Arial, not the
+/// bundled fallback). Cached per font string; misses fall back to bundled
+/// Inter, which is also the answer for an empty font string.
+fn canvas_font_data(font_str: &str) -> Arc<[u8]> {
+    static CACHE: OnceLock<Mutex<HashMap<String, Arc<[u8]>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(hit) = cache.lock().unwrap().get(font_str) {
+        return hit.clone();
+    }
+    let effective = if font_str.trim().is_empty() {
+        "10px sans-serif"
+    } else {
+        font_str
+    };
+    let (weight, style) = canvas_font_weight_style(effective);
+    let mut data: Option<Arc<[u8]>> = None;
+    for family in canvas_family_list(effective).split(',') {
+        let family = family
+            .trim()
+            .trim_matches(|c| c == '"' || c == '\'')
+            .trim();
+        if family.is_empty() {
+            continue;
+        }
+        if let Some(rec) = pick_canvas_face(family, weight, style)
+            && let Ok(bytes) = std::fs::read(&rec.path)
+        {
+            data = Some(Arc::from(bytes));
+            break;
+        }
+    }
+    let data = data.unwrap_or_else(|| Arc::from(BUNDLED_FONT));
+    cache
+        .lock()
+        .unwrap()
+        .insert(font_str.to_string(), data.clone());
+    data
+}
+
 /// Measure total advance width of `text` in pixels using the bundled Inter font at `pixel_size`.
 ///
 /// Returns a fallback estimate (0.55 × pixel_size per char) when font parsing fails.
@@ -187,7 +317,14 @@ pub(crate) fn parse_canvas_font_size(font: &str) -> f32 {
 /// `pub(crate)`: shared with [`crate::offscreen_canvas`] — see
 /// [`parse_canvas_font_size`].
 pub(crate) fn measure_text_width(text: &str, pixel_size: f32) -> f64 {
-    let Ok(font) = lumen_font::Font::parse(BUNDLED_FONT) else {
+    measure_text_width_for("", text, pixel_size)
+}
+
+/// [`measure_text_width`] with an explicit canvas font string — the family
+/// list resolves through the system font stack like Chrome's canvas.
+pub(crate) fn measure_text_width_for(font_str: &str, text: &str, pixel_size: f32) -> f64 {
+    let data = canvas_font_data(font_str);
+    let Ok(font) = lumen_font::Font::parse(&data) else {
         return text.chars().count() as f64 * f64::from(pixel_size) * 0.55;
     };
     let Ok(head) = font.head() else {
@@ -254,9 +391,10 @@ pub(crate) fn text_metrics_for(
     text: &str,
 ) -> Vec<f64> {
     let pixel_size = parse_canvas_font_size(font_str);
-    let width = measure_text_width(text, pixel_size);
+    let width = measure_text_width_for(font_str, text, pixel_size);
 
-    let parsed = lumen_font::Font::parse(BUNDLED_FONT).ok();
+    let font_data = canvas_font_data(font_str);
+    let parsed = lumen_font::Font::parse(&font_data).ok();
     let tables = parsed.as_ref().and_then(|f| {
         match (f.head(), f.hhea(), f.cmap(), f.hmtx()) {
             (Ok(head), Ok(hhea), Ok(cmap), Ok(hmtx)) => Some((f, head, hhea, cmap, hmtx)),
@@ -346,7 +484,8 @@ pub(crate) fn render_text_glyphs_for(ctx: &mut Context2D, text: &str, x: f32, y:
     if text.is_empty() {
         return;
     }
-    let Ok(font) = lumen_font::Font::parse(BUNDLED_FONT) else { return };
+    let font_data = canvas_font_data(&ctx.font);
+    let Ok(font) = lumen_font::Font::parse(&font_data) else { return };
     let (Ok(head), Ok(hhea), Ok(cmap), Ok(hmtx)) = (
         font.head(), font.hhea(), font.cmap(), font.hmtx(),
     ) else { return };
@@ -361,7 +500,7 @@ pub(crate) fn render_text_glyphs_for(ctx: &mut Context2D, text: &str, x: f32, y:
     let ascent_px = f32::from(hhea.ascent) / f32::from(units_per_em) * pixel_size;
 
     // Compute start_x accounting for textAlign (HTML Canvas 2D §4.12.4).
-    let text_w = measure_text_width(text, pixel_size) as f32;
+    let text_w = measure_text_width_for(&font_str, text, pixel_size) as f32;
     let start_x = match text_align.as_str() {
         "center" => x - text_w * 0.5,
         "right" | "end" => x - text_w,
@@ -1265,7 +1404,7 @@ pub(crate) fn install_canvas2d_bindings_v8(
                 c.borrow().get(&nid).map(|ctx| ctx.font.clone()).unwrap_or_default()
             });
             let pixel_size = parse_canvas_font_size(&font_str);
-            measure_text_width(&text, pixel_size)
+            measure_text_width_for(&font_str, &text, pixel_size)
         }),
     )?;
     rt.register_native(

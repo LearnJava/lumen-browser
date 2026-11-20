@@ -607,6 +607,63 @@ where
     })
 }
 
+pub(crate) struct NativeFn8<A, B, C, D, E, G, H, I, R, F> {
+    pub(crate) f: F,
+    _ph: PhantomData<fn(A, B, C, D, E, G, H, I) -> R>,
+}
+// SAFETY: same reasoning as `NativeFn7` — the only payload is `f: F: Send`.
+unsafe impl<A, B, C, D, E, G, H, I, R, F: Send + 'static> Send
+    for NativeFn8<A, B, C, D, E, G, H, I, R, F>
+{
+}
+
+impl<
+    A: FromJsValue + 'static,
+    B: FromJsValue + 'static,
+    C: FromJsValue + 'static,
+    D: FromJsValue + 'static,
+    E: FromJsValue + 'static,
+    G: FromJsValue + 'static,
+    H: FromJsValue + 'static,
+    I: FromJsValue + 'static,
+    R: IntoJsReturn + 'static,
+    F: Fn(A, B, C, D, E, G, H, I) -> R + Send + 'static,
+> V8NativeFn for NativeFn8<A, B, C, D, E, G, H, I, R, F>
+{
+    fn call_js(&self, args: &[JsValue]) -> JsResult<JsValue> {
+        let a = A::from_js_value(args.first().cloned().unwrap_or(JsValue::Undefined), 0)?;
+        let b = B::from_js_value(args.get(1).cloned().unwrap_or(JsValue::Undefined), 1)?;
+        let c = C::from_js_value(args.get(2).cloned().unwrap_or(JsValue::Undefined), 2)?;
+        let d = D::from_js_value(args.get(3).cloned().unwrap_or(JsValue::Undefined), 3)?;
+        let e = E::from_js_value(args.get(4).cloned().unwrap_or(JsValue::Undefined), 4)?;
+        let g = G::from_js_value(args.get(5).cloned().unwrap_or(JsValue::Undefined), 5)?;
+        let h = H::from_js_value(args.get(6).cloned().unwrap_or(JsValue::Undefined), 6)?;
+        let i = I::from_js_value(args.get(7).cloned().unwrap_or(JsValue::Undefined), 7)?;
+        Ok((self.f)(a, b, c, d, e, g, h, i).into_js_return())
+    }
+}
+
+/// Wrap an 8-argument closure as a boxed [`V8NativeFn`].
+#[allow(dead_code)]
+pub(crate) fn into_v8_fn8<A, B, C, D, E, G, H, I, R, F>(f: F) -> Box<dyn V8NativeFn + Send>
+where
+    A: FromJsValue + 'static,
+    B: FromJsValue + 'static,
+    C: FromJsValue + 'static,
+    D: FromJsValue + 'static,
+    E: FromJsValue + 'static,
+    G: FromJsValue + 'static,
+    H: FromJsValue + 'static,
+    I: FromJsValue + 'static,
+    R: IntoJsReturn + 'static,
+    F: Fn(A, B, C, D, E, G, H, I) -> R + Send + 'static,
+{
+    Box::new(NativeFn8 {
+        f,
+        _ph: PhantomData,
+    })
+}
+
 // ── Ownership handle for registered native closures ─────────────────────────
 
 /// Owns a double-boxed `V8NativeFn + Send` allocated for `v8::External`.

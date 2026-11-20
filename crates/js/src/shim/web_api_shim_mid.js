@@ -7923,7 +7923,7 @@ _lumen_c2d_method('isContextLost', function() {
 });
 _lumen_c2d_method('getContextAttributes', function() {
     _lumen_c2d(this, 'getContextAttributes');
-    return { alpha: !_canvas2d_opaque[_lumen_c2d(this, 'getContextAttributes').nid], colorSpace: 'srgb', desynchronized: false, willReadFrequently: false };
+    return { alpha: !_canvas2d_opaque[_lumen_c2d(this, 'getContextAttributes').nid], colorSpace: 'srgb', colorType: 'unorm8', desynchronized: false, toneMapping: { mode: 'standard' }, willReadFrequently: false };
 });
 
 // §4.12.5.1.2 reset: the bitmap goes transparent black, the state stack is

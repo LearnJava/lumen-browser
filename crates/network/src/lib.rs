@@ -1838,16 +1838,16 @@ fn fetch_single(
     // QUIC connection pool for reuse across sequential h3 requests; `Some` ⇔
     // HTTP/3 enabled ([`HttpClient::with_http3`]).
     h3_pool: Option<&std::sync::Mutex<h3::client_pool::H3ConnectionPool>>,
-    // PH1-2a: HTTP/1.1 streaming body sink. The H2 mux and the proxy-CONNECT
-    // path buffer the body (the sink is never invoked there), so a request
-    // carrying a sink is forced onto HTTP/1.1 — `STREAM-H1`: without it a
-    // progressive document load over H2 delivers zero chunks and the page
-    // shows nothing until the final pipeline.
+    // PH1-2a / H2-DOC: a request carrying a progressive body sink may now
+    // ride the H2 mux too — its DATA frames are buffered until the stream
+    // completes, and `fetch_with_redirect` then replays the decoded body to
+    // the sink in one shot. Chrome parity (ALPN/next-protocol h2 on document
+    // navigations) outweighs progressive delivery; H1 still streams live
+    // whenever the origin doesn't negotiate h2.
     mut stream_sink: Option<ChunkSink<'_>>,
     // Request body for POST/PUT/PATCH/DELETE; `None` for GET/HEAD.
     body: Option<&RequestBody<'_>>,
 ) -> Result<Response> {
-    let stream_h1 = stream_sink.is_some();
     // SOCKS5 takes precedence over HTTP proxy when both are set.
     // With SOCKS5 the tunnel is established by the proxy itself, so we
     // connect to the target host:port directly (the pool key uses the
@@ -1944,12 +1944,9 @@ fn fetch_single(
     // only the TLS/CONNECT-tunnelled leg does — `key` above now names the
     // real tunnelled origin, so pooling it is safe. The plain-HTTP relay leg
     // never negotiates h2 (no TLS ALPN), so it is excluded either way.
-    // STREAM-H1: a request carrying a progressive body sink never enters the
-    // H2 mux — its DATA frames are buffered until the stream completes, so
-    // the sink would stay silent for the whole download.
-    let h2_pool = if stream_h1 {
-        None
-    } else if effective_proxy.is_none() || is_tls {
+    // H2-DOC: sink-запросы тоже идут в mux — тело доедет до sink-а после
+    // декодирования в `fetch_with_redirect` (см. комментарий у параметра).
+    let h2_pool = if effective_proxy.is_none() || is_tls {
         h2_pool
     } else {
         None
@@ -2019,14 +2016,9 @@ fn fetch_single(
             }
         }
 
-        // Попытка 2 (или 1, если пул был пуст): свежий connect. STREAM-H1:
-        // ALPN ограничен http/1.1, иначе TLS согласует h2 и тело опять
-        // уйдёт в буферный mux без единого chunk-а для sink-а.
-        let mut conn = if stream_h1 {
-            connect_h1(connect_host, connect_port, connect_is_tls, resolver, tls_profile, socks5_proxy, Some(FETCH_READ_TIMEOUT))?
-        } else {
-            connect(connect_host, connect_port, connect_is_tls, resolver, tls_profile, socks5_proxy, Some(FETCH_READ_TIMEOUT))?
-        };
+        // Попытка 2 (или 1, если пул был пуст): свежий connect. ALPN
+        // допускает h2 — sink-запросы тоже могут согласовать его (H2-DOC).
+        let mut conn = connect(connect_host, connect_port, connect_is_tls, resolver, tls_profile, socks5_proxy, Some(FETCH_READ_TIMEOUT))?;
 
         // Если используется HTTPS HTTP-прокси: выполнить CONNECT-туннель.
         #[allow(clippy::collapsible_if)]
@@ -2084,9 +2076,9 @@ fn fetch_single(
                 };
 
                 // BUG-1826: BoringSSL transport, как и в `connect_inner`.
-                // STREAM-H1: внутри CONNECT-туннеля тоже только http/1.1 —
-                // иначе согласованный h2 вернул бы нас в буферный mux.
-                let stream = tls::boring::connect(host, tcp, tls_profile, stream_h1)?;
+                // H2-DOC: h2 внутри CONNECT-туннеля разрешён — sink получит
+                // тело после буферизации (см. `fetch_with_redirect`).
+                let stream = tls::boring::connect(host, tcp, tls_profile, false)?;
                 let alpn = tls::boring::negotiated_alpn(&stream);
                 let is_h2 = check_negotiated_alpn(alpn.as_deref())?;
                 let cert_info = tls::boring::cert_info(&stream, host);
@@ -3077,7 +3069,13 @@ fn fetch_with_redirect(
         // не знают и знать не должны. `stream_sink` заимствуется только здесь,
         // поэтому остаётся доступным для рекурсии по редиректу ниже.
         let streams_body = stream_sink.is_some();
+        // H2-DOC: флаг «sink уже получил байты». H1/H3 зовут его по ходу
+        // чтения; H2-mux буферизует тело до конца stream-а, и тогда
+        // `fetch_with_redirect` досылает декодированное тело одним куском
+        // (см. ветку 2xx ниже) — Chrome parity важнее прогрессивности.
+        let sink_streamed = std::cell::Cell::new(false);
         let mut hop_adapter = |chunk: &[u8], headers: &[(String, String)]| {
+            sink_streamed.set(true);
             if let Some(s) = stream_sink.as_mut() {
                 s(chunk, url, headers);
             }
@@ -3236,6 +3234,13 @@ fn fetch_with_redirect(
                 // успехом; для 4xx/5xx — нет (caller получает Err по статусу,
                 // тело туда не доходит).
                 resp.body = apply_content_encoding(resp.body, &resp.headers, decoders)?;
+                // H2-DOC: ответ пришёл по h2 (или по h3 без streaming-sink) —
+                // sink за время передачи молчал; отдаём декодированное тело
+                // сейчас, чтобы потребитель document-stream всё равно его
+                // увидел (тот же контракт, что у cache-hit `on_chunk`).
+                if streams_body && !sink_streamed.get() && !resp.body.is_empty() {
+                    hop_adapter(&resp.body, &resp.headers);
+                }
                 return Ok((resp, url.clone()));
             }
             // 304 Not Modified: conditional GET confirmed the cached copy is

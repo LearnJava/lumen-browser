@@ -584,12 +584,16 @@ pub(crate) fn install_match_media(
     // are stateless. Returns `true` when the query currently matches.
     reg!(scope, ctx, store, 
         "_lumen_match_media",
-        |query: String, w: f64, h: f64, dark: bool, reduced_motion: bool, forced_colors: bool, dpr: f64| -> bool {
+        |query: String, w: f64, h: f64, dark: bool, reduced_motion: bool, forced_colors: bool, dpr: f64, device: Vec<f64>| -> bool {
             let mq = lumen_css_parser::parse_media_query(&query);
+            let device_w = device.first().copied().unwrap_or(0.0);
+            let device_h = device.get(1).copied().unwrap_or(0.0);
             let ctx = lumen_css_parser::MediaContext {
                 media_type: "screen".to_owned(),
                 width: w as f32,
                 height: h as f32,
+                device_width: if device_w.is_finite() && device_w > 0.0 { device_w as f32 } else { 0.0 },
+                device_height: if device_h.is_finite() && device_h > 0.0 { device_h as f32 } else { 0.0 },
                 prefers_dark: dark,
                 prefers_reduced_motion: reduced_motion,
                 forced_colors,

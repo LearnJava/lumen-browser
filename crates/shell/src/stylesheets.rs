@@ -40,6 +40,11 @@ pub(crate) fn screen_media_context(viewport: Size, dark_mode: bool) -> lumen_css
         media_type: "screen".into(),
         width: viewport.width,
         height: viewport.height,
+        // `device-width`/`device-height` меряют экран, не viewport; точного
+        // размера экрана у stylesheet-гейта нет — viewport лучшая оценка,
+        // а 0 обнулял бы и bare-форму (`(device-width)` → false).
+        device_width: viewport.width,
+        device_height: viewport.height,
         prefers_dark: dark_mode,
         ..Default::default()
     }

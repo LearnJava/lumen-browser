@@ -262,8 +262,13 @@ const WEBGL_SHIM: &str = r#"(function() {
     getError: function() { _glState(this); return 0; },
     getContextAttributes: function() {
       _glState(this);
-      return { alpha: true, antialias: false, depth: true, premultipliedAlpha: true,
-               preserveDrawingBuffer: false, stencil: false };
+      // WebGL spec defaults + Chrome's extended dictionary: antialias
+      // defaults to TRUE (Lumen wrongly reported false), plus the
+      // Chrome-only keys a fingerprint probe enumerates.
+      return { alpha: true, antialias: true, depth: true, stencil: false,
+               premultipliedAlpha: true, preserveDrawingBuffer: false,
+               powerPreference: 'default', failIfMajorPerformanceCaveat: false,
+               desynchronized: false, xrCompatible: false };
     },
 
     viewport: function(x, y, w, h) { _lumen_webgl_viewport(_glState(this).cid, x|0, y|0, w|0, h|0); },

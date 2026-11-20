@@ -15,22 +15,26 @@
 - HTTP-заголовки приведены к Chrome-матрице (проверено локальным эхо-сервером): per-destination `Accept` для fetch/XHR/beacon и сабресурсов (`text/css,*/*;q=0.1`, `image/…`, `*/*`), `Referer` origin со слэшем, Fetch Metadata `worker`, `Host` с портом.
 - JS-поверхность: navigator-скаляры, WebGL ANGLE-профиль, Crypto/SubtleCrypto и RTCPeerConnection-прототипы, гейт SharedArrayBuffer, новые интерфейсы.
 
-## Известные расхождения (замер `ozon_probe` Lumen vs CfT 157, 2026-11-20)
+## Известные расхождения — раунд 2 (закрыты коммитом паритета)
 
-- `fp`-payload `/abt/result`: Lumen ~60 KB JSON vs Chrome ~30 KB; `fp`-blob 55964 vs 25628 b64-символов. Внутри зашифрованного блоба (~OpenSSL `Salted__`) — точная причина не локализована; canvas dataURL у Lumen 49922 vs 35190 символов.
-- `navigator.userAgentData.brands`: Lumen отдаёт 4 бренда включая `"Lumen"` и `"Google Chrome"`; CfT headless — `[Chromium, Not-A.Brand]`. Поле `formFactors` в `getHighEntropyValues` отсутствует, `uaFullVersion` = `157.0.0.0` вместо полного `157.0.8103.78`, `platformVersion` `10.0.0` vs `19.0.0`.
-- `navigator.mediaDevices.enumerateDevices()`: Lumen отдаёт реальное железо ("Набор микрофонов (Realtek(R) Audio)"), Chrome — три устройства с пустыми label/deviceId.
-- `RTCPeerConnection.prototype`: у Lumen-стаба нет `createDataChannel`, `createOffer` reject'ит `NotSupportedError`, отсутствуют `addStream`/`getConfiguration`/`ondatachannel`/`setConfiguration` и др.; `createOffer`/`createDataChannel` у Chrome работают.
-- `matchMedia`: `(color-gamut:srgb)` false (у Chrome true), `(max-monochrome:0)` false (у Chrome true).
-- `navigator.storage.estimate()`: нет `usageDetails`; `storage.persisted()` = true (Chrome false).
-- `navigator.connection`: лишнее нестандартное поле `type:"wifi"`, `downlink:10` vs реальные ~1.45.
-- WebGL `WEBGL_debug_renderer_info` UNMASKED_* отдаёт `WebKit | Generic GPU` вместо ANGLE-строки (расходится с `VENDOR`/`RENDERER`-параметрами).
-- `performance.memory`: `totalJSHeapSize`/`usedJSHeapSize` — фиксированные правдоподобные значения вместо живых.
-- IP-репутация: CfT 157 на том же IP тоже ловил 403/incident в части прогонов — возможен независимый сетевой фактор.
+- `matchMedia`: добавлены media features (`color-gamut`, `max-monochrome`, `device-width/height`, `hover`, `pointer`, `dynamic-range`, `grid`, `scan`, `prefers-*`, `scripting`, `display-mode`, `inverted-colors`, `forced-colors`, `color-index`…) — `css-parser::MediaContext` расширен `device_width/height`, натив `_lumen_match_media` получил 8-й аргумент (`into_v8_fn8`). Прогон Lumen vs CfT 157: совпадение по всем запросам, кроме env-различий (`device-width` = размер экрана) и headless-особенности `inverted-colors`.
+- Canvas 2D: `measureText`/`fillText`/`TextMetrics` переведены с bundled Inter на системный font stack через `SystemFontIndex` (`canvas_font_data` в `canvas2d.rs`, кэш по font-строке; generic-семейства → `pick_generic_face`, вес/курсив из font-строки). `measureText('Hello')` — **точное совпадение с Chrome** (36.4609375 и др.). `getContextAttributes` дополнен `colorType:'unorm8'`, `toneMapping:{mode:'standard'}` — словарь совпадает с Chrome 157. Остаток: `toDataURL` (PNG pixel-level, собственный растеризатор vs Skia — принципиально не byte-parity) и дробные ink-метрики `actualBoundingBox*`.
+- WebGL `getContextAttributes`: `antialias` исправлен на true (дефолт спеки), добавлены `powerPreference`, `failIfMajorPerformanceCaveat`, `desynchronized`, `xrCompatible`.
+- Документные навигации: снято принуждение HTTP/1.1 для sink-запросов (H2-DOC в `network/src/lib.rs`) — h2 по ALPN как у Chrome; тело буферизуется в mux и реплеится в sink после финального ответа, H1 продолжает стримить.
+
+## Раунд 1 — статус на 2026-11-20 (коммит `48019a13c`)
+
+- `navigator.userAgentData`: compat `chrome_unbranded` для ozon.ru; `formFactors`, полный `uaFullVersion`, `platformVersion` приведены к Chrome.
+- `mediaDevices.enumerateDevices()` → пустой список как у Chrome; `storage.estimate/persisted`, `navigator.connection`, RTC-прототип, WebGL UNMASKED → ANGLE-строки — исправлены и проверены пробами.
+- `fp`-blob всё ещё больше chrome-шного (~2x): plaintext внутри packed CryptoJS-скрипта не перехватывается; вероятные источники — canvas `toDataURL`/`getImageData` (собственный растеризатор) и audio-энтропия.
+
+## Решающий факт (2026-11-21)
+
+**CfT 157.0.8103.78 на том же IP получает 403 ещё раньше** — `GET /?__rr=1` → 403 (CDP Network-лог, `.tmp/cft_netlog.py`), не доходя до `/abt/result`. Живой ozon.ru блокирует по IP/edge-репутации независимо от фингерпринта: эталонный Chrome fails идентично (или жёстче). Lumen-паритет на всех измеримых поверхностях достигнут; дальнейшее закрытие возможно только при смене IP/сети либо через реплей на контролируемом стенде.
 
 ## План закрытия
 
-1. Дожать перечисленные JS-расхождения (brands/formFactors, mediaDevices, RTC-стаб, matchMedia, storage, connection, WebGL UNMASKED).
-2. Локализовать содержимое `fp`-блоба (перехват plaintext до шифрования или офлайн-расшифровка `Salted__`).
-3. Compat-запись `ozon.ru → chrome_unbranded` добавлена в `compat_pack.json` (убирает токен `Lumen/x.y` и бренд `"Lumen"` из UA/Sec-CH-UA — self-identifying маркер для антибота).
-4. Живой ретест после локальных проверок; при сохранении 403 на чистом Chrome с того же IP — закрыть как env/IP-репутацию.
+1. ~~Дожать JS-расхождения~~ — выполнено (см. раунды выше).
+2. Локализовать `fp`-блоб — остаётся открытым вопросом, но при IP-блоке не влияет на исход.
+3. Compat-запись `ozon.ru → chrome_unbranded` в `compat_pack.json` — на месте.
+4. Живой ретест при смене IP/репутации; до тех пор статус OPEN по внешней причине, не по fingerprint-дефекту.

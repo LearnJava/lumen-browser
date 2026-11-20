@@ -976,7 +976,7 @@ pub(crate) fn install_offscreen_canvas_bindings_v8(
                 c.borrow().get(&canvas_id).map(|ctx| ctx.font.clone()).unwrap_or_default()
             });
             let pixel_size = crate::canvas2d::parse_canvas_font_size(&font_str);
-            crate::canvas2d::measure_text_width(&text, pixel_size)
+            crate::canvas2d::measure_text_width_for(&font_str, &text, pixel_size)
         }),
     )?;
     rt.register_native(
