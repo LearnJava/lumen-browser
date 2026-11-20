@@ -1298,6 +1298,9 @@ mod tests_v8 {
         let ports = Arc::new(Mutex::new(HashMap::new()));
         install_shared_worker_globals_v8(&rt, ports, None, "", false, Arc::new(AtomicBool::new(false)), None)
             .unwrap();
+        // BUG-1833: sweep живёт в run-пути (после бинда WebSocket, перед
+        // worker-скриптом), а не внутри install — тест повторяет run-путь.
+        rt.eval(crate::dom::NATIVE_REGISTRY_SWEEP).unwrap();
         let r = rt
             .eval(
                 "[TextEncoder.prototype.encode.toString(),\

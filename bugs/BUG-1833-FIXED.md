@@ -1,6 +1,6 @@
-# BUG-1833-OPEN: shared-worker реалм — shim-функции печатают исходник вместо `[native code]` (тест не повторяет run-путь)
+# BUG-1833-FIXED: shared-worker реалм — shim-функции печатают исходник вместо `[native code]` (тест не повторяет run-путь)
 
-- **Статус:** OPEN (актуальность проверена 2026-11-20 на `c6d618cf9`: симптом 2 закрылся, симптом 1 остаётся)
+- **Статус:** FIXED 2026-11-20 (дефект теста, не рантайма)
 - **Область:** js (`crates/js/src/shared_worker.rs` — `install_shared_worker_globals_v8`, run-путь shared worker; реестр `shim/native_registry_shim.js`)
 - **Приоритет:** P3 (фингерпринт-дивергенция в SharedWorker-реалме; детерминированное падение `cargo test -p lumen-js --lib --features v8-backend`)
 
@@ -44,9 +44,15 @@ cargo test -p lumen-js --lib --features v8-backend -- \
 внутренним контейнером, который тестовый путь обходит. Второе падение может быть
 следствием того же reorder run-пути (failure-ивент шлётся до подключения клиента).
 
-## Критерий закрытия
+## Разбор и фикс
 
-Оба теста зелёные; `probe_native_api.py` и юнит-уровень согласованы (проба ловит
-то же, что тест).
+Подтверждено на `c6d618cf9`: `v8_shared_worker_top_level_failure_reaches_the_first_client`
+зелёный (закрыт upstream `dc3df124b` или флаки). `shared_worker_shim_functions_print_as_native`
+падал, потому что вызывал `install_shared_worker_globals_v8` без
+`_lumen_native_sweep()` — sweep живёт в run-пути (`shared_worker.rs:927`), после
+бинда WebSocket и до worker-скрипта; `install` его намеренно не делает
+(комментарий `shared_worker.rs:1201-1203`). Фикс — тест повторяет run-путь:
+eval `crate::dom::NATIVE_REGISTRY_SWEEP` после install. Тест зелёный;
+`probe_native_api.py` и юнит-уровень согласованы (рантайм утечек не имел).
 
-Заведён P3 при гейте FINGERPRINT-MANIFEST (scoped-test), 2026-11-20.
+Заведён P3 при гейте FINGERPRINT-MANIFEST (scoped-test), 2026-11-20; закрыт тем же днём.
