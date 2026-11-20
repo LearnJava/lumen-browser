@@ -62,18 +62,39 @@ impl Lumen {
                 Target::NodeId(id) => {
                     let lb = self.layout_box.as_ref()?;
                     let node = lumen_dom::NodeId::from_index(*id as usize);
-                    let rect = forms::find_box_rect(lb, node)?;
+                    // Inline elements own no LayoutBox — fall back to the
+                    // per-fragment rects `collect_client_rects` already maps
+                    // for them (same source `getClientRects` uses).
+                    let rect = forms::find_box_rect(lb, node).or_else(|| {
+                        let doc = self.layout_source.as_ref()?.document.lock().ok()?;
+                        let rs = lumen_layout::collect_client_rects(lb, &doc)
+                            .get(&(node.index() as u32))?
+                            .clone();
+                        union_inline_rects(&rs)
+                    })?;
                     let (x, y) = page_to_viewport(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
                     Some(ResolvedTarget { x, y, node: Some(node) })
                 }
                 Target::Selector(selector) => {
                     let lb = self.layout_box.as_ref()?;
                     let doc = self.layout_source.as_ref()?.document.lock().ok()?;
-                    let found = *lumen_layout::selector_query::find_all_by_selector(lb, &doc, selector)
-                        .first()?;
-                    let rect = found.rect;
+                    if let Some(found) =
+                        lumen_layout::selector_query::find_all_by_selector(lb, &doc, selector).first()
+                    {
+                        let rect = found.rect;
+                        let (x, y) = page_to_viewport(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
+                        return Some(ResolvedTarget { x, y, node: Some(found.node) });
+                    }
+                    // Same inline-element gap as `Target::NodeId`: the DOM
+                    // walk finds `<a>`/`<span>`/…, `collect_client_rects`
+                    // supplies the geometry the layout walk cannot.
+                    let nid = *lumen_layout::selector_query::query_all(&doc, selector).first()?;
+                    let rs = lumen_layout::collect_client_rects(lb, &doc)
+                        .get(&(nid.index() as u32))?
+                        .clone();
+                    let rect = union_inline_rects(&rs)?;
                     let (x, y) = page_to_viewport(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
-                    Some(ResolvedTarget { x, y, node: Some(found.node) })
+                    Some(ResolvedTarget { x, y, node: Some(nid) })
                 }
             }
         }
@@ -103,8 +124,12 @@ impl Lumen {
         ) -> Option<String> {
             let node = resolved.node?;
             let hit = self.pointer_target(resolved.x, resolved.y).page;
+            let doc = self
+                .layout_source
+                .as_ref()
+                .and_then(|s| s.document.lock().ok());
             match hit {
-                Some(hit) if hit_belongs_to_target(&hit, node) => None,
+                Some(hit) if hit_belongs_to_target(&hit, node, doc.as_deref()) => None,
                 Some(hit) => Some(format!(
                     "Element click intercepted: point ({:.0}, {:.0}) hits {} instead of the target element (node {})",
                     resolved.x,
@@ -153,23 +178,70 @@ impl Lumen {
             let Some(lb) = self.layout_box.as_ref() else { return Vec::new() };
             let Some(source) = self.layout_source.as_ref() else { return Vec::new() };
             let Ok(doc) = source.document.lock() else { return Vec::new() };
-            lumen_layout::selector_query::find_all_by_selector(lb, &doc, selector)
-                .into_iter()
-                .map(|found| {
-                    let tag_name = match &doc.get(found.node).data {
-                        NodeData::Element { name, .. } => name.local.to_string(),
-                        _ => String::new(),
-                    };
-                    let mut text_content = String::new();
-                    collect_automation_text(&doc, found.node, &mut text_content);
-                    lumen_driver::NodeRef {
-                        node_id: found.node.index() as u32,
-                        tag_name,
-                        text_content,
-                        bounding_rect: found.rect,
+            let mut seen = std::collections::HashSet::new();
+            let mut out: Vec<lumen_driver::NodeRef> =
+                lumen_layout::selector_query::find_all_by_selector(lb, &doc, selector)
+                    .into_iter()
+                    .map(|found| {
+                        seen.insert(found.node.index() as u32);
+                        self.node_ref_for(&doc, found.node, found.rect)
+                    })
+                    .collect();
+            // Inline elements (`<a>`, `<span>`, …) merge into anonymous
+            // `InlineRun` boxes, so the layout walk above never sees them.
+            // `query_all` walks the DOM instead; `collect_client_rects`
+            // already maps each inline element ancestor to its per-line frag
+            // rects — union them into the reported bounding box.
+            let dom_only: Vec<lumen_dom::NodeId> =
+                lumen_layout::selector_query::query_all(&doc, selector)
+                    .into_iter()
+                    .filter(|n| !seen.contains(&(n.index() as u32)))
+                    .collect();
+            if !dom_only.is_empty() {
+                let rects = lumen_layout::collect_client_rects(lb, &doc);
+                for nid in dom_only {
+                    let Some(rs) = rects.get(&(nid.index() as u32)) else { continue };
+                    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+                    for r in rs {
+                        x0 = x0.min(r[0]);
+                        y0 = y0.min(r[1]);
+                        x1 = x1.max(r[0] + r[2]);
+                        y1 = y1.max(r[1] + r[3]);
                     }
-                })
-                .collect()
+                    if x0 > x1 {
+                        continue;
+                    }
+                    out.push(self.node_ref_for(
+                        &doc,
+                        nid,
+                        lumen_core::geom::Rect::new(x0, y0, x1 - x0, y1 - y0),
+                    ));
+                }
+            }
+            out
+        }
+
+        /// Shared `NodeRef` builder for [`Self::query_automation_nodes`] —
+        /// tag/text from the DOM, rect supplied by the caller (layout box or
+        /// unioned inline frag rects).
+        fn node_ref_for(
+            &self,
+            doc: &lumen_dom::Document,
+            node: lumen_dom::NodeId,
+            rect: lumen_core::geom::Rect,
+        ) -> lumen_driver::NodeRef {
+            let tag_name = match &doc.get(node).data {
+                NodeData::Element { name, .. } => name.local.to_string(),
+                _ => String::new(),
+            };
+            let mut text_content = String::new();
+            collect_automation_text(doc, node, &mut text_content);
+            lumen_driver::NodeRef {
+                node_id: node.index() as u32,
+                tag_name,
+                text_content,
+                bounding_rect: rect,
+            }
         }
 
         /// Build the accessibility tree for `AutomationCommand::A11yTree` (SDC-2).
@@ -560,8 +632,26 @@ pub(crate) struct ResolvedTarget {
 pub(crate) fn hit_belongs_to_target(
     hit: &lumen_paint::HitTestResult,
     target: lumen_dom::NodeId,
+    doc: Option<&lumen_dom::Document>,
 ) -> bool {
-    hit.source_node == target || hit.path.contains(&target)
+    if hit.source_node == target || hit.path.contains(&target) {
+        return true;
+    }
+    // Inline elements own no LayoutBox: a click inside `<a>` reports the
+    // frag's *text* node as `source_node`, and the run's `path` holds the
+    // block container — neither equals the `<a>` itself. Walk the source
+    // node's ancestors instead: the target belongs iff it contains the
+    // hit text, which is exactly what a real click on the element means.
+    // `doc == None` keeps the strict pre-inline behavior (tests).
+    let Some(doc) = doc else { return false };
+    let mut cur = doc.get(hit.source_node).parent;
+    while let Some(id) = cur {
+        if id == target {
+            return true;
+        }
+        cur = doc.get(id).parent;
+    }
+    false
 }
 
 /// Collect the concatenated text content of `id`'s subtree (SDC-2 `Query` support).
@@ -609,4 +699,17 @@ pub(crate) fn automation_ax_node(
             .map(|c| automation_ax_node(c, bounds))
             .collect(),
     }
+}
+
+/// Union of `[x, y, w, h]` frag rects into one `Rect` — `None` on empty.
+/// Shared by the inline-element fallbacks in `resolve_automation_target`.
+fn union_inline_rects(rs: &[[f32; 4]]) -> Option<lumen_core::geom::Rect> {
+    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for r in rs {
+        x0 = x0.min(r[0]);
+        y0 = y0.min(r[1]);
+        x1 = x1.max(r[0] + r[2]);
+        y1 = y1.max(r[1] + r[3]);
+    }
+    (x0 <= x1 && y0 <= y1).then(|| lumen_core::geom::Rect::new(x0, y0, x1 - x0, y1 - y0))
 }

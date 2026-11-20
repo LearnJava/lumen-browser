@@ -56,7 +56,7 @@ fn click_on_a_submit_button_inside_a_form_belongs_to_the_button() {
     let (button, point) = target_centre(&doc, &layout, "gopost");
     let hit = hit_test(point, &layout).expect("the button's centre must hit something");
     assert!(
-        hit_belongs_to_target(&hit, button),
+        hit_belongs_to_target(&hit, button, None),
         "click at the button's own centre must count as reaching the button, \
          hit node {} path {:?}",
         hit.node.index(),
@@ -76,7 +76,7 @@ fn click_on_text_inside_the_target_belongs_to_the_target() {
     let (outer, point) = target_centre(&doc, &layout, "outer");
     let hit = hit_test(point, &layout).expect("the div's centre must hit something");
     assert!(
-        hit_belongs_to_target(&hit, outer),
+        hit_belongs_to_target(&hit, outer, None),
         "a hit on the inner span is a hit on the outer div's subtree",
     );
 }
@@ -99,11 +99,11 @@ fn click_covered_by_an_overlay_does_not_belong_to_the_target() {
     let over = doc.find_by_id("over").expect("fixture has #over");
     let hit = hit_test(point, &layout).expect("the overlay covers the point");
     assert!(
-        hit_belongs_to_target(&hit, over),
+        hit_belongs_to_target(&hit, over, None),
         "sanity: the overlay is what is actually under the point",
     );
     assert!(
-        !hit_belongs_to_target(&hit, under),
+        !hit_belongs_to_target(&hit, under, None),
         "a click swallowed by the overlay must not count as reaching #under",
     );
 }
@@ -127,9 +127,9 @@ fn click_on_an_ancestor_does_not_belong_to_the_target() {
         wrap_box.rect.y + wrap_box.rect.height - 2.0,
     );
     let hit = hit_test(point, &layout).expect("the wrapper covers the point");
-    assert!(hit_belongs_to_target(&hit, wrap), "sanity: the wrapper is hit");
+    assert!(hit_belongs_to_target(&hit, wrap, None), "sanity: the wrapper is hit");
     assert!(
-        !hit_belongs_to_target(&hit, kid),
+        !hit_belongs_to_target(&hit, kid, None),
         "an ancestor hit is not a hit on the descendant the caller named",
     );
 }
