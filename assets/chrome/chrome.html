@@ -947,6 +947,58 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
 .set-section{ display:none; }
 .set-section.active{ display:block; }
 
+/* ============================================================
+   СКИНЫ ХРОМА (body[data-skin])
+   ============================================================
+   Переопределяют дизайн-токены :root/body[data-theme]. Идентификаторы
+   должны совпадать с lumen_chrome::SKINS и кнопками .skin-btn ниже. */
+
+/* Кнопки выбора скина (секция настроек «Внешний вид»). */
+.skin-row{display:flex;gap:6px;flex-wrap:wrap;}
+.skin-btn{
+  padding:4px 10px; border:1px solid var(--stroke); border-radius:var(--radius-md);
+  background:var(--surface-1); color:var(--text-secondary);
+  font-size:12px; line-height:16px; cursor:pointer;
+}
+.skin-btn:hover{color:var(--text-primary); border-color:var(--text-secondary);}
+body[data-skin="midnight"] .skin-btn[data-skin="midnight"],
+body[data-skin="contrast"] .skin-btn[data-skin="contrast"],
+body[data-skin="compact"] .skin-btn[data-skin="compact"]{
+  background:var(--accent-soft); border-color:var(--accent); color:var(--accent);
+}
+
+/* ── «Полночь»: OLED-чёрный для тёмной темы, тёплая бумага для светлой. ── */
+body[data-skin="midnight"][data-theme="dark"]{
+  --surface-0:#000000; --surface-1:#050505; --surface-2:#0D0D0D;
+  --stroke:#1F1F1F; --text-primary:#F2F2F2; --text-secondary:#7C7C7C;
+  --overlay-bg:rgba(0,0,0,.65);
+}
+body[data-skin="midnight"][data-theme="light"]{
+  --surface-0:#FDFBF7; --surface-1:#F7F4EE; --surface-2:#EFEAE0;
+  --stroke:#E2DACB; --text-primary:#221E18; --text-secondary:#6E675C;
+  --overlay-bg:rgba(40,32,20,.35);
+}
+
+/* ── «Контраст»: максимальный контраст текста и границ в обеих темах. ── */
+body[data-skin="contrast"][data-theme="dark"]{
+  --surface-0:#000000; --surface-1:#0A0A0A; --surface-2:#1C1C1C;
+  --stroke:#FFFFFF; --text-primary:#FFFFFF; --text-secondary:#D0D0D0;
+  --overlay-bg:rgba(0,0,0,.7);
+}
+body[data-skin="contrast"][data-theme="light"]{
+  --surface-0:#FFFFFF; --surface-1:#FFFFFF; --surface-2:#F0F0F0;
+  --stroke:#000000; --text-primary:#000000; --text-secondary:#2E2E2E;
+  --overlay-bg:rgba(0,0,0,.45);
+}
+
+/* ── «Компакт»: уменьшенная плотность — высоты панелей и сайдбара.
+   Только геометрические токены: отступы/радиусы не трогаем, чтобы не
+   ломать сетки, рассчитанные на --space-*/--radius-*. */
+body[data-skin="compact"]{
+  --tab-h:24px; --toolbar-h:30px;
+  --sidebar-w:208px; --sidebar-w-collapsed:40px;
+}
+
 </style>
 </head>
 <body data-theme="light" data-profile="personal" data-layout="vertical" data-demo="card">
@@ -1672,6 +1724,14 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                   <div class="set-block"><h3>Вкладки</h3>
                     <div class="set-row"><div class="st-text"><div class="st-title">Раскладка</div><div class="st-desc">Вертикальный сайдбар или горизонтальная лента</div></div><a class="link" href="javascript:void(0)">Вертикальные ▾</a></div>
                     <div class="set-row"><div class="st-text"><div class="st-title">Скругления</div><div class="st-desc">Макс. 6px — без пилюль (правило дизайн-системы)</div></div><span class="st-desc" style="font-family:var(--font-mono)">2/4/6px</span></div>
+                  </div>
+                  <div class="set-block"><h3>Скин</h3><div class="desc">Оформление хрома: цвета и плотность. Применяется сразу и запоминается.</div>
+                    <div class="skin-row">
+                      <button class="skin-btn" data-action="set-skin" data-skin="default">Стандарт</button>
+                      <button class="skin-btn" data-action="set-skin" data-skin="midnight">Полночь</button>
+                      <button class="skin-btn" data-action="set-skin" data-skin="contrast">Контраст</button>
+                      <button class="skin-btn" data-action="set-skin" data-skin="compact">Компакт</button>
+                    </div>
                   </div>
                 </div>
 

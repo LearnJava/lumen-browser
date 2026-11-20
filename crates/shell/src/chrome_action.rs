@@ -956,6 +956,24 @@ impl Lumen {
                     self.relayout_chrome_host();
                 }
             }
+            // Settings "Внешний вид" skin picker: `data-skin` carries the
+            // target id; unknown ids are refused so a stale asset can't
+            // persist a skin the CSS doesn't define. Switching is a pure
+            // `body[data-skin]` attribute change + one chrome relayout —
+            // the same live-mutation path `SetDemoVariant` uses.
+            ChromeAction::SetSkin => {
+                if let Some(skin) = self
+                    .chrome_doc
+                    .as_ref()
+                    .and_then(|(doc, _)| doc.get(nid).get_attr("data-skin"))
+                    .map(lumen_chrome::skin_or_default)
+                    && skin != self.chrome_skin
+                {
+                    self.chrome_skin = skin.to_owned();
+                    let _ = self.settings_store.set_skin(skin);
+                    self.relayout_chrome_host();
+                }
+            }
             ChromeAction::ToggleDemoMini => {
                 self.control_panel_mini_open = !self.control_panel_mini_open;
                 self.relayout_chrome_host();

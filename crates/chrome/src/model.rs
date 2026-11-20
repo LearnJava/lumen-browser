@@ -31,6 +31,17 @@ pub use media_bar::ChromeMediaBarModel;
 mod update_bar;
 pub use update_bar::{ChromeUpdateAction, ChromeUpdateModel};
 
+/// Chrome skin ids known to the engine chrome — must stay in sync with the
+/// `body[data-skin="…"]` blocks in `assets/chrome/skins.css` and the
+/// `set-skin` buttons in the settings "Внешний вид" section.
+pub const SKINS: &[&str] = &["default", "midnight", "contrast", "compact"];
+
+/// Returns `s` when it names a known skin, `"default"` otherwise — the single
+/// normalisation point for persisted/UI-provided skin ids.
+pub fn skin_or_default(s: &str) -> &'static str {
+    SKINS.iter().copied().find(|k| *k == s).unwrap_or("default")
+}
+
 /// Snapshot of shell state [`bind_model`] reflects into the chrome document.
 ///
 /// Built fresh by the shell on every [`bind_model`] call (see
@@ -48,6 +59,10 @@ pub struct ChromeModel {
     /// `"guest"`) for the active profile, or `None` for a non-seeded profile
     /// with no matching CSS branch (the attribute is then omitted).
     pub profile_slug: Option<String>,
+    /// Chrome skin id bound to `body[data-skin]` — one of [`SKINS`]; the CSS
+    /// token overrides live in `assets/chrome/skins.css` (inlined into the
+    /// generated `chrome.html`). Empty/`"default"` removes the attribute.
+    pub skin: String,
     /// `true` shows the profile dropdown (`#profileMenu`/`#profileMenuH`,
     /// UX-CHROME-PANELS) — mirrors `ProfileMenuPanel::visible`.
     pub profile_menu_open: bool,
@@ -1252,6 +1267,10 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
             None => remove_attr(doc, body, "data-profile"),
         }
         set_attr(doc, body, "data-demo", model.control_panel.shape.attr_value());
+        match model.skin.as_str() {
+            "" | "default" => remove_attr(doc, body, "data-skin"),
+            skin => set_attr(doc, body, "data-skin", skin),
+        }
     }
     bind_control_panel(doc, model);
     bind_profile_menu(doc, model);

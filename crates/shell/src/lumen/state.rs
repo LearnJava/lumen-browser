@@ -144,6 +144,10 @@ pub(crate) struct Lumen {
     /// `visible` flag — that one picks vertical vs. horizontal layout,
     /// this one narrows the vertical sidebar without hiding it.
     pub(crate) chrome_sidebar_collapsed: bool,
+    /// Active chrome skin id (`body[data-skin]`, `lumen_chrome::SKINS`) —
+    /// persisted in `settings.db` (`BrowserSettings::skin`), switched live by
+    /// `ChromeAction::SetSkin` from the settings "Внешний вид" section.
+    pub(crate) chrome_skin: String,
     /// CC-10b (docs/tasks/p1-css-chrome.md): `data-section` slug of the
     /// active `#view-settings` tab (`"general"`/`"privacy"`/`"appearance"`/
     /// `"sync"`/`"ext"`/`"qa"`). Engine-chrome-only UI state — the design's 6

@@ -503,6 +503,14 @@ tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/mai
   indent rule, so `ChromeTabModel::is_child` collapses `tabs::tree::depth_of`'s full depth to a single
   boolean — a grandchild renders at the same indent as its parent's direct children. Would need a new
   CSS construct in the reference (out of scope for CC-8/CC-CSS-*, this is a markup gap not an engine one).
+- **Скины хрома** (`body[data-skin]`): `lumen_chrome::SKINS` (`default`/`midnight`/`contrast`/
+  `compact`) — token-override blocks in `assets/chrome/chrome.html`'s own `<style>`; `ChromeModel::skin`
+  binds the attribute like `data-theme`, `ChromeAction::SetSkin` (settings «Внешний вид» → «Скин»)
+  persists via `BrowserSettings::skin`/`set_skin` and relayouts. NB: the checked-in `chrome.html` has
+  drifted from `scripts/gen_chrome_assets.py` + `lumen-v3_3.html` (the asset carries ~235 ids the
+  frozen reference lacks — recent commits edit the asset directly), so skin markup/CSS went into the
+  asset by hand, same as the rest of the post-generator additions; running the generator today would
+  drop them.
 
 ## Invariants
 

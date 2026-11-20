@@ -223,6 +223,28 @@ fn no_profile_slug_removes_the_attribute() {
 }
 
 #[test]
+fn skin_binds_data_skin_and_default_removes_it() {
+    let mut doc = parse_asset();
+    bind_model(&mut doc, &ChromeModel { skin: "midnight".to_owned(), ..ChromeModel::default() });
+    let body = doc.body().expect("asset has <body>");
+    assert_eq!(doc.get(body).get_attr("data-skin"), Some("midnight"));
+    bind_model(&mut doc, &ChromeModel { skin: "default".to_owned(), ..ChromeModel::default() });
+    assert_eq!(doc.get(body).get_attr("data-skin"), None);
+    bind_model(&mut doc, &ChromeModel { skin: String::new(), ..ChromeModel::default() });
+    assert_eq!(doc.get(body).get_attr("data-skin"), None);
+}
+
+#[test]
+fn skin_or_default_normalises_to_known_ids() {
+    assert_eq!(skin_or_default("midnight"), "midnight");
+    assert_eq!(skin_or_default("bogus"), "default");
+    assert_eq!(skin_or_default(""), "default");
+    for &skin in SKINS {
+        assert_eq!(skin_or_default(skin), skin);
+    }
+}
+
+#[test]
 fn tab_list_is_rebuilt_from_the_model() {
     let mut doc = parse_asset();
     let model = model_with_tabs(vec![

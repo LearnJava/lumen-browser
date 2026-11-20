@@ -900,6 +900,7 @@ impl Lumen {
             dark_theme: self.dark_mode,
             layout_vertical: self.vertical_tabs.visible || self.tree_tabs.visible,
             profile_slug,
+            skin: self.chrome_skin.clone(),
             profile_menu_open: self.profile_menu.visible,
             control_panel: lumen_chrome::ChromeControlPanelModel {
                 shape: self.control_panel_shape,
