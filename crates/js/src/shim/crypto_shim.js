@@ -32,6 +32,9 @@
         this.extractable = info.extractable;
         this.usages     = info.usages;
     }
+    Object.defineProperty(CryptoKey.prototype, Symbol.toStringTag, {
+        value: 'CryptoKey', configurable: true
+    });
 
     function _make_crypto_key(id) {
         var infoJson = _lumen_subtle_key_info(id);
@@ -61,7 +64,13 @@
         return new DOMException(msg, msg);
     }
 
-    var subtle = {
+    // BUG-1829: `SubtleCrypto` is a real interface object — this literal is
+    // its prototype (methods live there, like Chrome's WebIDL surface), and
+    // `crypto.subtle` is a separate instance inheriting from it.
+    function SubtleCrypto() {
+        throw new TypeError('Illegal constructor');
+    }
+    SubtleCrypto.prototype = {
         // ── digest ───────────────────────────────────────────────────────────
         digest: function (algorithm, data) {
             var algo = (algorithm && typeof algorithm === 'object' && algorithm.name)
@@ -316,20 +325,45 @@
             return Promise.reject(new DOMException('unwrapKey: not implemented', 'NotSupportedError'));
         }
     };
+    Object.defineProperty(SubtleCrypto.prototype, 'constructor', {
+        value: SubtleCrypto, writable: true, configurable: true
+    });
+    Object.defineProperty(SubtleCrypto.prototype, Symbol.toStringTag, {
+        value: 'SubtleCrypto', configurable: true
+    });
+    var subtle = Object.create(SubtleCrypto.prototype);
 
     // `globalThis`, not `window`: the same object on the page (`window` is the real global,
     // BUG-280), and a worker scope has no `window` (BUG-1688).
     var g = globalThis;
-    g.crypto = { getRandomValues: getRandomValues, randomUUID: randomUUID };
-    g.Crypto = function Crypto() {};
+    // BUG-1829: `crypto` is a `Crypto` instance — the methods sit on
+    // `Crypto.prototype` and `crypto instanceof Crypto` holds, matching
+    // Chrome's WebIDL surface instead of a plain object literal.
+    function Crypto() {
+        throw new TypeError('Illegal constructor');
+    }
+    Crypto.prototype.getRandomValues = getRandomValues;
+    Crypto.prototype.randomUUID = randomUUID;
+    Object.defineProperty(Crypto.prototype, Symbol.toStringTag, {
+        value: 'Crypto', configurable: true
+    });
+    g.crypto = Object.create(Crypto.prototype);
+    g.Crypto = Crypto;
     // BUG-765: `SubtleCrypto` and `CryptoKey` are both `[SecureContext]`
     // (WebCryptoAPI) — `crypto.getRandomValues`/`.randomUUID` are not, so
     // only `.subtle` and the `CryptoKey` constructor are gated, not the
     // whole `Crypto` interface. Absent entirely on an insecure origin, not
     // merely inert (see `_lumen_secure_context`'s doc comment, `web_api_shim_mid_b.js`).
     function exposeSecure() {
-        g.crypto.subtle = subtle;
+        // `subtle` is a [SecureContext] attribute of `Crypto` — a prototype
+        // getter installed only here, so an insecure origin sees neither the
+        // property nor the `SubtleCrypto`/`CryptoKey` interface objects.
+        Object.defineProperty(Crypto.prototype, 'subtle', {
+            get: function() { return subtle; },
+            enumerable: true, configurable: true
+        });
         g.CryptoKey = CryptoKey;
+        g.SubtleCrypto = SubtleCrypto;
     }
     if (typeof _lumen_secure_context !== 'undefined') {
         if (_lumen_secure_context !== false) exposeSecure();
