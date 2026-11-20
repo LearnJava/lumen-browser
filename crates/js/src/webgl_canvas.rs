@@ -121,8 +121,8 @@ pub use webgl::{ARRAY_BUFFER, COLOR_BUFFER_BIT, FRAGMENT_SHADER, TRIANGLES, VERT
 /// for good (BUG-348).
 #[cfg(feature = "v8-backend")]
 const WEBGL_SHIM: &str = r#"(function() {
-  var _vendor   = (typeof _LUMEN_GPU_VENDOR   !== 'undefined') ? _LUMEN_GPU_VENDOR   : 'WebKit';
-  var _renderer = (typeof _LUMEN_GPU_RENDERER !== 'undefined') ? _LUMEN_GPU_RENDERER : 'Generic GPU';
+  var _vendor   = (typeof _LUMEN_GPU_VENDOR   !== 'undefined') ? _LUMEN_GPU_VENDOR   : 'Google Inc. (Intel)';
+  var _renderer = (typeof _LUMEN_GPU_RENDERER !== 'undefined') ? _LUMEN_GPU_RENDERER : 'ANGLE (Intel, Intel(R) Iris(R) Plus Graphics (0x00008A52) Direct3D11 vs_5_0 ps_5_0, D3D11)';
 
   // Opaque GL object wrappers carry the backend handle in `__wid`.
   function _wrap(n) { return n ? { __wid: n } : null; }

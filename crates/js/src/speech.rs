@@ -98,15 +98,36 @@ const SPEECH_SHIM: &str = r#"(function() {
 
 // ── SpeechSynthesisVoice ──────────────────────────────────────────────────────
 function SpeechSynthesisVoice(name, lang, localService) {
-    this.voiceURI     = 'urn:' + name;
+    // Chrome's voiceURI is the voice name itself, not a URN.
+    this.voiceURI     = name;
     this.name         = name;
     this.lang         = lang;
     this.localService = !!localService;
     this.default      = false;
 }
 
+// Chrome-on-Windows voice set: local SAPI voices (localService=true) plus the
+// remote Google network voices (localService=false). A single synthetic
+// "Lumen Voice" was both self-identifying and unlike any real Chrome output.
 var _voices = [
-    new SpeechSynthesisVoice('Lumen Voice', 'en-US', true)
+    new SpeechSynthesisVoice('Microsoft David - English (United States)', 'en-US', true),
+    new SpeechSynthesisVoice('Microsoft Zira - English (United States)', 'en-US', true),
+    new SpeechSynthesisVoice('Microsoft Mark - English (United States)', 'en-US', true),
+    new SpeechSynthesisVoice('Google US English', 'en-US', false),
+    new SpeechSynthesisVoice('Google UK English Female', 'en-GB', false),
+    new SpeechSynthesisVoice('Google UK English Male', 'en-GB', false),
+    new SpeechSynthesisVoice('Google Deutsch', 'de-DE', false),
+    new SpeechSynthesisVoice('Google español', 'es-ES', false),
+    new SpeechSynthesisVoice('Google français', 'fr-FR', false),
+    new SpeechSynthesisVoice('Google italiano', 'it-IT', false),
+    new SpeechSynthesisVoice('Google ', 'ja-JP', false),
+    new SpeechSynthesisVoice('Google 한국의', 'ko-KR', false),
+    new SpeechSynthesisVoice('Google Nederlands', 'nl-NL', false),
+    new SpeechSynthesisVoice('Google polski', 'pl-PL', false),
+    new SpeechSynthesisVoice('Google português do Brasil', 'pt-BR', false),
+    new SpeechSynthesisVoice('Google русский', 'ru-RU', false),
+    new SpeechSynthesisVoice('Google （）', 'zh-TW', false),
+    new SpeechSynthesisVoice('Google （）', 'zh-CN', false),
 ];
 _voices[0].default = true;
 

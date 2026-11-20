@@ -44,9 +44,13 @@
   var budget = 1000000; // жёсткий потолок на новые объекты; DOM-граф ~10^4
   var queue = [];
 
-  var fnText = function (fn) {
+  var fnText = function (fn, fallback) {
     var name = '';
     try { name = fn.name || ''; } catch (e) { name = ''; }
+    // У анонимных функций, найденных как значение свойства, `.name` пуст —
+    // Chrome называет их по ключу (`atob`, `getHighEntropyValues`), поэтому
+    // подставляем имя свойства как fallback.
+    if (!name && typeof fallback === 'string' && fallback !== '') name = fallback;
     return 'function ' + (name ? name : '') + '() { [native code] }';
   };
   var accessorText = function (kind, key) {
@@ -106,7 +110,7 @@
         if (typeof d.set === 'function') register(d.set, accessorText('set', kt));
         var v = d.value;
         if (typeof v === 'function') {
-          register(v, fnText(v));
+          register(v, fnText(v, typeof key === 'string' ? key : ''));
           // Сама функция в очереди: её `.prototype` и статики — data-свойства.
           queue.push([v, depth, callGetters]);
         } else if (v !== null && typeof v === 'object') {
@@ -159,7 +163,7 @@
         : keyText(key);
       register(fn, accessorText(kind === 'getter' ? 'get' : 'set', kt));
     } else {
-      register(fn, fnText(fn));
+      register(fn, fnText(fn, typeof key === 'string' ? key : ''));
     }
   });
   publish('_lumen_native_sweep', sweep);

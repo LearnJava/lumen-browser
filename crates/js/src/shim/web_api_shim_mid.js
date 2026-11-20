@@ -15568,6 +15568,23 @@ for (var _dohi = 0; _dohi < _LUMEN_EVENT_HANDLER_ATTRS.length; _dohi++) {
 // below `Document.prototype`, so `instanceof Document` still holds.
 Object.setPrototypeOf(document, HTMLDocument.prototype);
 
+// ParentNode/Document mixin parity (BUG-1829 follow-up): Chrome exposes the
+// selector entry points on `Document.prototype`; the `document` literal above
+// carries them as own properties (BUG-327 pattern), so `Document.prototype.
+// querySelector` read `undefined` — a probe-visible divergence. Detached
+// documents built by `_lumen_build_detached_document` shadow these with their
+// own copies, so the prototype versions only ever serve the live `document`;
+// anything else gets Chrome's illegal-invocation TypeError.
+['querySelector', 'querySelectorAll', 'getElementById',
+ 'getElementsByTagName', 'getElementsByTagNameNS', 'getElementsByClassName'
+].forEach(function (m) {
+    Document.prototype[m] = function () {
+        if (this !== document)
+            throw new TypeError("Failed to execute '" + m + "' on 'Document': Illegal invocation");
+        return document[m].apply(document, arguments);
+    };
+});
+
 // BUG-587: `document` is a `[LegacyUnforgeable] readonly` own property of the
 // global object (HTML LS, `Window.document`) — the ECMAScript
 // `[[DefineOwnProperty]]` algorithm only enforces "unforgeable" (rejects an

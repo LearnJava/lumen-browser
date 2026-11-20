@@ -180,6 +180,20 @@ pub enum MediaFeature {
     OverflowInline(MediaOverflowInline),
     /// `(overflow-block: none | scroll | paged)` (Media Queries L4 §6.3).
     OverflowBlock(MediaOverflowBlock),
+    /// `(color-gamut: srgb | p3 | rec2020)` — цветовой охват устройства
+    /// вывода (Media Queries L5 §6.7).
+    ColorGamut(MediaColorGamut),
+    /// `(min-color-gamut: …)` — охват не уже указанного.
+    MinColorGamut(MediaColorGamut),
+    /// `(max-color-gamut: …)` — охват не шире указанного.
+    MaxColorGamut(MediaColorGamut),
+    /// `(monochrome: <number>)` — битовая глубина монохромного канала;
+    /// 0 на любом цветном дисплее (Media Queries L4 §6.4).
+    Monochrome(f32),
+    /// `(min-monochrome: <number>)`.
+    MinMonochrome(f32),
+    /// `(max-monochrome: <number>)`.
+    MaxMonochrome(f32),
     /// Boolean-context form (bare `(feature)`, no `: value`) of a discrete
     /// feature whose value form is one of the arms above. See
     /// [`BooleanFeature`] — kept as its own small enum rather than one
@@ -187,6 +201,33 @@ pub enum MediaFeature {
     /// answer from `MediaContext` directly instead of carrying a parsed
     /// value literal.
     BooleanContext(BooleanFeature),
+}
+
+/// Media Queries L5 §6.7 — `color-gamut`: цветовой охват устройства вывода.
+/// Варианты упорядочены по ширине охвата — `min-`/`max-` формы сравнивают
+/// через `PartialOrd`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MediaColorGamut {
+    Srgb,
+    P3,
+    Rec2020,
+}
+
+fn color_gamut_str(g: MediaColorGamut) -> &'static str {
+    match g {
+        MediaColorGamut::Srgb => "srgb",
+        MediaColorGamut::P3 => "p3",
+        MediaColorGamut::Rec2020 => "rec2020",
+    }
+}
+
+fn parse_color_gamut(val: &str) -> Option<MediaColorGamut> {
+    Some(match val.to_ascii_lowercase().as_str() {
+        "srgb" => MediaColorGamut::Srgb,
+        "p3" => MediaColorGamut::P3,
+        "rec2020" => MediaColorGamut::Rec2020,
+        _ => return None,
+    })
 }
 
 /// Which already-implemented discrete feature a bare `(feature)` boolean
@@ -579,6 +620,13 @@ pub struct MediaContext {
     pub overflow_inline: MediaOverflowInline,
     /// Обработка переполнения вдоль block-оси (`overflow-block`).
     pub overflow_block: MediaOverflowBlock,
+    /// Цветовой охват устройства вывода (`color-gamut` media feature).
+    /// Lumen композитит в sRGB — desktop-дефолт `Srgb`, как у Chrome на
+    /// обычном sRGB-мониторе.
+    pub color_gamut: MediaColorGamut,
+    /// Битовая глубина монохромного канала (`monochrome` media feature);
+    /// 0 на любом цветном дисплее — desktop-дефолт Lumen.
+    pub monochrome: f32,
 }
 
 impl Default for MediaContext {
@@ -615,6 +663,8 @@ impl Default for MediaContext {
             navigation_controls: MediaNavigationControls::BackButton,
             overflow_inline: MediaOverflowInline::Scroll,
             overflow_block: MediaOverflowBlock::Scroll,
+            color_gamut: MediaColorGamut::Srgb,
+            monochrome: 0.0,
         }
     }
 }
@@ -727,6 +777,12 @@ impl MediaFeature {
             Self::NavigationControls(n) => ctx.navigation_controls == *n,
             Self::OverflowInline(o) => ctx.overflow_inline == *o,
             Self::OverflowBlock(o) => ctx.overflow_block == *o,
+            Self::ColorGamut(g) => ctx.color_gamut == *g,
+            Self::MinColorGamut(g) => ctx.color_gamut >= *g,
+            Self::MaxColorGamut(g) => ctx.color_gamut <= *g,
+            Self::Monochrome(v) => (ctx.monochrome - v).abs() < 0.001,
+            Self::MinMonochrome(v) => ctx.monochrome >= *v,
+            Self::MaxMonochrome(v) => ctx.monochrome <= *v,
             Self::BooleanContext(b) => b.matches(ctx),
         }
     }
@@ -928,6 +984,12 @@ impl MediaFeature {
                     MediaOverflowBlock::Paged => "paged",
                 }
             ),
+            Self::ColorGamut(g) => format!("color-gamut: {}", color_gamut_str(*g)),
+            Self::MinColorGamut(g) => format!("min-color-gamut: {}", color_gamut_str(*g)),
+            Self::MaxColorGamut(g) => format!("max-color-gamut: {}", color_gamut_str(*g)),
+            Self::Monochrome(v) => format!("monochrome: {v}"),
+            Self::MinMonochrome(v) => format!("min-monochrome: {v}"),
+            Self::MaxMonochrome(v) => format!("max-monochrome: {v}"),
             // Boolean context — bare feature name, no `: value` (same shape
             // as `Self::Color` above).
             Self::BooleanContext(b) => b.feature_name().to_string(),
@@ -1292,6 +1354,9 @@ pub(crate) fn parse_media_feature(s: &str) -> MediaCondition {
         let bare = s.trim().to_ascii_lowercase();
         return match bare.as_str() {
             "color" => MediaCondition::Feature(MediaFeature::Color),
+            // Boolean-context форма range-фичи — «значение не ноль»
+            // (CSS Values L4): на цветном дисплее monochrome=0 → false.
+            "monochrome" => MediaCondition::Feature(MediaFeature::MinMonochrome(1.0)),
             _ => match BooleanFeature::from_name(&bare) {
                 Some(b) => MediaCondition::Feature(MediaFeature::BooleanContext(b)),
                 None => MediaCondition::Unsupported,
@@ -1486,6 +1551,27 @@ pub(crate) fn parse_media_feature(s: &str) -> MediaCondition {
             "paged" => MediaCondition::Feature(MediaFeature::OverflowBlock(MediaOverflowBlock::Paged)),
             _ => MediaCondition::Unsupported,
         },
+        "color-gamut" | "min-color-gamut" | "max-color-gamut" => {
+            let Some(g) = parse_color_gamut(val) else {
+                return MediaCondition::Unsupported;
+            };
+            MediaCondition::Feature(match key.as_str() {
+                "color-gamut" => MediaFeature::ColorGamut(g),
+                "min-color-gamut" => MediaFeature::MinColorGamut(g),
+                _ => MediaFeature::MaxColorGamut(g),
+            })
+        }
+        "monochrome" | "min-monochrome" | "max-monochrome" => {
+            // Chrome принимает неотрицательный `<number>` (битовая глубина).
+            let Some(n) = val.parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 0.0) else {
+                return MediaCondition::Unsupported;
+            };
+            MediaCondition::Feature(match key.as_str() {
+                "monochrome" => MediaFeature::Monochrome(n),
+                "min-monochrome" => MediaFeature::MinMonochrome(n),
+                _ => MediaFeature::MaxMonochrome(n),
+            })
+        }
         _ => MediaCondition::Unsupported,
     }
 }

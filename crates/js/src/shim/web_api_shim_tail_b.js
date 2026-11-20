@@ -8605,7 +8605,8 @@ function _wa_motion_prune(nid) {
     { value: 'NetworkInformation', configurable: true });
 
   var state = {
-    type:          'wifi',
+    // `type` намеренно отсутствует: Chrome desktop его не экспонирует
+    // (BUG-1835 — Ozон abt сравнивает форму объекта с эталоном).
     effectiveType: '4g',
     downlink:      10,
     // BUG-641: WICG Network Information §`downlinkMax` — with no knowledge of
@@ -8643,17 +8644,22 @@ function _wa_motion_prune(nid) {
 // dispatchEvent()), and `isActive`/`hasBeenActive` read the live state
 // through natives registered by `install_user_activation`
 // (v8_runtime/install/platform.rs) — not a static snapshot.
+// Chrome: `UserActivation` は interface で、isActive/hasBeenActive は
+// prototype のenumerable getter。インスタンスに enumerable getter を
+// くと JSON.stringify が {"isActive":...} をし、Chrome の {} という。
+function UserActivation() { throw new TypeError('Illegal constructor'); }
+Object.defineProperty(UserActivation.prototype, Symbol.toStringTag, { value: 'UserActivation', configurable: true });
+Object.defineProperty(UserActivation.prototype, 'isActive', {
+  get: function() { return _lumen_user_activation_is_active(); },
+  enumerable: true, configurable: true,
+});
+Object.defineProperty(UserActivation.prototype, 'hasBeenActive', {
+  get: function() { return _lumen_user_activation_has_been_active(); },
+  enumerable: true, configurable: true,
+});
+Object.defineProperty(globalThis, 'UserActivation', { value: UserActivation, writable: true, enumerable: false, configurable: true });
 Object.defineProperty(navigator, 'userActivation', {
-  value: Object.create(Object.prototype, {
-    isActive: {
-      get: function() { return _lumen_user_activation_is_active(); },
-      enumerable: true, configurable: false,
-    },
-    hasBeenActive: {
-      get: function() { return _lumen_user_activation_has_been_active(); },
-      enumerable: true, configurable: false,
-    },
-  }),
+  value: Object.create(UserActivation.prototype),
   configurable: true, writable: false, enumerable: true,
 });
 

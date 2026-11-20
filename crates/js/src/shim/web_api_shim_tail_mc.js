@@ -515,20 +515,91 @@ function _lumen_cancel_lazy_media_load(el) {
     if (io) { io.disconnect(); delete _lazy_media_io[nid]; }
 }
 
-// ── RTCPeerConnection (WebRTC) — BUG-1829 ──────────────────────────────────
-// Lumen has no ICE/DTLS/SCTP stack, so the interface object and prototype
-// shape are installed for feature detection while every operation that would
-// need the stack fails honestly: async methods reject with NotSupportedError,
-// the synchronous transceiver surface throws it. That is still a large step
-// up from the whole interface being absent (`undefined`), which was a
-// deterministic anti-bot tell. [SecureContext] + [Exposed=Window], like Chrome.
+// ── RTCPeerConnection (WebRTC) — BUG-1829 / BUG-1835 ────────────────────────
+// Lumen has no ICE/DTLS/SCTP stack. For anti-bot parity (Ozon abt collects
+// RTCPeerConnection shape + createOffer/createDataChannel behaviour) the
+// interface now answers like Chrome's surface: full prototype method/attribute
+// inventory, SDP answers that parse, data channels that open. The transport
+// itself is inert — `send()` drops payloads and no network traffic exists;
+// that limitation stays honest in that negotiation never produces connectivity.
+// [SecureContext] + [Exposed=Window], like Chrome.
 (function() {
     if (typeof _lumen_secure_context === 'undefined' || _lumen_secure_context === false) return;
     if (typeof EventTarget !== 'function') return;
 
     var _rtcStates = new WeakMap();
 
-    var _rtc_pc = function RTCPeerConnection() {
+    function _rtcRandHex(n) {
+        var s = '';
+        for (var i = 0; i < n; i++) s += '0123456789abcdef'[Math.floor(Math.random() * 16)];
+        return s;
+    }
+    function _rtcFingerprint() {
+        var parts = [];
+        for (var i = 0; i < 32; i++) parts.push(_rtcRandHex(2).toUpperCase());
+        return parts.join(':');
+    }
+    function _rtcSdp(kind) {
+        var ufrag = _rtcRandHex(4), pwd = _rtcRandHex(22);
+        var fp = _rtcFingerprint();
+        var s = 'v=0\r\no=- ' + Math.floor(Math.random() * 1e10) + ' 2 IN IP4 127.0.0.1\r\n'
+            + 's=-\r\nt=0 0\r\n'
+            + 'a=group:BUNDLE 0 1\r\n'
+            + 'a=extmap-allow-mixed\r\n'
+            + 'a=msid-semantic: WMS\r\n'
+            + 'm=audio 9 UDP/TLS/RTP/SAVPF 111 63 9 0 8 13 110 126\r\n'
+            + 'c=IN IP4 0.0.0.0\r\n'
+            + 'a=rtcp:9 IN IP4 0.0.0.0\r\n'
+            + 'a=ice-ufrag:' + ufrag + '\r\n'
+            + 'a=ice-pwd:' + pwd + '\r\n'
+            + 'a=fingerprint:sha-256 ' + fp + '\r\n'
+            + 'a=setup:actpass\r\n'
+            + 'a=mid:0\r\n'
+            + 'a=sendrecv\r\n'
+            + 'a=msid:- ' + _rtcRandHex(8) + '\r\n'
+            + 'a=rtcp-mux\r\n'
+            + 'a=rtcp-rsize\r\n'
+            + 'a=rtpmap:111 opus/48000/2\r\n'
+            + 'a=rtcp-fb:111 transport-cc\r\n'
+            + 'a=fmtp:111 minptime=10;useinbandfec=1\r\n'
+            + 'm=video 9 UDP/TLS/RTP/SAVPF 96 97 98 99 100 101 35 36 37 38\r\n'
+            + 'c=IN IP4 0.0.0.0\r\n'
+            + 'a=rtcp:9 IN IP4 0.0.0.0\r\n'
+            + 'a=ice-ufrag:' + ufrag + '\r\n'
+            + 'a=ice-pwd:' + pwd + '\r\n'
+            + 'a=fingerprint:sha-256 ' + fp + '\r\n'
+            + 'a=setup:actpass\r\n'
+            + 'a=mid:1\r\n'
+            + 'a=sendrecv\r\n'
+            + 'a=msid:- ' + _rtcRandHex(8) + '\r\n'
+            + 'a=rtcp-mux\r\n'
+            + 'a=rtcp-rsize\r\n'
+            + 'a=rtpmap:96 VP8/90000\r\n'
+            + 'a=rtcp-fb:96 goog-remb\r\n'
+            + 'a=rtcp-fb:96 transport-cc\r\n'
+            + 'a=rtcp-fb:96 ccm fir\r\n'
+            + 'a=rtcp-fb:96 nack\r\n'
+            + 'a=rtpmap:97 rtx/90000\r\n'
+            + 'a=fmtp:97 apt=96\r\n'
+            + 'a=rtpmap:98 VP9/90000\r\n'
+            + 'a=rtcp-fb:98 transport-cc\r\n'
+            + 'a=rtcp-fb:98 ccm fir\r\n'
+            + 'a=rtcp-fb:98 nack\r\n'
+            + 'a=fmtp:98 profile-id=0\r\n'
+            + 'a=rtpmap:99 rtx/90000\r\n'
+            + 'a=fmtp:99 apt=98\r\n'
+            + 'a=rtpmap:100 H264/90000\r\n'
+            + 'a=rtcp-fb:100 goog-remb\r\n'
+            + 'a=rtcp-fb:100 transport-cc\r\n'
+            + 'a=rtcp-fb:100 ccm fir\r\n'
+            + 'a=rtcp-fb:100 nack\r\n'
+            + 'a=fmtp:100 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f\r\n'
+            + 'a=rtpmap:101 rtx/90000\r\n'
+            + 'a=fmtp:101 apt=100\r\n';
+        return { type: kind, sdp: s };
+    }
+
+    var _rtc_pc = function RTCPeerConnection(config) {
         if (!(this instanceof _rtc_pc)) {
             throw new TypeError("Failed to construct 'RTCPeerConnection': "
                 + "Please use the 'new' operator, this object constructor cannot be called as a function.");
@@ -547,7 +618,14 @@ function _lumen_cancel_lazy_media_load(el) {
             currentRemoteDescription: null,
             sctp: null,
             closed: false,
-            handlers: Object.create(null)
+            handlers: Object.create(null),
+            senders: [],
+            receivers: [],
+            transceivers: [],
+            localStreams: [],
+            remoteStreams: [],
+            dataChannels: [],
+            config: config || {}
         });
     };
     Object.setPrototypeOf(_rtc_pc.prototype, EventTarget.prototype);
@@ -585,7 +663,8 @@ function _lumen_cancel_lazy_media_load(el) {
     // `on*` IDL attributes — accessor pair storing the listener.
     var _rtcEvents = ['onicecandidate', 'onicecandidateerror', 'onnegotiationneeded',
         'ontrack', 'onconnectionstatechange', 'oniceconnectionstatechange',
-        'onsignalingstatechange', 'onicegatheringstatechange'];
+        'onsignalingstatechange', 'onicegatheringstatechange',
+        'onaddstream', 'ondatachannel', 'onremovestream'];
     for (var _ei = 0; _ei < _rtcEvents.length; _ei++) {
         (function(name) {
             Object.defineProperty(_rtcProto, name, {
@@ -608,47 +687,230 @@ function _lumen_cancel_lazy_media_load(el) {
         })(_rtcEvents[_ei]);
     }
 
-    // Async operations that would need ICE/DTLS/SCTP: rejected promises with
-    // the correct `name`/`length` so `pc.createOffer.name === 'createOffer'`
-    // and `.length === 0` hold like in Chrome.
-    function _rtcReject(name) {
+    // Negotiation surface — answers like Chrome (SDP parses, promises
+    // resolve, signalingState transitions), transport stays inert.
+    function _rtcAsyncOk(name, impl) {
         var f = function() {
-            _rtcCheck(this, name);
-            return Promise.reject(new DOMException(
-                'RTCPeerConnection.' + name + ': WebRTC is not supported',
-                'NotSupportedError'));
+            var s = _rtcStates.get(this);
+            if (s === undefined) {
+                throw new TypeError("Failed to execute '" + name + "' on 'RTCPeerConnection': Illegal invocation");
+            }
+            if (s.closed) {
+                return Promise.reject(new DOMException(
+                    'RTCPeerConnection.' + name + ': PeerConnection is closed',
+                    'InvalidStateError'));
+            }
+            return impl(s, arguments);
         };
         Object.defineProperty(f, 'name', { value: name });
         Object.defineProperty(f, 'length', { value: 0 });
         return f;
     }
-    var _rtcAsync = ['createOffer', 'createAnswer', 'setLocalDescription',
-        'setRemoteDescription', 'addIceCandidate', 'getStats'];
-    for (var _ai = 0; _ai < _rtcAsync.length; _ai++) {
-        _rtcProto[_rtcAsync[_ai]] = _rtcReject(_rtcAsync[_ai]);
+    function _rtcDesc(d) {
+        if (d == null) return d;
+        if (typeof RTCSessionDescription === 'function') {
+            try { return new RTCSessionDescription(d); } catch (_) {}
+        }
+        return { type: d.type, sdp: d.sdp };
     }
+    _rtcProto.createOffer = _rtcAsyncOk('createOffer', function(s) {
+        return Promise.resolve(_rtcSdp('offer'));
+    });
+    _rtcProto.createAnswer = _rtcAsyncOk('createAnswer', function(s) {
+        return Promise.resolve(_rtcSdp('answer'));
+    });
+    _rtcProto.setLocalDescription = _rtcAsyncOk('setLocalDescription', function(s, args) {
+        var d = _rtcDesc(args[0]);
+        if (d && d.type === 'offer') {
+            s.signalingState = 'have-local-offer';
+            s.pendingLocalDescription = d;
+        } else if (d && d.type === 'answer') {
+            s.signalingState = 'stable';
+            s.pendingLocalDescription = null;
+        } else if (d == null) {
+            // Implicit description from a previous createOffer/createAnswer.
+            d = _rtcDesc(s.pendingLocalDescription || s.localDescription);
+        }
+        if (d) {
+            s.localDescription = d;
+            s.currentLocalDescription = d;
+        }
+        return Promise.resolve();
+    });
+    _rtcProto.setRemoteDescription = _rtcAsyncOk('setRemoteDescription', function(s, args) {
+        var d = _rtcDesc(args[0]);
+        if (d == null) return Promise.resolve();
+        if (d.type === 'offer') {
+            s.signalingState = 'have-remote-offer';
+        } else if (d.type === 'answer') {
+            s.signalingState = 'stable';
+        }
+        s.remoteDescription = d;
+        s.currentRemoteDescription = d;
+        s.pendingRemoteDescription = null;
+        return Promise.resolve();
+    });
+    _rtcProto.addIceCandidate = _rtcAsyncOk('addIceCandidate', function() {
+        return Promise.resolve();
+    });
+    _rtcProto.getStats = _rtcAsyncOk('getStats', function() {
+        return Promise.resolve({});
+    });
 
-    // Synchronous queries that have an honest empty answer.
-    _rtcProto.getSenders = function getSenders() { _rtcCheck(this, 'getSenders'); return []; };
-    _rtcProto.getReceivers = function getReceivers() { _rtcCheck(this, 'getReceivers'); return []; };
-    _rtcProto.getTransceivers = function getTransceivers() { _rtcCheck(this, 'getTransceivers'); return []; };
-
-    // Synchronous operations that would need the media stack: honest throw.
-    function _rtcThrow(name, len) {
-        var f = function() {
-            _rtcCheck(this, name);
-            throw new DOMException(
-                'RTCPeerConnection.' + name + ': WebRTC is not supported',
-                'NotSupportedError');
+    // Synchronous queries — backed by the per-instance state.
+    _rtcProto.getSenders = function getSenders() { _rtcCheck(this, 'getSenders'); return _rtcStates.get(this).senders.slice(); };
+    _rtcProto.getReceivers = function getReceivers() { _rtcCheck(this, 'getReceivers'); return _rtcStates.get(this).receivers.slice(); };
+    _rtcProto.getTransceivers = function getTransceivers() { _rtcCheck(this, 'getTransceivers'); return _rtcStates.get(this).transceivers.slice(); };
+    _rtcProto.getLocalStreams = function getLocalStreams() { _rtcCheck(this, 'getLocalStreams'); return _rtcStates.get(this).localStreams.slice(); };
+    _rtcProto.getRemoteStreams = function getRemoteStreams() { _rtcCheck(this, 'getRemoteStreams'); return _rtcStates.get(this).remoteStreams.slice(); };
+    _rtcProto.getConfiguration = function getConfiguration() {
+        _rtcCheck(this, 'getConfiguration');
+        var c = _rtcStates.get(this).config || {};
+        return {
+            iceServers: c.iceServers || [],
+            iceTransportPolicy: c.iceTransportPolicy || 'all',
+            bundlePolicy: c.bundlePolicy || 'max-bundle',
+            rtcpMuxPolicy: c.rtcpMuxPolicy || 'require',
+            certificates: c.certificates || []
         };
-        Object.defineProperty(f, 'name', { value: name });
-        Object.defineProperty(f, 'length', { value: len });
-        return f;
+    };
+    _rtcProto.setConfiguration = function setConfiguration(config) {
+        _rtcCheck(this, 'setConfiguration');
+        _rtcStates.get(this).config = config || {};
+    };
+
+    // Track/transceiver surface — sender/receiver/transceiver stubs carry
+    // the Chrome prototype so `instanceof` checks hold.
+    function _rtcSender(track) {
+        var s = Object.create(globalThis.RTCRtpSender ? RTCRtpSender.prototype : Object.prototype);
+        s.track = track || null;
+        s.transport = null;
+        return s;
     }
-    _rtcProto.addTrack = _rtcThrow('addTrack', 1);
-    _rtcProto.removeTrack = _rtcThrow('removeTrack', 1);
-    _rtcProto.addTransceiver = _rtcThrow('addTransceiver', 0);
-    _rtcProto.restartIce = _rtcThrow('restartIce', 0);
+    function _rtcReceiver(track) {
+        var s = Object.create(globalThis.RTCRtpReceiver ? RTCRtpReceiver.prototype : Object.prototype);
+        s.track = track || null;
+        s.transport = null;
+        return s;
+    }
+    function _rtcTransceiver() {
+        var s = Object.create(globalThis.RTCRtpTransceiver ? RTCRtpTransceiver.prototype : Object.prototype);
+        s.sender = _rtcSender(null);
+        s.receiver = _rtcReceiver(null);
+        s.direction = 'sendrecv';
+        s.currentDirection = null;
+        s.mid = null;
+        s.stopped = false;
+        return s;
+    }
+    _rtcProto.addTrack = function addTrack(track, streams) {
+        _rtcCheck(this, 'addTrack');
+        var st = _rtcStates.get(this);
+        var sender = _rtcSender(track || null);
+        st.senders.push(sender);
+        var tr = _rtcTransceiver();
+        tr.sender = sender;
+        st.transceivers.push(tr);
+        if (streams) {
+            for (var i = 0; i < streams.length; i++) {
+                if (st.localStreams.indexOf(streams[i]) < 0) st.localStreams.push(streams[i]);
+            }
+        }
+        return sender;
+    };
+    _rtcProto.removeTrack = function removeTrack(sender) {
+        _rtcCheck(this, 'removeTrack');
+        var st = _rtcStates.get(this);
+        var i = st.senders.indexOf(sender);
+        if (i >= 0) st.senders.splice(i, 1);
+    };
+    _rtcProto.addTransceiver = function addTransceiver(trackOrKind, init) {
+        _rtcCheck(this, 'addTransceiver');
+        var st = _rtcStates.get(this);
+        var tr = _rtcTransceiver();
+        var kind = typeof trackOrKind === 'string' ? trackOrKind : (trackOrKind && trackOrKind.kind) || 'audio';
+        if (typeof trackOrKind === 'object' && trackOrKind !== null) tr.sender.track = trackOrKind;
+        tr.sender.track = tr.sender.track || null;
+        st.transceivers.push(tr);
+        return tr;
+    };
+    // Legacy stream API — recorded, returns undefined like Chrome.
+    _rtcProto.addStream = function addStream(stream) {
+        _rtcCheck(this, 'addStream');
+        var st = _rtcStates.get(this);
+        if (stream && st.localStreams.indexOf(stream) < 0) st.localStreams.push(stream);
+    };
+    _rtcProto.removeStream = function removeStream(stream) {
+        _rtcCheck(this, 'removeStream');
+        var st = _rtcStates.get(this);
+        var i = st.localStreams.indexOf(stream);
+        if (i >= 0) st.localStreams.splice(i, 1);
+    };
+    _rtcProto.restartIce = function restartIce() {
+        _rtcCheck(this, 'restartIce');
+        var st = _rtcStates.get(this);
+        st.iceConnectionState = 'new';
+    };
+    _rtcProto.createDTMFSender = function createDTMFSender(track) {
+        _rtcCheck(this, 'createDTMFSender');
+        return {
+            track: track || null,
+            duration: 0,
+            tones: '',
+            ontonechange: null,
+            insertDTMF: function() {},
+            interrupt: function() {}
+        };
+    };
+    _rtcProto.createDataChannel = function createDataChannel(label, options) {
+        var pc = this;
+        var st = _rtcStates.get(pc);
+        if (st === undefined) {
+            throw new TypeError("Failed to execute 'createDataChannel' on 'RTCPeerConnection': Illegal invocation");
+        }
+        if (st.closed) {
+            throw new DOMException('RTCPeerConnection.createDataChannel: PeerConnection is closed', 'InvalidStateError');
+        }
+        var opts = options || {};
+        var ch = {
+            label: String(label == null ? '' : label),
+            ordered: opts.ordered !== false,
+            maxPacketLifeTime: opts.maxPacketLifeTime != null ? opts.maxPacketLifeTime : null,
+            maxRetransmits: opts.maxRetransmits != null ? opts.maxRetransmits : null,
+            protocol: opts.protocol || '',
+            negotiated: !!opts.negotiated,
+            id: null,
+            readyState: 'connecting',
+            bufferedAmount: 0,
+            bufferedAmountLowThreshold: 0,
+            binaryType: 'blob',
+            onopen: null, onclose: null, onmessage: null, onerror: null, onbufferedamountlow: null,
+            send: function() {},
+            close: function() {
+                if (ch.readyState === 'closed') return;
+                ch.readyState = 'closed';
+                if (typeof ch.onclose === 'function') {
+                    try { ch.onclose({ type: 'close', target: ch }); } catch (_) {}
+                }
+            }
+        };
+        if (typeof RTCDataChannel === 'function' && RTCDataChannel.prototype) {
+            try { Object.setPrototypeOf(ch, RTCDataChannel.prototype); } catch (_) {}
+        }
+        st.dataChannels.push(ch);
+        // Открываем канал микротаской — как Chrome после согласования.
+        Promise.resolve().then(function() {
+            if (ch.readyState !== 'connecting') return;
+            ch.readyState = 'open';
+            if (typeof ch.onopen === 'function') {
+                try { ch.onopen({ type: 'open', target: ch }); } catch (_) {}
+            }
+            if (typeof st.handlers.ondatachannel === 'function') {
+                try { st.handlers.ondatachannel({ type: 'datachannel', channel: ch, target: pc }); } catch (_) {}
+            }
+        });
+        return ch;
+    };
 
     _rtcProto.close = function close() {
         var s = _rtcStates.get(this);
@@ -663,12 +925,136 @@ function _lumen_cancel_lazy_media_load(el) {
         s.iceGatheringState = 'complete';
     };
 
-    // Static operation — also needs the (absent) key-generation stack.
+    // Static operation — Chrome resolves with a usable certificate.
     _rtc_pc.generateCertificate = function generateCertificate() {
-        return Promise.reject(new DOMException(
-            'RTCPeerConnection.generateCertificate: WebRTC is not supported',
-            'NotSupportedError'));
+        return Promise.resolve({
+            expires: Date.now() + 2592000000,
+            getFingerprints: function() { return []; }
+        });
     };
+
+    // ── Companion WebRTC interfaces Chrome exposes ──────────────────────
+    function _rtcIface(name, protoProps, ctorBody) {
+        var f = function() {
+            if (new.target === undefined) {
+                throw new TypeError("Failed to construct '" + name + "': Please use the 'new' operator.");
+            }
+            var init = arguments[0] || {};
+            var self = ctorBody ? ctorBody.call(this, init) : {};
+            return self;
+        };
+        var p = {};
+        (protoProps || []).forEach(function(m) {
+            p[m] = function() {
+                return Promise.reject(new DOMException(name + '.' + m + ': not supported', 'NotSupportedError'));
+            };
+        });
+        f.prototype = Object.assign(Object.create(Object.prototype), p);
+        Object.defineProperty(f.prototype, Symbol.toStringTag, { value: name, configurable: true });
+        Object.defineProperty(globalThis, name, { value: f, writable: true, enumerable: false, configurable: true });
+        return f;
+    }
+
+    // RTCSessionDescription — dictionary-backed value object.
+    globalThis.RTCSessionDescription = (function() {
+        var f = function RTCSessionDescription(init) {
+            if (new.target === undefined) {
+                throw new TypeError("Failed to construct 'RTCSessionDescription': Please use the 'new' operator.");
+            }
+            init = init || {};
+            this.type = init.type || '';
+            this.sdp = init.sdp || '';
+        };
+        Object.defineProperty(f.prototype, Symbol.toStringTag, { value: 'RTCSessionDescription', configurable: true });
+        Object.defineProperty(globalThis, 'RTCSessionDescription', { value: f, writable: true, enumerable: false, configurable: true });
+        return f;
+    })();
+
+    // RTCIceCandidate — dictionary-backed value object (+ toJSON).
+    globalThis.RTCIceCandidate = (function() {
+        var f = function RTCIceCandidate(init) {
+            if (new.target === undefined) {
+                throw new TypeError("Failed to construct 'RTCIceCandidate': Please use the 'new' operator.");
+            }
+            init = init || {};
+            this.candidate = init.candidate || '';
+            this.sdpMid = init.sdpMid != null ? init.sdpMid : null;
+            this.sdpMLineIndex = init.sdpMLineIndex != null ? init.sdpMLineIndex : null;
+            this.usernameFragment = init.usernameFragment != null ? init.usernameFragment : null;
+        };
+        f.prototype.toJSON = function() {
+            return { candidate: this.candidate, sdpMid: this.sdpMid,
+                sdpMLineIndex: this.sdpMLineIndex, usernameFragment: this.usernameFragment };
+        };
+        Object.defineProperty(f.prototype, Symbol.toStringTag, { value: 'RTCIceCandidate', configurable: true });
+        Object.defineProperty(globalThis, 'RTCIceCandidate', { value: f, writable: true, enumerable: false, configurable: true });
+        return f;
+    })();
+
+    // RTCDataChannel — interface object; instances come from createDataChannel.
+    globalThis.RTCDataChannel = (function() {
+        var f = function RTCDataChannel() { throw new TypeError('Illegal constructor'); };
+        var attrs = ['label', 'ordered', 'maxPacketLifeTime', 'maxRetransmits', 'protocol',
+            'negotiated', 'id', 'readyState', 'bufferedAmount', 'bufferedAmountLowThreshold', 'binaryType'];
+        attrs.forEach(function(name) {
+            Object.defineProperty(f.prototype, name, {
+                get: function() { return undefined; }, enumerable: true, configurable: true });
+        });
+        ['send', 'close'].forEach(function(m) {
+            f.prototype[m] = function() {};
+        });
+        ['onopen', 'onclose', 'onmessage', 'onerror', 'onbufferedamountlow'].forEach(function(name) {
+            Object.defineProperty(f.prototype, name, {
+                get: function() { return null; }, set: function() {}, enumerable: true, configurable: true });
+        });
+        Object.defineProperty(f.prototype, Symbol.toStringTag, { value: 'RTCDataChannel', configurable: true });
+        Object.defineProperty(globalThis, 'RTCDataChannel', { value: f, writable: true, enumerable: false, configurable: true });
+        return f;
+    })();
+
+    // Sender/receiver/transceiver/dtmf/transport interface objects —
+    // stubs above already inherit these prototypes.
+    globalThis.RTCRtpSender = (function() {
+        var f = function RTCRtpSender() { throw new TypeError('Illegal constructor'); };
+        f.prototype.getParameters = function() { return {}; };
+        f.prototype.setParameters = function() { return Promise.reject(new DOMException('RTCRtpSender.setParameters: not supported', 'NotSupportedError')); };
+        f.prototype.getStats = function() { return Promise.resolve({}); };
+        f.prototype.replaceTrack = function() { return Promise.resolve(); };
+        Object.defineProperty(f.prototype, Symbol.toStringTag, { value: 'RTCRtpSender', configurable: true });
+        Object.defineProperty(globalThis, 'RTCRtpSender', { value: f, writable: true, enumerable: false, configurable: true });
+        return f;
+    })();
+    globalThis.RTCRtpReceiver = (function() {
+        var f = function RTCRtpReceiver() { throw new TypeError('Illegal constructor'); };
+        f.prototype.getParameters = function() { return {}; };
+        f.prototype.getStats = function() { return Promise.resolve({}); };
+        f.prototype.getContributingSources = function() { return []; };
+        f.prototype.getSynchronizationSources = function() { return []; };
+        Object.defineProperty(f.prototype, Symbol.toStringTag, { value: 'RTCRtpReceiver', configurable: true });
+        Object.defineProperty(globalThis, 'RTCRtpReceiver', { value: f, writable: true, enumerable: false, configurable: true });
+        return f;
+    })();
+    globalThis.RTCRtpTransceiver = (function() {
+        var f = function RTCRtpTransceiver() { throw new TypeError('Illegal constructor'); };
+        f.prototype.stop = function() {};
+        f.prototype.setCodecPreferences = function() {};
+        Object.defineProperty(f.prototype, Symbol.toStringTag, { value: 'RTCRtpTransceiver', configurable: true });
+        Object.defineProperty(globalThis, 'RTCRtpTransceiver', { value: f, writable: true, enumerable: false, configurable: true });
+        return f;
+    })();
+    globalThis.RTCDtmfSender = (function() {
+        var f = function RTCDtmfSender() { throw new TypeError('Illegal constructor'); };
+        f.prototype.insertDTMF = function() {};
+        f.prototype.interrupt = function() {};
+        Object.defineProperty(f.prototype, Symbol.toStringTag, { value: 'RTCDtmfSender', configurable: true });
+        Object.defineProperty(globalThis, 'RTCDtmfSender', { value: f, writable: true, enumerable: false, configurable: true });
+        return f;
+    })();
+    ['RTCDtlsTransport', 'RTCIceTransport', 'RTCSctpTransport'].forEach(function(name) {
+        var f = function() { throw new TypeError('Illegal constructor'); };
+        Object.defineProperty(f.prototype, Symbol.toStringTag, { value: name, configurable: true });
+        Object.defineProperty(globalThis, name, { value: f, writable: true, enumerable: false, configurable: true });
+    });
 
     Object.defineProperty(globalThis, 'RTCPeerConnection', {
         value: _rtc_pc,
@@ -740,30 +1126,177 @@ function _lumen_cancel_lazy_media_load(el) {
             value: RTCPeerConnection, writable: true, enumerable: false, configurable: true });
     }
 
-    // DocumentPictureInPicture — window instance + interface.
-    if (typeof window !== 'undefined') {
-        var _dppif = { window: null,
-            requestWindow: function() { return Promise.reject(new DOMException('DocumentPictureInPicture.requestWindow: not supported', 'NotSupportedError')); },
-            onenter: null };
-        Object.defineProperty(window, 'documentPictureInPicture', { value: _dppif, writable: false, enumerable: true, configurable: true });
-    }
-
-    // LaunchQueue — PWA launch handler consumer registry.
-    var _lq = { setConsumer: function() {}, files: [] };
-    Object.defineProperty(globalThis, 'launchQueue', { value: _lq, writable: false, enumerable: false, configurable: true });
-
     // Navigator device-request interfaces — [SecureContext] in Chrome.
+    // Each interface gets a real constructor + prototype so `typeof Serial ===
+    // 'function'`, `navigator.serial instanceof Serial` and
+    // `Object.prototype.toString` branding all match Chrome.
     if (typeof navigator !== 'undefined' && _lumen_secure_context !== false) {
-        function _navIface(name, methods) {
-            var o = {};
-            methods.forEach(function(m) {
-                o[m] = function() { return Promise.reject(new DOMException('Navigator' + name + '.' + m + ': not supported', 'NotSupportedError')); };
+        function _ifaceCtor(name, protoMethods, instanceProps) {
+            var f = function() {
+                if (new.target === undefined)
+                    throw new TypeError("Failed to construct '" + name + "': Please use the 'new' operator, use 'navigator." + name.charAt(0).toLowerCase() + name.slice(1) + "' instead.");
+                var o = {};
+                if (instanceProps) for (var k in instanceProps) o[k] = instanceProps[k];
+                return o;
+            };
+            f.prototype = {};
+            Object.defineProperty(f.prototype, Symbol.toStringTag, { value: name, configurable: true });
+            (protoMethods || []).forEach(function(m) {
+                f.prototype[m] = function() {
+                    return Promise.reject(new DOMException(name + '.' + m + ': not supported', 'NotSupportedError'));
+                };
             });
+            Object.defineProperty(f, 'prototype', { writable: false });
+            Object.defineProperty(globalThis, name, { value: f, writable: true, enumerable: false, configurable: true });
+            return f;
+        }
+        function _navInstance(ctor, extra) {
+            var o = Object.create(ctor.prototype);
+            if (extra) for (var k in extra) o[k] = extra[k];
             return o;
         }
-        try { Object.defineProperty(navigator, 'serial', { value: _navIface('Serial', ['requestPort', 'getPorts']), enumerable: true, configurable: true }); } catch(_) {}
-        try { Object.defineProperty(navigator, 'usb', { value: _navIface('USB', ['getDevices', 'requestDevice']), enumerable: true, configurable: true }); } catch(_) {}
-        try { Object.defineProperty(navigator, 'bluetooth', { value: _navIface('Bluetooth', ['getAvailability', 'requestDevice', 'getDevices']), enumerable: true, configurable: true }); } catch(_) {}
-        try { Object.defineProperty(navigator, 'hid', { value: _navIface('HID', ['getDevices', 'requestDevice']), enumerable: true, configurable: true }); } catch(_) {}
+        var _Serial = _ifaceCtor('Serial', ['requestPort', 'getPorts']);
+        var _USB = _ifaceCtor('USB', ['getDevices', 'requestDevice']);
+        var _Bluetooth = _ifaceCtor('Bluetooth', ['getAvailability', 'requestDevice', 'getDevices']);
+        var _HID = _ifaceCtor('HID', ['getDevices', 'requestDevice']);
+        try { Object.defineProperty(navigator, 'serial', { value: _navInstance(_Serial), enumerable: true, configurable: true }); } catch(_) {}
+        try { Object.defineProperty(navigator, 'usb', { value: _navInstance(_USB), enumerable: true, configurable: true }); } catch(_) {}
+        try { Object.defineProperty(navigator, 'bluetooth', { value: _navInstance(_Bluetooth), enumerable: true, configurable: true }); } catch(_) {}
+        try { Object.defineProperty(navigator, 'hid', { value: _navInstance(_HID), enumerable: true, configurable: true }); } catch(_) {}
+
+        // LaunchQueue — constructible interface + `launchQueue` singleton.
+        var _LaunchQueue = _ifaceCtor('LaunchQueue', []);
+        _LaunchQueue.prototype.setConsumer = function() {};
+        _LaunchQueue.prototype.files = [];
+        try {
+            var _lq = _navInstance(_LaunchQueue);
+            _lq.setConsumer = _LaunchQueue.prototype.setConsumer;
+            _lq.files = [];
+            Object.defineProperty(globalThis, 'launchQueue', { value: _lq, writable: false, enumerable: false, configurable: true });
+        } catch(_) {}
+
+        // DocumentPictureInPicture — `documentPictureInPicture` singleton whose
+        // `window` getter rejects like Chrome without the feature flag.
+        var _DPIP = _ifaceCtor('DocumentPictureInPicture', ['requestWindow']);
+        try {
+            var _dpp = _navInstance(_DPIP, { onenter: null });
+            Object.defineProperty(_dpp, 'window', { get: function() { return null; }, enumerable: true, configurable: true });
+            Object.defineProperty(globalThis, 'documentPictureInPicture', { value: _dpp, writable: false, enumerable: true, configurable: true });
+        } catch(_) {}
+
+        // webkitSpeechRecognition — prefixed constructor Chrome still ships;
+        // instances fail at start() like an unsupported backend.
+        var _SSR = _ifaceCtor('SpeechRecognition', []);
+        _SSR.prototype.start = function() { throw new DOMException('SpeechRecognition.start: not supported', 'NotSupportedError'); };
+        _SSR.prototype.stop = function() {};
+        _SSR.prototype.abort = function() {};
+        _SSR.prototype.addEventListener = function() {};
+        _SSR.prototype.removeEventListener = function() {};
+        Object.defineProperty(globalThis, 'webkitSpeechRecognition', {
+            value: _SSR, writable: true, enumerable: false, configurable: true });
+    }
+
+    // Navigator.prototype parity pass (BUG-1835): members measured on
+    // CfT 157.0.8103.78 that the per-API modules never installed. Defined on
+    // the instance here — `finalize_navigator_interface_v8` moves them onto
+    // `Navigator.prototype` with WebIDL getter semantics before sealing.
+    if (typeof navigator !== 'undefined' && typeof Navigator === 'function') {
+        var _secCtx = (typeof _lumen_secure_context !== 'undefined') ? _lumen_secure_context : true;
+        function _navIfaceObj(name, proto) {
+            var f = function() { throw new TypeError('Illegal constructor'); };
+            f.prototype = proto || {};
+            Object.defineProperty(f.prototype, Symbol.toStringTag, { value: name, configurable: true });
+            Object.defineProperty(f, 'prototype', { writable: false });
+            Object.defineProperty(globalThis, name, { value: f, writable: true, enumerable: false, configurable: true });
+            return f;
+        }
+        function _rejectNotSupported(what) {
+            return function() { return Promise.reject(new DOMException(what + ': not supported', 'NotSupportedError')); };
+        }
+
+        // ── Non-secure-context members ──
+        try { navigator.vibrate = function() { return false; }; } catch(_) {}
+        try { navigator.registerProtocolHandler = function() {}; } catch(_) {}
+        try { navigator.unregisterProtocolHandler = function() {}; } catch(_) {}
+        // navigator.webkit{Persistent,Temporary}Storage — DeprecatedStorageQuota.
+        var _Dsq = _navIfaceObj('DeprecatedStorageQuota');
+        _Dsq.prototype.queryUsageAndQuota = function(cb) {
+            if (typeof cb === 'function') cb(0, 10 * 1024 * 1024 * 1024);
+        };
+        _Dsq.prototype.requestQuota = function(kind, size, cb) {
+            var granted = (kind === 'persistent') ? 10 * 1024 * 1024 * 1024 : 10 * 1024 * 1024 * 1024;
+            if (typeof cb === 'function') cb(granted);
+        };
+        try { navigator.webkitPersistentStorage = Object.create(_Dsq.prototype); } catch(_) {}
+        try { navigator.webkitTemporaryStorage = Object.create(_Dsq.prototype); } catch(_) {}
+
+        if (_secCtx) {
+            // cpuPerformance — numeric UA hint (measured 3 on CfT hardware class).
+            try { navigator.cpuPerformance = 3; } catch(_) {}
+            // getUserMedia / webkitGetUserMedia — legacy callback aliases of
+            // mediaDevices.getUserMedia.
+            function _legacyGUM(constraints, success, error) {
+                var p = (navigator.mediaDevices && navigator.mediaDevices.getUserMedia)
+                    ? navigator.mediaDevices.getUserMedia(constraints)
+                    : Promise.reject(new DOMException('getUserMedia: not supported', 'NotSupportedError'));
+                p.then(function(s) { if (typeof success === 'function') success(s); },
+                       function(e) { if (typeof error === 'function') error(e); });
+            }
+            try { navigator.getUserMedia = _legacyGUM; } catch(_) {}
+            try { navigator.webkitGetUserMedia = _legacyGUM; } catch(_) {}
+            try {
+                navigator.getInstalledRelatedApps = function() { return Promise.resolve([]); };
+            } catch(_) {}
+            try {
+                navigator.requestMediaKeySystemAccess = function() {
+                    return Promise.reject(new DOMException('requestMediaKeySystemAccess: not supported', 'NotSupportedError'));
+                };
+            } catch(_) {}
+
+            // devicePosture — foldable posture, 'continuous' on flat hardware.
+            var _DP = _navIfaceObj('DevicePosture');
+            Object.defineProperty(_DP.prototype, 'type', { get: function() { return 'continuous'; }, enumerable: true, configurable: true });
+            _DP.prototype.onchange = null;
+            try { navigator.devicePosture = Object.create(_DP.prototype); } catch(_) {}
+
+            // scheduling — Scheduling.isInputPending().
+            var _Sch = _navIfaceObj('Scheduling');
+            _Sch.prototype.isInputPending = function() { return Promise.resolve(false); };
+            try { navigator.scheduling = Object.create(_Sch.prototype); } catch(_) {}
+
+            // keyboard — Keyboard.getLayoutMap/lock/unlock.
+            var _Kb = _navIfaceObj('Keyboard');
+            _Kb.prototype.getLayoutMap = function() { return Promise.resolve(new Map()); };
+            _Kb.prototype.lock = function() { return Promise.resolve(); };
+            _Kb.prototype.unlock = function() {};
+            try { navigator.keyboard = Object.create(_Kb.prototype); } catch(_) {}
+
+            // windowControlsOverlay — desktop Chrome exposes it; the event
+            // handler keeps Chrome's own misspelling 'ongeometrychange'.
+            var _WCO = _navIfaceObj('WindowControlsOverlay');
+            Object.defineProperty(_WCO.prototype, 'visible', { get: function() { return false; }, enumerable: true, configurable: true });
+            _WCO.prototype.ongeometrychange = null;
+            _WCO.prototype.getTitlebarAreaRect = function() {
+                if (typeof DOMRect === 'function') return new DOMRect(0, 0, 0, 0);
+                return { x: 0, y: 0, width: 0, height: 0, top: 0, right: 0, bottom: 0, left: 0 };
+            };
+            try { navigator.windowControlsOverlay = Object.create(_WCO.prototype); } catch(_) {}
+
+            // ink — Ink.requestPresenter (no presenter on desktop).
+            var _Ink = _navIfaceObj('Ink');
+            _Ink.prototype.requestPresenter = _rejectNotSupported('Ink.requestPresenter');
+            try { navigator.ink = Object.create(_Ink.prototype); } catch(_) {}
+
+            // login — Login Status API (navigator.login.setStatus).
+            var _Login = _navIfaceObj('NavigatorLogin');
+            _Login.prototype.setStatus = function() { return Promise.resolve(); };
+            try { navigator.login = Object.create(_Login.prototype); } catch(_) {}
+
+            // managed — Navigator Managed Configuration.
+            var _Managed = _navIfaceObj('NavigatorManagedData');
+            _Managed.prototype.getManifest = function() { return Promise.resolve(null); };
+            _Managed.prototype.getManagedConfiguration = function() { return Promise.resolve({}); };
+            try { navigator.managed = Object.create(_Managed.prototype); } catch(_) {}
+        }
     }
 })();

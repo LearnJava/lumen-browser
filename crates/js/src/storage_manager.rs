@@ -99,7 +99,7 @@ const STORAGE_MANAGER_SHIM: &str = r#"
     if (typeof _lumen_storage_estimate === 'function') {
       try { return Promise.resolve(_lumen_storage_estimate()); } catch(_) {}
     }
-    return Promise.resolve({ usage: 0, quota: 10 * 1024 * 1024 * 1024 });
+    return Promise.resolve({ quota: 10 * 1024 * 1024 * 1024, usage: 0, usageDetails: {} });
   };
 
   // WHATWG Storage §9.6 — request persistent storage permission.
@@ -113,12 +113,12 @@ const STORAGE_MANAGER_SHIM: &str = r#"
   };
 
   // WHATWG Storage §9.7 — query whether storage is already persistent.
-  // Phase 0: always resolves true.
+  // Chrome resolves false until persist() has been granted (BUG-1835).
   StorageManager.prototype.persisted = function() {
     if (typeof _lumen_storage_persisted === 'function') {
       try { return Promise.resolve(_lumen_storage_persisted()); } catch(_) {}
     }
-    return Promise.resolve(true);
+    return Promise.resolve(false);
   };
 
   // WHATWG Storage §9.8 / OPFS — return the origin's private file system root,

@@ -47,7 +47,8 @@ pub(crate) fn ua_data_instance_expr(d: &UaData) -> String {
     bitness:         "64",
     model:           "",
     uaFullVersion:   {full_version},
-    wow64:           false
+    wow64:           false,
+    formFactors:     ["Desktop"]
   }};
   function NavigatorUAData() {{ throw new TypeError('Illegal constructor'); }}
   Object.defineProperty(NavigatorUAData.prototype, Symbol.toStringTag, {{
@@ -220,7 +221,7 @@ mod tests {
                 .eval(
                     r#"
                     _result !== null &&
-                    _result.platformVersion === "10.0.0" &&
+                    _result.platformVersion === "19.0.0" &&
                     _result.architecture === "x86" &&
                     _result.bitness === "64"
                     "#,

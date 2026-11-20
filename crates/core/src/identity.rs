@@ -23,6 +23,12 @@ macro_rules! chrome_major {
 /// [`chrome_major!`] as a value.
 pub const CHROME_MAJOR: &str = chrome_major!();
 
+/// Full Chrome version (`major.minor.build.patch`) the Client Hints
+/// `uaFullVersion` / `fullVersionList` report — Chrome never answers
+/// `157.0.0.0` there, it answers the real build (`157.0.8103.78`). Bump the
+/// suffix together with [`chrome_major!`] when tracking a new stable.
+pub const CHROME_FULL_VERSION: &str = concat!(chrome_major!(), ".0.8103.78");
+
 /// Chrome User-Agent on Windows — what the `chrome_unbranded` identity sends;
 /// the JS layer reports [`CHROME_LUMEN_USER_AGENT`] by default (BUG-1832).
 pub const CHROME_USER_AGENT: &str = concat!(
@@ -308,8 +314,8 @@ impl Identity {
                 ];
                 let mut f = vec![
                     grease_pair(m, ".0.0.0"),
-                    ("Google Chrome".to_string(), format!("{m}.0.0.0")),
-                    ("Chromium".to_string(), format!("{m}.0.0.0")),
+                    ("Google Chrome".to_string(), CHROME_FULL_VERSION.to_string()),
+                    ("Chromium".to_string(), CHROME_FULL_VERSION.to_string()),
                 ];
                 // Brands always follow the UA (ADR-034): the token brings its brand.
                 if let (Some(v), Some(vm)) = (lumen, lumen_major) {
@@ -335,8 +341,15 @@ impl Identity {
                 brands,
                 full_version_list,
                 platform: ch_platform.to_string(),
-                platform_version: if ch_platform == "Windows" { "10.0.0" } else { "0.0.0" }.to_string(),
-                full_version: format!("{m}.0.0.0"),
+                // UA-CH platformVersion on Windows is the frozen "10.0.0"
+                // only on old Chrome; 157 reports the current generation
+                // value (measured on CfT 157.0.8103.78: "19.0.0").
+                platform_version: if ch_platform == "Windows" { "19.0.0" } else { "0.0.0" }.to_string(),
+                full_version: if family == UaFamily::Chrome {
+                    CHROME_FULL_VERSION.to_string()
+                } else {
+                    format!("{m}.0.0.0")
+                },
             }
         });
         Self {
@@ -383,7 +396,7 @@ mod tests {
         let d = id.ua_data.unwrap();
         assert!(d.brands.iter().any(|(b,v)| b=="Chromium" && v==CHROME_MAJOR));
         assert!(d.brands.iter().any(|(b,v)| b=="Google Chrome" && v==CHROME_MAJOR));
-        assert_eq!(d.full_version, format!("{CHROME_MAJOR}.0.0.0"));
+        assert_eq!(d.full_version, CHROME_FULL_VERSION);
         assert_eq!(d.brands.len(), 3);
     }
 
