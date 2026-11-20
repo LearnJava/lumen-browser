@@ -1,6 +1,6 @@
 # BUG-1826 — claude.ai: управляемый челлендж Cloudflare вешает движковый поток >4 мин (PoW-скрипт не завершается)
 
-**Статус:** FIXED 2026-11-19 — закрыт двумя независимыми слоями: (1) P6, срезы 1–5 — JS-фингерпринт: toString-фасад кадровых мостов (`Symbol.toStringTag` + native-печать глобалов чужого realm), живой claude.ai проходит челлендж, движковый поток свободен; (2) Devin (worktree devin-proxy) — сетевой фингерпринт Chrome 157: akamai H2 SETTINGS, HTTP-заголовки/Client Hints, `Accept-Encoding+zstd`, TLS ClientHello rustls→BoringSSL. Остаток отпечатков — [BUG-1829](BUG-1829-OPEN.md).
+**Статус:** FIXED 2026-11-19 — закрыт двумя независимыми слоями: (1) P6, срезы 1–5 — JS-фингерпринт: toString-фасад кадровых мостов (`Symbol.toStringTag` + native-печать глобалов чужого realm), живой claude.ai проходит челлендж, движковый поток свободен; (2) Devin (worktree devin-proxy) — сетевой фингерпринт Chrome 157: akamai H2 SETTINGS, HTTP-заголовки/Client Hints, `Accept-Encoding+zstd`, TLS ClientHello rustls→BoringSSL. Остаток отпечатков — [BUG-1829](BUG-1829-FIXED.md).
 **Заведён:** 2026-11-18 (Devin, при проверке BUG-1803 — системный прокси; маршрут уже исправлен, остался дефект движка)
 **Компонент:** js/engine (выполнение обфусцированного скрипта `cdn-cgi/challenge-platform/.../chl_page`); семья BUG-935/BUG-1778/BUG-1800 (engine thread busy)
 

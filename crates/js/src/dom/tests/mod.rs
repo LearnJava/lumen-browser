@@ -56,6 +56,8 @@ fn web_api_shim_splices_its_parts_in_source_order() {
         "URL.createObjectURL = ",
         "function Performance()",
         "function PerformanceObserver(",
+        // BUG-1829: гейт SharedArrayBuffer — между хвостом mc и IDB.
+        "BUG-1829: Chrome exposes `SharedArrayBuffer`",
         // IndexedDB — своя часть с 2026-08-17 (её же исполняет область
         // сервис-воркера): в собранном шиме она обязана стоять между
         // хвостом и его продолжением, ровно один раз.
@@ -102,6 +104,9 @@ fn worker_exposed_shim_is_a_verbatim_slice_of_the_page_shim() {
     // Интерфейсы `[Exposed=Worker]` в странице появиться не должны: это
     // единственная часть воркерного шима, которой в странице нет (BUG-776).
     assert!(worker.contains(WORKER_LOCATION_NAVIGATOR_SHIM));
+    // BUG-1829: гейт SharedArrayBuffer — общий текст страницы и воркера.
+    assert!(page.contains(SAB_GATE_SHIM));
+    assert!(worker.contains(SAB_GATE_SHIM));
     assert!(!page.contains("globalThis.WorkerLocation"));
     assert!(!page.contains("globalThis.WorkerNavigator"));
     // Console factory (BUG-1782): один и тот же текст на странице и в воркере.

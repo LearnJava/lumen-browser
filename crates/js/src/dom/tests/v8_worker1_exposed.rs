@@ -295,3 +295,18 @@ fn worker_scope_monotonic_clock_shares_the_page_counter() {
         "worker's Date.now() must observe advances made through the shared clock_ms"
     );
 }
+
+/// BUG-1829: a worker scope is never crossOriginIsolated in Lumen (isolation
+/// is not propagated from the creator), so `SharedArrayBuffer` must be absent
+/// there exactly like on a non-isolated page — while `Atomics` stays.
+#[test]
+fn worker_scope_hides_shared_array_buffer() {
+    let rt = worker_scope();
+    let out = rt
+        .eval("typeof SharedArrayBuffer + '|' + ('SharedArrayBuffer' in globalThis) + '|' + typeof Atomics")
+        .unwrap();
+    assert_eq!(
+        out,
+        lumen_core::JsValue::String("undefined|false|object".into())
+    );
+}

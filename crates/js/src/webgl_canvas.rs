@@ -146,98 +146,137 @@ const WEBGL_SHIM: &str = r#"(function() {
   var _GL1 = _defineCtxClass('WebGLRenderingContext');
   var _GL2 = _defineCtxClass('WebGL2RenderingContext');
 
-  function _makeContext(cid, isWebgl2) {
-    var gl = {
-      // ── Primitive modes ──
-      POINTS: 0x0000, LINES: 0x0001, LINE_LOOP: 0x0002, LINE_STRIP: 0x0003,
-      TRIANGLES: 0x0004, TRIANGLE_STRIP: 0x0005, TRIANGLE_FAN: 0x0006,
-      // ── Buffers ──
-      ARRAY_BUFFER: 0x8892, ELEMENT_ARRAY_BUFFER: 0x8893,
-      STATIC_DRAW: 0x88E4, DYNAMIC_DRAW: 0x88E8, STREAM_DRAW: 0x88E0,
-      // ── Clear bits ──
-      DEPTH_BUFFER_BIT: 0x0100, STENCIL_BUFFER_BIT: 0x0400, COLOR_BUFFER_BIT: 0x4000,
-      // ── Types ──
-      BYTE: 0x1400, UNSIGNED_BYTE: 0x1401, SHORT: 0x1402, UNSIGNED_SHORT: 0x1403,
-      INT: 0x1404, UNSIGNED_INT: 0x1405, FLOAT: 0x1406,
-      // ── Shaders / programs ──
-      FRAGMENT_SHADER: 0x8B30, VERTEX_SHADER: 0x8B31,
-      COMPILE_STATUS: 0x8B81, LINK_STATUS: 0x8B82, VALIDATE_STATUS: 0x8B83,
-      // ── Capabilities (accepted, no-op) ──
-      DEPTH_TEST: 0x0B71, BLEND: 0x0BE2, CULL_FACE: 0x0B44, SCISSOR_TEST: 0x0C11,
-      // ── Pixel formats ──
-      RGB: 0x1907, RGBA: 0x1908,
-      // ── Textures ── (срез 6, ph3-webgl2.md: `bindTexture`/`activeTexture`/
-      // `texImage2D` already forwarded to the software rasterizer, but the
-      // context object never named these enums — every caller had to pass
-      // raw hex, so `gl.bindTexture(gl.TEXTURE_2D, tex)` silently bound
-      // nothing (`gl.TEXTURE_2D === undefined`) and `texture()` in a GLSL ES
-      // 3.00 fragment shader always sampled the no-texture fallback)
-      TEXTURE_2D: 0x0DE1,
-      TEXTURE0: 0x84C0, TEXTURE1: 0x84C1, TEXTURE2: 0x84C2, TEXTURE3: 0x84C3,
-      TEXTURE4: 0x84C4, TEXTURE5: 0x84C5, TEXTURE6: 0x84C6, TEXTURE7: 0x84C7,
-      // ── getParameter pnames ──
-      VENDOR: 0x1F00, RENDERER: 0x1F01, VERSION: 0x1F02, SHADING_LANGUAGE_VERSION: 0x8B8C,
-      MAX_TEXTURE_SIZE: 0x0D33, MAX_VIEWPORT_DIMS: 0x0D3A,
-      MAX_VERTEX_ATTRIBS: 0x8869, MAX_COMBINED_TEXTURE_IMAGE_UNITS: 0x8B4D,
-      UNMASKED_VENDOR_WEBGL: 0x9245, UNMASKED_RENDERER_WEBGL: 0x9246
-    };
-    // WebGL 2.0 §3.1: pixel formats, buffer targets and query object enums
-    // that only a `webgl2` context exposes. Left off `webgl` contexts so
-    // `gl.UNIFORM_BUFFER === undefined` there, matching the spec's "context
-    // creation parameters differ by type" rather than aliasing both onto one
-    // enum table (WebGL 1.0 contexts never see UBOs, so scripts feature-detect
-    // WebGL2 by checking these are defined).
-    if (isWebgl2) {
-      gl.RGBA8 = 0x8058;
-      gl.HALF_FLOAT = 0x140B;
-      gl.UNIFORM_BUFFER = 0x8A11;
-      gl.PIXEL_PACK_BUFFER = 0x88EB;
-      gl.PIXEL_UNPACK_BUFFER = 0x88EC;
-      gl.COPY_READ_BUFFER = 0x8F36;
-      gl.COPY_WRITE_BUFFER = 0x8F37;
-      gl.TRANSFORM_FEEDBACK_BUFFER = 0x8C8E;
-      gl.SYNC_GPU_COMMANDS_COMPLETE = 0x9117;
-      gl.SYNC_FLUSH_COMMANDS_BIT = 0x00000001;
-      gl.ALREADY_SIGNALED = 0x911A;
-      gl.TIMEOUT_EXPIRED = 0x911B;
-      gl.CONDITION_SATISFIED = 0x911C;
-      gl.WAIT_FAILED = 0x911D;
-    }
+  // BUG-1829: WebIDL surface — constants and methods live on the two context
+  // prototypes (as in Chrome), while each context instance carries only
+  // internal state in a WeakMap, so `Object.getOwnPropertyNames(gl)` stays
+  // empty like a real `WebGLRenderingContext`.
+  var _glStates = new WeakMap();
 
+  function _glState(self) {
+    var st = _glStates.get(self);
+    if (st === undefined) {
+      throw new TypeError("Failed to execute on 'WebGLRenderingContext': Illegal invocation");
+    }
+    return st;
+  }
+
+  function _locVal(location) {
+    if (location == null) return -1;
+    if (typeof location === 'number') return location;
+    return (typeof location.__loc === 'number') ? location.__loc : -1;
+  }
+
+  var _GL_CONSTS = {
+    // ── Primitive modes ──
+    POINTS: 0x0000, LINES: 0x0001, LINE_LOOP: 0x0002, LINE_STRIP: 0x0003,
+    TRIANGLES: 0x0004, TRIANGLE_STRIP: 0x0005, TRIANGLE_FAN: 0x0006,
+    // ── Buffers ──
+    ARRAY_BUFFER: 0x8892, ELEMENT_ARRAY_BUFFER: 0x8893,
+    STATIC_DRAW: 0x88E4, DYNAMIC_DRAW: 0x88E8, STREAM_DRAW: 0x88E0,
+    // ── Clear bits ──
+    DEPTH_BUFFER_BIT: 0x0100, STENCIL_BUFFER_BIT: 0x0400, COLOR_BUFFER_BIT: 0x4000,
+    // ── Types ──
+    BYTE: 0x1400, UNSIGNED_BYTE: 0x1401, SHORT: 0x1402, UNSIGNED_SHORT: 0x1403,
+    INT: 0x1404, UNSIGNED_INT: 0x1405, FLOAT: 0x1406,
+    // ── Shaders / programs ──
+    FRAGMENT_SHADER: 0x8B30, VERTEX_SHADER: 0x8B31,
+    COMPILE_STATUS: 0x8B81, LINK_STATUS: 0x8B82, VALIDATE_STATUS: 0x8B83,
+    // ── Capabilities (accepted, no-op) ──
+    DEPTH_TEST: 0x0B71, BLEND: 0x0BE2, CULL_FACE: 0x0B44, SCISSOR_TEST: 0x0C11,
+    // ── Pixel formats ──
+    RGB: 0x1907, RGBA: 0x1908,
+    // ── Textures ──
+    TEXTURE_2D: 0x0DE1,
+    TEXTURE0: 0x84C0, TEXTURE1: 0x84C1, TEXTURE2: 0x84C2, TEXTURE3: 0x84C3,
+    TEXTURE4: 0x84C4, TEXTURE5: 0x84C5, TEXTURE6: 0x84C6, TEXTURE7: 0x84C7,
+    // ── getParameter pnames ──
+    VENDOR: 0x1F00, RENDERER: 0x1F01, VERSION: 0x1F02, SHADING_LANGUAGE_VERSION: 0x8B8C,
+    MAX_TEXTURE_SIZE: 0x0D33, MAX_VIEWPORT_DIMS: 0x0D3A,
+    MAX_VERTEX_ATTRIBS: 0x8869, MAX_COMBINED_TEXTURE_IMAGE_UNITS: 0x8B4D,
+    UNMASKED_VENDOR_WEBGL: 0x9245, UNMASKED_RENDERER_WEBGL: 0x9246
+  };
+  // WebGL 2.0 §3.1: pixel formats, buffer targets and query object enums
+  // that only a `webgl2` context exposes. Left off `webgl` contexts so
+  // `gl.UNIFORM_BUFFER === undefined` there, matching the spec's "context
+  // creation parameters differ by type" rather than aliasing both onto one
+  // enum table (WebGL 1.0 contexts never see UBOs, so scripts feature-detect
+  // WebGL2 by checking these are defined).
+  var _GL2_CONSTS = {
+    RGBA8: 0x8058,
+    HALF_FLOAT: 0x140B,
+    UNIFORM_BUFFER: 0x8A11,
+    PIXEL_PACK_BUFFER: 0x88EB,
+    PIXEL_UNPACK_BUFFER: 0x88EC,
+    COPY_READ_BUFFER: 0x8F36,
+    COPY_WRITE_BUFFER: 0x8F37,
+    TRANSFORM_FEEDBACK_BUFFER: 0x8C8E,
+    SYNC_GPU_COMMANDS_COMPLETE: 0x9117,
+    SYNC_FLUSH_COMMANDS_BIT: 0x00000001,
+    ALREADY_SIGNALED: 0x911A,
+    TIMEOUT_EXPIRED: 0x911B,
+    CONDITION_SATISFIED: 0x911C,
+    WAIT_FAILED: 0x911D
+  };
+
+  function _installConsts(proto, table) {
+    for (var k in table) {
+      Object.defineProperty(proto, k, {
+        value: table[k], writable: false, enumerable: true, configurable: false
+      });
+    }
+  }
+
+  // `canvas`/`drawingBufferWidth`/`drawingBufferHeight` are readonly WebIDL
+  // attributes — accessors on the prototype backed by the per-context state,
+  // not own data properties of the instance.
+  function _installAttrs(proto, names) {
+    for (var i = 0; i < names.length; i++) {
+      (function(name) {
+        Object.defineProperty(proto, name, {
+          get: function() { return _glState(this)[name]; },
+          enumerable: true, configurable: true
+        });
+      })(names[i]);
+    }
+  }
+
+  var _GL_METHODS = {
     // ── State / capability no-ops ──
-    gl.enable = function() {};
-    gl.disable = function() {};
-    gl.blendFunc = function() {};
-    gl.depthFunc = function() {};
-    gl.pixelStorei = function() {};
-    gl.scissor = function() {};
-    gl.flush = function() {};
-    gl.finish = function() {};
-    gl.isContextLost = function() { return false; };
-    gl.getError = function() { return 0; };
-    gl.getContextAttributes = function() {
+    enable: function() { _glState(this); },
+    disable: function() { _glState(this); },
+    blendFunc: function() { _glState(this); },
+    depthFunc: function() { _glState(this); },
+    pixelStorei: function() { _glState(this); },
+    scissor: function() { _glState(this); },
+    flush: function() { _glState(this); },
+    finish: function() { _glState(this); },
+    isContextLost: function() { _glState(this); return false; },
+    getError: function() { _glState(this); return 0; },
+    getContextAttributes: function() {
+      _glState(this);
       return { alpha: true, antialias: false, depth: true, premultipliedAlpha: true,
                preserveDrawingBuffer: false, stencil: false };
-    };
+    },
 
-    gl.viewport = function(x, y, w, h) { _lumen_webgl_viewport(cid, x|0, y|0, w|0, h|0); };
-    gl.clearColor = function(r, g, b, a) { _lumen_webgl_clear_color(cid, +r, +g, +b, +a); };
-    gl.clear = function(mask) { _lumen_webgl_clear(cid, mask>>>0); };
-    gl.clearDepth = function() {};
-    gl.clearStencil = function() {};
+    viewport: function(x, y, w, h) { _lumen_webgl_viewport(_glState(this).cid, x|0, y|0, w|0, h|0); },
+    clearColor: function(r, g, b, a) { _lumen_webgl_clear_color(_glState(this).cid, +r, +g, +b, +a); },
+    clear: function(mask) { _lumen_webgl_clear(_glState(this).cid, mask>>>0); },
+    clearDepth: function() { _glState(this); },
+    clearStencil: function() { _glState(this); },
 
     // ── Buffers ──
-    gl.createVertexArray = function() { return _wrap(_lumen_webgl_create_vertex_array(cid)); };
-    gl.bindVertexArray = function(vao) { _lumen_webgl_bind_vertex_array(cid, _unwrap(vao)); };
-    gl.deleteVertexArray = function(vao) { _lumen_webgl_delete_vertex_array(cid, _unwrap(vao)); };
-    gl.isVertexArray = function(vao) { return _lumen_webgl_is_vertex_array(cid, _unwrap(vao)); };
+    createVertexArray: function() { return _wrap(_lumen_webgl_create_vertex_array(_glState(this).cid)); },
+    bindVertexArray: function(vao) { _lumen_webgl_bind_vertex_array(_glState(this).cid, _unwrap(vao)); },
+    deleteVertexArray: function(vao) { _lumen_webgl_delete_vertex_array(_glState(this).cid, _unwrap(vao)); },
+    isVertexArray: function(vao) { return _lumen_webgl_is_vertex_array(_glState(this).cid, _unwrap(vao)); },
 
-    gl.createBuffer = function() { return _wrap(_lumen_webgl_create_buffer(cid)); };
-    gl.deleteBuffer = function() {};
-    gl.bindBuffer = function(target, buffer) {
-      _lumen_webgl_bind_buffer(cid, target>>>0, _unwrap(buffer));
-    };
-    gl.bufferData = function(target, data /*, usage */) {
+    createBuffer: function() { return _wrap(_lumen_webgl_create_buffer(_glState(this).cid)); },
+    deleteBuffer: function() { _glState(this); },
+    bindBuffer: function(target, buffer) {
+      _lumen_webgl_bind_buffer(_glState(this).cid, target>>>0, _unwrap(buffer));
+    },
+    bufferData: function(target, data /*, usage */) {
+      var st = _glState(this);
       var arr = [];
       if (data && typeof data.length === 'number') {
         for (var i = 0; i < data.length; i++) arr.push(data[i]);
@@ -245,94 +284,92 @@ const WEBGL_SHIM: &str = r#"(function() {
         // Size-only allocation: zero-fill.
         for (var j = 0; j < data; j++) arr.push(0);
       }
-      if ((target>>>0) === gl.ELEMENT_ARRAY_BUFFER) {
-        _lumen_webgl_buffer_data_elements(cid, target>>>0, arr);
+      if ((target>>>0) === this.ELEMENT_ARRAY_BUFFER) {
+        _lumen_webgl_buffer_data_elements(st.cid, target>>>0, arr);
       } else {
-        _lumen_webgl_buffer_data(cid, target>>>0, arr);
+        _lumen_webgl_buffer_data(st.cid, target>>>0, arr);
       }
-    };
-    gl.bufferSubData = function() {};
+    },
+    bufferSubData: function() { _glState(this); },
 
     // ── Shaders ──
-    gl.createShader = function(kind) { return _wrap(_lumen_webgl_create_shader(cid, kind>>>0)); };
-    gl.deleteShader = function() {};
-    gl.shaderSource = function(shader, src) { _lumen_webgl_shader_source(cid, _unwrap(shader), '' + src); };
-    gl.compileShader = function(shader) { _lumen_webgl_compile_shader(cid, _unwrap(shader)); };
-    gl.getShaderParameter = function(shader, pname) {
-      if (pname === gl.COMPILE_STATUS) return _lumen_webgl_shader_compiled(cid, _unwrap(shader));
+    createShader: function(kind) { return _wrap(_lumen_webgl_create_shader(_glState(this).cid, kind>>>0)); },
+    deleteShader: function() { _glState(this); },
+    shaderSource: function(shader, src) { _lumen_webgl_shader_source(_glState(this).cid, _unwrap(shader), '' + src); },
+    compileShader: function(shader) { _lumen_webgl_compile_shader(_glState(this).cid, _unwrap(shader)); },
+    getShaderParameter: function(shader, pname) {
+      var st = _glState(this);
+      if (pname === this.COMPILE_STATUS) return _lumen_webgl_shader_compiled(st.cid, _unwrap(shader));
       return null;
-    };
-    gl.getShaderInfoLog = function() { return ''; };
+    },
+    getShaderInfoLog: function() { _glState(this); return ''; },
 
     // ── Programs ──
-    gl.createProgram = function() { return _wrap(_lumen_webgl_create_program(cid)); };
-    gl.deleteProgram = function() {};
-    gl.attachShader = function(program, shader) { _lumen_webgl_attach_shader(cid, _unwrap(program), _unwrap(shader)); };
-    gl.detachShader = function() {};
-    gl.linkProgram = function(program) { _lumen_webgl_link_program(cid, _unwrap(program)); };
-    gl.getProgramParameter = function(program, pname) {
-      if (pname === gl.LINK_STATUS) return _lumen_webgl_program_linked(cid, _unwrap(program));
-      if (pname === gl.VALIDATE_STATUS) return true;
+    createProgram: function() { return _wrap(_lumen_webgl_create_program(_glState(this).cid)); },
+    deleteProgram: function() { _glState(this); },
+    attachShader: function(program, shader) { _lumen_webgl_attach_shader(_glState(this).cid, _unwrap(program), _unwrap(shader)); },
+    detachShader: function() { _glState(this); },
+    linkProgram: function(program) { _lumen_webgl_link_program(_glState(this).cid, _unwrap(program)); },
+    getProgramParameter: function(program, pname) {
+      var st = _glState(this);
+      if (pname === this.LINK_STATUS) return _lumen_webgl_program_linked(st.cid, _unwrap(program));
+      if (pname === this.VALIDATE_STATUS) return true;
       return null;
-    };
-    gl.getProgramInfoLog = function() { return ''; };
-    gl.validateProgram = function() {};
-    gl.useProgram = function(program) { _lumen_webgl_use_program(cid, _unwrap(program)); };
+    },
+    getProgramInfoLog: function() { _glState(this); return ''; },
+    validateProgram: function() { _glState(this); },
+    useProgram: function(program) { _lumen_webgl_use_program(_glState(this).cid, _unwrap(program)); },
 
     // ── Attributes / uniforms ──
-    gl.getAttribLocation = function(program, name) { return _lumen_webgl_attrib_location(cid, _unwrap(program), '' + name); };
-    gl.bindAttribLocation = function() {};
-    gl.getUniformLocation = function(program, name) {
-      var loc = _lumen_webgl_uniform_location(cid, _unwrap(program), '' + name);
+    getAttribLocation: function(program, name) { return _lumen_webgl_attrib_location(_glState(this).cid, _unwrap(program), '' + name); },
+    bindAttribLocation: function() { _glState(this); },
+    getUniformLocation: function(program, name) {
+      var loc = _lumen_webgl_uniform_location(_glState(this).cid, _unwrap(program), '' + name);
       return loc < 0 ? null : { __loc: loc };
-    };
-    function _locVal(location) {
-      if (location == null) return -1;
-      if (typeof location === 'number') return location;
-      return (typeof location.__loc === 'number') ? location.__loc : -1;
-    }
-    gl.enableVertexAttribArray = function(index) { _lumen_webgl_enable_attrib(cid, index>>>0); };
-    gl.disableVertexAttribArray = function(index) { _lumen_webgl_disable_attrib(cid, index>>>0); };
-    gl.vertexAttribPointer = function(index, size, type, normalized, stride, offset) {
-      _lumen_webgl_attrib_pointer(cid, index>>>0, size|0, stride|0, offset|0);
-    };
-    gl.uniform4f = function(location, x, y, z, w) { _lumen_webgl_uniform4f(cid, _locVal(location), +x, +y, +z, +w); };
-    gl.uniform4fv = function(location, v) { _lumen_webgl_uniform4f(cid, _locVal(location), +v[0], +v[1], +v[2], +v[3]); };
-    gl.uniform3f = function(location, x, y, z) { _lumen_webgl_uniform3f(cid, _locVal(location), +x, +y, +z); };
-    gl.uniform3fv = function(location, v) { _lumen_webgl_uniform3f(cid, _locVal(location), +v[0], +v[1], +v[2]); };
-    gl.uniform2f = function(location, x, y) { _lumen_webgl_uniform2f(cid, _locVal(location), +x, +y); };
-    gl.uniform2fv = function(location, v) { _lumen_webgl_uniform2f(cid, _locVal(location), +v[0], +v[1]); };
-    gl.uniform1f = function(location, x) { _lumen_webgl_uniform1f(cid, _locVal(location), +x); };
-    gl.uniform1fv = function(location, v) { _lumen_webgl_uniform1f(cid, _locVal(location), +v[0]); };
-    gl.uniform1i = function(location, v) { _lumen_webgl_uniform1i(cid, _locVal(location), v|0); };
-    gl.uniform1iv = function(location, v) { _lumen_webgl_uniform1i(cid, _locVal(location), (v[0])|0); };
-    gl.uniformMatrix4fv = function(location, transpose, data) {
+    },
+    enableVertexAttribArray: function(index) { _lumen_webgl_enable_attrib(_glState(this).cid, index>>>0); },
+    disableVertexAttribArray: function(index) { _lumen_webgl_disable_attrib(_glState(this).cid, index>>>0); },
+    vertexAttribPointer: function(index, size, type, normalized, stride, offset) {
+      _lumen_webgl_attrib_pointer(_glState(this).cid, index>>>0, size|0, stride|0, offset|0);
+    },
+    uniform4f: function(location, x, y, z, w) { _lumen_webgl_uniform4f(_glState(this).cid, _locVal(location), +x, +y, +z, +w); },
+    uniform4fv: function(location, v) { _lumen_webgl_uniform4f(_glState(this).cid, _locVal(location), +v[0], +v[1], +v[2], +v[3]); },
+    uniform3f: function(location, x, y, z) { _lumen_webgl_uniform3f(_glState(this).cid, _locVal(location), +x, +y, +z); },
+    uniform3fv: function(location, v) { _lumen_webgl_uniform3f(_glState(this).cid, _locVal(location), +v[0], +v[1], +v[2]); },
+    uniform2f: function(location, x, y) { _lumen_webgl_uniform2f(_glState(this).cid, _locVal(location), +x, +y); },
+    uniform2fv: function(location, v) { _lumen_webgl_uniform2f(_glState(this).cid, _locVal(location), +v[0], +v[1]); },
+    uniform1f: function(location, x) { _lumen_webgl_uniform1f(_glState(this).cid, _locVal(location), +x); },
+    uniform1fv: function(location, v) { _lumen_webgl_uniform1f(_glState(this).cid, _locVal(location), +v[0]); },
+    uniform1i: function(location, v) { _lumen_webgl_uniform1i(_glState(this).cid, _locVal(location), v|0); },
+    uniform1iv: function(location, v) { _lumen_webgl_uniform1i(_glState(this).cid, _locVal(location), (v[0])|0); },
+    uniformMatrix4fv: function(location, transpose, data) {
       var arr = [];
       for (var mi = 0; mi < 16; mi++) arr.push(+(data[mi] || 0));
-      _lumen_webgl_uniform_mat4fv(cid, _locVal(location), arr);
-    };
-    gl.uniformMatrix3fv = function(location, transpose, data) {
+      _lumen_webgl_uniform_mat4fv(_glState(this).cid, _locVal(location), arr);
+    },
+    uniformMatrix3fv: function(location, transpose, data) {
       var arr = [];
       for (var mi = 0; mi < 9; mi++) arr.push(+(data[mi] || 0));
-      _lumen_webgl_uniform_mat3fv(cid, _locVal(location), arr);
-    };
+      _lumen_webgl_uniform_mat3fv(_glState(this).cid, _locVal(location), arr);
+    },
 
     // ── Draw ──
     // mat2 is not tracked by the rasterizer: accepted, does nothing (like the
     // other unimplemented GL calls of this shim), but it must exist.
-    gl.uniformMatrix2fv = function() {};
-    gl.compressedTexImage2D = function() {};
-    gl.compressedTexSubImage2D = function() {};
-    gl.drawArrays = function(mode, first, count) { _lumen_webgl_draw_arrays(cid, mode>>>0, first|0, count|0); };
-    gl.drawElements = function(mode, count, type, offset) {
-      _lumen_webgl_draw_elements(cid, mode>>>0, count|0, type>>>0, offset|0);
-    };
+    uniformMatrix2fv: function() { _glState(this); },
+    compressedTexImage2D: function() { _glState(this); },
+    compressedTexSubImage2D: function() { _glState(this); },
+    drawArrays: function(mode, first, count) { _lumen_webgl_draw_arrays(_glState(this).cid, mode>>>0, first|0, count|0); },
+    drawElements: function(mode, count, type, offset) {
+      _lumen_webgl_draw_elements(_glState(this).cid, mode>>>0, count|0, type>>>0, offset|0);
+    },
 
     // ── Readback (WebGL: bottom-left origin) ──
-    gl.readPixels = function(x, y, width, height, format, type, pixels) {
+    readPixels: function(x, y, width, height, format, type, pixels) {
+      var st = _glState(this);
       if (!pixels || typeof pixels.length !== 'number') return;
-      var fb = _lumen_webgl_read_pixels(cid);
-      var dims = _lumen_webgl_dims(cid);
+      var fb = _lumen_webgl_read_pixels(st.cid);
+      var dims = _lumen_webgl_dims(st.cid);
       var fw = dims[0], fh = dims[1];
       x = x|0; y = y|0; width = width|0; height = height|0;
       for (var row = 0; row < height; row++) {
@@ -352,52 +389,55 @@ const WEBGL_SHIM: &str = r#"(function() {
           pixels[di+3] = fb[si+3];
         }
       }
-    };
+    },
 
     // ── Parameters (fingerprint-normalized, ADR-007 Layer 4) ──
-    gl.getParameter = function(pname) {
+    getParameter: function(pname) {
+      var st = _glState(this);
       switch (pname) {
-        case gl.UNMASKED_VENDOR_WEBGL:
-        case gl.VENDOR: return _vendor;
-        case gl.UNMASKED_RENDERER_WEBGL:
-        case gl.RENDERER: return _renderer;
-        case gl.VERSION: return isWebgl2 ? 'WebGL 2.0' : 'WebGL 1.0';
-        case gl.SHADING_LANGUAGE_VERSION:
-          return isWebgl2 ? 'WebGL GLSL ES 3.00' : 'WebGL GLSL ES 1.0';
-        case gl.MAX_TEXTURE_SIZE: return 4096;
-        case gl.MAX_VIEWPORT_DIMS: return [4096, 4096];
-        case gl.MAX_VERTEX_ATTRIBS: return 16;
-        case gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS: return 8;
+        case this.UNMASKED_VENDOR_WEBGL:
+        case this.VENDOR: return _vendor;
+        case this.UNMASKED_RENDERER_WEBGL:
+        case this.RENDERER: return _renderer;
+        case this.VERSION: return st.isWebgl2 ? 'WebGL 2.0' : 'WebGL 1.0';
+        case this.SHADING_LANGUAGE_VERSION:
+          return st.isWebgl2 ? 'WebGL GLSL ES 3.00' : 'WebGL GLSL ES 1.0';
+        case this.MAX_TEXTURE_SIZE: return 4096;
+        case this.MAX_VIEWPORT_DIMS: return [4096, 4096];
+        case this.MAX_VERTEX_ATTRIBS: return 16;
+        case this.MAX_COMBINED_TEXTURE_IMAGE_UNITS: return 8;
         default: return null;
       }
-    };
-    gl.getExtension = function(name) {
+    },
+    getExtension: function(name) {
+      var st = _glState(this);
       if (name === 'WEBGL_debug_renderer_info') {
         return { UNMASKED_VENDOR_WEBGL: 0x9245, UNMASKED_RENDERER_WEBGL: 0x9246 };
       }
       if (name === 'WEBGL_lose_context') {
-        return { loseContext: function() { _lumen_webgl_destroy(cid); }, restoreContext: function() {} };
+        return { loseContext: function() { _lumen_webgl_destroy(st.cid); }, restoreContext: function() {} };
       }
       return null;
-    };
-    gl.getSupportedExtensions = function() {
+    },
+    getSupportedExtensions: function() {
+      _glState(this);
       return ['WEBGL_debug_renderer_info', 'WEBGL_lose_context'];
-    };
+    },
 
     // ── Textures ──────────────────────────────────────────────────────────
-    var _nextTexId = 1;
-    var _boundTex2D = 0; // currently bound TEXTURE_2D id
-    gl.createTexture = function() { var id = _nextTexId++; return _wrap(id); };
-    gl.deleteTexture = function() {};
-    gl.bindTexture = function(target, tex) {
+    createTexture: function() { var st = _glState(this); return _wrap(st.nextTexId++); },
+    deleteTexture: function() { _glState(this); },
+    bindTexture: function(target, tex) {
+      var st = _glState(this);
       var tid = _unwrap(tex);
-      if ((target>>>0) === 0x0DE1) _boundTex2D = tid; // GL_TEXTURE_2D
-      _lumen_webgl_bind_texture(cid, target>>>0, tid);
-    };
-    gl.activeTexture = function(unit) { _lumen_webgl_active_texture(cid, unit>>>0); };
-    gl.texParameteri = function() {};
-    gl.generateMipmap = function() {};
-    gl.texImage2D = function(target, level, internalformat, width, height, border, format, type, pixels) {
+      if ((target>>>0) === 0x0DE1) st.boundTex2D = tid; // GL_TEXTURE_2D
+      _lumen_webgl_bind_texture(st.cid, target>>>0, tid);
+    },
+    activeTexture: function(unit) { _lumen_webgl_active_texture(_glState(this).cid, unit>>>0); },
+    texParameteri: function() { _glState(this); },
+    generateMipmap: function() { _glState(this); },
+    texImage2D: function(target, level, internalformat, width, height, border, format, type, pixels) {
+      var st = _glState(this);
       if (arguments.length === 6) {
         // TexImageSource overload: a source that is not an object with numeric
         // dimensions fails WebIDL conversion (getter exceptions propagate).
@@ -409,17 +449,38 @@ const WEBGL_SHIM: &str = r#"(function() {
         }
         return;
       }
-      if (pixels == null || _boundTex2D === 0) return;
+      if (pixels == null || st.boundTex2D === 0) return;
       var w = width|0, h = height|0;
       var arr = [];
       if (pixels && typeof pixels.length === 'number') {
         var expected = w * h * 4;
         for (var pi = 0; pi < expected && pi < pixels.length; pi++) arr.push(pixels[pi] & 0xFF);
       }
-      _lumen_webgl_tex_image_2d(cid, _boundTex2D, w, h, arr);
-    };
+      _lumen_webgl_tex_image_2d(st.cid, st.boundTex2D, w, h, arr);
+    }
+  };
 
-    Object.setPrototypeOf(gl, (isWebgl2 ? _GL2 : _GL1).prototype);
+  for (var _mn in _GL_METHODS) {
+    _GL1.prototype[_mn] = _GL_METHODS[_mn];
+    _GL2.prototype[_mn] = _GL_METHODS[_mn];
+  }
+  _installConsts(_GL1.prototype, _GL_CONSTS);
+  _installConsts(_GL2.prototype, _GL_CONSTS);
+  _installConsts(_GL2.prototype, _GL2_CONSTS);
+  _installAttrs(_GL1.prototype, ['canvas', 'drawingBufferWidth', 'drawingBufferHeight']);
+  _installAttrs(_GL2.prototype, ['canvas', 'drawingBufferWidth', 'drawingBufferHeight']);
+
+  function _makeContext(cid, isWebgl2) {
+    var gl = Object.create(isWebgl2 ? _GL2.prototype : _GL1.prototype);
+    _glStates.set(gl, {
+      cid: cid,
+      isWebgl2: isWebgl2,
+      boundTex2D: 0,
+      nextTexId: 1,
+      canvas: null,
+      drawingBufferWidth: 0,
+      drawingBufferHeight: 0
+    });
     return gl;
   }
 
@@ -466,9 +527,10 @@ const WEBGL_SHIM: &str = r#"(function() {
           var nid = (el.__nid__ === undefined) ? -1 : el.__nid__;
           var cid = _lumen_webgl_create(nid, d[0], d[1]);
           _ctx = _makeContext(cid, t === 'webgl2');
-          _ctx.canvas = el;
-          _ctx.drawingBufferWidth = d[0];
-          _ctx.drawingBufferHeight = d[1];
+          var _gst = _glStates.get(_ctx);
+          _gst.canvas = el;
+          _gst.drawingBufferWidth = d[0];
+          _gst.drawingBufferHeight = d[1];
         }
         return _ctx;
       }
@@ -1461,6 +1523,85 @@ var document = {
         .unwrap();
         super::install_webgl_canvas_v8(&rt, &fp()).unwrap();
         let ok = bool_eval(&rt, "_existing.getContext('webgl2') !== null");
+        assert!(ok);
+    }
+
+    // ── BUG-1829: методы и константы живут на прототипах, как в Chrome ──────
+
+    /// `WebGLRenderingContext.prototype.getParameter` — функция, и метод
+    /// инстанса делегирует именно ей (`gl.getParameter === proto.getParameter`).
+    #[test]
+    fn get_parameter_lives_on_prototype() {
+        let rt = with_webgl();
+        let ok = bool_eval(
+            &rt,
+            r#"var gl = document.createElement('canvas').getContext('webgl');
+WebGLRenderingContext.prototype.getParameter === gl.getParameter
+  && typeof WebGLRenderingContext.prototype.getParameter === 'function'
+  && typeof WebGL2RenderingContext.prototype.getParameter === 'function'"#,
+        );
+        assert!(ok);
+    }
+
+    /// Весь интерфейс — на прототипе: ни одного own-метода у инстанса, а
+    /// константы читаются через прототип (`gl.VENDOR === proto.VENDOR`).
+    #[test]
+    fn context_instance_has_no_own_members() {
+        let rt = with_webgl();
+        let ok = bool_eval(
+            &rt,
+            r#"var gl = document.createElement('canvas').getContext('webgl');
+!gl.hasOwnProperty('getParameter') && !gl.hasOwnProperty('drawArrays')
+  && !gl.hasOwnProperty('VENDOR')
+  && gl.VENDOR === WebGLRenderingContext.prototype.VENDOR
+  && gl instanceof WebGLRenderingContext
+  && Object.prototype.toString.call(gl) === '[object WebGLRenderingContext]'"#,
+        );
+        assert!(ok);
+    }
+
+    /// Бренд-чек WebIDL: метод прототипа, вызванный с чужим `this`, бросает
+    /// TypeError — как `gl.getParameter.call({})` в Chrome.
+    #[test]
+    fn prototype_method_rejects_foreign_this() {
+        let rt = with_webgl();
+        let ok = bool_eval(
+            &rt,
+            r#"var threw = false;
+try { WebGLRenderingContext.prototype.getParameter.call({}, 0x1F00); }
+catch (e) { threw = e instanceof TypeError; }
+threw"#,
+        );
+        assert!(ok);
+    }
+
+    /// WebGL2-контекст: свои константы (`UNIFORM_BUFFER`) есть на его
+    /// прототипе и отсутствуют на WebGL1 — feature-detect как в Chrome.
+    #[test]
+    fn webgl2_prototype_has_own_constants() {
+        let rt = with_webgl();
+        let ok = bool_eval(
+            &rt,
+            r#"var gl2 = document.createElement('canvas').getContext('webgl2');
+WebGL2RenderingContext.prototype.hasOwnProperty('UNIFORM_BUFFER')
+  && !WebGLRenderingContext.prototype.hasOwnProperty('UNIFORM_BUFFER')
+  && gl2.UNIFORM_BUFFER === WebGL2RenderingContext.prototype.UNIFORM_BUFFER
+  && gl2.getParameter(gl2.VERSION) === 'WebGL 2.0'"#,
+        );
+        assert!(ok);
+    }
+
+    /// `canvas`/`drawingBufferWidth` — accessor'ы прототипа, не own-свойства.
+    #[test]
+    fn canvas_attrs_are_prototype_accessors() {
+        let rt = with_webgl();
+        let ok = bool_eval(
+            &rt,
+            r#"var c = document.createElement('canvas');
+var gl = c.getContext('webgl');
+!gl.hasOwnProperty('canvas') && gl.canvas === c
+  && gl.drawingBufferWidth === 8 && gl.drawingBufferHeight === 8"#,
+        );
         assert!(ok);
     }
 }

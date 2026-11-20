@@ -401,3 +401,45 @@ fn subtle_derive_key_hkdf_then_aes_gcm() {
     let r = rt.eval("_hkdf_done ? _hkdf_pt : null").unwrap();
     assert_eq!(r, lumen_core::JsValue::String("hkdf-derived".to_string()));
 }
+
+// ── BUG-1829: Crypto/SubtleCrypto — прототипная форма, как у Chrome ──────────
+
+/// `crypto` — экземпляр интерфейсного класса `Crypto`: методы живут на
+/// `Crypto.prototype`, `crypto instanceof Crypto` выполняется, own-свойств
+/// у объекта нет. `subtle` — экземпляр `SubtleCrypto` с методами на его
+/// прототипе. То же для `CryptoKey` (Symbol.toStringTag).
+#[test]
+fn crypto_subtle_have_prototype_backed_interfaces() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "window.crypto instanceof Crypto
+             && typeof Crypto.prototype.getRandomValues === 'function'
+             && typeof Crypto.prototype.randomUUID === 'function'
+             && window.crypto.getRandomValues === Crypto.prototype.getRandomValues
+             && !window.crypto.hasOwnProperty('getRandomValues')
+             && !window.crypto.hasOwnProperty('randomUUID')
+             && window.crypto.subtle instanceof SubtleCrypto
+             && window.crypto.subtle.digest === SubtleCrypto.prototype.digest
+             && typeof SubtleCrypto.prototype.generateKey === 'function'
+             && !window.crypto.subtle.hasOwnProperty('digest')
+             && Object.prototype.toString.call(window.crypto) === '[object Crypto]'
+             && Object.prototype.toString.call(window.crypto.subtle) === '[object SubtleCrypto]'",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+/// Конструкторы интерфейсов нелегальны — как `new Crypto()` в Chrome.
+#[test]
+fn crypto_constructor_is_illegal() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var threw = false;
+             try { new Crypto(); } catch (e) { threw = e instanceof TypeError; }
+             threw",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
