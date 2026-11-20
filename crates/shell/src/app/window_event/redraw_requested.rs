@@ -468,6 +468,10 @@ impl Lumen {
                 // выше; под движковым потоком это место не выполняется вовсе
                 // (см. doc-comment `frame_dynamic.rs`).
                 self.poll_dynamic_frames();
+                // PERF-INPUT-1c: the readback is now bounded (8 ms budget +
+                // busy-skip) and falls back to the async latest-wins submit,
+                // so it can no longer park the UI thread behind a
+                // multi-second layout job the way the unbounded variant did.
                 self.relayout_raf_dirty_readback();
             } else if self
                 .anim_frame
@@ -488,7 +492,15 @@ impl Lumen {
                 // Scope of this slice: the synchronous default path only —
                 // `LUMEN_ENGINE_THREAD=1`'s `pump_raf_engine_thread` is not
                 // wired to this trigger yet.
-                self.relayout();
+                // PERF-INPUT-1c: `relayout()` is a full synchronous layout —
+                // measured as the ~1.5 s `js`-bucket stalls on
+                // market.yandex while a height animation runs. The deferred
+                // variant submits the same job off-thread (animated heights
+                // are captured into the job snapshot) and only falls back
+                // to the synchronous path when no engine/layout thread
+                // exists; the frame paints one tick behind instead of
+                // freezing.
+                self.relayout_raf_dirty();
             }
         }
 

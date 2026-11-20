@@ -208,7 +208,11 @@ impl Lumen {
         let Some(base) = dynamic_css.as_mut() else {
             return false;
         };
-        let Ok(doc) = document.lock() else {
+        // PERF-INPUT-1c: an off-thread layout job holds this mutex for the
+        // whole layout; a blocking `lock()` here parked the UI thread inside
+        // `make_relayout_job` (measured ~1.4 s `js`-bucket stalls). A skipped
+        // refresh only delays late-`<style>` pickup to the next submit.
+        let Ok(doc) = document.try_lock() else {
             return false;
         };
         let fp = inline_style_fingerprint(&doc);

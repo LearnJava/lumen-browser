@@ -396,13 +396,24 @@ impl Lumen {
         let decoder = lumen_js::video_gif_store::get_video_decoder();
 
         // Drain pending load requests queued by JS `__lumen_video_container_load`.
-        let loads: Vec<lumen_js::video_gif_store::VideoLoadRequest> = self
-            .video_gif_store
-            .pending_container_loads
-            .lock()
-            .unwrap()
-            .drain(..)
-            .collect();
+        // PERF-INPUT-1c: each load does a synchronous network fetch + decode
+        // right here on the UI thread — seconds per video during page load.
+        // Defer the whole drain until `window.load` settles; the requests
+        // stay queued in the store and playback of already-loaded sessions
+        // below is unaffected.
+        let loads: Vec<lumen_js::video_gif_store::VideoLoadRequest> = if self
+            .pending_window_load
+            .is_some()
+        {
+            Vec::new()
+        } else {
+            self.video_gif_store
+                .pending_container_loads
+                .lock()
+                .unwrap()
+                .drain(..)
+                .collect()
+        };
 
         let mut frames_relaid: Vec<usize> = Vec::new();
         for req in loads {

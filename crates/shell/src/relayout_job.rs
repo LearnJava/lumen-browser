@@ -737,12 +737,31 @@ impl Lumen {
         let Some((_generation, job)) = self.make_relayout_job() else { return false };
         // PERF-INPUT-1: same routing as `submit_relayout_job` — the layout
         // thread first, `engine_thread` as the spawn-failure fallback.
-        let commit = if let Some(engine) = self.layout_thread.as_ref() {
-            engine.readback(job)
-        } else {
-            self.engine_thread.as_ref().and_then(|engine| engine.readback(job))
+        // PERF-INPUT-1c: never park the UI thread behind a busy executor —
+        // skip the readback outright while `busy`, and bound the wait for
+        // the queued-but-idle case. On `None` (busy / timeout / shutdown)
+        // the work is resubmitted through the async latest-wins path; the
+        // caller's synchronous-fallback chain is only for "no threads".
+        let commit = {
+            const BUDGET: std::time::Duration = std::time::Duration::from_millis(8);
+            // `layout_thread` is stateless (`S = ()`), `engine_thread` carries
+            // `EngineJsState` — different types, so the two arms duplicate the
+            // three lines instead of sharing a helper.
+            if let Some(engine) = self.layout_thread.as_ref() {
+                (engine.busy().is_none())
+                    .then(|| engine.readback_within(BUDGET, job))
+                    .flatten()
+            } else {
+                self.engine_thread.as_ref().and_then(|engine| {
+                    (engine.busy().is_none())
+                        .then(|| engine.readback_within(BUDGET, job))
+                        .flatten()
+                })
+            }
         };
-        let Some(commit) = commit else { return false };
+        let Some(commit) = commit else {
+            return self.submit_relayout_job();
+        };
         // Authoritative like `relayout()`: mark the just-bumped generation applied so
         // a stale in-flight async commit is dropped by `poll_engine_commit`.
         self.engine_applied_generation = self.engine_job_generation;
