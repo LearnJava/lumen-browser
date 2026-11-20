@@ -89,7 +89,15 @@
           if (callGetters && depth < 3) {
             try {
               var gv = d.get.call(obj);
+              // A probe getter may answer with a promise that rejects
+              // asynchronously (brand-checked accessors such as the
+              // ViewTransition `ready`/`finished`/`updateCallbackDone`
+              // getters reject when `this` is not a real instance). The
+              // synchronous try/catch above cannot see that rejection —
+              // attach a noop handler so the sweep does not surface it as
+              // the page's own unhandledrejection.
               if (gv !== null && (typeof gv === 'object' || typeof gv === 'function')) {
+                try { Promise.resolve(gv).then(undefined, function () {}); } catch (e2) {}
                 queue.push([gv, depth + 1, true]);
               }
             } catch (e) {}
