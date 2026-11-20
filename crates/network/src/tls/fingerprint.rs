@@ -1,9 +1,18 @@
-//! TLS fingerprint data structures and Chrome 130 reference snapshots.
+//! TLS fingerprint data structures and the historical Chrome 130 reference
+//! snapshots.
 //!
 //! Provides JA3 (raw) and JA4_r (raw, no SHA256) fingerprint strings for
 //! snapshot-testing and anti-detection verification. The "raw" variants skip
 //! the MD5/SHA256 hashing step so tests can assert on the exact parameter
 //! values without needing a hash crate as a dependency.
+//!
+//! **Historical snapshot, not the live fingerprint.** The `CHROME_130_*`
+//! constants below are a Wireshark capture of Chrome 130 stable kept for
+//! JA3/JA4 regression tests (`tests/cases/tls_integration.rs`). The live
+//! ClientHello is built by `tls::boring` from
+//! `http::chrome_manifest::CHROME_157` (FINGERPRINT-MANIFEST) — Chrome 157
+//! differs (X25519MLKEM768 group, ALPS, different extension set), so these
+//! constants must not be read as "current Chrome".
 //!
 //! Chrome 130 ClientHello (Wireshark capture, stable channel, Linux/Windows):
 //! - TLS versions advertised: TLS 1.3 (0x0304), TLS 1.2 (0x0303)
@@ -457,6 +466,8 @@ pub fn is_grease(v: u16) -> bool {
 /// Reference Chrome 130 TLS ClientHello parameters for JA3 snapshot testing.
 ///
 /// Values from Wireshark capture of Chrome 130 stable (GREASE values excluded).
+/// Historical snapshot — см. module docs; live ClientHello идёт из
+/// `http::chrome_manifest::CHROME_157`.
 #[allow(dead_code)]
 pub struct ChromeJa3Snapshot {
     /// `ClientHello.legacy_version` = 771 (TLS 1.2 placeholder field in TLS 1.3).

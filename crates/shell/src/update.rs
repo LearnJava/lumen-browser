@@ -19,7 +19,7 @@
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, mpsc};
+use std::sync::mpsc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use lumen_core::ext::NetworkTransport;
@@ -266,17 +266,13 @@ pub fn check_for_update_now(
 }
 
 /// `HttpClient` every self-update request goes through — the user's proxy/TLS
-/// config via `config::global().apply_http`, plus the three content decoders
-/// (GitHub serves release assets compressed on some mirrors).
+/// config via `config::global().apply_http`, plus the canonical Chrome
+/// content decoders (GitHub serves release assets compressed on some mirrors).
 #[must_use]
 pub fn update_http_client() -> HttpClient {
-    use lumen_network::{BrotliContentDecoder, DeflateContentDecoder, GzipContentDecoder, ZstdContentDecoder};
     crate::config::global().apply_http(
         HttpClient::new()
-            .with_content_decoder(Arc::new(GzipContentDecoder::new()))
-            .with_content_decoder(Arc::new(DeflateContentDecoder::new()))
-            .with_content_decoder(Arc::new(BrotliContentDecoder::new()))
-            .with_content_decoder(Arc::new(ZstdContentDecoder::new())),
+            .with_content_decoders(lumen_network::default_content_decoders()),
     )
 }
 
