@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Лента времени</title>
+<style>
+  :root{--bg:#f4f5f7;--panel:#fff;--ink:#1f2328;--mut:#7d8590;--line:#dde2e8;--acc:#0b6fe0;--acc-soft:#e3eefc;--grn:#1f9d55}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  .bar{height:44px;display:flex;align-items:center;gap:8px;padding:0 12px;background:var(--panel);border-bottom:1px solid var(--line);flex:none}
+  .ib{height:30px;min-width:30px;padding:0 8px;border:none;background:none;border-radius:7px;color:var(--mut);display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12.5px}
+  .ib:hover{background:#eef1f4;color:var(--ink)}
+  .brand{font-weight:700}.brand span{color:var(--acc)}
+  .omni{flex:1;max-width:460px;margin-left:8px;height:32px;display:flex;align-items:center;padding:0 12px;background:#f4f5f7;border:1px solid var(--line);border-radius:8px;font-size:13px;cursor:pointer}
+  .omni:hover{border-color:#b9c2cc}
+  .layout{flex:1;display:flex;min-height:0}
+  /* вертикальная шкала времени */
+  .rail{width:130px;flex:none;border-right:1px solid var(--line);background:var(--panel);overflow:auto;padding:16px 0}
+  .rail .hr{position:relative;padding:18px 16px;font-size:12px;color:var(--mut);border-left:2px solid var(--line);margin-left:18px}
+  .rail .hr.on{color:var(--ink);font-weight:700;border-left-color:var(--acc)}
+  .rail .hr .cnt{font-size:10.5px;color:var(--mut);font-weight:400}
+  .feed{flex:1;overflow:auto;padding:20px 30px}
+  .day{margin-bottom:26px}
+  .day h2{font-size:13px;text-transform:uppercase;letter-spacing:.07em;color:var(--mut);margin:0 0 12px;display:flex;align-items:center;gap:10px}
+  .day h2::after{content:'';flex:1;height:1px;background:var(--line)}
+  .ev{display:flex;gap:16px;padding:10px 0;cursor:pointer;border-radius:10px}
+  .ev:hover{background:#f7f8fa}
+  .ev .time{width:52px;flex:none;text-align:right;font-size:11.5px;color:var(--mut);padding-top:2px;font-variant-numeric:tabular-nums}
+  .ev .dot{width:11px;height:11px;border-radius:50%;flex:none;margin-top:6px;border:2px solid var(--panel);box-shadow:0 0 0 2px var(--line)}
+  .ev .card{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:10px 14px;display:flex;align-items:center;gap:12px}
+  .ev .card:hover{border-color:var(--acc)}
+  .ev .fav{width:20px;height:20px;border-radius:5px;flex:none}
+  .ev .card .t{font-weight:600;font-size:13px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ev .card .u{font-size:11px;color:var(--mut)}
+  .ev .card .tag{font-size:10px;border-radius:8px;padding:2px 8px;font-weight:600}
+  .tag.tab{background:#e3eefc;color:#0b6fe0}
+  .tag.bm{background:#e6f4ec;color:#1f9d55}
+  .tag.dl{background:#fdf3dc;color:#9a6d10}
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#1c1f26;color:#e8eaed;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:300px;box-shadow:0 6px 20px rgba(0,0,0,.25);display:none}
+  #tip b{color:#8fb8ec}#tip kbd{background:#33373f;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+</style>
+</head>
+<body>
+  <div class="bar">
+    <button class="ib" data-tip="Назад"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15 18l-6-6 6-6"/></svg></button>
+    <button class="ib" data-tip="Вперёд"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 6l6 6-6 6"/></svg></button>
+    <button class="ib" data-tip="Обновить"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 12a8 8 0 11-2.34-5.66M20 4v4h-4"/></svg></button>
+    <div class="brand">lumen<span>://</span>timeline</div>
+    <div class="omni" data-tip="Поиск по таймлайну — FTS по истории" onclick="openPage('app.html?s=history')">🔍 время, тема, сайт…</div>
+    <button class="ib" data-tip="Настройки" onclick="openPage('app.html?s=settings')">⚙</button>
+  </div>
+  <div class="layout">
+    <aside class="rail" id="rail"></aside>
+    <div class="feed" id="feed"></div>
+  </div>
+  <div id="tip"></div>
+<script>
+function openPage(u){window.open(u,'_blank')}
+const DAYS=[
+ {d:'Сегодня',ev:[
+  ['09:12','Lumen — движок','lumen.local/docs','#e3a008','tab','вкладка'],
+  ['09:40','GitHub — PR #412','github.com/pull/412','#4285f4','tab','вкладка'],
+  ['10:15','MDN — CSS Grid','developer.mozilla.org','#d93025','bm','закладка'],
+  ['11:03','Подкаст ep.42','youtube.com','#34a853','tab','LIVE'],
+  ['12:30','rust-toolchain.toml','download','#9aa3ad','dl','загрузка'],
+  ['14:02','StackOverflow — borrow','stackoverflow.com','#fbbc05','bm','история'],
+  ['15:20','Спека HTML','whatwg.org','#fbbc05','tab','вкладка'],
+ ]},
+ {d:'Вчера',ev:[
+  ['18:40','Read-later: V8','read-later','#8b5cf6','tab','68%'],
+  ['20:11','Новости — дайджест','news.example.com','#ea4335','tab','прочитано'],
+  ['21:05','Банк — счета','bank.example.com','#d6453d','tab','🔒 контейнер'],
+ ]},
+ {d:'3 дня назад',ev:[
+  ['10:00','Rust async in depth','read-later','#8b5cf6','bm','12%'],
+  ['16:44','CI — pipeline run','ci.internal','#7c3aed','tab','спит'],
+ ]},
+];
+document.getElementById('rail').innerHTML=DAYS.map((d,i)=>`<div class="hr ${i===0?'on':''}">${d.d}<br><span class="cnt">${d.ev.length} событий</span></div>`).join('');
+document.getElementById('feed').innerHTML=DAYS.map(d=>`
+ <div class="day"><h2>${d.d}</h2>${d.ev.map(e=>`
+  <div class="ev" data-tip="<b>${e[1]}</b><br>${e[2]} · ${e[5]}<br>${e[0]} — клик: открыть" onclick="openPage('app.html?s=${e[4]==='bm'?'bookmarks':e[4]==='dl'?'downloads':'home'}')">
+   <span class="time">${e[0]}</span><span class="dot" style="background:${e[3]}"></span>
+   <div class="card"><span class="fav" style="background:${e[3]}">${e[1][0]}</span><span class="t">${e[1]}</span><span class="u">${e[2]}</span><span class="tag ${e[4]}">${e[5]}</span></div>
+  </div>`).join('')}</div>`).join('');
+const tip=document.getElementById('tip');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-320)+'px';tip.style.top=(e.clientY+16)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none'});
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

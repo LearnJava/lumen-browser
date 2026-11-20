@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Zen</title>
+<style>
+  :root{--bg:#f7f7f5;--panel:#fff;--ink:#20242a;--mut:#8a919c;--line:#e4e6e8;--acc:#0b6fe0;--acc-soft:#e8f1fd;--chip:#eef0f2}
+  @media(prefers-color-scheme:dark){:root{--bg:#17181b;--panel:#202226;--ink:#e4e7ea;--mut:#8b939d;--line:#2c2f34;--acc:#4d9fff;--acc-soft:#1b2a3d;--chip:#2a2d32}}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.45 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  /* ===== Тулбар: одна строка ===== */
+  .bar{height:48px;display:flex;align-items:center;gap:6px;padding:0 12px;background:var(--panel);border-bottom:1px solid var(--line);flex:none}
+  .ib{width:32px;height:32px;border:none;background:none;border-radius:8px;color:var(--mut);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;position:relative}
+  .ib:hover{background:var(--chip);color:var(--ink)}
+  .ib.on{color:var(--acc);background:var(--acc-soft)}
+  .ib svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .omni{flex:1;max-width:680px;margin:0 auto;display:flex;align-items:center;gap:8px;height:36px;padding:0 14px;background:var(--bg);border:1px solid var(--line);border-radius:10px;cursor:text}
+  .omni:hover{border-color:#c6ccd4}
+  .omni .lock{width:13px;height:13px;color:#3aa757;flex:none}
+  .omni .txt{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13.5px}
+  .omni .txt b{font-weight:600}
+  .omni kbd{font:11px/1 'Segoe UI';color:var(--mut);border:1px solid var(--line);border-radius:5px;padding:3px 6px;background:var(--panel)}
+  .sep{width:1px;height:22px;background:var(--line);margin:0 4px;flex:none}
+  .right{display:flex;align-items:center;gap:2px}
+  .badge{position:absolute;top:4px;right:4px;min-width:15px;height:15px;border-radius:8px;background:var(--acc);color:#fff;font-size:10px;font-weight:600;display:flex;align-items:center;justify-content:center;padding:0 4px}
+  /* ===== Контент: минимум ===== */
+  main{flex:1;display:flex;align-items:center;justify-content:center;position:relative}
+  .hint{color:var(--mut);text-align:center;max-width:460px;padding:0 20px}
+  .hint .big{font-size:16px;font-weight:600;color:var(--ink);margin-bottom:8px}
+  .hint .keys{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:16px}
+  .keys span{background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:5px 10px;font-size:12px}
+  /* ===== Палитра команд ===== */
+  .pal{position:absolute;top:60px;left:50%;transform:translateX(-50%);width:min(560px,92vw);background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.18);overflow:hidden;display:none;z-index:10}
+  .pal.open{display:block}
+  .pal .input{display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line);font-size:15px}
+  .pal .input .prompt{color:var(--acc);font-weight:600}
+  .pal .input input{flex:1;border:none;outline:none;background:none;color:var(--ink);font:inherit;font-size:15px}
+  .pal .list{max-height:320px;overflow:auto;padding:6px}
+  .pal .row{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;cursor:pointer;font-size:13.5px}
+  .pal .row:hover,.pal .row.sel{background:var(--acc-soft)}
+  .pal .row .ic{width:16px;height:16px;color:var(--mut);flex:none}
+  .pal .row .hint2{margin-left:auto;color:var(--mut);font-size:11.5px}
+  .pal .row .tag{font-size:10.5px;color:var(--acc);background:var(--acc-soft);border-radius:4px;padding:1px 6px}
+  .pal .foot{padding:8px 16px;border-top:1px solid var(--line);color:var(--mut);font-size:11.5px;display:flex;gap:16px}
+  /* ===== Вкладки-пилюли (появляются при Ctrl+Tab) ===== */
+  .switcher{position:absolute;top:60px;right:16px;width:300px;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 14px 40px rgba(0,0,0,.16);padding:8px;display:none;z-index:10}
+  .switcher.open{display:block}
+  .switcher .t{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;font-size:13px;cursor:pointer}
+  .switcher .t:hover,.switcher .t.sel{background:var(--acc-soft)}
+  .switcher .t .fav{width:12px;height:12px;border-radius:3px;background:#e3a008;flex:none}
+  .switcher .t .u{color:var(--mut);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* ===== Всплывающие подсказки ===== */
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#1c1f26;color:#e8eaed;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:280px;box-shadow:0 6px 20px rgba(0,0,0,.25);display:none}
+  #tip b{color:#8fb8ec}
+  #tip kbd{background:#33373f;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+  /* ===== Мок-страница внутри окна ===== */
+  .page{position:absolute;inset:48px 0 0;display:none;overflow:auto;background:#fff;color:#222}
+  .page.open{display:block}
+  .page .ph{height:180px;background:linear-gradient(120deg,#dfe6ee,#cfd8e3);display:flex;align-items:center;justify-content:center;color:#77839a;font-size:13px}
+  .page .body{max-width:640px;margin:26px auto;padding:0 20px;font-size:14.5px;line-height:1.6}
+  .page .body h1{font-size:22px}
+</style>
+</head>
+<body>
+  <!-- Тулбар -->
+  <div class="bar">
+    <button class="ib" data-tip="Назад <kbd>Alt+←</kbd><br>Вернуться на предыдущую страницу" onclick="openPage('')">
+      <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
+    <button class="ib" data-tip="Вперёд <kbd>Alt+→</kbd><br>Вернуться вперёд по истории" onclick="openPage('')">
+      <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+    <button class="ib" data-tip="Обновить <kbd>F5</kbd> · зажать для «Жёсткое обновление» <kbd>Ctrl+F5</kbd>" onclick="openPage('')">
+      <svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 11-2.34-5.66M20 4v4h-4"/></svg></button>
+    <button class="ib" data-tip="Домашняя страница — новая вкладка со speed-dial <kbd>Alt+Home</kbd>" onclick="openPage('')">
+      <svg viewBox="0 0 24 24"><path d="M3 10.5L12 3l9 7.5V20a1 1 0 01-1 1h-5v-6h-6v6H4a1 1 0 01-1-1z"/></svg></button>
+
+    <div class="omni" data-tip="Адресная строка и командная строка<br>• Enter — перейти<br>• <b>@history</b> история · <b>@notes</b> заметки<br>• <b>@read-later</b> отложенное · <b>@tabs</b> вкладки<br>• <b>@bookmarks</b> закладки · <b>@ai</b> ответ ИИ" onclick="document.getElementById('pal').classList.add('open')">
+      <svg class="lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg>
+      <span class="txt"><b>lumen</b> — лёгкий браузер на собственном движке</span>
+      <kbd>Ctrl K</kbd>
+    </div>
+
+    <div class="sep"></div>
+    <div class="right">
+      <button class="ib" data-tip="Защита: блокировщик рекламы и трекеров<br><b>2 трекера заблокировано</b> на этой странице<br><kbd>Ctrl+Shift+U</kbd>" onclick="openPage('privacy.html')">
+        <svg viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
+        <span class="badge">2</span></button>
+      <button class="ib" data-tip="Карточка «Слушать позже» / PiP — плавающий плеер поверх окон <kbd>Ctrl+Shift+P</kbd>" onclick="openPage('page.html')">
+        <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9l5 3-5 3z"/></svg></button>
+      <button class="ib" data-tip="Вкладки: 7 открыто · 3 спят<br><kbd>Ctrl+Tab</kbd> — переключатель, <kbd>Ctrl+T</kbd> — новая" onclick="document.getElementById('sw').classList.add('open')">
+        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 9v11"/></svg>
+        <span class="badge">7</span></button>
+      <button class="ib on" data-tip="Меню: загрузки, закладки, история, чтение позже, настройки, <b>about:settings</b>" onclick="openPage('focus.html')">
+        <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/></svg></button>
+    </div>
+  </div>
+
+  <!-- Палитра команд -->
+  <div class="pal" id="pal" onclick="event.stopPropagation()">
+    <div class="input"><span class="prompt">⌘</span><input id="palIn" placeholder="Команда, запрос или @-префикс…" oninput="filterPal(this.value)"></div>
+    <div class="list" id="palList"></div>
+    <div class="foot"><span><kbd>↑↓</kbd> выбор</span><span><kbd>Enter</kbd> выполнить</span><span><kbd>Esc</kbd> закрыть</span><span style="margin-left:auto">@ai — ответ по вашим данным (закладки + заметки)</span></div>
+  </div>
+
+  <!-- Переключатель вкладок -->
+  <div class="switcher" id="sw" onclick="event.stopPropagation()">
+    <div class="t sel"><span class="fav"></span><span>Lumen — лёгкий браузер…<br><span class="u">lumen.local/docs</span></span></div>
+    <div class="t"><span class="fav" style="background:#4285f4"></span><span>GitHub — репозиторий движка<br><span class="u">github.com/lumen</span></span></div>
+    <div class="t"><span class="fav" style="background:#d93025"></span><span>YouTube — доклад про V8<br><span class="u">youtube.com/watch</span></span></div>
+    <div class="t"><span class="fav" style="background:#0f9d58"></span><span>Спящая: MDN — CSS Grid<br><span class="u">hướng dẫn · T3</span></span></div>
+  </div>
+
+  <!-- Контент -->
+  <main id="main">
+    <div class="hint" id="hint">
+      <div class="big">Lumen — минимум chrome, максимум движка</div>
+      <div>Все функции живут в одной строке. Нажмите <b>Ctrl+K</b> или кликните по адресной строке — откроется палитра команд: переход, поиск по истории/заметкам/read-later/вкладкам/закладкам и ИИ-ответ.</div>
+      <div class="keys">
+        <span><b>Ctrl K</b> — команды</span>
+        <span><b>Ctrl T</b> — новая вкладка</span>
+        <span><b>Ctrl W</b> — закрыть</span>
+        <span><b>Ctrl Shift U</b> — щиты</span>
+        <span><b>Ctrl Shift P</b> — PiP</span>
+      </div>
+    </div>
+  </main>
+
+  <div id="tip"></div>
+<script>
+const PAGES={
+ 'page.html':'page.html','privacy.html':'privacy.html','focus.html':'focus.html','workbench.html':'workbench.html','command.html':'command.html','zen.html':'zen.html'
+};
+function openPage(p){ if(!p) return; window.open(PAGES[p]||p,'_blank'); }
+
+/* подсказки */
+const tip=document.getElementById('tip');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-300)+'px';tip.style.top=(e.clientY+16)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none';});
+
+/* палитра */
+const CMDS=[
+ ['⌕','Перейти: lumen.local/docs','открыть в этой вкладке','nav'],
+ ['＋','Новая вкладка','Ctrl+T','nav'],
+ ['✎','Новая заметка','@notes','notes'],
+ ['▶','Слушать позже','read-later','readlater'],
+ ['⬇','Загрузки','3 файла · 12 МБ','dl'],
+ ['⚿','Настройки браузера','about:settings','set'],
+ ['✦','Ответ ИИ по моим данным','@ai · RAG по закладкам и заметкам','ai'],
+ ['🔍','Поиск по истории','@history «rust»','hist'],
+ ['▤','Древо вкладок','Ctrl+Shift+S','tabs'],
+ ['◐','Режим чтения','reader view','reader'],
+ ['✦','Перевести страницу','translate','tr'],
+ ['🗑','Очистить историю','настройки → приватность','priv'],
+];
+function renderPal(q){
+  const l=document.getElementById('palList');const qq=(q||'').toLowerCase();
+  l.innerHTML=CMDS.filter(c=>!qq||c[1].toLowerCase().includes(qq)||c[3].includes(qq)).map((c,i)=>
+   `<div class="row ${i===0?'sel':''}" data-act="${c[3]}" onclick="runCmd('${c[3]}')"><svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>${c[1]}</span>${c[2]?`<span class="hint2">${c[2]}</span>`:''}${c[3]==='ai'?'<span class="tag">@ai</span>':''}</div>`).join('')||'<div class="row">Ничего не найдено — попробуйте @-префикс</div>';
+}
+function runCmd(a){document.getElementById('pal').classList.remove('open');openPage(a==='priv'||a==='set'?'focus.html':'page.html');}
+function filterPal(v){renderPal(v)}
+document.getElementById('palIn').addEventListener('keydown',e=>{if(e.key==='Enter'){const r=document.querySelector('#palList .row');r&&runCmd(r.dataset.act)}if(e.key==='Escape')document.getElementById('pal').classList.remove('open')});
+document.getElementById('palIn').addEventListener('focus',()=>renderPal(''));
+addEventListener('click',e=>{if(!e.target.closest('.pal'))document.getElementById('pal').classList.remove('open');if(!e.target.closest('.switcher'))document.getElementById('sw').classList.remove('open');});
+addEventListener('keydown',e=>{
+  if(e.key==='Escape'){document.getElementById('pal').classList.remove('open');document.getElementById('sw').classList.remove('open');}
+  if(e.ctrlKey&&e.key.toLowerCase()==='k'){e.preventDefault();const p=document.getElementById('pal');p.classList.toggle('open');if(p.classList.contains('open'))document.getElementById('palIn').focus();}
+  if(e.ctrlKey&&e.key.toLowerCase()==='t'){e.preventDefault();openPage('page.html');}
+  if(e.ctrlKey&&e.key.toLowerCase()==='w'){e.preventDefault();}
+  if(e.ctrlKey&&e.key.toLowerCase()==='tab'){e.preventDefault();document.getElementById('sw').classList.toggle('open');}
+});
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

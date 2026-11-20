@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Колода: фокус</title>
+<style>
+  :root{--bg:#0d1014;--panel:#151920;--ink:#e8eaed;--mut:#8a919c;--line:#262c35;--acc:#5b9dff}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  .top{height:42px;flex:none;display:flex;align-items:center;gap:10px;padding:0 14px;background:var(--panel);border-bottom:1px solid var(--line)}
+  .brand{font-weight:700}.brand span{color:var(--acc)}
+  .omni{flex:1;max-width:440px;margin:0 auto;height:32px;display:flex;align-items:center;padding:0 14px;background:#0b0d10;border:1px solid var(--line);border-radius:16px;font-size:13px;color:var(--mut);cursor:pointer}
+  .omni:hover{border-color:#3a4250}
+  .ib{height:30px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:none;color:var(--mut);cursor:pointer;font-size:12.5px}
+  .ib:hover{color:var(--ink);border-color:#3a4250}
+  .stage{flex:1;display:flex;align-items:center;justify-content:center;position:relative;min-height:0}
+  .main{width:min(720px,80vw);height:min(500px,78vh);background:#fff;color:#222;border-radius:16px;overflow:hidden;box-shadow:0 40px 100px rgba(0,0,0,.6);position:relative;z-index:5}
+  .main .hd{height:38px;background:#f0f2f5;display:flex;align-items:center;gap:10px;padding:0 16px;border-bottom:1px solid #e4e6e8}
+  .fav{width:15px;height:15px;border-radius:4px}
+  .main .url{font-size:12px;color:#77809a;flex:1}
+  .main .bd{height:calc(100% - 38px);overflow:auto;padding:28px}
+  .main .bd .hero{height:130px;border-radius:12px;background:linear-gradient(120deg,#dfe6ee,#cfd8e3);margin-bottom:20px}
+  .main .bd h1{font-size:23px;margin:0 0 12px}
+  .main .bd p{font-size:15px;line-height:1.7;color:#333}
+  /* размытые соседи */
+  .side{position:absolute;top:50%;transform:translateY(-50%);width:min(320px,30vw);height:min(400px,66vh);background:#2a2f37;border-radius:14px;overflow:hidden;opacity:.35;filter:blur(6px);transition:all .3s;z-index:1}
+  .side.l{left:3%}
+  .side.r{right:3%}
+  .side .sh{height:100%;background:linear-gradient(140deg,#333a45,#2a2f37)}
+  .side .fav{position:absolute;top:12px;left:12px;width:16px;height:16px;border-radius:4px}
+  .nav{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);display:flex;gap:10px;z-index:10}
+  .nav button{width:44px;height:44px;border-radius:50%;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer;font-size:18px}
+  .nav button:hover{border-color:var(--acc);color:var(--acc)}
+  .dots{position:absolute;bottom:74px;left:50%;transform:translateX(-50%);display:flex;gap:6px;z-index:10}
+  .dots span{width:6px;height:6px;border-radius:50%;background:#3a4250;cursor:pointer}
+  .dots span.on{background:var(--acc);transform:scale(1.4)}
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#0d1117;color:#e6e9ee;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:290px;border:1px solid #2a313c;box-shadow:0 6px 20px rgba(0,0,0,.5);display:none}
+  #tip b{color:#8fb8ec}#tip kbd{background:#262b33;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+</style>
+</head>
+<body>
+  <div class="top">
+    <div class="brand">lumen<span>://</span>deck-focus</div>
+    <div class="omni" data-tip="Адрес / @-команды" onclick="openPage('app.html?s=history')">🔍 lumen.local…</div>
+    <button class="ib" data-tip="Все вкладки" onclick="openPage('app.html?s=home')">▦</button>
+    <button class="ib" data-tip="Настройки" onclick="openPage('app.html?s=settings')">⚙</button>
+  </div>
+  <div class="stage" id="st"></div>
+  <div class="dots" id="dots"></div>
+  <div class="nav"><button data-tip="Предыдущая" onclick="step(-1)">←</button><button data-tip="Следующая" onclick="step(1)">→</button></div>
+  <div id="tip"></div>
+<script>
+function openPage(u){window.open(u,'_blank')}
+const P=[
+ {t:'Lumen — движок',u:'lumen.local/docs',c:'#e3a008',h:'Архитектура',b:'DOM-арена → layout → paint → V8. Фокус-режим: только текущая страница, соседи размыты.'},
+ {t:'GitHub — lumen',u:'github.com/lumen',c:'#4285f4',h:'Репозиторий',b:'Код и issues. Работа в worktree-слотах.'},
+ {t:'MDN — Grid',u:'mozilla.org',c:'#d93025',h:'CSS Grid',b:'Справочник · спит (T3).'},
+ {t:'Подкаст',u:'youtube.com',c:'#34a853',h:'V8 и JIT',b:'Видео · PiP доступен.'},
+ {t:'V8 deep dive',u:'read-later',c:'#8b5cf6',h:'Inside V8',b:'68% прочитано.'},
+ {t:'HTML Spec',u:'whatwg.org',c:'#fbbc05',h:'Standard',b:'Навигация и bfcache.'},
+];
+let cur=0;
+const st=document.getElementById('st'),dots=document.getElementById('dots');
+function render(){
+  const p=P[cur];
+  st.innerHTML=`
+   <div class="side l" data-tip="Предыдущая вкладка — клик: переключиться"><div class="sh"><span class="fav" style="background:${P[(cur-1+P.length)%P.length].c}"></span></div></div>
+   <div class="main"><div class="hd"><span class="fav" style="background:${p.c}"></span><span class="url">${p.u} · ${cur+1}/${P.length}</span></div><div class="bd"><div class="hero"></div><h1>${p.h}</h1><p>${p.b}</p><p>Режим «Сцена»: одна страница в фокусе, соседние — размытый контекст. Для чтения и презентаций.</p></div></div>
+   <div class="side r" data-tip="Следующая вкладка — клик: переключиться"><div class="sh"><span class="fav" style="background:${P[(cur+1)%P.length].c}"></span></div></div>`;
+  dots.innerHTML=P.map((_,i)=>`<span class="${i===cur?'on':''}" onclick="cur=${i};render()"></span>`).join('');
+  st.querySelector('.side.l').onclick=()=>step(-1);
+  st.querySelector('.side.r').onclick=()=>step(1);
+}
+function step(d){cur=(cur+d+P.length)%P.length;render()}
+addEventListener('keydown',e=>{if(e.key==='ArrowLeft')step(-1);if(e.key==='ArrowRight')step(1)});
+const tip=document.getElementById('tip');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-300)+'px';tip.style.top=(e.clientY+16)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none'});
+render();
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Сцена</title>
+<style>
+  :root{--bg:#0d1014;--panel:#151920;--ink:#e8eaed;--mut:#8a919c;--line:#262c35;--acc:#5b9dff}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  .stage{flex:1;display:flex;align-items:center;justify-content:center;position:relative;min-height:0;padding:20px}
+  .slide{width:min(860px,90vw);height:min(520px,80vh);background:#fff;color:#222;border-radius:16px;overflow:hidden;box-shadow:0 30px 90px rgba(0,0,0,.6);display:flex;flex-direction:column}
+  .slide .hd{height:40px;background:#f0f2f5;display:flex;align-items:center;gap:10px;padding:0 16px;border-bottom:1px solid #e4e6e8;flex:none}
+  .fav{width:15px;height:15px;border-radius:4px}
+  .slide .url{font-size:12px;color:#77809a;flex:1}
+  .slide .bd{flex:1;overflow:auto;padding:28px}
+  .slide .bd .hero{height:120px;border-radius:12px;background:linear-gradient(120deg,#dfe6ee,#cfd8e3);margin-bottom:20px;display:flex;align-items:center;justify-content:center;color:#77839a;font-size:13px}
+  .slide .bd h1{font-size:24px;margin:0 0 12px}
+  .slide .bd p{font-size:15px;line-height:1.7;color:#333;margin:0 0 14px}
+  /* навигация сцены */
+  .nav{position:absolute;left:50%;bottom:18px;transform:translateX(-50%);display:flex;align-items:center;gap:14px;background:rgba(21,25,32,.85);backdrop-filter:blur(12px);border:1px solid var(--line);border-radius:30px;padding:8px 18px;z-index:20}
+  .nav button{width:38px;height:38px;border-radius:50%;border:none;background:var(--acc);color:#fff;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center}
+  .nav button.ghost{background:#2a2f37;color:var(--mut)}
+  .nav .cnt{font-size:12.5px;color:var(--mut);min-width:56px;text-align:center}
+  .nav .dots{display:flex;gap:5px}
+  .nav .dots i{width:6px;height:6px;border-radius:50%;background:#3a4250;cursor:pointer}
+  .nav .dots i.on{background:var(--acc);transform:scale(1.4)}
+  .strip{position:absolute;left:50%;top:14px;transform:translateX(-50%);display:flex;gap:6px;z-index:15}
+  .strip .m{width:52px;height:34px;border-radius:6px;background:#2a2f37;border:1px solid var(--line);cursor:pointer;opacity:.5;transition:all .2s;overflow:hidden}
+  .strip .m:hover{opacity:.85}
+  .strip .m.on{opacity:1;border-color:var(--acc);box-shadow:0 0 0 2px rgba(91,157,255,.3)}
+  .strip .m .f{height:8px;margin:4px;border-radius:2px}
+  .topbtns{position:absolute;top:14px;right:16px;display:flex;gap:8px;z-index:15}
+  .topbtns button{background:rgba(21,25,32,.85);border:1px solid var(--line);border-radius:9px;color:var(--mut);padding:7px 12px;font-size:12px;cursor:pointer;backdrop-filter:blur(8px)}
+  .topbtns button:hover{color:var(--ink);border-color:#3a4250}
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#0d1117;color:#e6e9ee;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:290px;border:1px solid #2a313c;box-shadow:0 6px 20px rgba(0,0,0,.5);display:none}
+  #tip b{color:#8fb8ec}#tip kbd{background:#262b33;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+</style>
+</head>
+<body>
+  <div class="topbtns">
+    <button data-tip="Омнибокс — адрес / @-команды" onclick="openPage('app.html?s=history')">🔍 lumen.local</button>
+    <button data-tip="Пространства" onclick="openPage('app.html?s=workspaces')">⬒</button>
+    <button data-tip="Настройки" onclick="openPage('app.html?s=settings')">⚙</button>
+  </div>
+  <div class="strip" id="strip"></div>
+  <div class="stage">
+    <div class="slide" id="slide"></div>
+  </div>
+  <div class="nav">
+    <button class="ghost" data-tip="Предыдущая страница <kbd>←</kbd> или <kbd>Alt+←</kbd> — история, не вкладки" onclick="step(-1)">←</button>
+    <div class="dots" id="dots"></div>
+    <span class="cnt" id="cnt"></span>
+    <button data-tip="Следующая страница <kbd>→</kbd> или <kbd>Alt+→</kbd>" onclick="step(1)">→</button>
+    <button class="ghost" data-tip="Все вкладки — обзор" onclick="openPage('app.html?s=home')">▦</button>
+  </div>
+  <div id="tip"></div>
+<script>
+function openPage(u){window.open(u,'_blank')}
+const P=[
+ {t:'Lumen — движок',u:'lumen.local/docs',c:'#e3a008',h:'Архитектура движка',b:'DOM-арена, layout, paint, V8. Потоковая загрузка.'},
+ {t:'GitHub — lumen',u:'github.com/lumen',c:'#4285f4',h:'Репозиторий',b:'Код, issues, CI. Работа в worktree-слотах.'},
+ {t:'MDN — CSS Grid',u:'developer.mozilla.org',c:'#d93025',h:'CSS Grid',b:'Справочник по grid layout.'},
+ {t:'Подкаст ep.42',u:'youtube.com',c:'#34a853',h:'Доклад про V8',b:'Видео · можно в PiP.'},
+ {t:'Read-later: V8',u:'read-later',c:'#8b5cf6',h:'Inside the V8 engine',b:'68% прочитано · продолжить.'},
+ {t:'Спека HTML',u:'whatwg.org',c:'#fbbc05',h:'HTML Standard',b:'Навигация, bfcache, focus.'},
+];
+let cur=0;
+function render(){
+  const p=P[cur];
+  document.getElementById('slide').innerHTML=`<div class="hd"><span class="fav" style="background:${p.c}"></span><span class="url">${p.u}</span><span style="font-size:11px;color:#999">${cur+1}/${P.length}</span></div><div class="bd"><div class="hero">[скриншот]</div><h1>${p.h}</h1><p>${p.b}</p><p>Эта «сцена» показывает одну страницу за раз — как слайды. Стрелки ← → листают по истории вкладки, миниатюры сверху — по вкладкам.</p></div>`;
+  document.getElementById('dots').innerHTML=P.map((_,i)=>`<i class="${i===cur?'on':''}" onclick="cur=${i};render()"></i>`).join('');
+  document.getElementById('strip').innerHTML=P.map((t,i)=>`<div class="m ${i===cur?'on':''}" style="background:${t.c}22" data-tip="<b>${t.t}</b><br>${t.u}" onclick="cur=${i};render()"><div class="f" style="background:${t.c}"></div></div>`).join('');
+  document.getElementById('cnt').textContent=(cur+1)+' / '+P.length;
+}
+function step(d){cur=(cur+d+P.length)%P.length;render()}
+addEventListener('keydown',e=>{if(e.key==='ArrowLeft')step(-1);if(e.key==='ArrowRight')step(1)});
+const tip=document.getElementById('tip');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-300)+'px';tip.style.top=(e.clientY+16)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none'});
+render();
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

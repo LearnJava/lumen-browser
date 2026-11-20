@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Атлас</title>
+<style>
+  :root{--bg:#f4f5f7;--panel:#fff;--ink:#1f2328;--mut:#7d8590;--line:#dde2e8;--acc:#0b6fe0;--acc-soft:#e3eefc}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  .bar{height:44px;display:flex;align-items:center;gap:10px;padding:0 14px;background:var(--panel);border-bottom:1px solid var(--line);flex:none}
+  .brand{font-weight:700}.brand span{color:var(--acc)}
+  .omni{flex:1;max-width:420px;margin-left:10px;height:32px;display:flex;align-items:center;padding:0 13px;background:#f4f5f7;border:1px solid var(--line);border-radius:16px;font-size:13px;color:var(--mut);cursor:pointer}
+  .omni:hover{border-color:#b9c2cc}
+  .ib{height:30px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:none;color:var(--mut);cursor:pointer;font-size:12.5px}
+  .ib:hover{color:var(--ink)}
+  .map{flex:1;position:relative;overflow:hidden;background:
+    radial-gradient(circle at 20% 30%,rgba(11,111,224,.06),transparent 40%),
+    radial-gradient(circle at 75% 60%,rgba(139,92,246,.06),transparent 40%),
+    radial-gradient(circle at 50% 85%,rgba(31,157,85,.05),transparent 40%),var(--bg)}
+  .node{position:absolute;width:180px;background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:12px 14px;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.06);transition:transform .15s,border-color .15s}
+  .node:hover{transform:scale(1.04);border-color:var(--acc)}
+  .node .h{display:flex;align-items:center;gap:9px;margin-bottom:8px}
+  .node .fav{width:24px;height:24px;border-radius:7px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:11px;flex:none}
+  .node .h b{font-size:13px;display:block}
+  .node .h span{font-size:10.5px;color:var(--mut)}
+  .node .tags{display:flex;gap:5px;flex-wrap:wrap}
+  .node .tags i{font-style:normal;font-size:10px;background:#f0f2f5;border-radius:8px;padding:1px 7px;color:var(--mut)}
+  .edge{position:absolute;height:1px;background:#c6ccd4;transform-origin:left center;opacity:.5;pointer-events:none}
+  .legend{position:absolute;left:18px;bottom:16px;background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:12px 16px;font-size:12px}
+  .legend b{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);display:block;margin-bottom:8px}
+  .legend div{display:flex;align-items:center;gap:8px;padding:3px 0;color:var(--mut)}
+  .legend i{width:10px;height:10px;border-radius:3px;display:inline-block}
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#1c1f26;color:#e8eaed;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:300px;box-shadow:0 6px 20px rgba(0,0,0,.25);display:none}
+  #tip b{color:#8fb8ec}#tip kbd{background:#33373f;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+</style>
+</head>
+<body>
+  <div class="bar">
+    <div class="brand">lumen<span>://</span>atlas</div>
+    <div class="omni" data-tip="Поиск по карте: домены, теги, закладки" onclick="openPage('app.html?s=bookmarks')">🔍 домен, тег или закладка…</div>
+    <button class="ib" data-tip="Вкладки" onclick="openPage('app.html?s=home')">▤</button>
+    <button class="ib" data-tip="История" onclick="openPage('app.html?s=history')">🕘</button>
+    <button class="ib" data-tip="Настройки" onclick="openPage('app.html?s=settings')">⚙</button>
+  </div>
+  <div class="map" id="map"></div>
+  <div class="legend"><b>Легенда</b><div><i style="background:#0b6fe0"></i>работа / код</div><div><i style="background:#1f9d55"></i>медиа</div><div><i style="background:#8b5cf6"></i>чтение</div><div><i style="background:#d6453d"></i>финансы</div><div><i style="background:#d8a400"></i>новости</div></div>
+  <div id="tip"></div>
+<script>
+function openPage(u){window.open(u,'_blank')}
+const N=[
+ {x:12,y:18,c:'#0b6fe0',n:'GitHub',s:'github.com · 14 вкладок',t:['код','PR','CI']},
+ {x:32,y:8,c:'#0b6fe0',n:'Lumen docs',s:'lumen.local · 3',t:['движок','API']},
+ {x:55,y:22,c:'#8b5cf6',n:'MDN / Specs',s:'developer.mozilla.org · 6',t:['CSS','HTML','ref']},
+ {x:70,y:8,c:'#1f9d55',n:'YouTube',s:'youtube.com · 2 вкладки',t:['LIVE','подкаст']},
+ {x:20,y:55,c:'#1f9d55',n:'Read-later',s:'очередь · 18 статей',t:['V8','Rust','CSS']},
+ {x:48,y:60,c:'#8b5cf6',n:'Статьи',s:'внешние страницы · 9',t:['глубокие']},
+ {x:75,y:52,c:'#d8a400',n:'Новости',s:'news.example.com · сегодня',t:['дайджест']},
+ {x:35,y:78,c:'#d6453d',n:'Банк',s:'bank.example.com · 🔒 контейнер',t:['финансы','личное']},
+ {x:62,y:82,c:'#6b7280',n:'Почта',s:'mail.example.com · 2',t:['работа']},
+];
+const map=document.getElementById('map');
+map.innerHTML=N.map(n=>`<div class="node" style="left:${n.x}%;top:${n.y}%" data-tip="<b>${n.n}</b><br>${n.s}<br>теги: ${n.t.join(', ')}<br>клик — открыть раздел" onclick="openPage('app.html?s=${n.c==='#d6453d'?'privacy':'bookmarks'}')"><div class="h"><div class="fav" style="background:${n.c}">${n.n[0]}</div><div><b>${n.n}</b><span>${n.s.split(' · ')[0]}</span></div></div><div class="tags">${n.t.map(t=>`<i>${t}</i>`).join('')}</div></div>`).join('');
+const tip=document.getElementById('tip');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-320)+'px';tip.style.top=(e.clientY+16)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none'});
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

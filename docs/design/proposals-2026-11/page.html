@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Статья — Lumen (окно)</title>
+<style>
+  body{margin:0;font-family:'Segoe UI',system-ui,sans-serif;background:#fff;color:#1c1f26}
+  header{background:#14161a;color:#e6e8eb;padding:14px 22px;font-size:15px}
+  header b{color:#7aa7d9}
+  main{max-width:720px;margin:0 auto;padding:28px 22px 60px;line-height:1.65;font-size:15.5px}
+  h1{font-size:26px;line-height:1.25;margin:0 0 14px}
+  .meta{color:#777;font-size:13px;margin-bottom:24px}
+  p{margin:0 0 16px}
+  blockquote{border-left:3px solid #d9dee4;margin:0 0 16px;padding:4px 16px;color:#444}
+  img{max-width:100%;border-radius:8px;display:block;margin:18px auto;background:#eef1f5}
+  .ph{width:100%;height:190px;display:flex;align-items:center;justify-content:center;color:#8a939e;font-size:13px;background:linear-gradient(135deg,#eef1f5,#e2e7ec);border-radius:8px;margin:18px 0}
+  footer{color:#999;font-size:12px;border-top:1px solid #eee;padding:14px 22px}
+</style>
+</head>
+<body>
+<header><b>Lumen</b> — приватный лёгкий браузер с собственным движком на Rust</header>
+<main>
+<h1>Как устроен собственный движок браузера</h1>
+<div class="meta">Пример страницы, открытой в новом окне. Загружено через потоковый пайплайн lumen-shell: HTML парсится инкрементально, CSS каскадируется в layout, вёрстка и отрисовка идут в отдельном потоке — окно не замирает на время загрузки.</div>
+<p>Браузер — это не оболочка вокруг чужого движка, а единая система: ареновый DOM без <code>Rc/RefCell</code>, итераторный HTML-токенизатор, типизированный каскад CSS и собственный растеризатор. V8 исполняет JavaScript, остальное — код Lumen.</p>
+<div class="ph">[Изображение-заглушка: движок рисует его через image-декодер]</div>
+<p>Каждая навигация — будь то клик по ссылке, адресная строка или <code>location.href</code> из скрипта — проходит один и тот же потоковый конвейер вне UI-потока. Пользователь видит прогрессивные кадры вместо «замёрзшего» окна.</p>
+<blockquote>Приватность здесь не режим, а архитектура: shield-фильтр решает по каждому запросу в его собственном контексте, Tor — отдельный профиль без постоянного состояния, а Global Privacy Control выставляется только когда он не выдаёт отпечаток.</blockquote>
+<p>Дальше по тексту идут абзацы, чтобы у страницы была высота для прокрутки, восстановления позиции и find-in-page.</p>
+<p>Вкладки группируются по цвету и названию, у каждой — свой контейнер (изоляция cookie и хранилищ), а закрытую можно вернуть по Ctrl+Shift+T со всей позицией прокрутки и состоянием.</p>
+<p>История ищется полнотекстово (FTS5 + bm25), заметки и read-later доступны из той же адресной строки через @-префиксы — не нужно открывать отдельный раздел настроек.</p>
+</main>
+<footer>Окно открыто кнопкой прототипа · data: пример · сессия: anonymous container</footer>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

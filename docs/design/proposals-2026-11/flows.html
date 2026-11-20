@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Потоки</title>
+<style>
+  :root{--bg:#f4f5f7;--panel:#fff;--ink:#1f2328;--mut:#7d8590;--line:#dde2e8;--acc:#0b6fe0}
+  *{box-sizing:border-box}
+  body{margin:0;font:13.5px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  .bar{height:44px;display:flex;align-items:center;gap:8px;padding:0 12px;background:var(--panel);border-bottom:1px solid var(--line);flex:none}
+  .ib{height:30px;min-width:30px;padding:0 8px;border:none;background:none;border-radius:7px;color:var(--mut);display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12.5px}
+  .ib:hover{background:#eef1f4;color:var(--ink)}
+  .brand{font-weight:700}.brand span{color:var(--acc)}
+  .omni{flex:1;max-width:420px;margin-left:8px;height:32px;display:flex;align-items:center;padding:0 12px;background:#f4f5f7;border:1px solid var(--line);border-radius:8px;font-size:13px;cursor:pointer}
+  .board{flex:1;display:flex;gap:14px;padding:20px;overflow-x:auto;min-height:0}
+  .col{width:250px;flex:none;background:#eceef2;border-radius:14px;padding:12px;display:flex;flex-direction:column}
+  .col h3{margin:0 4px 10px;font-size:12px;display:flex;align-items:center;gap:8px}
+  .col h3 .dot{width:10px;height:10px;border-radius:3px}
+  .col h3 .cnt{margin-left:auto;color:var(--mut);font-weight:400}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:11px 13px;margin-bottom:8px;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.05)}
+  .card:hover{border-color:var(--acc)}
+  .card .t{font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .card .u{font-size:11px;color:var(--mut);margin-top:2px}
+  .card .tags{display:flex;gap:4px;margin-top:7px}
+  .card .tags i{font-style:normal;font-size:10px;background:#f0f2f5;border-radius:8px;padding:1px 7px;color:var(--mut)}
+  .card .live{color:#1f9d55;font-size:10.5px;margin-top:5px;display:block}
+  .card .sleep{color:#9aa3ad;font-size:10.5px;margin-top:5px;display:block}
+  .addcol{width:56px;flex:none;display:flex;align-items:flex-start;justify-content:center;padding-top:14px}
+  .addcol button{width:44px;height:44px;border-radius:12px;border:2px dashed #c6ccd4;background:none;color:var(--mut);font-size:20px;cursor:pointer}
+  .addcol button:hover{border-color:var(--acc);color:var(--acc)}
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#1c1f26;color:#e8eaed;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:290px;box-shadow:0 6px 20px rgba(0,0,0,.25);display:none}
+  #tip b{color:#8fb8ec}#tip kbd{background:#33373f;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+</style>
+</head>
+<body>
+  <div class="bar">
+    <button class="ib" data-tip="Назад"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15 18l-6-6 6-6"/></svg></button>
+    <button class="ib" data-tip="Вперёд"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 6l6 6-6 6"/></svg></button>
+    <button class="ib" data-tip="Обновить"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 12a8 8 0 11-2.34-5.66M20 4v4h-4"/></svg></button>
+    <div class="brand">lumen<span>://</span>flows</div>
+    <div class="omni" data-tip="Адрес / поиск / @-команды" onclick="openPage('app.html?s=history')">🔍 lumen.local…</div>
+    <button class="ib" data-tip="Новая колонка-поток" onclick="openPage('app.html?s=workspaces')">＋ поток</button>
+    <button class="ib" data-tip="Настройки" onclick="openPage('app.html?s=settings')">⚙</button>
+  </div>
+  <div class="board" id="b"></div>
+  <div id="tip"></div>
+<script>
+function openPage(u){window.open(u,'_blank')}
+const COLS=[
+ {n:'Сейчас',c:'#0b6fe0',cards:[['Lumen — движок','lumen.local/docs',['движок','core']],['GitHub — PR #412','github.com/pull/412',['ревью']],['Подкаст ep.42','youtube.com',['LIVE','42 мин']]]},
+ {n:'Читаю',c:'#8b5cf6',cards:[['Read-later: V8','read-later',['68%']],['MDN — Grid','developer.mozilla.org',['справка']]]},
+ {n:'Отложено',c:'#d8a400',cards:[['Новости — дайджест','news.example.com',['snooze 2ч']]]},
+ {n:'Спит (T3)',c:'#9aa3ad',cards:[['Спека HTML','whatwg.org',['💤 заморожена']]]},
+ {n:'Готово',c:'#1f9d55',cards:[['Загрузки — 3 файла','downloads',['✅ завершены']]]},
+];
+const b=document.getElementById('b');
+b.innerHTML=COLS.map(c=>`
+ <div class="col" data-tip="<b>${c.n}</b><br>колонка-поток: перетаскивайте карточки между колонками — вкладка меняет статус">
+  <h3><span class="dot" style="background:${c.c}"></span>${c.n}<span class="cnt">${c.cards.length}</span></h3>
+  ${c.cards.map(k=>`<div class="card" data-tip="<b>${k[0]}</b><br>${k[1]}${k[2].includes('LIVE')?' · воспроизводится':k[2].includes('💤')?' · DOM+JS заморожены':''}<br>клик — открыть" onclick="openPage('app.html?s=home')"><div class="t">${k[0]}</div><div class="u">${k[1]}</div><div class="tags">${k[2].filter(t=>t!=='LIVE'&&t!=='💤 заморожена').map(t=>`<i>${t}</i>`).join('')}</div>${k[2].includes('LIVE')?'<span class="live">● воспроизводится</span>':''}${k[2].includes('💤')?'<span class="sleep">💤 спит</span>':''}</div>`).join('')}
+ </div>`).join('')+`<div class="addcol"><button data-tip="Новая колонка — свой статус для вкладок">＋</button></div>`;
+const tip=document.getElementById('tip');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-300)+'px';tip.style.top=(e.clientY+16)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none'});
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

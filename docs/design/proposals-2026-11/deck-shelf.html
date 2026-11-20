@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Колода: полка</title>
+<style>
+  :root{--bg:#14100c;--panel:#1e1812;--ink:#efe6d8;--mut:#a89a85;--line:#3a3226;--acc:#e8a33d;--acc-soft:#3a2f1a}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  .top{height:44px;flex:none;display:flex;align-items:center;gap:10px;padding:0 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+  .brand{font-weight:700}.brand span{color:var(--acc)}
+  .omni{flex:1;max-width:460px;margin:0 auto;height:33px;display:flex;align-items:center;padding:0 14px;background:#0e0b08;border:1px solid var(--line);border-radius:8px;font-size:13px;color:var(--mut);cursor:pointer}
+  .omni:hover{border-color:#4a3f2a}
+  .ib{height:30px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:none;color:var(--mut);cursor:pointer;font-size:12.5px}
+  .ib:hover{color:var(--ink);border-color:#4a3f2a}
+  /* полка */
+  .shelf{flex:1;display:flex;align-items:flex-end;justify-content:center;gap:18px;padding:0 30px 0;position:relative;min-height:0}
+  .shelf::after{content:'';position:absolute;bottom:60px;left:20px;right:20px;height:14px;background:linear-gradient(180deg,#4a3a24,#2e2416);border-radius:4px;box-shadow:0 8px 20px rgba(0,0,0,.5)}
+  .card{width:190px;height:min(300px,42vh);background:#f5f0e6;color:#222;border-radius:8px 8px 0 0;overflow:hidden;cursor:pointer;position:relative;transition:transform .2s,bottom .2s;box-shadow:0 14px 30px rgba(0,0,0,.4);flex:none}
+  .card:hover{transform:translateY(-8px)}
+  .card.on{bottom:0}
+  .card:not(.on){bottom:-30px;opacity:.75;transform:scale(.94)}
+  .card .hd{height:30px;background:#e8e0d0;display:flex;align-items:center;gap:8px;padding:0 10px;border-bottom:1px solid #d5cbb8}
+  .fav{width:12px;height:12px;border-radius:3px}
+  .card .url{font-size:10px;color:#8a8172;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .card .bd{padding:14px 12px;font-size:12px;line-height:1.5;height:calc(100% - 30px);overflow:hidden}
+  .card .bd h3{font-size:14px;margin:0 0 6px}
+  .card .bd p{margin:0;color:#5a5648;font-size:11.5px}
+  .card .bd .hero{height:50px;border-radius:6px;background:linear-gradient(120deg,#ddd5c2,#c9bfa8);margin-bottom:10px}
+  .big{position:absolute;bottom:96px;left:50%;transform:translateX(-50%);width:min(560px,80vw);height:min(380px,60vh);background:#f5f0e6;color:#222;border-radius:10px;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,.5);z-index:10}
+  .big .hd{height:36px;background:#e8e0d0;display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid #d5cbb8}
+  .big .url{font-size:11.5px;color:#8a8172;flex:1}
+  .big .bd{padding:22px;height:calc(100% - 36px);overflow:auto}
+  .big .bd .hero{height:110px;border-radius:8px;background:linear-gradient(120deg,#ddd5c2,#c9bfa8);margin-bottom:16px}
+  .big .bd h1{font-size:21px;margin:0 0 10px}
+  .big .bd p{font-size:14px;line-height:1.6;color:#444}
+  .floor{position:absolute;bottom:0;left:0;right:0;height:60px;background:linear-gradient(180deg,#1a140d,#0e0b08)}
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#1c1f26;color:#e8eaed;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:290px;box-shadow:0 6px 20px rgba(0,0,0,.25);display:none}
+  #tip b{color:#f0c98a}#tip kbd{background:#33373f;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+</style>
+</head>
+<body>
+  <div class="top">
+    <div class="brand">lumen<span>://</span>deck-shelf</div>
+    <div class="omni" data-tip="Адрес / @-команды" onclick="openPage('app.html?s=history')">🔍 lumen.local…</div>
+    <button class="ib" data-tip="Все вкладки" onclick="openPage('app.html?s=home')">▦</button>
+    <button class="ib" data-tip="Настройки" onclick="openPage('app.html?s=settings')">⚙</button>
+  </div>
+  <div class="shelf" id="sh"></div>
+  <div class="big" id="big"></div>
+  <div class="floor"></div>
+  <div id="tip"></div>
+<script>
+function openPage(u){window.open(u,'_blank')}
+const P=[
+ {t:'Lumen — движок',u:'lumen.local/docs',c:'#e3a008',h:'Архитектура',b:'DOM → layout → paint → V8.'},
+ {t:'GitHub',u:'github.com/lumen',c:'#4285f4',h:'Репозиторий',b:'Код и issues.'},
+ {t:'MDN — Grid',u:'mozilla.org',c:'#d93025',h:'CSS Grid',b:'Справочник.'},
+ {t:'Подкаст',u:'youtube.com',c:'#34a853',h:'V8 и JIT',b:'Видео.'},
+ {t:'V8 deep dive',u:'read-later',c:'#8b5cf6',h:'Inside V8',b:'68%.'},
+ {t:'HTML Spec',u:'whatwg.org',c:'#fbbc05',h:'Standard',b:'Навигация.'},
+];
+let cur=0;
+const sh=document.getElementById('sh'),big=document.getElementById('big');
+function render(){
+  sh.innerHTML=P.map((p,i)=>{
+    const off=i-cur;
+    if(Math.abs(off)>3)return '';
+    return `<div class="card ${i===cur?'on':''}" style="transform:translateX(${off*60}px) scale(${1-Math.abs(off)*0.05})" data-tip="<b>${p.t}</b><br>${p.u}<br>клик — открыть крупно" onclick="if(${i}!==${cur}){cur=${i};render()}">
+      <div class="hd"><span class="fav" style="background:${p.c}"></span><span class="url">${p.u}</span></div>
+      <div class="bd"><div class="hero"></div><h3>${p.h}</h3><p>${p.b}</p></div></div>`;
+  }).join('');
+  const p=P[cur];
+  big.innerHTML=`<div class="hd"><span class="fav" style="background:${p.c}"></span><span class="url">${p.u} · ${cur+1}/${P.length}</span></div><div class="bd"><div class="hero"></div><h1>${p.h}</h1><p>${p.b} Эта карточка стоит на полке — клик по соседней поднимает её.</p><p style="color:#777;font-size:12.5px">Управление: клик по карточке на полке · ← → для переключения.</p></div>`;
+}
+function step(d){cur=(cur+d+P.length)%P.length;render()}
+addEventListener('keydown',e=>{if(e.key==='ArrowLeft')step(-1);if(e.key==='ArrowRight')step(1)});
+const tip=document.getElementById('tip');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-300)+'px';tip.style.top=(e.clientY+16)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none'});
+render();
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

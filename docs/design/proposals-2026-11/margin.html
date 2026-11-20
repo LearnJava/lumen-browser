@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Поля</title>
+<style>
+  :root{--bg:#f6f5f1;--panel:#fff;--ink:#26241f;--mut:#8a8578;--line:#e4e1d8;--acc:#b3541e;--acc-soft:#fbeadd;--hi:#fff3c4}
+  *{box-sizing:border-box}
+  body{margin:0;font:15px/1.7 Georgia,'Times New Roman',serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  .bar{height:46px;flex:none;display:flex;align-items:center;gap:8px;padding:0 14px;background:var(--panel);border-bottom:1px solid var(--line);font-family:'Segoe UI',system-ui,sans-serif}
+  .ib{height:32px;min-width:32px;padding:0 9px;border:none;background:none;border-radius:8px;color:var(--mut);display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:13px}
+  .ib:hover{background:#f0eee7;color:var(--ink)}
+  .ib svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .omni{flex:1;max-width:560px;margin:0 auto;display:flex;align-items:center;height:34px;padding:0 14px;background:var(--bg);border:1px solid var(--line);border-radius:9px;font-size:13.5px;font-family:'Segoe UI',sans-serif;cursor:text}
+  .omni:hover{border-color:#cfc9b8}
+  /* ===== Три колонки: текст | поля ===== */
+  .cols{flex:1;display:flex;min-height:0}
+  .reader{flex:0 0 640px;margin:0 auto;overflow:auto;padding:44px 40px 80px;border-right:1px solid var(--line);background:#fff}
+  .reader h1{font-size:30px;line-height:1.25;margin:0 0 8px;font-weight:700}
+  .reader .byline{font-family:'Segoe UI',sans-serif;color:var(--mut);font-size:13px;margin-bottom:30px}
+  .reader p{margin:0 0 1.3em}
+  .reader a{color:var(--acc);text-decoration:none;border-bottom:1px solid #ecd9c8}
+  .reader a:hover{border-bottom-color:var(--acc)}
+  .reader a.preview:hover{background:var(--acc-soft)}
+  .reader mark{background:var(--hi);border-radius:3px;padding:0 2px}
+  .reader mark.cur{background:#ffd97a;outline:2px solid #e8a33d}
+  /* ===== Правое поле: аннотации ===== */
+  aside{flex:0 0 320px;overflow:auto;padding:24px 20px;background:#fbfaf6;border-left:1px solid var(--line);font-family:'Segoe UI',sans-serif}
+  aside h2{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);margin:0 0 14px}
+  .note{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--acc);border-radius:0 10px 10px 0;padding:10px 13px;margin-bottom:10px;font-size:13px;cursor:pointer}
+  .note:hover{border-color:var(--acc)}
+  .note .q{color:var(--mut);font-size:11.5px;margin-bottom:4px;font-style:italic}
+  .note .mine{margin-top:6px;color:var(--ink)}
+  .note .meta{font-size:10.5px;color:var(--mut);margin-top:6px}
+  .card2{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px;cursor:pointer}
+  .card2:hover{border-color:var(--acc)}
+  .card2 h3{margin:0 0 4px;font-size:13px}
+  .card2 p{margin:0;font-size:12.5px;color:var(--mut)}
+  .card2 .go{display:inline-block;margin-top:8px;font-size:12px;color:var(--acc);font-weight:600}
+  /* превью ссылки при наведении */
+  .peek{position:fixed;z-index:90;width:300px;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 18px 50px rgba(0,0,0,.22);overflow:hidden;display:none}
+  .peek .ph{height:110px;background:linear-gradient(140deg,#e8e4d8,#d8d3c2);display:flex;align-items:center;justify-content:center;color:#98917d;font-size:12px}
+  .peek .tx{padding:12px 14px;font-family:'Segoe UI',sans-serif}
+  .peek .tx b{font-size:13px;display:block;margin-bottom:3px}
+  .peek .tx span{font-size:11.5px;color:var(--mut)}
+  /* подсказки */
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#26241f;color:#f3f1ea;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:300px;box-shadow:0 6px 20px rgba(0,0,0,.3);display:none}
+  #tip b{color:#f0b98a}#tip kbd{background:#3a372f;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+</style>
+</head>
+<body>
+  <div class="bar">
+    <button class="ib" data-tip="Назад <kbd>Alt+←</kbd>"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
+    <button class="ib" data-tip="Вперёд <kbd>Alt+→</kbd>"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+    <button class="ib" data-tip="Обновить <kbd>F5</kbd>"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 11-2.34-5.66M20 4v4h-4"/></svg></button>
+    <div class="omni" data-tip="Омнибокс: адрес / поиск / @-команды">example.com/article — режим чтения</div>
+    <button class="ib" data-tip="Поиск по странице <kbd>Ctrl+F</kbd> — совпадения подсвечены на полях" onclick="openPage('focus.html')"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg></button>
+    <button class="ib" data-tip="Аннотации: показать/скрыть правое поле <kbd>Ctrl+Shift+A</kbd>"><svg viewBox="0 0 24 24"><path d="M4 20l1-4L16 5l3 3L8 19z"/></svg></button>
+    <button class="ib" data-tip="Слушать позже / PiP"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9l5 3-5 3z"/></svg></button>
+    <button class="ib" data-tip="Меню" onclick="openPage('page.html')"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/></svg></button>
+  </div>
+
+  <div class="cols">
+    <div class="reader">
+      <h1>Как браузеры на самом деле рисуют страницу</h1>
+      <div class="byline">Lumen Engineering · 12 мин чтения · <span style="color:var(--acc)">режим чтения включён</span></div>
+      <p>Между <mark class="cur">HTML</mark> и пикселями на экране лежат четыре мира: токенизатор разбирает байты в теги, DOM-арена собирает дерево без единого <code>Rc&lt;RefCell&gt;</code>, движок стилей сворачивает сотни правил в один computed style, а растеризатор превращает display list в кадр. В Lumen каждый слой — свой crate, и ни один не знает о соседях.</p>
+      <p>Когда вы кликаете ссылку, Lumen не «открывает страницу» — он запускает конвейер: потоковый fetch вне UI-потока, инкрементальный парсер, прогрессивный layout. Пользователь видит первый текст за миллисекунды, пока остальное догружается. Подробнее о <a class="preview" href="#" data-peek="Статья о потоковой загрузке">потоковой загрузке</a> и о том, как <a class="preview" href="#" data-peek="Материал о bfcache">кэш назад/вперёд</a> возвращает страницу мгновенно.</p>
+      <p>Аннотации живут в правом поле: выделил фразу — написал заметку — она привязана к этому месту статьи и находится через @notes в омнибоксе. <mark>Заметки переживают перезапуск</mark> — они в SQLite, а не в DOM страницы.</p>
+      <p>А когда вы дочитали и закрыли вкладку, позиция прокрутки и выделения сохраняются: Back, Ctrl+Shift+T или восстановление сессии вернут вас ровно сюда — <mark>на тот же абзац</mark>, а не на верх страницы.</p>
+      <p>Ссылки с классом preview показывают превью при наведении — имя, описание и миниатюру, без ухода со страницы. Для длинных статей есть find-in-page с живым счётчиком.</p>
+    </div>
+
+    <aside>
+      <h2>Аннотации · 3</h2>
+      <div class="note" data-tip="Заметка привязана к выделенному фрагменту — клик прокручивает статью к ней и подсвечивает контекст" onclick="openPage('page.html')">
+        <div class="q">«DOM-арена собирает дерево без единого Rc»</div>
+        <div class="mine">Проверить: arena NodeId с generation — защита от stale id после GC.</div>
+        <div class="meta">сегодня, 14:02 · @notes «движок»</div>
+      </div>
+      <div class="note" data-tip="Вторая заметка — к абзацу про потоковую загрузку" onclick="openPage('page.html')">
+        <div class="q">«пользователь видит первый текст за миллисекунды»</div>
+        <div class="mine">Сравнить с цифрой из perf-журнала: last response 1.56 s на repeat visit.</div>
+        <div class="meta">вчера · приватная</div>
+      </div>
+      <div class="note" data-tip="Заметка из прошлого визита — восстановлена вместе со скроллом" onclick="openPage('page.html')">
+        <div class="q">«позиция прокрутки и выделения сохраняются»</div>
+        <div class="mine">TODO: проверить восстановление выделения после bfcache-restore.</div>
+        <div class="meta">3 дня назад</div>
+      </div>
+
+      <h2 style="margin-top:22px">Поля статьи</h2>
+      <div class="card2" data-tip="Read-later: эта статья уже в очереди — 42% прочитано, продолжить можно отсюда" onclick="openPage('page.html')">
+        <h3>▤ В очереди «Читать позже»</h3><p>Прогресс 42% · тег: «движок» · статус: читаю</p><span class="go">Продолжить →</span>
+      </div>
+      <div class="card2" data-tip="Ссылки страницы, сгруппированные по разделам — @bookmarks добавит текущую" onclick="openPage('page.html')">
+        <h3>🔗 Исходящие ссылки · 12</h3><p>4 внутренние · 8 внешние · 2 уже в закладках</p><span class="go">Список →</span>
+      </div>
+      <div class="card2" data-tip="История по этому сайту: 14 визитов за месяц — @history для поиска" onclick="openPage('page.html')">
+        <h3>🕘 Этот сайт</h3><p>14 визитов · первый: 12 окт · последний: сегодня</p><span class="go">История →</span>
+      </div>
+    </aside>
+  </div>
+
+  <div class="peek" id="peek"><div class="ph">[миниатюра страницы]</div><div class="tx"><b id="pkT"></b><span id="pkD"></span></div></div>
+  <div id="tip"></div>
+<script>
+function openPage(p){window.open(p||'page.html','_blank')}
+const tip=document.getElementById('tip'),peek=document.getElementById('peek');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{
+  if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-320)+'px';tip.style.top=(e.clientY+16)+'px';}
+  const a=e.target.closest('a.preview');
+  if(a){peek.style.display='block';peek.style.left=Math.min(e.clientX+18,innerWidth-320)+'px';peek.style.top=(e.clientY-40)+'px';document.getElementById('pkT').textContent=a.dataset.peek;document.getElementById('pkD').textContent='example.com · ~6 мин чтения · уже в закладках';}
+  else peek.style.display='none';
+});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none';if(!e.target.closest('a.preview'))peek.style.display='none';});
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

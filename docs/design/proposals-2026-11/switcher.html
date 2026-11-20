@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Переключатель</title>
+<style>
+  :root{--bg:#14161a;--panel:#1c1f25;--ink:#e8eaed;--mut:#8a919c;--line:#2a2e36;--acc:#5b9dff}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  .top{height:44px;flex:none;display:flex;align-items:center;gap:10px;padding:0 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+  .brand{font-weight:700;font-size:15px}.brand span{color:var(--acc)}
+  .ib{height:30px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:none;color:var(--mut);cursor:pointer;font-size:12.5px}
+  .ib:hover{color:var(--ink);border-color:#3a4250}
+  /* затемнённая страница сзади */
+  .page{flex:1;position:relative;background:#1a1d22;overflow:hidden}
+  .page .mock{position:absolute;inset:0;padding:40px;opacity:.35}
+  .page .mock .bar2{height:40px;background:#2a2e36;border-radius:8px;margin-bottom:16px}
+  .page .mock .ln{height:12px;background:#242932;border-radius:6px;margin-bottom:10px}
+  /* ===== Оверлей-переключатель ===== */
+  .ov{position:absolute;inset:0;background:rgba(8,10,13,.55);backdrop-filter:blur(3px);display:flex;align-items:flex-start;justify-content:center;padding-top:11vh;z-index:20}
+  .sw{width:min(680px,94vw);background:var(--panel);border:1px solid var(--line);border-radius:18px;box-shadow:0 30px 80px rgba(0,0,0,.6);overflow:hidden}
+  .sw .hd{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line)}
+  .sw .hd input{flex:1;background:none;border:none;outline:none;color:var(--ink);font:inherit;font-size:15px}
+  .sw .hd input::placeholder{color:#5b636e}
+  .sw .sec{padding:14px 18px 6px;font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--mut)}
+  .sw .body{padding:0 18px 16px;max-height:56vh;overflow:auto}
+  /* профили */
+  .pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+  .pcard{border:1px solid var(--line);border-radius:12px;padding:14px 12px;text-align:center;cursor:pointer;position:relative;transition:border-color .15s,background .15s}
+  .pcard:hover{border-color:#3a4250;background:#22262e}
+  .pcard.on{border-color:var(--acc);background:var(--acc-soft,#16233c)}
+  .pcard .av{width:44px;height:44px;border-radius:50%;margin:0 auto 8px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:17px}
+  .pcard .nm{font-weight:600;font-size:13px}
+  .pcard .st{font-size:10.5px;color:var(--mut);margin-top:2px}
+  .pcard .gear{position:absolute;top:8px;right:8px;color:var(--mut);font-size:14px;padding:3px;border-radius:5px}
+  .pcard .gear:hover{background:#2a2e36;color:var(--ink)}
+  .pcard .add{border-style:dashed;color:var(--mut)}
+  .pcard .add .av{background:none;border:2px dashed #3a4250;color:#5b636e}
+  /* пространства выбранного профиля */
+  .wrow{display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:11px;margin-bottom:8px;cursor:pointer}
+  .wrow:hover{border-color:#3a4250;background:#22262e}
+  .wrow.on{border-color:var(--acc);background:var(--acc-soft,#16233c)}
+  .wrow .dot{width:11px;height:11px;border-radius:3px;flex:none}
+  .wrow .nm{font-weight:600;font-size:13.5px}
+  .wrow .meta{margin-left:auto;font-size:11px;color:var(--mut);text-align:right}
+  .wrow .tabs{display:flex;gap:3px;margin-left:10px}
+  .wrow .tabs i{width:14px;height:14px;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:8px;font-style:normal;color:#fff}
+  .wrow.add{border-style:dashed;color:var(--mut);justify-content:center}
+  /* формы создания — inline */
+  .form{display:none;border:1px solid var(--acc);border-radius:12px;padding:14px;margin-top:10px;background:#14171c}
+  .form.open{display:block}
+  .form h4{margin:0 0 10px;font-size:13px}
+  .form .fl{display:flex;align-items:center;gap:10px;margin-bottom:9px;font-size:12.5px}
+  .form .fl label{width:110px;color:var(--mut);flex:none}
+  .form input[type=text]{flex:1;background:#0b0d10;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:var(--ink);font:inherit;font-size:13px;outline:none}
+  .form input[type=text]:focus{border-color:var(--acc)}
+  .swatches{display:flex;gap:6px}
+  .swatches span{width:20px;height:20px;border-radius:50%;cursor:pointer;border:2px solid transparent}
+  .swatches span.on{border-color:#fff}
+  .toggle{width:36px;height:20px;border-radius:10px;background:#2a2e36;position:relative;cursor:pointer;flex:none}
+  .toggle::after{content:'';position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:left .15s}
+  .toggle.on{background:var(--acc)}.toggle.on::after{left:18px}
+  .form .acts{display:flex;gap:8px;justify-content:flex-end;margin-top:4px}
+  .form .acts button{border:none;border-radius:8px;padding:7px 16px;font-weight:600;cursor:pointer;font-size:13px}
+  .form .acts .ok{background:var(--acc);color:#fff}
+  .form .acts .no{background:#2a2e36;color:var(--ink)}
+  .foot{display:flex;align-items:center;gap:16px;padding:10px 18px;border-top:1px solid var(--line);font-size:11.5px;color:var(--mut)}
+  .foot kbd{background:#2a2e36;border-radius:4px;padding:1px 6px;font:11px 'Segoe UI'}
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#0d1117;color:#e6e9ee;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:300px;border:1px solid #2a313c;box-shadow:0 6px 20px rgba(0,0,0,.5);display:none}
+  #tip b{color:#8fb8ec}#tip kbd{background:#262b33;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+</style>
+</head>
+<body>
+  <div class="top">
+    <div class="brand">lumen<span>://</span>switcher</div>
+    <span style="color:var(--mut);font-size:12px">Профиль → пространства → контейнеры — один оверлей, один хоткей</span>
+    <button class="ib" data-tip="Открыть панель управления полностью" onclick="openPage('manager.html')">⚙ Управление</button>
+  </div>
+
+  <div class="page">
+    <div class="mock"><div class="bar2"></div><div class="ln" style="width:80%"></div><div class="ln" style="width:65%"></div><div class="ln" style="width:72%"></div><div class="ln" style="width:50%"></div></div>
+    <div class="ov">
+      <div class="sw">
+        <div class="hd"><span style="color:var(--mut);font-size:15px">🔍</span><input id="q" placeholder="Профиль, пространство, вкладка или @-команда…" oninput="filt()"><span style="color:var(--mut);font-size:12px">esc</span></div>
+        <div class="body">
+          <div class="sec">Профили — <span style="text-transform:none;letter-spacing:0">у каждого свои данные, тема и разрешения</span></div>
+          <div class="pgrid" id="pgrid"></div>
+          <div class="form" id="pform">
+            <h4>Новый профиль</h4>
+            <div class="fl"><label>Имя</label><input type="text" id="pn" placeholder="Например: Семья, Сторонние проекты…"></div>
+            <div class="fl"><label>Цвет</label><div class="swatches" id="pcs"></div></div>
+            <div class="fl"><label>Значок</label><div class="swatches" id="picons"></div></div>
+            <div class="fl"><label>Щиты по умолчанию</label><span class="toggle on" data-tip="Для нового профиля включать блокировку трекеров сразу"></span></div>
+            <div class="fl"><label>Tor по умолчанию</label><span class="toggle" data-tip="Открывать окна этого профиля через Tor-профиль"></span></div>
+            <div class="acts"><button class="no" onclick="closeForm('pform')">Отмена</button><button class="ok" onclick="createProfile()">Создать профиль</button></div>
+          </div>
+
+          <div class="sec" style="margin-top:14px">Пространства профиля «<span id="wsp">Личный</span>» — <span style="text-transform:none;letter-spacing:0">именованные группы вкладок с изоляцией cookie</span></div>
+          <div id="wlist"></div>
+          <div class="form" id="wform">
+            <h4>Новое пространство</h4>
+            <div class="fl"><label>Имя</label><input type="text" id="wn" placeholder="Работа, Покупки, Учёба…"></div>
+            <div class="fl"><label>Цвет</label><div class="swatches" id="wcs"></div></div>
+            <div class="fl"><label>Изоляция cookie</label><span class="toggle on" data-tip="У пространства будут свои куки и хранилища — сессии сайтов не пересекаются с другими пространствами"></span></div>
+            <div class="acts"><button class="no" onclick="closeForm('wform')">Отмена</button><button class="ok" onclick="createWs()">Создать пространство</button></div>
+          </div>
+        </div>
+        <div class="foot"><span><kbd>↑↓</kbd> выбор</span><span><kbd>Enter</kbd> переключить</span><span><kbd>Ctrl N</kbd> новый профиль</span><span><kbd>Ctrl Shift N</kbd> новое пространство</span><span style="margin-left:auto">хранилище: profiles.db + workspaces.db</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="tip"></div>
+<script>
+function openPage(p){window.open(p||'page.html','_blank')}
+const PROFILES=[
+ {id:'p1',n:'Личный',l:'Л',c:'#0066FF',tabs:12,mb:'48 МБ',on:1},
+ {id:'p2',n:'Рабочий',l:'Р',c:'#8B5CF6',tabs:8,mb:'112 МБ'},
+ {id:'p3',n:'Анонимный',l:'А',c:'#FF3B30',tabs:0,mb:'0 МБ',note:'без записи'},
+ {id:'p4',n:'Гость',l:'Г',c:'#8E8E93',tabs:2,mb:'сессия'},
+];
+const WSS={'Личный':[
+ {n:'Default',c:'#9aa3ad',tabs:4,iso:0},
+ {n:'Чтение',c:'#0b6fe0',tabs:6,iso:1},
+ {n:'Медиа',c:'#8b5cf6',tabs:2,iso:1},
+],'Рабочий':[
+ {n:'Проект Лumen',c:'#7c3aed',tabs:5,iso:1},
+ {n:'Ревью',c:'#0b6fe0',tabs:3,iso:0},
+],'Анонимный':[],'Гость':[{n:'Default',c:'#9aa3ad',tabs:2,iso:0}]};
+const COLORS=['#0066FF','#8B5CF6','#FF3B30','#8E8E93','#0b6fe0','#1f9d55','#d8a400','#e0342b','#7c3aed','#0e7490'];
+const ICONS=['👤','💼','🕶','👻','🎮','📚','🔬','🎨','🛒','🌿'];
+let curP=PROFILES[0];
+function swatches(el,fn){el.innerHTML=COLORS.map(c=>`<span style="background:${c}" data-c="${c}" onclick="fn&&fn('${c}',this)"></span>`).join('');}
+function build(){
+  document.getElementById('pgrid').innerHTML=PROFILES.map(p=>`
+    <div class="pcard ${p===curP?'on':''}" data-tip="<b>${p.n}</b><br>${p.tabs} вкладок · ${p.mb} данных${p.note?' · '+p.note:''}<br><kbd>Enter</kbd> — переключиться: тема и данные сменятся сразу" onclick="selP('${p.id}')">
+      <span class="gear" data-tip="Настройки профиля: переименовать, сменить цвет, очистить данные, удалить">⚙</span>
+      <div class="av" style="background:${p.c}">${p.l}</div><div class="nm">${p.n}</div><div class="st">${p.tabs} вкладок</div>
+    </div>`).join('')+`
+    <div class="pcard add" data-tip="Создать новый профиль: имя, цвет, значок, щиты и Tor по умолчанию — данные сразу изолированы" onclick="document.getElementById('pform').classList.toggle('open')">
+      <div class="av">＋</div><div class="nm">Новый профиль</div><div class="st">личное пространство данных</div>
+    </div>`;
+  document.getElementById('wsp').textContent=curP.n;
+  const ws=WSS[curP.n]||[];
+  document.getElementById('wlist').innerHTML=ws.map(w=>`
+    <div class="wrow" data-tip="<b>${w.n}</b><br>${w.tabs} вкладок${w.iso?' · изолированные cookie и хранилища':' · общие куки пространства'}" onclick="openPage('spaces.html')">
+      <span class="dot" style="background:${w.c}"></span><span class="nm">${w.n}</span>
+      <span class="tabs">${Array.from({length:Math.min(w.tabs,4)},(_,i)=>`<i style="background:${w.c}">${i+1}</i>`).join('')}${w.tabs>4?`<i style="background:#2a2e36">+${w.tabs-4}</i>`:''}</span>
+      <span class="meta">${w.tabs} вкладок<br>${w.iso?'🔒 изоляция':'общие куки'}</span>
+    </div>`).join('')+`
+    <div class="wrow add" data-tip="Новое пространство в профиле «${curP.n}»: имя, цвет, опциональная изоляция cookie" onclick="document.getElementById('wform').classList.toggle('open')">＋ Новое пространство</div>`;
+}
+function selP(id){curP=PROFILES.find(p=>p.id===id);PROFILES.forEach(p=>p.on=p===curP);build()}
+function closeForm(id){document.getElementById(id).classList.remove('open')}
+function createProfile(){const n=document.getElementById('pn').value.trim()||'Новый';PROFILES.push({id:'p'+Date.now(),n,l:n[0].toUpperCase(),c:'#5b9dff',tabs:0,mb:'0 МБ'});WSS[n]=[];closeForm('pform');build()}
+function createWs(){const n=document.getElementById('wn').value.trim()||'Workspace';(WSS[curP.n]=WSS[curP.n]||[]).push({n,c:'#5b9dff',tabs:0,iso:1});closeForm('wform');build()}
+/* свотчи цвета/иконки */
+(function(){
+  const pcs=document.getElementById('pcs'),picons=document.getElementById('picons'),wcs=document.getElementById('wcs');
+  pcs.innerHTML=COLORS.map(c=>`<span style="background:${c}" onclick="this.parentElement.querySelectorAll('span').forEach(x=>x.classList.remove('on'));this.classList.add('on')"></span>`).join('');pcs.firstChild.classList.add('on');
+  wcs.innerHTML=COLORS.map(c=>`<span style="background:${c}" onclick="this.parentElement.querySelectorAll('span').forEach(x=>x.classList.remove('on'));this.classList.add('on')"></span>`).join('');wcs.children[3].classList.add('on');
+  picons.innerHTML=ICONS.map(i=>`<span style="width:26px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:7px;background:#2a2e36;font-size:14px;cursor:pointer" onclick="this.parentElement.querySelectorAll('span').forEach(x=>x.style.outline='');this.style.outline='2px solid var(--acc)'">${i}</span>`).join('');
+})();
+document.querySelectorAll('.toggle').forEach(t=>t.onclick=()=>t.classList.toggle('on'));
+function filt(){/* в прототипе фильтр не нужен — список короткий */}
+const tip=document.getElementById('tip');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-320)+'px';tip.style.top=(e.clientY+16)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none';});
+build();
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

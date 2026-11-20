@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Пульс</title>
+<style>
+  :root{--bg:#101216;--panel:#171a1f;--ink:#e8eaed;--mut:#8a919c;--line:#262b33;--acc:#5b9dff;--acc-soft:#1b2b45;--grn:#3fb96f;--grn-soft:#12271b;--amb:#e8a33d;--amb-soft:#2a2113}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  .top{height:44px;flex:none;display:flex;align-items:center;gap:10px;padding:0 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+  .brand{font-weight:700;font-size:15px}.brand span{color:var(--acc)}
+  .omni{flex:1;max-width:520px;margin:0 auto;display:flex;align-items:center;height:32px;padding:0 14px;background:#0b0d10;border:1px solid var(--line);border-radius:16px;font-size:13.5px;cursor:text}
+  .omni:hover{border-color:#3a4250}
+  .ib{height:30px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:none;color:var(--mut);cursor:pointer;font-size:12.5px}
+  .ib:hover{color:var(--ink);border-color:#3a4250}
+  /* ===== Дашборд ===== */
+  .dash{flex:1;overflow:auto;padding:30px 36px}
+  .hello{font-size:22px;font-weight:600;margin:0 0 4px}
+  .hello small{color:var(--mut);font-weight:400;font-size:14px}
+  .widgets{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;margin-top:22px;max-width:1100px}
+  .w{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;cursor:pointer;transition:border-color .15s,transform .15s}
+  .w:hover{border-color:var(--acc);transform:translateY(-2px)}
+  .w h3{margin:0 0 3px;font-size:12px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--mut);display:flex;align-items:center;gap:7px}
+  .w .big{font-size:26px;font-weight:700;margin:8px 0 2px}
+  .w .big small{font-size:13px;color:var(--mut);font-weight:400}
+  .w .sub{font-size:12px;color:var(--mut)}
+  .w .bar{height:5px;border-radius:3px;background:#262b33;margin-top:10px;overflow:hidden}
+  .w .bar i{display:block;height:100%;border-radius:3px}
+  .w.media .art{width:100%;height:74px;border-radius:10px;background:linear-gradient(135deg,#2a3140,#1a2029);margin-bottom:12px;display:flex;align-items:center;justify-content:center;gap:10px;color:#9aa3ad;font-size:12px}
+  .w.media .play{width:38px;height:38px;border-radius:50%;background:var(--acc);color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px}
+  .w.tabs .row{display:flex;align-items:center;gap:9px;padding:6px 0;font-size:13px;border-top:1px solid #1f242c}
+  .w.tabs .row:first-of-type{border-top:none;margin-top:8px}
+  .w.tabs .fav{width:13px;height:13px;border-radius:3px;flex:none}
+  .w.tabs .u{margin-left:auto;font-size:10.5px;color:var(--mut)}
+  .w.tabs .sleep{color:var(--mut);font-size:10px}
+  .w.read .item{display:flex;gap:10px;padding:7px 0;border-top:1px solid #1f242c;font-size:12.8px}
+  .w.read .item:first-of-type{border-top:none;margin-top:8px}
+  .w.read .prog{margin-left:auto;font-size:11px;color:var(--mut);white-space:nowrap}
+  .w.shield .num{color:var(--grn)}
+  .w.shield .grn{color:var(--grn)}
+  .w.upd{border-color:#3d4a2e}
+  .w.upd .big{color:var(--amb)}
+  .quick{display:flex;gap:8px;margin-top:14px;max-width:1100px;flex-wrap:wrap}
+  .quick button{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:8px 16px;color:var(--ink);font-size:13px;cursor:pointer}
+  .quick button:hover{border-color:var(--acc);color:var(--acc)}
+  /* подсказки */
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#0d1117;color:#e6e9ee;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:300px;border:1px solid #2a313c;box-shadow:0 6px 20px rgba(0,0,0,.5);display:none}
+  #tip b{color:#8fb8ec}#tip kbd{background:#262b33;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+</style>
+</head>
+<body>
+  <div class="top">
+    <div class="brand">lumen<span>://</span>pulse</div>
+    <div class="omni" data-tip="Омнибокс — в новой вкладке это строка быстрого перехода: адрес, поиск, @-команды">🔍 Адрес, поиск или @-команда…</div>
+    <button class="ib" data-tip="Обзор всех вкладок <kbd>Ctrl+Shift+O</kbd>" onclick="openPage('orbit.html')">▦</button>
+    <button class="ib" data-tip="Пространства" onclick="openPage('spaces.html')">⬒</button>
+    <button class="ib" data-tip="Настройки" onclick="openPage('page.html')">⚙</button>
+  </div>
+
+  <div class="dash">
+    <h1 class="hello" id="hello">Добрый вечер</h1>
+    <div class="sub hello" style="color:var(--mut);font-size:14px;margin-top:-2px" id="dateSub"></div>
+
+    <div class="widgets">
+      <!-- Медиа -->
+      <div class="w media" data-tip="Сейчас играет: медиа-бар видит активный <video>/<audio> любой вкладки. PiP выносит плеер в отдельное всегда-сверху окно" onclick="openPage('page.html')">
+        <h3>🎧 Сейчас играет</h3>
+        <div class="art"><div class="play">▶</div><div>Подкаст «Эпизод 42»<br><small style="color:#8a919c">YouTube · вкладка спит, звук идёт</small></div></div>
+        <div class="sub">Можно слушать в PiP — окно поверх всех страниц</div>
+      </div>
+
+      <!-- Вкладки -->
+      <div class="w tabs" data-tip="Сводка по вкладкам: активные, спящие (T3 — DOM+JS заморожены, 0 памяти), с уведомлениями. Клик — обзор">
+        <h3>▤ Вкладки</h3>
+        <div class="row" data-tip="Активная вкладка текущего пространства"><span class="fav" style="background:#e3a008"></span>Lumen — движок<span class="u">lumen.local</span></div>
+        <div class="row" data-tip="Вкладка в фоне"><span class="fav" style="background:#4285f4"></span>GitHub — репозиторий<span class="u">github.com</span></div>
+        <div class="row" data-tip="Спит (T3): контекст заморожен, разбудится мгновенно при активации"><span class="fav" style="background:#d93025"></span>MDN — CSS Grid<span class="sleep">💤</span></div>
+        <div class="row" data-tip="Сайт запросил уведомления — решается в щитах"><span class="fav" style="background:#ea4335"></span>Новости — comments<span class="sleep">🔔</span></div>
+        <div class="sub" style="margin-top:8px">7 открыто · 3 спят · 0 запрошено разрешений</div>
+      </div>
+
+      <!-- Read-later -->
+      <div class="w read" data-tip="Очередь «Читать позже»: 18 статей, прогресс по каждой. @read-later в омнибоксе открывает её же" onclick="openPage('page.html')">
+        <h3>▤ Читать позже</h3>
+        <div class="item"><span>«Inside the V8 engine»</span><span class="prog">68%</span></div>
+        <div class="item"><span>«Rust async in depth»</span><span class="prog">12%</span></div>
+        <div class="item"><span>«CSS Anchor Positioning»</span><span class="prog">не начата</span></div>
+        <div class="sub" style="margin-top:8px">продолжить с того же места — позиция чтения хранится</div>
+      </div>
+
+      <!-- Защита -->
+      <div class="w shield" data-tip="Защита за сегодня: реклама, трекеры, fingerprint. Детали — privacy.html">
+        <h3>🛡 Защита сегодня</h3>
+        <div class="big num">214 <small>запросов заблокировано</small></div>
+        <div class="sub">5 сайтов · Tor выкл · GPC: вкл · щиты: on</div>
+      </div>
+
+      <!-- Загрузки -->
+      <div class="w" data-tip="Загрузки: 2 активных, 1 завершена. Ctrl+J — менеджер" onclick="openPage('page.html')">
+        <h3>⬇ Загрузки</h3>
+        <div class="big">2 <small>активных</small></div>
+        <div class="bar"><i style="width:64%;background:var(--acc)"></i></div>
+        <div class="bar" style="margin-top:6px"><i style="width:31%;background:var(--grn)"></i></div>
+        <div class="sub" style="margin-top:8px">rust-toolchain.toml · 64% · spec.zip · 31%</div>
+      </div>
+
+      <!-- Обновление -->
+      <div class="w upd" data-tip="Self-update: фоновая проверка подписанного latest.json раз в сутки. «Скачать» → «Перезапустить и обновить» — атомарная замена с сохранением сессии">
+        <h3>⬆ Обновление</h3>
+        <div class="big">0.6.0 <small>доступна</small></div>
+        <div class="sub">исправления движка и ~40 багов · подпись проверена</div>
+        <button onclick="openPage('page.html')" style="margin-top:10px;border:1px solid var(--line);background:none;color:var(--amb);border-radius:8px;padding:5px 14px;cursor:pointer;font-weight:600">Скачать и обновить</button>
+      </div>
+
+      <!-- Фокус -->
+      <div class="w" data-tip="Фокус-таймер: Lumen планирует distraction-free режим — затемнение хрома, скрытие вкладок, one-page-at-a-time">
+        <h3>◐ Фокус</h3>
+        <div class="big">25:00 <small>помодоро</small></div>
+        <div class="sub">вкладок за сессию: 7 · среднее время на страницу: 4:12</div>
+        <div class="bar"><i style="width:38%;background:var(--amb)"></i></div>
+      </div>
+    </div>
+
+    <div class="quick">
+      <button data-tip="Новая вкладка <kbd>Ctrl+T</kbd>" onclick="openPage('page.html')">＋ Новая вкладка</button>
+      <button data-tip="Частный режим — профиль «Анонимный»: ничего на диск" onclick="openPage('profiles.html')">🕶 Анонимное окно</button>
+      <button data-tip="Сплит-экран двух вкладок" onclick="openPage('workbench.html')">◫ Сплит-вью</button>
+      <button data-tip="Режим чтения текущей страницы" onclick="openPage('page.html')">📖 Читать</button>
+      <button data-tip="Импорт закладок/паролей из Chrome, Firefox, Edge" onclick="openPage('page.html')">⇩ Импорт</button>
+      <button data-tip="Заметка к текущей странице — @notes" onclick="openPage('command.html')">✎ Заметка</button>
+    </div>
+  </div>
+
+  <div id="tip"></div>
+<script>
+function openPage(p){window.open(p||'page.html','_blank')}
+const h=new Date().getHours();
+document.getElementById('hello').innerHTML=(h<5?'Доброй ночи':h<12?'Доброе утро':h<18?'Добрый день':'Добрый вечер')+' <small>— пульс твоего браузера</small>';
+document.getElementById('dateSub').textContent=new Date().toLocaleDateString('ru-RU',{weekday:'long',day:'numeric',month:'long'});
+const tip=document.getElementById('tip');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-320)+'px';tip.style.top=(e.clientY+16)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none';});
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

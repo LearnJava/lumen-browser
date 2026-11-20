@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Сейф</title>
+<style>
+  :root{--bg:#101216;--panel:#171a1f;--ink:#e8eaed;--mut:#8a919c;--line:#262b33;--acc:#5b9dff;--acc-soft:#1b2b45}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  .lock{width:min(420px,92vw);background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:38px 34px;text-align:center;box-shadow:0 30px 80px rgba(0,0,0,.5)}
+  .lock .av{width:72px;height:72px;border-radius:50%;margin:0 auto 16px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:26px;font-weight:700;background:#0066FF}
+  .lock h2{margin:0 0 4px;font-size:20px}
+  .lock .sub{color:var(--mut);font-size:13px;margin-bottom:26px}
+  .profiles{display:flex;gap:10px;justify-content:center;margin-bottom:26px}
+  .profiles .p{width:48px;height:48px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:17px;cursor:pointer;border:2px solid transparent;opacity:.55;transition:all .15s}
+  .profiles .p:hover{opacity:.85;transform:scale(1.08)}
+  .profiles .p.on{opacity:1;border-color:#fff}
+  .pin{display:flex;gap:14px;justify-content:center;margin-bottom:20px}
+  .pin .d{width:16px;height:16px;border-radius:50%;border:2px solid var(--mut);cursor:pointer;transition:all .12s}
+  .pin .d.f{background:var(--acc);border-color:var(--acc);transform:scale(1.25)}
+  .lock .msg{font-size:13px;color:var(--mut);min-height:20px;margin-bottom:18px}
+  .lock .acts{display:flex;gap:10px;justify-content:center}
+  .lock .acts button{border:1px solid var(--line);background:#22262e;border-radius:10px;padding:9px 20px;font-size:13px;cursor:pointer;color:var(--ink)}
+  .lock .acts button.pri{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
+  .lock .acts button:hover{border-color:#3a4250}
+  .lock .fp{margin-top:22px;font-size:11px;color:#5b636e}
+  .lock .fp b{color:var(--mut)}
+  /* разблокированное состояние — показывается при клике */
+  .open-state{display:none;width:min(560px,94vw);background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:30px;box-shadow:0 30px 80px rgba(0,0,0,.5)}
+  .open-state.open{display:block}
+  .open-state h3{margin:0 0 4px;font-size:17px}
+  .open-state .sub{color:var(--mut);font-size:12.5px;margin-bottom:18px}
+  .ws-mini{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}
+  .ws-mini span{border:1px solid var(--line);border-radius:20px;padding:6px 14px;font-size:12.5px;cursor:pointer}
+  .ws-mini span:hover{border-color:var(--acc);color:var(--acc)}
+  .open-state .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  .open-state .g{border:1px solid var(--line);border-radius:11px;padding:14px;cursor:pointer;text-align:center}
+  .open-state .g:hover{border-color:var(--acc)}
+  .open-state .g .ic{font-size:20px;margin-bottom:6px}
+  .open-state .g .n{font-size:12px;font-weight:600}
+  .open-state .g .d{font-size:10.5px;color:var(--mut);margin-top:2px}
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#0d1117;color:#e6e9ee;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:300px;border:1px solid #2a313c;box-shadow:0 6px 20px rgba(0,0,0,.5);display:none}
+  #tip b{color:#8fb8ec}#tip kbd{background:#262b33;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+</style>
+</head>
+<body>
+  <div class="lock" id="lockScr">
+    <div class="av" id="av">Л</div>
+    <h2 id="pname">Личный профиль</h2>
+    <div class="sub">Введите PIN или используйте биометрию · сессия хранит 12 вкладок</div>
+    <div class="profiles" id="profs"></div>
+    <div class="pin" id="pin"></div>
+    <div class="msg" id="msg">Нажмите цифры или кликните точки</div>
+    <div class="acts">
+      <button class="pri" data-tip="Разблокировать и открыть браузер" onclick="unlock()">Разблокировать</button>
+      <button data-tip="Гостевой режим — без профиля, ничего не сохраняется" onclick="openPage('app.html?s=home')">Гость</button>
+      <button data-tip="Сменить профиль — вернуться к выбору" onclick="resetSel()">Сменить</button>
+    </div>
+    <div class="fp">Fingerprint protection: <b>on</b> · Tor: <b>off</b> · GPC: <b>on</b> · данные зашифрованы: <b>AES-256-GCM</b></div>
+  </div>
+
+  <div class="open-state" id="openScr">
+    <h3>Добро пожаловать, Личный</h3>
+    <div class="sub">Профиль разблокирован · 12 вкладок восстановлены · пространства ниже</div>
+    <div class="ws-mini">
+      <span data-tip="Пространство «Работа» — 5 вкладок, изоляция cookie" onclick="openPage('app.html?s=workspaces')">⬒ Работа · 5</span>
+      <span data-tip="Пространство «Чтение» — 6 вкладок" onclick="openPage('app.html?s=workspaces')">⬒ Чтение · 6</span>
+      <span data-tip="Пространство «Медиа» — 2 вкладки" onclick="openPage('app.html?s=workspaces')">⬒ Медиа · 2</span>
+      <span data-tip="Новое пространство" onclick="openPage('app.html?s=workspaces')">＋</span>
+    </div>
+    <div class="grid">
+      <div class="g" data-tip="Продолжить чтение — read-later" onclick="openPage('app.html?s=readlater')"><div class="ic">⧗</div><div class="n">Читать позже</div><div class="d">3 статьи</div></div>
+      <div class="g" data-tip="Закладки" onclick="openPage('app.html?s=bookmarks')"><div class="ic">📌</div><div class="n">Закладки</div><div class="d">42</div></div>
+      <div class="g" data-tip="История" onclick="openPage('app.html?s=history')"><div class="ic">🕘</div><div class="n">История</div><div class="d">1.2k</div></div>
+      <div class="g" data-tip="Загрузки" onclick="openPage('app.html?s=downloads')"><div class="ic">⬇</div><div class="n">Загрузки</div><div class="d">2 активных</div></div>
+      <div class="g" data-tip="Заметки" onclick="openPage('app.html?s=notes')"><div class="ic">✎</div><div class="n">Заметки</div><div class="d">6</div></div>
+      <div class="g" data-tip="Щиты и приватность" onclick="openPage('app.html?s=privacy')"><div class="ic">🛡</div><div class="n">Защита</div><div class="d">214 блок.</div></div>
+      <div class="g" data-tip="Управление профилями и пространствами" onclick="openPage('manager.html')"><div class="ic">⚙</div><div class="n">Управление</div><div class="d">profiles · workspaces</div></div>
+      <div class="g" data-tip="Новая вкладка" onclick="openPage('app.html?s=home')"><div class="ic">＋</div><div class="n">Новая вкладка</div><div class="d">Ctrl+T</div></div>
+    </div>
+  </div>
+
+  <div id="tip"></div>
+<script>
+function openPage(u){window.open(u,'_blank')}
+const PROFS=[{n:'Личный',l:'Л',c:'#0066FF'},{n:'Рабочий',l:'Р',c:'#8B5CF6'},{n:'Анонимный',l:'А',c:'#FF3B30'},{n:'Гость',l:'Г',c:'#8E8E93'}];
+let cur=PROFS[0],pin='';
+document.getElementById('profs').innerHTML=PROFS.map((p,i)=>`<div class="p ${i===0?'on':''}" style="background:${p.c}" data-tip="<b>${p.n}</b><br>клик — выбрать профиль для разблокировки" onclick="selP(${i})">${p.l}</div>`).join('');
+function selP(i){cur=PROFS[i];document.getElementById('av').style.background=cur.c;document.getElementById('av').textContent=cur.l;document.getElementById('pname').textContent=cur.n+' профиль';document.querySelectorAll('.p').forEach((p,j)=>p.classList.toggle('on',i===j));pin='';drawPin()}
+function drawPin(){document.getElementById('pin').innerHTML='<div class="d'+(pin.length>0?' f':'')+'"></div>'.repeat(4);document.getElementById('msg').textContent=pin.length===4?'PIN введён — нажмите «Разблокировать»':'Нажмите цифры или кликните точки'}
+for(let i=0;i<10;i++){const d=document.createElement('div');d.className='d';d.style.cssText='width:14px;height:14px;border-radius:50%;border:1px solid var(--line);cursor:pointer;font-size:0';d.onclick=()=>{pin=pin.slice(0,3)+(pin.length<4?'•':'');drawPin()};}
+document.querySelectorAll('.pin .d').forEach(d=>d.onclick=()=>{if(pin.length<4){pin+='•';drawPin()}});
+document.getElementById('pin').addEventListener('click',e=>{if(e.target.classList.contains('d')&&pin.length<4){pin+='•';drawPin()}});
+function unlock(){document.getElementById('lockScr').style.display='none';document.getElementById('openScr').classList.add('open')}
+function resetSel(){document.getElementById('lockScr').style.display='block';document.getElementById('openScr').classList.remove('open')}
+const tip=document.getElementById('tip');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-320)+'px';tip.style.top=(e.clientY+16)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none'});
+drawPin();
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

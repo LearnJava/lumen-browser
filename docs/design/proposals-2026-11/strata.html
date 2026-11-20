@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Пласты</title>
+<style>
+  :root{--bg:#f4f5f7;--panel:#fff;--ink:#1f2328;--mut:#7d8590;--line:#dde2e8;--acc:#0b6fe0}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;overflow:hidden;position:relative}
+  .page{position:absolute;inset:0;background:#fff;overflow:auto}
+  .page .hd{height:160px;background:linear-gradient(120deg,#2c3e50,#5a7a9c)}
+  .page .bd{max-width:640px;margin:26px auto;padding:0 22px;font-size:15px;line-height:1.7}
+  .page .bd h1{font-size:24px}
+  /* HUD-слои поверх контента */
+  .hud{position:absolute;z-index:30}
+  .topbar{top:0;left:0;right:0;height:40px;background:rgba(255,255,255,.75);backdrop-filter:blur(16px);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;padding:0 14px;transform:translateY(-100%);transition:transform .25s}
+  body:hover .topbar{transform:translateY(0)}
+  body:not(:hover) .topbar{transition-delay:.4s}
+  .ib{width:28px;height:28px;border:none;background:none;border-radius:7px;color:var(--mut);display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+  .ib:hover{background:#eef1f4;color:var(--ink)}
+  .ib svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .omni{flex:1;max-width:480px;margin:0 auto;height:30px;display:flex;align-items:center;padding:0 12px;background:#fff;border:1px solid var(--line);border-radius:15px;font-size:13px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+  .omni:hover{border-color:#b9c2cc}
+  /* виджеты по углам */
+  .w{background:rgba(255,255,255,.85);backdrop-filter:blur(12px);border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-size:12px;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,.08);min-width:150px}
+  .w:hover{border-color:var(--acc)}
+  .w b{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);margin-bottom:4px}
+  .w .v{font-size:18px;font-weight:700}
+  .w .s{color:var(--mut);font-size:11px;margin-top:2px}
+  .w.media .v{font-size:14px}
+  .tl{top:56px;right:14px}
+  .br{bottom:14px;right:14px}
+  .bl{bottom:14px;left:14px}
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#1c1f26;color:#e8eaed;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:290px;box-shadow:0 6px 20px rgba(0,0,0,.25);display:none}
+  #tip b{color:#8fb8ec}#tip kbd{background:#33373f;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+</style>
+</head>
+<body>
+  <div class="page">
+    <div class="hd"></div>
+    <div class="bd">
+      <h1>Пласты — контент главный, HUD по требованию</h1>
+      <p>Хром — это пласты поверх страницы, а не рамка вокруг неё. Верхняя панель появляется при наведении на верх экрана; по углам живут виджеты-статусы: что играет, сколько заблокировано, прогресс загрузок.</p>
+      <p>Виджеты не занимают место в потоке — они «плавают» и исчезают, когда не нужны. Это HUD-подход: информация всегда под рукой, но никогда не мешает чтению.</p>
+      <p>Клик по любому виджету открывает свой раздел: медиа — плеер/PiP, защита — отчёт, загрузки — менеджер.</p>
+    </div>
+  </div>
+  <div class="hud topbar">
+    <button class="ib" data-tip="Назад"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
+    <button class="ib" data-tip="Вперёд"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+    <button class="ib" data-tip="Обновить"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 11-2.34-5.66M20 4v4h-4"/></svg></button>
+    <div class="omni" data-tip="Адрес / поиск / @-команды" onclick="openPage('app.html?s=history')">lumen.local/article</div>
+    <button class="ib" data-tip="Настройки" onclick="openPage('app.html?s=settings')"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.14-1.4l2-1.5-2-3.4-2.3 1a7 7 0 00-2.4-1.4L14 3h-4l-.36 2.6a7 7 0 00-2.4 1.4l-2.3-1-2 3.4 2 1.5a7 7 0 000 2.8l-2 1.5 2 3.4 2.3-1a7 7 0 002.4 1.4L10 21h4l.36-2.6a7 7 0 002.4-1.4l2.3 1 2-3.4-2-1.5c.09-.46.14-.93.14-1.4z"/></svg></button>
+    <button class="ib" data-tip="Меню" onclick="openPage('app.html?s=home')"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/></svg></button>
+  </div>
+  <div class="hud w tl" data-tip="Вкладки: 7 открыто · 3 спят · 2 с уведомлениями — клик: обзор" onclick="openPage('app.html?s=home')"><b>Вкладки</b><div class="v">7 <small style="font-size:12px;color:var(--mut)">· 3 💤</small></div><div class="s">2 ждут разрешения</div></div>
+  <div class="hud w tl" style="top:120px" data-tip="Медиа: подкаст играет в фоновой вкладке — вынести в PiP" onclick="openPage('app.html?s=home')"><b>Медиа</b><div class="v media">🎧 Подкаст ep.42</div><div class="s">PiP — поверх окон</div></div>
+  <div class="hud w br" data-tip="Защита: 7 запросов заблокировано на этой странице" onclick="openPage('app.html?s=privacy')"><b>Защита</b><div class="v" style="color:#1f9d55">7 блок.</div><div class="s">сегодня: 214</div></div>
+  <div class="hud w bl" data-tip="Загрузки: 2 активных — менеджер Ctrl+J" onclick="openPage('app.html?s=downloads')"><b>Загрузки</b><div class="v">2 <small style="font-size:12px;color:var(--mut)">активных</small></div><div class="s">64% · 31%</div></div>
+  <div id="tip"></div>
+<script>
+function openPage(u){window.open(u,'_blank')}
+const tip=document.getElementById('tip');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-300)+'px';tip.style.top=(e.clientY+16)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none'});
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

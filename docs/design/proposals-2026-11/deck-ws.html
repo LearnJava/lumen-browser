@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Колода: пространства</title>
+<style>
+  :root{--bg:#0f1116;--panel:#171a20;--ink:#e8eaed;--mut:#8a919c;--line:#262b33;--acc:#5b9dff}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  .top{height:44px;flex:none;display:flex;align-items:center;gap:10px;padding:0 14px;background:var(--panel);border-bottom:1px solid var(--line)}
+  .brand{font-weight:700}.brand span{color:var(--acc)}
+  .wsbar{display:flex;gap:6px;align-items:center}
+  .ws{padding:5px 13px;border-radius:15px;font-size:12px;cursor:pointer;border:1px solid var(--line);color:var(--mut)}
+  .ws.on{background:var(--acc);color:#fff;border-color:var(--acc);font-weight:600}
+  .ws:hover:not(.on){color:var(--ink);border-color:#3a4250}
+  .omni{flex:1;max-width:420px;margin:0 auto;height:32px;display:flex;align-items:center;padding:0 13px;background:#0b0d10;border:1px solid var(--line);border-radius:16px;font-size:13px;color:var(--mut);cursor:pointer}
+  .ib{height:30px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:none;color:var(--mut);cursor:pointer;font-size:12.5px}
+  .ib:hover{color:var(--ink);border-color:#3a4250}
+  .layout{flex:1;display:flex;min-height:0}
+  /* колода слева */
+  .deck{width:62%;display:flex;align-items:center;justify-content:center;position:relative;min-height:0;border-right:1px solid var(--line)}
+  .card{width:min(430px,88%);height:min(500px,76vh);background:#fff;color:#222;border-radius:16px;overflow:hidden;box-shadow:0 30px 80px rgba(0,0,0,.55);transition:transform .3s,opacity .3s}
+  .card .hd{height:36px;background:#f0f2f5;display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid #e4e6e8}
+  .fav{width:14px;height:14px;border-radius:4px}
+  .card .url{font-size:12px;color:#77809a;flex:1}
+  .card .bd{height:calc(100% - 36px);overflow:auto;padding:24px}
+  .card .bd .hero{height:120px;border-radius:10px;background:linear-gradient(120deg,#dfe6ee,#cfd8e3);margin-bottom:18px}
+  .card .bd h1{font-size:21px;margin:0 0 10px}
+  .card .bd p{font-size:14px;line-height:1.65;color:#333}
+  .peek{position:absolute;bottom:30px;display:flex;gap:8px}
+  .peek i{width:56px;height:38px;border-radius:6px;background:#2a2f37;display:block;cursor:pointer;border:1px solid var(--line)}
+  .peek i.on{border-color:var(--acc)}
+  /* панель пространства справа */
+  .side{width:38%;overflow:auto;padding:20px;background:var(--panel)}
+  .side h3{margin:0 0 12px;font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--mut)}
+  .wsi{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;cursor:pointer;font-size:13px;margin-bottom:4px}
+  .wsi:hover{background:#1f242c}
+  .wsi.on{background:#1f2b45;border:1px solid var(--acc)}
+  .wsi .dot{width:10px;height:10px;border-radius:3px;flex:none}
+  .wsi .cnt{margin-left:auto;font-size:11px;color:var(--mut)}
+  .wsi .acts{display:none;gap:4px}
+  .wsi:hover .acts{display:flex}
+  .wsi .acts button{border:none;background:none;color:var(--mut);cursor:pointer;font-size:11px;padding:1px 4px}
+  .wsi .acts button:hover{color:var(--ink)}
+  .newws{margin-top:14px;border:1px dashed var(--line);border-radius:10px;padding:10px;text-align:center;color:var(--mut);cursor:pointer;font-size:12.5px}
+  .newws:hover{border-color:var(--acc);color:var(--acc)}
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#0d1117;color:#e6e9ee;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:300px;border:1px solid #2a313c;box-shadow:0 6px 20px rgba(0,0,0,.5);display:none}
+  #tip b{color:#8fb8ec}#tip kbd{background:#262b33;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+</style>
+</head>
+<body>
+  <div class="top">
+    <div class="brand">lumen<span>://</span>deck-ws</div>
+    <div class="wsbar" id="wsbar"></div>
+    <div class="omni" data-tip="Адрес / @-команды" onclick="openPage('app.html?s=history')">🔍 lumen.local…</div>
+    <button class="ib" data-tip="Все вкладки" onclick="openPage('app.html?s=home')">▦</button>
+    <button class="ib" data-tip="Настройки" onclick="openPage('app.html?s=settings')">⚙</button>
+  </div>
+  <div class="layout">
+    <div class="deck" id="deck"></div>
+    <aside class="side" id="side"></aside>
+  </div>
+  <div id="tip"></div>
+<script>
+function openPage(u){window.open(u,'_blank')}
+const WS=[
+ {n:'Работа',c:'#5b9dff',tabs:[{t:'Lumen — движок',u:'lumen.local',cc:'#e3a008'},{t:'GitHub — PR',u:'github.com',cc:'#4285f4'},{t:'CI — pipeline',u:'ci.internal',cc:'#7c3aed'}]},
+ {n:'Чтение',c:'#8b5cf6',tabs:[{t:'V8 deep dive',u:'read-later',cc:'#8b5cf6'},{t:'MDN — Grid',u:'mozilla.org',cc:'#d93025'},{t:'HTML Spec',u:'whatwg.org',cc:'#fbbc05'}]},
+ {n:'Медиа',c:'#3fb96f',tabs:[{t:'Подкаст ep.42',u:'youtube.com',cc:'#34a853'},{t:'YouTube — микс',u:'youtube.com',cc:'#f00'}]},
+ {n:'Личное',c:'#e05a5a',tabs:[{t:'Банк',u:'bank.example.com',cc:'#d6453d'}]},
+];
+let ws=0,tab=0;
+const deck=document.getElementById('deck'),side=document.getElementById('side'),wsbar=document.getElementById('wsbar');
+function render(){
+  wsbar.innerHTML=WS.map((w,i)=>`<span class="ws ${i===ws?'on':''}" data-tip="Пространство «${w.n}» — ${w.tabs.length} вкладок · клик переключить" onclick="ws=${i};tab=0;render()">${w.n} · ${w.tabs.length}</span>`).join('')+`<span class="ws" data-tip="Новое пространство" onclick="openPage('app.html?s=workspaces')">＋</span>`;
+  const w=WS[ws],p=w.tabs[tab];
+  deck.innerHTML=`<div class="card"><div class="hd"><span class="fav" style="background:${p.cc}"></span><span class="url">${p.u} · ${w.n} · ${tab+1}/${w.tabs.length}</span></div><div class="bd"><div class="hero"></div><h1>${p.t}</h1><p>Колода пространства «${w.n}»: карточки — только вкладки этого пространства. Переключение пространства меняет и колоду, и боковую панель.</p><p>Управление: ← → по вкладкам · клик по пространству вверху · клик по строке справа.</p></div></div>
+   <div class="peek">${w.tabs.map((t,i)=>`<i class="${i===tab?'on':''}" style="background:${t.cc}33;border-color:${t.cc}" data-tip="${t.t}" onclick="tab=${i};render()"></i>`).join('')}</div>`;
+  side.innerHTML=`<h3>Пространства · ${WS.length}</h3>`+WS.map((w,i)=>`
+   <div class="wsi ${i===ws?'on':''}" data-tip="<b>${w.n}</b><br>${w.tabs.length} вкладок · клик — выбрать" onclick="ws=${i};tab=0;render()">
+    <span class="dot" style="background:${w.c}"></span><span style="font-weight:${i===ws?600:400}">${w.n}</span><span class="cnt">${w.tabs.length}</span>
+    <span class="acts"><button data-tip="Новое пространство" onclick="event.stopPropagation();openPage('app.html?s=workspaces')">＋</button><button data-tip="Настройки пространства" onclick="event.stopPropagation();openPage('app.html?s=workspaces')">⚙</button></span>
+   </div>`).join('')+`<div class="newws" data-tip="Создать новое пространство — имя, цвет, изоляция cookie" onclick="openPage('app.html?s=workspaces')">＋ Новое пространство</div>`;
+}
+addEventListener('keydown',e=>{if(e.key==='ArrowLeft'){tab=(tab-1+WS[ws].tabs.length)%WS[ws].tabs.length;render()}if(e.key==='ArrowRight'){tab=(tab+1)%WS[ws].tabs.length;render()}});
+const tip=document.getElementById('tip');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-320)+'px';tip.style.top=(e.clientY+16)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none'});
+render();
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>

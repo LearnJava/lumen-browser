@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Lumen — Кокпит</title>
+<style>
+  :root{--bg:#0d1014;--panel:#151920;--ink:#e8eaed;--mut:#8a919c;--line:#262c35;--acc:#5b9dff;--grn:#3fb96f;--amb:#e8a33d;--red:#e05a5a}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  .top{height:46px;flex:none;display:flex;align-items:center;gap:12px;padding:0 18px;background:var(--panel);border-bottom:1px solid var(--line)}
+  .brand{font-weight:700;font-size:15px}.brand span{color:var(--acc)}
+  .clock{font-size:20px;font-weight:300;font-variant-numeric:tabular-nums}
+  .omni{flex:1;max-width:460px;margin-left:auto;height:34px;display:flex;align-items:center;padding:0 14px;background:#0b0d10;border:1px solid var(--line);border-radius:17px;font-size:13.5px;color:var(--mut);cursor:pointer}
+  .omni:hover{border-color:#3a4250}
+  .ib{height:32px;padding:0 11px;border:1px solid var(--line);border-radius:8px;background:none;color:var(--mut);cursor:pointer;font-size:12.5px}
+  .ib:hover{color:var(--ink);border-color:#3a4250}
+  .dash{flex:1;overflow:auto;padding:26px 30px}
+  .gauges{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-bottom:22px}
+  .g{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;text-align:center}
+  .g .ring{width:76px;height:76px;margin:0 auto 10px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;position:relative}
+  .g .ring::before{content:'';position:absolute;inset:6px;border-radius:50%;background:var(--panel)}
+  .g .ring span{position:relative;z-index:1}
+  .g .lb{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.06em}
+  .g .sub{font-size:11.5px;color:var(--mut);margin-top:3px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
+  .panel h3{margin:0 0 12px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut)}
+  .prow{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid #1f242c;font-size:13px}
+  .prow:first-of-type{border-top:none}
+  .prow .k{color:var(--mut);width:90px;flex:none;font-size:12px}
+  .prow .v{flex:1}
+  .prow .v.acc{color:var(--acc)}
+  .prow .v.grn{color:var(--grn)}
+  .prow .v.amb{color:var(--amb)}
+  .bar{height:5px;border-radius:3px;background:#262c35;margin-top:5px;overflow:hidden}
+  .bar i{display:block;height:100%;border-radius:3px}
+  @media(max-width:800px){.grid2{grid-template-columns:1fr}}
+  #tip{position:fixed;z-index:100;pointer-events:none;background:#0d1117;color:#e6e9ee;font-size:12px;line-height:1.4;padding:7px 10px;border-radius:8px;max-width:300px;border:1px solid #2a313c;box-shadow:0 6px 20px rgba(0,0,0,.5);display:none}
+  #tip b{color:#8fb8ec}#tip kbd{background:#262b33;border-radius:4px;padding:0 5px;font:11px 'Segoe UI';margin-left:4px}
+</style>
+</head>
+<body>
+  <div class="top">
+    <div class="brand">lumen<span>://</span>cockpit</div>
+    <div class="clock" id="clk">--:--:--</div>
+    <div class="omni" data-tip="Адрес / поиск / @-команды" onclick="openPage('app.html?s=history')">🔍 lumen.local…</div>
+    <button class="ib" data-tip="Обзор вкладок" onclick="openPage('orbit.html')">▦</button>
+    <button class="ib" data-tip="Настройки" onclick="openPage('app.html?s=settings')">⚙</button>
+  </div>
+  <div class="dash">
+    <div class="gauges">
+      <div class="g" data-tip="Память: суммарно по всем вкладкам. Спящие T3 вкладки занимают ~0"><div class="ring" style="background:conic-gradient(#5b9dff 0 62%,#262c35 62%)"><span>620<span style="font-size:12px;color:var(--mut)">МБ</span></span></div><div class="lb">Память</div><div class="sub">7 вкладок · 3 спят</div></div>
+      <div class="g" data-tip="CPU текущей сессии: V8 + layout + paint"><div class="ring" style="background:conic-gradient(#3fb96f 0 34%,#262c35 34%)"><span>3.4<span style="font-size:12px;color:var(--mut)">%</span></span></div><div class="lb">CPU</div><div class="sub">idle-friendly</div></div>
+      <div class="g" data-tip="Скорость: время до первого кадра и последнего ответа на repeat-визитах"><div class="ring" style="background:conic-gradient(#e8a33d 0 78%,#262c35 78%)"><span>1.56<span style="font-size:12px;color:var(--mut)">s</span></span></div><div class="lb">Last response</div><div class="sub">repeat visit · цель ≤2s</div></div>
+      <div class="g" data-tip="Защита: запросов заблокировано сегодня во всех вкладках"><div class="ring" style="background:conic-gradient(#3fb96f 0 88%,#262c35 88%)"><span>214</span></div><div class="lb">Заблокировано</div><div class="sub">трекеры · реклама · fp</div></div>
+    </div>
+    <div class="grid2">
+      <div class="panel" data-tip="Состояние движка: JS-runtime, bfcache, network">
+        <h3>Движок</h3>
+        <div class="prow"><span class="k">JS runtime</span><span class="v grn">V8 persistent ✓</span></div>
+        <div class="prow"><span class="k">bfcache</span><span class="v grn">parked 2/2</span></div>
+        <div class="prow"><span class="k">WPT</span><span class="v acc">44.80%</span></div>
+        <div class="prow"><span class="k">Layout</span><span class="v">139 CSS props</span></div>
+        <div class="prow"><span class="k">Paint</span><span class="v">wgpu + CPU</span></div>
+      </div>
+      <div class="panel" data-tip="Активность: что делают вкладки прямо сейчас">
+        <h3>Активность</h3>
+        <div class="prow"><span class="k">Медиа</span><span class="v">🎧 Подкаст — PLAY</span></div>
+        <div class="prow"><span class="k">Загрузка</span><span class="v">⬇ rust-toolchain 64%</span><div class="bar"><i style="width:64%;background:var(--acc)"></i></div></div>
+        <div class="prow"><span class="k">Обновление</span><span class="v amb">0.6.0 доступна</span></div>
+        <div class="prow"><span class="k">Сессия</span><span class="v">восстановлена 12 вкладок</span></div>
+      </div>
+      <div class="panel" data-tip="Сеть: соединения, preconnect, site memory">
+        <h3>Сеть</h3>
+        <div class="prow"><span class="k">Соединений</span><span class="v">4 keep-alive</span></div>
+        <div class="prow"><span class="k">Site memory</span><span class="v grn">on · 32 URL/стр</span></div>
+        <div class="prow"><span class="k">Preconnect</span><span class="v">2 origins warm</span></div>
+        <div class="prow"><span class="k">HTTP/2</span><span class="v grn">mux ready</span></div>
+      </div>
+      <div class="panel" data-tip="Приватность: щиты, Tor, GPC, fingerprint">
+        <h3>Приватность</h3>
+        <div class="prow"><span class="k">Щиты</span><span class="v grn">on</span></div>
+        <div class="prow"><span class="k">Tor</span><span class="v">off</span></div>
+        <div class="prow"><span class="k">GPC</span><span class="v grn">Sec-GPC: 1</span></div>
+        <div class="prow"><span class="k">HTTP-профиль</span><span class="v acc">lumen</span></div>
+        <div class="prow"><span class="k">Fingerprint</span><span class="v">config.toml</span></div>
+      </div>
+    </div>
+  </div>
+  <div id="tip"></div>
+<script>
+function openPage(u){window.open(u,'_blank')}
+setInterval(()=>{document.getElementById('clk').textContent=new Date().toLocaleTimeString('ru-RU')},1000);
+const tip=document.getElementById('tip');
+addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;tip.innerHTML=t.dataset.tip;tip.style.display='block';});
+addEventListener('mousemove',e=>{if(tip.style.display==='block'){tip.style.left=Math.min(e.clientX+14,innerWidth-320)+'px';tip.style.top=(e.clientY+16)+'px';}});
+addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))tip.style.display='none'});
+</script>
+<script src="omni.js"></script>
+<script src="chrome.js"></script>
+</body>
+</html>
