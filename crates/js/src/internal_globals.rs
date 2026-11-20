@@ -783,7 +783,9 @@ mod tests {
     }
 
     /// BUG-753 census: the page's global object carries no engine-internal own
-    /// property. Any name showing up here is a regression.
+    /// property. Any name showing up here is a regression. The
+    /// FINGERPRINT-JS-REGISTRY hooks live on the internal container
+    /// (`__lumen_C`), not on `globalThis`, so they do not appear here either.
     #[test]
     fn only_known_internal_names_remain_on_the_global() {
         let rt = runtime();

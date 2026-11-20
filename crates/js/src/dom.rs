@@ -610,20 +610,27 @@ pub(crate) const CRYPTO_SHIM: &str = include_str!("shim/crypto_shim.js");
 /// склейки закреплён тестом `web_api_shim_splices_its_parts_in_source_order`.
 const WEB_API_SHIM_TAIL_B: &str = include_str!("shim/web_api_shim_tail_b.js");
 
-/// Native-фасад `Function.prototype.toString` для функций шима (BUG-1826
-/// срез 3) — `[Exposed=*]`, последний кусок и страничной склейки, и
-/// [`worker_exposed_shim`]: в момент его исполнения globalThis ещё содержит
-/// только платформенную поверхность, которую и маскирует. Порядок склейки
-/// закреплён тестом `web_api_shim_splices_its_parts_in_source_order`.
+/// Единый реестр «нативных» функций реалма (BUG-1826 / FINGERPRINT-JS-REGISTRY)
+/// — заменил пару `native_tostring_shim.js` + `native_mask_shim.js`. Фасад
+/// `Function.prototype.toString` ставится последним куском и страничной
+/// склейки, и [`worker_exposed_shim`], но обход не делает: единственный
+/// `_lumen_native_sweep()` вызывает Rust после всех `install_*` (page —
+/// `v8_runtime.rs` перед BUG-1811 preload и BUG-378 seal; worker — конец
+/// install-пути каждого flavour). Хуки `_lumen_native_register`/
+/// `_lumen_native_sweep` — неэнумерируемые свойства внутреннего контейнера
+/// `__lumen_C` (на globalThis — только в реалмах без контейнера) для функций,
+/// созданных после обхода. Порядок склейки закреплён тестом
+/// `web_api_shim_splices_its_parts_in_source_order`.
 #[cfg(feature = "v8-backend")]
-pub(crate) const NATIVE_TO_STRING_SHIM: &str = include_str!("shim/native_tostring_shim.js");
+pub(crate) const NATIVE_REGISTRY_SHIM: &str = include_str!("shim/native_registry_shim.js");
 
-/// BUG-1826: masks Web API functions as `[native code]` under
-/// `Function.prototype.toString`. Evaluated once at the end of `install_dom`
-/// (after every interface install, before preload/page scripts) — see the
-/// file's own doc comment for why the snapshot timing matters.
+/// Вызов единственного обхода реестра нативных функций реалма — eval-строка
+/// для конца install-пути (страница: `v8_runtime.rs`; воркеры: хвосты
+/// `install_*_globals_v8` трёх flavour). `typeof`-гард: в реалме без
+/// реестра (минимальные тестовые рантаймы) — no-op, а не ReferenceError.
 #[cfg(feature = "v8-backend")]
-pub(crate) const NATIVE_MASK_SHIM: &str = include_str!("shim/native_mask_shim.js");
+pub(crate) const NATIVE_REGISTRY_SWEEP: &str =
+    "typeof _lumen_native_sweep === 'function' && _lumen_native_sweep()";
 
 /// `WorkerLocation` (HTML LS §10.2.4) and `WorkerNavigator` (§10.2.5) — the two
 /// `[Exposed=Worker]` interfaces every `WorkerGlobalScope` has and the page does
@@ -667,7 +674,7 @@ pub(crate) const CONSOLE_SHIM: &str = include_str!("shim/console_shim.js");
 /// split is invisible to the shim's own code.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn web_api_shim() -> String {
-    format!("{WEB_API_SHIM_HEAD}{EVENT_SHIM}{EVENT_TARGET_SHIM}{CONSOLE_SHIM}{WEB_API_SHIM_MID}{URL_PARSE_SHIM}{WEB_API_SHIM_MID_B}{ABORT_SHIM}{STREAMS_SHIM}{HEADERS_SHIM}{FETCH_BODY_SHIM}{FORM_DATA_SHIM}{TEXT_ENCODING_SHIM}{WEB_API_SHIM_MID_B3}{WEBSOCKET_SHIM}{WEB_API_SHIM_MID_B4}{GEOMETRY_SHIM}{PSEUDO_ELEMENT_SHIM}{URL_SHIM}{ORIGIN_SHIM}{WEB_API_SHIM_MID_C}{FILE_API_SHIM}{WEB_API_SHIM_MID_C2}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}{MESSAGE_CHANNEL_SHIM}{WEB_API_SHIM_TAIL_MC}{IDB_SHIM}{CRYPTO_SHIM}{WEB_API_SHIM_TAIL_B}{NATIVE_TO_STRING_SHIM}")
+    format!("{WEB_API_SHIM_HEAD}{EVENT_SHIM}{EVENT_TARGET_SHIM}{CONSOLE_SHIM}{WEB_API_SHIM_MID}{URL_PARSE_SHIM}{WEB_API_SHIM_MID_B}{ABORT_SHIM}{STREAMS_SHIM}{HEADERS_SHIM}{FETCH_BODY_SHIM}{FORM_DATA_SHIM}{TEXT_ENCODING_SHIM}{WEB_API_SHIM_MID_B3}{WEBSOCKET_SHIM}{WEB_API_SHIM_MID_B4}{GEOMETRY_SHIM}{PSEUDO_ELEMENT_SHIM}{URL_SHIM}{ORIGIN_SHIM}{WEB_API_SHIM_MID_C}{FILE_API_SHIM}{WEB_API_SHIM_MID_C2}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}{MESSAGE_CHANNEL_SHIM}{WEB_API_SHIM_TAIL_MC}{IDB_SHIM}{CRYPTO_SHIM}{WEB_API_SHIM_TAIL_B}{NATIVE_REGISTRY_SHIM}")
 }
 
 /// The subset of the page shim that WHATWG also exposes in a
@@ -693,7 +700,7 @@ pub(crate) fn worker_exposed_shim() -> String {
     format!(
         "{EVENT_SHIM}{EVENT_TARGET_SHIM}{CONSOLE_SHIM}{PERFORMANCE_SHIM}{URL_PARSE_SHIM}{URL_SHIM}{ORIGIN_SHIM}\
          \n{URL_PATTERN_SHIM}\n{TEXT_ENCODING_SHIM}{ABORT_SHIM}{STREAMS_SHIM}{HEADERS_SHIM}{FETCH_BODY_SHIM}{FORM_DATA_SHIM}{FILE_API_SHIM}{WEBSOCKET_SHIM}\
-         {WORKER_LOCATION_NAVIGATOR_SHIM}{NATIVE_TO_STRING_SHIM}\nundefined;\n"
+         {WORKER_LOCATION_NAVIGATOR_SHIM}{NATIVE_REGISTRY_SHIM}\nundefined;\n"
     )
 }
 

@@ -2592,13 +2592,22 @@ runtime or the shim. Read them before a JS/Web-API change.
   `broadcast_channel.rs`, … each install their own JS. The same defect has been fixed three times in
   different modules for exactly this reason (relative-URL resolution in `fetch`, then XHR, then
   `sendBeacon`). Before assuming a fix landed everywhere, grep the other shims for the same shape.
-- **A JS shim function installed after `install_dom`'s toString-mask pass prints its source, not
-  `[native code]`.** The mask (`shim/native_tostring_shim.js`, BUG-1826 срез 3) snapshots the platform
-  surface at mask time; anything installed later (lazy feature shims, a new module) is invisible to
-  it, and a challenge reading `fn.toString()` sees shim JS where Chrome prints a native. If the new
-  install adds function-valued platform members, re-eval `dom::NATIVE_TO_STRING_SHIM` after it
-  (idempotent — fresh WeakMap, the toString chain grows by one link); that is what `install_dom` does
-  for the post-program module installs.
+- **A JS shim function installed after the realm's `_lumen_native_sweep()` prints its source, not
+  `[native code]`.** The single registry (`shim/native_registry_shim.js`, FINGERPRINT-JS-REGISTRY,
+  replaced the `native_tostring_shim.js` + `native_mask_shim.js` pair) installs the
+  `Function.prototype.toString` facade inside the shim concat but runs its one reachability sweep
+  only when Rust evals `dom::NATIVE_REGISTRY_SWEEP` — page: tail of `install_dom` before the BUG-1811
+  preload and the BUG-378 seal; workers: last step of each run path before the worker script
+  (`worker.rs`/`shared_worker.rs`/`sw_worker.rs`), i.e. *after* nested `Worker`,
+  `OffscreenCanvas` and WebSocket binds — moving an install past that point leaves its functions
+  unmasked. Functions created later still (frame-bridge facades, per-call shim objects like
+  `video_element.js`'s `TextTrackList`) must self-register through the
+  `_lumen_native_register(fn, kind, key)` hook on the internal container `__lumen_C` — bare-name
+  lookup works inside `with (container)` closures even after the seal. The authoritative coverage
+  check is `scripts/probe_native_api.py` (page + dedicated + shared worker realms, zero non-native
+  platform functions); a getter that caches onto `this` also runs on prototypes during the walk, so
+  prototype-polluting getters (`textTracks` cached `__lumen_text_tracks` on
+  `HTMLMediaElement.prototype`) both leak internals and dodge the sweep's enumeration.
 - **`_LUMEN_WRAPPER_MEMBERS` (`crates/js/src/dom.rs`) sits on a prototype BELOW the interface
   prototypes**, so anything declared there outranks every `_lumen_install_reflection` row and every
   hand-written `HTML*Element.prototype` accessor. A tag-specific member in that shared table silently

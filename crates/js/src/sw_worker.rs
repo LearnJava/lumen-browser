@@ -1570,6 +1570,9 @@ fn install_sw_globals_v8(
     // `install_worker_scope_globals_v8` above (GAP-WORKERSCOPE); nothing left
     // to evaluate for them here.
     rt.eval(crate::dom::IDB_SHIM)?;
+    // FINGERPRINT-JS-REGISTRY: единственный обход реестра нативных этого
+    // реалма — после всех install выше, до worker-скрипта.
+    rt.eval(crate::dom::NATIVE_REGISTRY_SWEEP)?;
     Ok(())
 }
 

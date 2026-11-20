@@ -1490,3 +1490,36 @@ focus/view-transition) одним местом.
 НЕ тронуто намеренно: `route_query_js` для effectful-чтений
 (`eval_js_value` в click/form_submit, `take_nav_intercept_result`) —
 пропуск там терял бы выполнение скрипта или рассинхронизировал drain.
+
+## 2026-11-20 — WS-A fingerprint-unification: единый реестр нативных функций реалма — Windows 10, dev-release ветки fingerprint-js-registry, маршрут home-direct
+
+Пара `native_tostring_shim.js` + `native_mask_shim.js` заменена одним
+`shim/native_registry_shim.js` (FINGERPRINT-JS-REGISTRY): фасад
+`Function.prototype.toString` ставится последним куском склейки, единственный
+обход `_lumen_native_sweep()` делает Rust после всех `install_*` (page — хвост
+`install_dom` до BUG-1811 preload и BUG-378 seal; dedicated/shared/service —
+последний шаг run-пути перед worker-скриптом, т.е. после nested `Worker`,
+`OffscreenCanvas` и WebSocket — первый прогон пробы показал, что sweep внутри
+`install_worker_globals_v8` их не покрывал: 68 утечек). Хуки
+`_lumen_native_register`/`_lumen_native_sweep` живут на внутреннем контейнере
+`__lumen_C` (BUG-753), не на globalThis — странице недоступны, seal не нужен;
+`frame_bridge.rs` читает хук через `__lumen_C` (замыкание под `with(container)`).
+
+**Побочные правки по результатам пробы:** геттер `HTMLMediaElement.prototype.textTracks`
+больше не кэширует `__lumen_text_tracks` на прототипе (обходы дёргают геттеры на
+прототипных объектах — own-prop с shim-функциями оставался странице);
+`video_element.js` регистрирует `TextTrackList.getTrackById` хуком в момент
+создания (список новый на каждое чтение — sweep его не догоняет).
+
+**Ledger** `scripts/probe_native_api.py` (новый, Appendix B): один обход
+достижимости в page/dedicated/shared реалмах на пустой loopback-странице,
+классификация по `Function.prototype.toString`. Lumen: page 7821 / dedicated 2044 /
+shared 1966 функций — **0 утечек**; CfT 157.0.8103.78: 11741 / 3819 / 3405 — 0
+утечек (паритет классификации; у Lumen меньше платформенных API — это покрытие,
+не маскировка). Артефакты: `runs/2026-11-19-native-api-lumen.json`,
+`…-native-api-chrome.json`.
+
+**Живая проверка** claude.ai (`--maximized`, свежий профиль через
+`--mcp-live-port`): челлендж пройден, title «Sign in or create an account |
+Claude.ai», в середине прогона сайт ушёл на accounts.google.com (OAuth-флоу —
+значит, гейт пройден), engine stall нет. Лог: `runs/2026-11-19-ws-a-claude-ai.log`.

@@ -922,6 +922,11 @@ fn run_shared_worker_thread_v8(
     {
         eprintln!("[shared-worker] v8 websocket bind failed: {e:?}");
     }
+    // FINGERPRINT-JS-REGISTRY: единственный обход реестра нативных этого
+    // реалма — после всех install, до worker-скрипта.
+    if let Err(e) = rt.eval(crate::dom::NATIVE_REGISTRY_SWEEP) {
+        eprintln!("[shared-worker] v8 native registry sweep failed: {e:?}");
+    }
 
     // BUG-905: the top-level script goes through the runtime-only reporting
     // variants so an uncaught RUNTIME exception fires `error` at this scope's
@@ -1193,6 +1198,9 @@ fn install_shared_worker_globals_v8(
     rt.eval(SHARED_WORKER_GLOBAL_SHIM)?;
     rt.eval(crate::worker_shims::WORKER_TIMERS_SHIM)?;   // BUG-815
     crate::worker_net::install_worker_net_v8(rt, net_provider, &no_blobs)?;
+    // FINGERPRINT-JS-REGISTRY: обход реестра нативных здесь НЕ делаем —
+    // run-путь после этой функции биндит WebSocket, и единственный
+    // `_lumen_native_sweep()` идёт последним шагом перед worker-скриптом.
     Ok(())
 }
 
@@ -1279,6 +1287,29 @@ mod tests_v8 {
         // The stateful paths run through the flavour's own emit without crashing.
         rt.eval("console.time('t'); console.count('c'); console.timeEnd('t'); console.assert(false, 'boom');")
             .unwrap();
+    }
+
+    /// FINGERPRINT-JS-REGISTRY: в shared-worker реалме тот же единый реестр —
+    /// шимовые функции печатаются `[native code]` после единственного обхода
+    /// в конце `install_shared_worker_globals_v8`.
+    #[test]
+    fn shared_worker_shim_functions_print_as_native() {
+        let rt = V8JsRuntime::new().unwrap();
+        let ports = Arc::new(Mutex::new(HashMap::new()));
+        install_shared_worker_globals_v8(&rt, ports, None, "", false, Arc::new(AtomicBool::new(false)), None)
+            .unwrap();
+        let r = rt
+            .eval(
+                "[TextEncoder.prototype.encode.toString(),\
+                  performance.now.toString(), fetch.toString()].join('|')",
+            )
+            .unwrap();
+        let s = match r {
+            JsValue::String(s) => s,
+            other => panic!("unexpected: {other:?}"),
+        };
+        assert!(s.contains("[native code]"), "shared worker toString: {s}");
+        assert_eq!(s.matches("[native code]").count(), 3, "{s}");
     }
 
     /// BUG-766: `SharedWorkerGlobalScope.isSecureContext` follows the same
