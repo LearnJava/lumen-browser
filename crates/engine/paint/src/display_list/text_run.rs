@@ -172,7 +172,6 @@ fn emit_vertical_emphasis_marks(
 fn emit_text_frags(
     line: &[InlineFrag],
     container_x: f32,
-    container_width: f32,
     line_y: f32,
     line_h: f32,
     out: &mut Vec<DisplayCommand>,
@@ -213,7 +212,7 @@ fn emit_text_frags(
             continue;
         }
 
-        let geo = FragGeometry { container_x, container_width, line_h, frag_y };
+        let geo = FragGeometry { container_x, line_h, frag_y };
         match highlights.as_deref().and_then(|h| h.pieces(frag)) {
             Some(pieces) => super::highlight_paint::emit_highlighted_frag(out, frag, pieces, &geo),
             None => emit_frag_text(out, frag, &geo, TextParts::ALL),
@@ -224,7 +223,6 @@ fn emit_text_frags(
 /// Where one fragment sits on its line.
 pub(super) struct FragGeometry {
     pub(super) container_x: f32,
-    pub(super) container_width: f32,
     pub(super) line_h: f32,
     pub(super) frag_y: f32,
 }
@@ -245,9 +243,15 @@ impl TextParts {
 
 /// Shadows, glyphs, stroke, decorations and emphasis marks of one text fragment.
 pub(super) fn emit_frag_text(out: &mut Vec<DisplayCommand>, frag: &InlineFrag, geo: &FragGeometry, parts: TextParts) {
-    let FragGeometry { container_x, container_width, line_h, frag_y, .. } = *geo;
+    let FragGeometry { container_x, line_h, frag_y, .. } = *geo;
     let text_color = frag.style.used_text_fill_color();
-    let base_rect = Rect::new(container_x + frag.x, frag_y, container_width, line_h);
+    // `frag.width` — измеренная ширина глифов рана, а не ширина контейнера:
+    // растровщики читают из rect только x/y (размер им не нужен), а метрики
+    // прокрутки (`content_width_of`) и `find`-группировка строк считают по
+    // rect — с container_width каждый DrawText заявлял правый край на ширину
+    // блока и на широких контейнерах за viewport появлялась лишняя
+    // горизонтальная полоса прокрутки.
+    let base_rect = Rect::new(container_x + frag.x, frag_y, frag.width, line_h);
     if parts.shadows {
         emit_text_shadows(out, base_rect, line_h, frag);
     }
@@ -434,7 +438,7 @@ pub(crate) fn emit_inline_run(
         // An inline element with `opacity`/`filter` paints through its own layer: its
         // backgrounds and text go into one group (Filter Effects L1 §3, Compositing L1 §3.1).
         if !wants_ellipsis && line.iter().any(|f| !f.effect_scopes.is_empty()) {
-            emit_line_with_effects(line, 0, b.rect.x, b.rect.width, line_y, line_h, out);
+            emit_line_with_effects(line, 0, b.rect.x, line_y, line_h, out);
             continue;
         }
 
@@ -463,7 +467,7 @@ pub(crate) fn emit_inline_run(
             out.push(DisplayCommand::PushClipRect {
                 rect: Rect::new(b.rect.x, line_y, clip_w, line_h),
             });
-            emit_text_frags(line, b.rect.x, b.rect.width, line_y, line_h, out);
+            emit_text_frags(line, b.rect.x, line_y, line_h, out);
             out.push(DisplayCommand::PopClip);
             out.push(DisplayCommand::DrawText {
                 font_stretch: ef.style.font_stretch,
@@ -488,7 +492,7 @@ pub(crate) fn emit_inline_run(
                 },
             });
         } else {
-            emit_text_frags(line, b.rect.x, b.rect.width, line_y, line_h, out);
+            emit_text_frags(line, b.rect.x, line_y, line_h, out);
         }
     }
 }
@@ -501,7 +505,6 @@ fn emit_line_with_effects(
     frags: &[InlineFrag],
     depth: usize,
     container_x: f32,
-    container_width: f32,
     line_y: f32,
     line_h: f32,
     out: &mut Vec<DisplayCommand>,
@@ -521,7 +524,7 @@ fn emit_line_with_effects(
                     emit_inline_frag_box(out, container_x, line_y + frag.y_offset, line_h, frag);
                 }
             }
-            emit_text_frags(group, container_x, container_width, line_y, line_h, out);
+            emit_text_frags(group, container_x, line_y, line_h, out);
             continue;
         };
         let (mut x0, mut x1, mut y0) = (f32::MAX, f32::MIN, f32::MAX);
@@ -542,7 +545,7 @@ fn emit_line_with_effects(
             let filters = style.filter.iter().map(|f| f.with_current_color(style.color)).collect();
             out.push(DisplayCommand::PushFilter { filters, bounds });
         }
-        emit_line_with_effects(group, depth + 1, container_x, container_width, line_y, line_h, out);
+        emit_line_with_effects(group, depth + 1, container_x, line_y, line_h, out);
         if filter {
             out.push(DisplayCommand::PopFilter);
         }
