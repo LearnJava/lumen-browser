@@ -75,12 +75,12 @@
 {
  "generated": "2026-11-19",
  "counts": {
-  "open": 298,
-  "fixed": 1457,
+  "open": 299,
+  "fixed": 1458,
   "inprogress": 0,
   "wontfix": 8
  },
- "total_bugs": 1763,
+ "total_bugs": 1765,
  "phases": [
   {
    "id": "P0",
@@ -11903,13 +11903,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1826": {
-   "status": "open",
-   "title": "claude.ai: после 403+«Just a moment» челлендж `chl_page` уходит в одну JS-задачу >135 с на движковом потоке без ошибок — страница висит, `eval` → `engine thread…",
-   "component": "js/engine (выполнение `cdn-cgi/challenge-platform` PoW-скрипта; семья BUG-935/1778/1800)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1827": {
    "status": "open",
    "title": "Голый `cargo clippy -p lumen-js --all-targets -- -D warnings` (без `v8-backend`) красный на чистом main `e0f8aff95` уже в таргете `lib` — 85 ошибок never-used/u…",
@@ -11921,6 +11914,20 @@
    "status": "open",
    "title": "С системным прокси Windows (`ProxyEnable=1`, здесь `127.0.0.1:12334`) каждый WPT-прогон красный: браузер ходит за `http://web-platform.test:18300/...` через сис…",
    "component": "shell/network ↔ wpt-runner (`crates/shell/src/cli_args.rs` — установка системного прокси; `tests/wpt/run_corpus.py`/`tools/wptrunner/wptrunner/browsers/lumen.py` — окружение браузера)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1829": {
+   "status": "open",
+   "title": "Фингерпринт-дивергенты toString-пробы BUG-1826 срез 2: `SharedArrayBuffer` виден без `crossOriginIsolated` (Chrome прячет); `WebGLRenderingContext/WebGL2Renderi…",
+   "component": "js (`crates/js/src` — шимы/нативы: `SharedArrayBuffer`, WebGL, Crypto, RTCPeerConnection)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1830": {
+   "status": "open",
+   "title": "Скриншот-пайплайн (живое окно, WPT-рефтесты) не пиннит `position: fixed`: скобки `BeginFixedLayer` эмитит только walk-путь, порядковый список их не содержит, а…",
+   "component": "paint/shell (`box_layer.rs` — порядковый сборщик; `automation.rs:render_current_page_to_png`, `cpu_raster.rs` — скриншот)",
    "date": null,
    "debtor": false
   },
@@ -22150,6 +22157,13 @@
    "component": "shell (`crates/shell/src/cli_args.rs`)",
    "date": "2026-11-18",
    "debtor": false
+  },
+  "BUG-1826": {
+   "status": "fixed",
+   "title": "claude.ai: управляемый челлендж Cloudflare (`chl_page`) уходил в одну JS-задачу >135 с на движковом потоке — страница висела, `eval` → `engine thread busy`. Сре…",
+   "component": "js (`crates/js/src/frame_bridge.rs` — фасады `winFacade`/`docFacade`/`location`, `wrapWinFacadeGlobals`; `crates/js/src/shim/native_tostring_shim.js` — хук `_lumen_tostring_mark`)",
+   "date": "2026-11-19",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -22881,6 +22895,9 @@
   "js (`crates/js/src/frame_bridge.rs` — фасад `d.referrer` документа `<iframe>`)": [
    "BUG-1231"
   ],
+  "js (`crates/js/src/frame_bridge.rs` — фасады `winFacade`/`docFacade`/`location`, `wrapWinFacadeGlobals`; `crates/js/src/shim/native_tostring_shim.js` — хук `_lumen_tostring_mark`)": [
+   "BUG-1826"
+  ],
   "js (`crates/js/src/frame_bridge.rs`, `frame_bridge_globals.rs`, `v8_runtime/tests/mod.rs`)": [
    "BUG-1813"
   ],
@@ -23475,6 +23492,9 @@
   "js (`crates/js/src` — хелперы, живущие только v8-глеймом: `compression.rs`, `noise_key.rs`, текстовые метрики `canvas2d.rs`, шимы/нативы `dom.rs`, `worker.rs`, `push_api.rs`, `offscreen_canvas`, `lib.rs`)": [
    "BUG-1827"
   ],
+  "js (`crates/js/src` — шимы/нативы: `SharedArrayBuffer`, WebGL, Crypto, RTCPeerConnection)": [
+   "BUG-1829"
+  ],
   "js (`crypto_shim.js` `encrypt`/`decrypt`/`sign`/`verify`/`deriveBits`; `subtle_crypto.rs` `aes_gcm_*`, `rsa_verify`, `aes_ctr_crypt`)": [
    "BUG-1739"
   ],
@@ -23669,9 +23689,6 @@
   ],
   "js/encoding (`TextDecoder`/`TextEncoder`, `lumen_encoding::from_label`)": [
    "BUG-1695"
-  ],
-  "js/engine (выполнение `cdn-cgi/challenge-platform` PoW-скрипта; семья BUG-935/1778/1800)": [
-   "BUG-1826"
   ],
   "js/layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map` — нет строк для `column-*`; `crates/js/src/shim/web_api_shim_mid.js` — валидация)": [
    "BUG-1402"
@@ -25218,6 +25235,9 @@
   "paint/shell": [
    "BUG-111",
    "BUG-231"
+  ],
+  "paint/shell (`box_layer.rs` — порядковый сборщик; `automation.rs:render_current_page_to_png`, `cpu_raster.rs` — скриншот)": [
+   "BUG-1830"
   ],
   "paint/shell — выбор wgpu-бэкенда (`[probe]`, `crates/engine/paint/src/backends/wgpu_backend.rs`, `Renderer::new`/`Surface::configure`); причина не локализована": [
    "BUG-1073"
