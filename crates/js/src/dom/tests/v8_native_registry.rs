@@ -107,6 +107,43 @@ fn registry_hooks_stay_off_the_page_global() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+/// `.prototype` — data-свойство, поэтому sweep звал бренд-чекнутые геттеры
+/// прототипа с this=prototype: ViewTransition `ready`/`finished`/
+/// `updateCallbackDone` возвращали rejected promise, и каждый sweep сыпал
+/// странице unhandledrejection'ами (массовый TypeError: Illegal invocation).
+/// Геттер на прототипе не вызывается, но его функция всё равно
+/// регистрируется как native.
+#[test]
+fn sweep_does_not_call_prototype_getters() {
+    // Bare runtime: install_dom уже прогнал sweep при старте, поэтому
+    // проверяем шима напрямую — сначала «страничные» объекты, потом сам
+    // native_registry_shim и ручной sweep (seen-реестр тогда пуст).
+    let rt = V8JsRuntime::new().unwrap();
+    rt.eval(
+        "var __calls__ = 0;\
+         function __C__() {}\
+         Object.defineProperty(__C__.prototype, 'p', {\
+           get: function() { __calls__++; return Promise.reject(new TypeError('Illegal invocation')); },\
+           enumerable: true, configurable: true });\
+         globalThis.__C__ = __C__;\
+         'ok'",
+    )
+    .unwrap();
+    rt.eval(include_str!("../../shim/native_registry_shim.js"))
+        .unwrap();
+    let r = rt.eval("_lumen_native_sweep(); __calls__").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Number(0.0));
+    let r = rt
+        .eval(
+            "Object.getOwnPropertyDescriptor(__C__.prototype, 'p').get.toString()",
+        )
+        .unwrap();
+    assert_eq!(
+        r,
+        lumen_core::JsValue::String("function get p() { [native code] }".into())
+    );
+}
+
 /// `Function.prototype.toString` сам печатается нативным, а страничная
 /// функция, созданная после обхода и НЕ помеченная, сохраняет исходник.
 #[test]

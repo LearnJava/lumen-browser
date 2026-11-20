@@ -105,12 +105,20 @@
         }
         if (typeof d.set === 'function') register(d.set, accessorText('set', kt));
         var v = d.value;
+        // `.prototype` — data-свойство, поэтому правило «объект по
+        // прототипной цепочке → геттеры не зовём» его не ловит. Но
+        // бренд-чекнутые геттеры прототипа (ViewTransition
+        // `ready`/`finished`/`updateCallbackDone` и т.п.) на this=prototype
+        // возвращают rejected promise — sweep сыпал страницу
+        // unhandledrejection'ами (массовый TypeError: Illegal invocation
+        // на ~15 сайтах аудита). Регистрацию текстов это не отменяет —
+        // геттеры прототипа всё равно проходят через register() выше.
+        var childGetters = callGetters && !(typeof obj === 'function' && kt === 'prototype');
         if (typeof v === 'function') {
           register(v, fnText(v));
-          // Сама функция в очереди: её `.prototype` и статики — data-свойства.
-          queue.push([v, depth, callGetters]);
+          queue.push([v, depth, childGetters]);
         } else if (v !== null && typeof v === 'object') {
-          queue.push([v, depth, callGetters]);
+          queue.push([v, depth, childGetters]);
         }
       }
     }
