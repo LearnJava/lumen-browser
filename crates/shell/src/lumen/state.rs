@@ -728,6 +728,24 @@ pub(crate) struct Lumen {
     /// начале новой навигации — первый промежуточный кадр делает полный layout и
     /// «засевает» дерево; последующие кадры релейаутят инкрементально.
     pub(crate) stream_layout_seeded: bool,
+    /// PERF-STREAM-CASCADE: carried cascade cache from the previous streaming
+    /// paint — `prev_styles` for `layout_streaming_incremental_delta`.
+    /// `None` until the first paint stores it; any doubt falls back to the
+    /// full-cascade streaming path, which re-seeds it.
+    pub(crate) stream_cascade: Option<lumen_layout::CascadeStyles>,
+    /// PERF-STREAM-CASCADE: per-slot signature `(parent_raw, content_hash)` of
+    /// the DOM the last streaming paint laid out — the diff source that turns
+    /// parser appends into a `RestyleDelta`. Keyed by arena index so a freed
+    /// and reused slot simply diffs as changed.
+    pub(crate) stream_sig: std::collections::HashMap<u32, (u32, u64)>,
+    /// PERF-STREAM-CASCADE: stylesheet revision `stream_cascade`/`stream_sig`
+    /// were built against. A merged-CSS tick with a different revision takes
+    /// the full cascade (new rules may match untouched nodes) and re-seeds.
+    pub(crate) stream_sheet_rev: Option<lumen_css_parser::StylesheetRevision>,
+    /// PERF-STREAM-CASCADE: снимок `stream_sheet` на момент прошлого кадра —
+    /// `changed_style_rules` нужен обе версии листа, а `merge_from` мёрджит
+    /// in-place и старую разрушает.
+    pub(crate) stream_prev_sheet: Option<lumen_css_parser::Stylesheet>,
     /// URL subresource-хинтов, уже отправленных в sink во время streaming
     /// (`EarlyPreloadHints`). Финальный `dispatch_preload_hints` в `LoadDone`
     /// пропускает URL из этого набора — без дублей в stderr и без повторных

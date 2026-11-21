@@ -341,7 +341,31 @@ pub fn layout_streaming_incremental_with_counters(
     dark_mode: bool,
     prev: &LayoutBox,
 ) -> (LayoutBox, CounterMap) {
-    streaming_incremental_inner(doc, sheet, viewport, measurer, hp, dark_mode, prev, false)
+    streaming_incremental_inner(doc, sheet, viewport, measurer, hp, dark_mode, prev, false, None)
+}
+
+/// Streaming incremental layout with an incremental cascade (PERF-STREAM-CASCADE).
+///
+/// Same contract as [`layout_streaming_incremental_with_counters`], but the
+/// style pass is [`crate::counters::incremental_precompute_counters`] driven
+/// by `delta` instead of a full [`precompute_counters`]: only the delta's
+/// roots and their affected descendants pay `compute_style`; the rest reuse
+/// `delta.prev_styles`. The caller owns diffing the growing streaming DOM
+/// into `delta` (see `Lumen::paint_partial_dom`) and must set
+/// [`crate::counters::set_incremental_restyle`] around the call, exactly like
+/// `layout_mutation_incremental_restyle`'s caller does.
+#[allow(clippy::too_many_arguments)]
+pub fn layout_streaming_incremental_delta(
+    doc: &Document,
+    sheet: &Stylesheet,
+    viewport: Size,
+    measurer: &dyn TextMeasurer,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+    prev: &LayoutBox,
+    delta: crate::counters::RestyleDelta<'_>,
+) -> (LayoutBox, CounterMap) {
+    streaming_incremental_inner(doc, sheet, viewport, measurer, hp, dark_mode, prev, false, Some(delta))
 }
 
 /// `defer_clear` — leave [`INCREMENTAL_LAYOUT_MODE`] on and the dirty bits set
@@ -357,13 +381,17 @@ fn streaming_incremental_inner(
     dark_mode: bool,
     prev: &LayoutBox,
     defer_clear: bool,
+    delta: Option<crate::counters::RestyleDelta<'_>>,
 ) -> (LayoutBox, CounterMap) {
     crate::content_visibility::reset_cv_skipped();
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
     crate::style::set_shadow_sheets(build_shadow_sheets(doc));
     super::shape_resolve::install_shape_images(doc);
-    let counters = precompute_counters(doc, sheet, viewport, &flat, dark_mode);
+    let counters = match delta {
+        Some(d) => crate::counters::incremental_precompute_counters(doc, sheet, viewport, &flat, dark_mode, d),
+        None => precompute_counters(doc, sheet, viewport, &flat, dark_mode),
+    };
     let registry = build_counter_style_registry(sheet);
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None);
     apply_font_size_adjust(&mut root, measurer);
@@ -450,7 +478,7 @@ pub fn layout_mutation_incremental_with_counters(
     // which subtrees this pass actually changed — its size-container child
     // re-layout then translates clean subtrees instead of re-laying them all.
     let (mut root, mut counters) = streaming_incremental_inner(
-        doc, sheet, viewport, measurer, hp, dark_mode, prev, true,
+        doc, sheet, viewport, measurer, hp, dark_mode, prev, true, None,
     );
     // Post-layout passes — same set as layout_measured_hyp, same order.
     apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);

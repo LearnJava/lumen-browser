@@ -12,6 +12,17 @@ use crate::*;
 #[cfg(feature = "v8")]
 use crate::layout_shift::compute_layout_shift_score;
 
+/// PERF-STREAM-CASCADE — результат [`Lumen::stream_cascade_diff`]: новый
+/// слепок сигнатур DOM + изменения с прошлого тика для `RestyleDelta`.
+struct StreamCascadeDiff {
+    /// `slot_index -> (parent_raw, content_hash)` — слепок для следующего тика.
+    sig: std::collections::HashMap<u32, (u32, u64)>,
+    /// `(узел, изменение)` для `restyle_roots_for_node_changes_with_basis`.
+    changes: Vec<(lumen_dom::NodeId, lumen_layout::style::NodeChange<'static>)>,
+    /// Узлы с изменённым контентом — `ContentDirty::Nodes`.
+    content: std::collections::HashSet<lumen_dom::NodeId>,
+}
+
 impl Lumen {
     /// Fetch, decode and register lazy images whose node IDs were queued by JS.
     ///
@@ -585,6 +596,10 @@ impl Lumen {
             self.pending_font_relayout = None;
             self.stream_sheet = lumen_css_parser::Stylesheet::default();
             self.stream_layout_seeded = false;
+            self.stream_cascade = None;
+            self.stream_sig.clear();
+            self.stream_sheet_rev = None;
+            self.stream_prev_sheet = None;
             self.stream_builder = None;
             self.load_generation = self.load_generation.wrapping_add(1);
             let tab_id = self.tab_strip.tabs[self.tab_strip.active].id;
@@ -1208,12 +1223,90 @@ impl Lumen {
         // переиспользуем геометрию неизменённого префикса из прошлого кадра,
         // релейаутим только новые/изменённые поддеревья. Полный layout всего
         // частичного DOM на каждый 16-мс тик тормозил большие страницы.
+        //
+        // PERF-STREAM-CASCADE: когда carried-каскад и diff-сигнатура живы,
+        // стиль тоже считается инкрементально — `compute_style` платят только
+        // новые/изменённые узлы, а не весь частичный DOM на каждый чанк.
         let null_hp = lumen_core::ext::NullHyphenationProvider;
-        let layout = match (self.stream_layout_seeded, self.layout_box.as_ref()) {
-            (true, Some(prev)) => lumen_layout::layout_streaming_incremental(
-                doc, &self.stream_sheet, viewport, &measurer, &null_hp, false, prev,
-            ),
-            _ => lumen_layout::layout_measured(doc, &self.stream_sheet, viewport, &measurer),
+        let sheet_rev = self.stream_sheet.revision();
+        let StreamCascadeDiff { sig: new_sig, changes, content: content_nodes } =
+            self.stream_cascade_diff(doc);
+        // Дельта листа: та же ревизия — пустое множество; новая —
+        // `changed_style_rules`+`restyle_roots_for_rule_changes` именуют
+        // элементы под добавленные/удалённые правила (та же машинерия, что у
+        // JS-флаша). `None` — разница невыразима → полный каскад.
+        let sheet_roots: Option<std::collections::HashSet<lumen_dom::NodeId>> =
+            if self.stream_sheet_rev == Some(sheet_rev) {
+                Some(Default::default())
+            } else {
+                self.stream_prev_sheet.as_ref().and_then(|prev_sheet| {
+                    let changed = prev_sheet.changed_style_rules(&self.stream_sheet)?;
+                    lumen_layout::style::restyle_roots_for_rule_changes(doc, &changed)
+                })
+            };
+        let cascade_ready = self.stream_layout_seeded
+            && self.layout_box.is_some()
+            && self.stream_cascade.is_some()
+            && sheet_roots.is_some()
+            && !doc.has_author_shadow_roots()
+            && std::env::var_os("LUMEN_NO_STREAM_CASCADE").is_none();
+        // `cascade_ready` уже проверил все `is_some`; match — защита от
+        // рассинхрона, а не рабочий путь (clippy запрещает `expect`).
+        let delta_inputs = if cascade_ready {
+            match (self.layout_box.as_ref(), self.stream_cascade.take(), sheet_roots) {
+                (Some(p), Some(c), Some(r)) => Some((p, c, r)),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let (layout, counters) = if let Some((prev, prev_styles, sheet_roots)) = delta_inputs {
+            // Пустой список изменений (тик без DOM-мутаций) не должен платить
+            // за `restyle_node_index` — он сканирует весь лист заново.
+            let (mut dirty_roots, shallow_roots, point_roots) = if changes.is_empty() {
+                (Default::default(), Default::default(), Default::default())
+            } else {
+                let index = lumen_layout::style::restyle_node_index(doc, &self.stream_sheet);
+                let roots = lumen_layout::style::restyle_roots_for_node_changes_with_basis(
+                    doc,
+                    changes.iter().copied(),
+                    &index,
+                    &|n| prev_styles.contains_key(&n),
+                    None,
+                );
+                (roots.deep, roots.shallow, roots.point)
+            };
+            // Корни от дельты листа — глубокие: поддерево каждого элемента,
+            // который могут затронуть изменённые правила.
+            dirty_roots.extend(sheet_roots);
+            let content_dirty = if content_nodes.is_empty() {
+                lumen_layout::counters::ContentDirty::Nothing
+            } else {
+                lumen_layout::counters::ContentDirty::Nodes(&content_nodes)
+            };
+            let delta = lumen_layout::counters::RestyleDelta {
+                invalidation: None,
+                prev_styles,
+                dirty_roots,
+                shallow_roots,
+                point_roots,
+                content_dirty,
+            };
+            lumen_layout::counters::set_incremental_restyle(true);
+            lumen_layout::box_tree::set_incremental_box_build(true);
+            let r = lumen_layout::layout_streaming_incremental_delta(
+                doc, &self.stream_sheet, viewport, &measurer, &null_hp, false, prev, delta,
+            );
+            lumen_layout::box_tree::set_incremental_box_build(false);
+            lumen_layout::counters::set_incremental_restyle(false);
+            r
+        } else {
+            match (self.stream_layout_seeded, self.layout_box.as_ref()) {
+                (true, Some(prev)) => lumen_layout::layout_streaming_incremental_with_counters(
+                    doc, &self.stream_sheet, viewport, &measurer, &null_hp, false, prev,
+                ),
+                _ => lumen_layout::layout_measured_with_counters(doc, &self.stream_sheet, viewport, &measurer),
+            }
         };
         let dl = crate::display_list_metrics::paint_ordered_in(&layout, viewport);
         #[cfg(feature = "v8")]
@@ -1236,6 +1329,10 @@ impl Lumen {
         // (`layout_streaming_incremental`, no `CounterMap`) — invalidate the
         // restyle cache so it isn't diffed against this tree by mistake.
         self.page_prev_cascade_styles = None;
+        self.stream_cascade = Some(counters.into_styles());
+        self.stream_sig = new_sig;
+        self.stream_sheet_rev = Some(sheet_rev);
+        self.stream_prev_sheet = Some(self.stream_sheet.clone());
         self.layout_box = Some(layout);
         self.stream_layout_seeded = true;
         self.update_snap_containers();
@@ -1249,6 +1346,124 @@ impl Lumen {
         if let Some(w) = self.window.as_ref() {
             w.request_redraw();
         }
+    }
+
+    /// PERF-STREAM-CASCADE — обойти streaming-DOM и сверить с сигнатурой
+    /// прошлого тика (`self.stream_sig`). Возвращает новый слепок сигнатур,
+    /// список `(узел, изменение)` для `restyle_roots_for_node_changes_with_basis`
+    /// и множество узлов с изменённым контентом для `ContentDirty::Nodes`.
+    ///
+    /// Это единственный источник дельты для инкрементального каскада стриминга:
+    /// парсер только добавляет узлы и дописывает текст, поэтому полный
+    /// структурный diff по `(parent, hash)` ловит всё — новые узлы, переносы
+    /// (adoption agency / foster parenting), удаления и правки текста/атрибутов.
+    /// Ключ — индекс слота арены: освобождённый и переиспользованный слот
+    /// просто диффнется как изменённый, поколение `NodeId` в сравнениях не
+    /// участвует.
+    fn stream_cascade_diff(&self, doc: &lumen_dom::Document) -> StreamCascadeDiff {
+        use std::hash::{Hash, Hasher};
+        fn sig_hash(data: &lumen_dom::NodeData) -> u64 {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            match data {
+                lumen_dom::NodeData::Element { name, attrs } => {
+                    1u8.hash(&mut h);
+                    name.local.hash(&mut h);
+                    for a in attrs {
+                        a.name.local.hash(&mut h);
+                        a.value.hash(&mut h);
+                    }
+                }
+                lumen_dom::NodeData::Text(t) => {
+                    2u8.hash(&mut h);
+                    t.hash(&mut h);
+                }
+                lumen_dom::NodeData::Comment(_) => {
+                    3u8.hash(&mut h);
+                }
+                lumen_dom::NodeData::Document => {
+                    4u8.hash(&mut h);
+                }
+                _ => {
+                    5u8.hash(&mut h);
+                }
+            }
+            h.finish()
+        }
+
+        let mut sig = std::collections::HashMap::with_capacity(doc.node_count());
+        let mut changes = Vec::new();
+        let mut content = std::collections::HashSet::new();
+        // Сотни новых siblings дают один child-list корень, а не сотни записей.
+        let mut list_changed = std::collections::HashSet::new();
+        let mut stack = vec![doc.root()];
+        while let Some(id) = stack.pop() {
+            let node = doc.get(id);
+            stack.extend(node.children.iter().copied());
+            let idx = id.index() as u32;
+            let parent_raw = node.parent.map_or(u32::MAX, |p| p.raw());
+            let hash = sig_hash(&node.data);
+            sig.insert(idx, (parent_raw, hash));
+            match self.stream_sig.get(&idx) {
+                None => {
+                    // Новый узел: child-list изменился у родителя.
+                    content.insert(id);
+                    if let Some(p) = node.parent {
+                        if list_changed.insert(p) {
+                            changes.push((p, lumen_layout::style::NodeChange::ChildList));
+                        }
+                        content.insert(p);
+                    }
+                }
+                Some(&(old_praw, _)) if old_praw != parent_raw => {
+                    // Перенос: child-list изменился у обоих родителей.
+                    content.insert(id);
+                    if let Some(op) = doc.resolve(old_praw) {
+                        if list_changed.insert(op) {
+                            changes.push((op, lumen_layout::style::NodeChange::ChildList));
+                        }
+                        content.insert(op);
+                    }
+                    if let Some(p) = node.parent {
+                        if list_changed.insert(p) {
+                            changes.push((p, lumen_layout::style::NodeChange::ChildList));
+                        }
+                        content.insert(p);
+                    }
+                }
+                Some(&(_, old_hash)) if old_hash != hash => {
+                    match &node.data {
+                        // Текст не участвует в селекторах без смены child-list
+                        // (`:empty` считает узлы, а не содержимое) — каскаду
+                        // корень не нужен, только content-запись для box reuse.
+                        lumen_dom::NodeData::Text(_) => {
+                            content.insert(id);
+                        }
+                        _ => {
+                            // Атрибут/другие поля элемента: имя атрибута из
+                            // хэша не восстановить — Unattributed (широкий,
+                            // но редкий путь: парсер атрибуты после создания
+                            // не трогает).
+                            changes.push((id, lumen_layout::style::NodeChange::Unattributed));
+                            content.insert(id);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        // Удалённые поддеревья: слот есть в старой сигнатуре, но узла в
+        // текущем дереве нет — child-list изменился у бывшего родителя.
+        for (&idx, &(praw, _)) in &self.stream_sig {
+            if !sig.contains_key(&idx)
+                && let Some(p) = doc.resolve(praw)
+            {
+                if list_changed.insert(p) {
+                    changes.push((p, lumen_layout::style::NodeChange::ChildList));
+                }
+                content.insert(p);
+            }
+        }
+        StreamCascadeDiff { sig, changes, content }
     }
 
     /// PH1-2c: найти `<img>` в частичном streaming-DOM и запустить параллельные
