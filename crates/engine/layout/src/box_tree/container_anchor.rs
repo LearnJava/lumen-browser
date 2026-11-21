@@ -98,7 +98,11 @@ pub fn apply_container_styles(
     // CSS2.1 §10.5: the initial containing block's height is the viewport height —
     // the `%`-height basis a root-level container itself would resolve against.
     let mut boxless = HashMap::new();
+    let mut boxed = HashMap::new();
+    let mut geom = HashMap::new();
+    let _p = lumen_core::profile::scope_detail("cq.propagating");
     let propagating = viewport_propagating_nodes(root);
+    drop(_p);
     // CSS Conditional 5 §style-container: with a `style()` query in the sheet every element
     // answers queries, so the restyle runs per element ([`StyleSweep`]), not per `container-type`.
     let sweep = sheet.container_rules.iter().any(|r| r.preludes().any(|(_, c)| query_mentions_style(c))).then(|| StyleSweep {
@@ -114,14 +118,21 @@ pub fn apply_container_styles(
     });
     let mut pending = HashMap::new();
     if let Some(sweep) = &sweep {
+        let _p = lumen_core::profile::scope_detail("cq.sweep");
         sweep.run(root, None, viewport.height, &mut boxless, &mut pending);
+        drop(_p);
     }
+    let _p = lumen_core::profile::scope_detail("cq.shadowed");
     let shadowed = shadowed_by_boxless_container(root, doc, counters);
+    drop(_p);
+    let _p = lumen_core::profile::scope_detail("cq.inner");
     apply_container_inner(
         root, doc, sheet, viewport, measurer, pcb, viewport.height, hp, dark_mode, counters, &propagating,
-        &mut boxless, sweep.as_ref(), &mut pending, &shadowed,
+        &mut boxless, sweep.as_ref(), &mut pending, &shadowed, &mut boxed, &mut geom,
     );
+    drop(_p);
     counters.set_cq_boxless(boxless);
+    counters.set_cq_state(boxed, geom);
 }
 
 /// `parent_h` is the content-box height (px) of `b`'s *immediate* parent —
@@ -158,6 +169,8 @@ fn apply_container_inner(
     sweep: Option<&StyleSweep>,
     pending: &mut HashMap<NodeId, Option<Arc<ContainerContext>>>,
     shadowed: &HashSet<NodeId>,
+    boxed_new: &mut HashMap<NodeId, Arc<ComputedStyle>>,
+    geom_new: &mut HashMap<NodeId, (f32, f32)>,
 ) {
     // The third element is the nearest query container above the box — the head of
     // the chain a descendant container links to via `ContainerContext::parent`.
@@ -191,18 +204,34 @@ fn apply_container_inner(
             let axes = cq_axes_of(Some(&ctx));
             set_cq_axes(axes.0, axes.1);
             // Re-apply container rules to all direct + indirect descendants.
+            let _p = lumen_core::profile::scope_detail("cq.restype");
             if let Some(sweep) = sweep {
                 sweep.run(b, Some(Arc::clone(&ctx)), content_h_val, boxless, pending);
+                // The sweep restyles without a per-node change probe: inside the
+                // incremental window a CLEAN bit would translate-stale the mutated
+                // boxes, so the whole subtree is marked for real re-layout — the
+                // same cost the pass always paid before the window existed.
+                crate::incremental::mark_subtree_dirty(b);
             } else {
+                let boxed_prev = counters.styles().cq_boxed();
                 let mut seen = SeenBoxes::default();
                 for child in &mut b.children {
-                    re_style_subtree(child, doc, sheet, &ctx, viewport, dark_mode, shadowed, &mut seen, axes);
+                    let mut changed = false;
+                    re_style_subtree(child, doc, sheet, &ctx, viewport, dark_mode, shadowed, &mut seen, axes, &mut changed, boxed_prev, boxed_new);
+                    // A change anywhere in the child's subtree must reach
+                    // geometry: mark the whole child subtree dirty so `lay_out`
+                    // re-lays it for real instead of translate-skipping the
+                    // mutated descendant hidden under clean ancestors.
+                    if changed {
+                        crate::incremental::mark_subtree_dirty(child);
+                    }
                 }
                 restyle_boxless(
                     doc, sheet, counters, b.node, &seen, &ctx, viewport, dark_mode, boxless, axes,
                     !sheet.container_rules.is_empty(),
                 );
             }
+            drop(_p);
             if !size_container {
                 clear_cq_context();
                 // A scroll-state-only container does not contain its size: the queries
@@ -215,6 +244,7 @@ fn apply_container_inner(
                 continue;
             }
             // Re-lay out block-flow children with updated styles.
+            let _p = lumen_core::profile::scope_detail("cq.relayout");
             let content_x = b.rect.x + pad_l + b.style.border_left_width;
             let content_y = b.rect.y + pad_t + b.style.border_top_width;
             // An `inline-size` container does not expose its height to queries, but a
@@ -227,6 +257,17 @@ fn apply_container_inner(
             };
             // Expose this container's dimensions to cq* unit resolution during re-layout.
             let size_h = content_h.or(size_h);
+            // `cq*` units in descendants resolve against `(content_w, content_h)`
+            // at layout time — they are not stored in `ComputedStyle`, so a
+            // changed axis set forces real re-layout even when every restyled
+            // value compared equal to last pass.
+            let sig = (content_w, content_h_val);
+            if counters.styles().cq_geom().get(&b.node).is_none_or(|prev| *prev != sig) {
+                for child in &mut b.children {
+                    crate::incremental::mark_subtree_dirty(child);
+                }
+            }
+            geom_new.insert(b.node, sig);
             let mut child_y = content_y;
             for child in &mut b.children {
                 if matches!(child.style.position, Position::Absolute | Position::Fixed) {
@@ -243,6 +284,7 @@ fn apply_container_inner(
                 child_y = child.rect.y + child.rect.height + child_mb;
             }
             clear_cq_context();
+            drop(_p);
             // After re-layout, push children to catch nested containers.
             // Each nested container will set its own cq* context during its own re-layout.
             for child in &mut b.children {
@@ -703,6 +745,9 @@ fn re_style_subtree(
     shadowed: &HashSet<NodeId>,
     seen: &mut SeenBoxes,
     cq_axes: (Option<f32>, Option<f32>),
+    changed: &mut bool,
+    boxed_prev: &HashMap<NodeId, Arc<ComputedStyle>>,
+    boxed_new: &mut HashMap<NodeId, Arc<ComputedStyle>>,
 ) {
     let mut stack: Vec<&mut LayoutBox> = vec![b];
     while let Some(b) = stack.pop() {
@@ -710,6 +755,18 @@ fn re_style_subtree(
             seen.boxed.insert(b.node);
             // A box-less container nearer than `ctx` answers the query "unknown": no match.
             let rules = if shadowed.contains(&b.node) { Vec::new() } else { matching_container_rules(doc, b.node, sheet, ctx) };
+            // The probe snapshots the style only for nodes a rule or a `cq*`
+            // length can touch; `Arc::make_mut` clones shared styles, so the
+            // snapshot survives the mutation. It answers "did this pass's
+            // mutation change anything" — not "does the result differ from
+            // what geometry was computed with", which is `boxed_prev`'s job.
+            let probe = (!rules.is_empty() || !b.style.cq_lengths.is_empty()).then(|| {
+                if Arc::strong_count(&b.style) > 1 {
+                    Probe::Shared(b.style.clone())
+                } else {
+                    Probe::Owned(Box::new(b.style.as_ref().clone()))
+                }
+            });
             if !rules.is_empty() {
                 apply_matched_container_rules(Arc::make_mut(&mut b.style), &rules, doc, b.node, viewport, dark_mode);
             }
@@ -717,6 +774,33 @@ fn re_style_subtree(
             // during the cascade: the container's size is known now (BUG-1664).
             if !b.style.cq_lengths.is_empty() {
                 Arc::make_mut(&mut b.style).resolve_cq_lengths(cq_axes, viewport);
+            }
+            let mutated = match &probe {
+                Some(Probe::Shared(before)) => before.as_ref() != b.style.as_ref(),
+                Some(Probe::Owned(before)) => **before != *b.style,
+                None => false,
+            };
+            // `boxed_prev` holds the style last pass's geometry was computed
+            // with. Equal → adopt the carried `Arc` (restoring sharing) and
+            // leave the box clean; different → dirty, so `lay_out` cannot
+            // translate-stale it. No entry → the node was not restyled last
+            // pass, so geometry saw its pre-mutation style: dirty iff this
+            // pass's mutation changed anything.
+            match boxed_prev.get(&b.node) {
+                Some(prev) => {
+                    if prev.as_ref() == b.style.as_ref() {
+                        b.style = prev.clone();
+                    } else {
+                        *changed = true;
+                    }
+                    boxed_new.insert(b.node, b.style.clone());
+                }
+                None => {
+                    if mutated {
+                        *changed = true;
+                        boxed_new.insert(b.node, b.style.clone());
+                    }
+                }
             }
         }
         // Don't propagate into nested containers — they'll build their own context.
@@ -770,6 +854,15 @@ fn shadowed_by_boxless_container(root: &LayoutBox, doc: &Document, counters: &Co
 struct SeenBoxes {
     boxed: HashSet<NodeId>,
     nested: HashSet<NodeId>,
+}
+
+/// Pre-mutation style snapshot for [`re_style_subtree`]'s change probe: a shared
+/// `Arc` clone when the style is still shared (the common case — `Arc::make_mut`
+/// then clones, leaving this allocation at its pre-mutation value), or an owned
+/// clone when it is uniquely held and would be mutated in place.
+enum Probe {
+    Shared(Arc<ComputedStyle>),
+    Owned(Box<ComputedStyle>),
 }
 
 /// `@container` rules for the elements below `container` that own no box — plain

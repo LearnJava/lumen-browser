@@ -250,8 +250,40 @@ pub fn lay_out_incremental(
     pcb: Rect,
     hp: &dyn HyphenationProvider,
 ) {
+    lay_out_incremental_begin(
+        root, start_x, start_y, available_width, available_height, measurer, viewport, pcb, hp,
+    );
+    lay_out_incremental_finish(root);
+}
+
+/// First half of [`lay_out_incremental`]: enables [`INCREMENTAL_LAYOUT_MODE`]
+/// and runs `lay_out`, leaving the dirty bits **set** and the mode **on**.
+///
+/// Post-layout passes that re-lay out subtrees themselves — `apply_container_styles`'s
+/// size-container child pass — must run inside this window: with the mode on,
+/// `lay_out` translates [`DirtyBits::CLEAN`] subtrees instead of re-laying them,
+/// which is what makes the container pass O(changed) rather than O(container
+/// subtree) on every flush. The caller must pair this with
+/// [`lay_out_incremental_finish`] once those passes are done.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn lay_out_incremental_begin(
+    root: &mut LayoutBox,
+    start_x: f32,
+    start_y: f32,
+    available_width: f32,
+    available_height: Option<f32>,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    pcb: Rect,
+    hp: &dyn HyphenationProvider,
+) {
     INCREMENTAL_LAYOUT_MODE.with(|m| m.set(true));
     lay_out(root, start_x, start_y, available_width, available_height, measurer, viewport, pcb, hp, false);
+}
+
+/// Second half of [`lay_out_incremental`]: clears every dirty bit, leaves
+/// [`INCREMENTAL_LAYOUT_MODE`], and runs the geometry invariants check.
+pub(crate) fn lay_out_incremental_finish(root: &mut LayoutBox) {
     INCREMENTAL_LAYOUT_MODE.with(|m| m.set(false));
     crate::incremental::clear_dirty(root);
     #[cfg(debug_assertions)]
@@ -309,6 +341,23 @@ pub fn layout_streaming_incremental_with_counters(
     dark_mode: bool,
     prev: &LayoutBox,
 ) -> (LayoutBox, CounterMap) {
+    streaming_incremental_inner(doc, sheet, viewport, measurer, hp, dark_mode, prev, false)
+}
+
+/// `defer_clear` — leave [`INCREMENTAL_LAYOUT_MODE`] on and the dirty bits set
+/// on return; the caller must run [`lay_out_incremental_finish`] after its own
+/// post-`lay_out` passes (see [`layout_mutation_incremental_with_counters`]).
+#[allow(clippy::too_many_arguments)]
+fn streaming_incremental_inner(
+    doc: &Document,
+    sheet: &Stylesheet,
+    viewport: Size,
+    measurer: &dyn TextMeasurer,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+    prev: &LayoutBox,
+    defer_clear: bool,
+) -> (LayoutBox, CounterMap) {
     crate::content_visibility::reset_cv_skipped();
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
@@ -328,7 +377,15 @@ pub fn layout_streaming_incremental_with_counters(
     crate::incremental::mark_subtree_dirty(&mut root);
     crate::incremental::graft_geometry(&mut root, prev);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
-    lay_out_incremental(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb, hp);
+    if defer_clear {
+        lay_out_incremental_begin(
+            &mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb, hp,
+        );
+    } else {
+        lay_out_incremental(
+            &mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb, hp,
+        );
+    }
     (root, counters)
 }
 
@@ -388,12 +445,17 @@ pub fn layout_mutation_incremental_with_counters(
     dark_mode: bool,
     prev: &LayoutBox,
 ) -> (LayoutBox, CounterMap) {
-    // Full cascade + graft: unchanged-style subtrees become CLEAN.
-    let (mut root, mut counters) =
-        layout_streaming_incremental_with_counters(doc, sheet, viewport, measurer, hp, dark_mode, prev);
+    // Full cascade + graft: unchanged-style subtrees become CLEAN. The clear is
+    // deferred so `apply_container_styles` runs while the dirty bits still say
+    // which subtrees this pass actually changed — its size-container child
+    // re-layout then translates clean subtrees instead of re-laying them all.
+    let (mut root, mut counters) = streaming_incremental_inner(
+        doc, sheet, viewport, measurer, hp, dark_mode, prev, true,
+    );
     // Post-layout passes — same set as layout_measured_hyp, same order.
     apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);
     apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode, &mut counters);
+    lay_out_incremental_finish(&mut root);
     apply_anchor_positions(&mut root, doc, &mut counters, viewport);
     split_first_line_boxes(&mut root);
     (root, counters)
@@ -580,7 +642,10 @@ pub fn layout_mutation_incremental_restyle(
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     {
         let _prof = lumen_core::profile::scope("lay_out");
-        lay_out_incremental(
+        // Dirty bits stay set through `apply_container_styles`: its size-container
+        // child re-layout translates clean subtrees (INCREMENTAL_LAYOUT_MODE is
+        // still on) instead of re-laying out every container descendant.
+        lay_out_incremental_begin(
             &mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb, hp,
         );
     }
@@ -589,6 +654,7 @@ pub fn layout_mutation_incremental_restyle(
         // Post-layout passes — same set as layout_measured_hyp/layout_mutation_incremental, same order.
         apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);
         apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode, &mut counters);
+        lay_out_incremental_finish(&mut root);
         apply_anchor_positions(&mut root, doc, &mut counters, viewport);
         split_first_line_boxes(&mut root);
     }

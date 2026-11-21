@@ -168,6 +168,18 @@ pub struct CascadeStyles {
     /// makes them meaningless: a pass with a different revision must not restrict.
     sheet_revision: Option<lumen_css_parser::StylesheetRevision>,
     counter_scopes: IdSet<NodeId>,
+    /// Post-`@container` styles of *boxed* descendants of query containers, written
+    /// by `apply_container_styles` at the end of a pass and read as "what last
+    /// pass's geometry was computed with" by the next pass's container pass.
+    /// Only nodes a rule or `cq*` length touched are tracked; `begin_pass` keeps
+    /// them — they are carried state, not per-pass cascade entries.
+    cq_boxed: HashMap<NodeId, Arc<ComputedStyle>>,
+    /// Last-pass `(content width, content height)` of every `container-type: size`
+    /// box — the axes `cq*` units in its descendants resolve against at layout
+    /// time. A changed signature forces re-layout even when every restyled
+    /// `ComputedStyle` compares equal, because unit resolution is not stored in
+    /// the style.
+    cq_geom: HashMap<NodeId, (f32, f32)>,
 }
 
 impl CascadeStyles {
@@ -182,7 +194,29 @@ impl CascadeStyles {
             quotes_recorded: false,
             sheet_revision: None,
             counter_scopes: IdSet::default(),
+            cq_boxed: HashMap::new(),
+            cq_geom: HashMap::new(),
         }
+    }
+
+    /// Post-`@container` boxed-descendant styles from the previous pass.
+    pub fn cq_boxed(&self) -> &HashMap<NodeId, Arc<ComputedStyle>> {
+        &self.cq_boxed
+    }
+
+    /// Query-container geometry signatures from the previous pass.
+    pub fn cq_geom(&self) -> &HashMap<NodeId, (f32, f32)> {
+        &self.cq_geom
+    }
+
+    /// Stores this pass's `@container` carried state.
+    pub(crate) fn set_cq_state(
+        &mut self,
+        boxed: HashMap<NodeId, Arc<ComputedStyle>>,
+        geom: HashMap<NodeId, (f32, f32)>,
+    ) {
+        self.cq_boxed = boxed;
+        self.cq_geom = geom;
     }
 
     /// Start writing a new pass into this carried cache.
@@ -397,6 +431,8 @@ impl CascadeStyles {
             quotes_recorded: true,
             sheet_revision: None,
             counter_scopes: IdSet::default(),
+            cq_boxed: HashMap::new(),
+            cq_geom: HashMap::new(),
         }
     }
 }
@@ -718,6 +754,17 @@ impl CounterMap {
     /// Box-less elements restyled by `@container` rules (see [`Self::boxless_style`]).
     pub fn cq_boxless(&self) -> &HashMap<NodeId, Arc<ComputedStyle>> {
         &self.cq_boxless
+    }
+
+    /// Stores this pass's `@container` carried state — post-rule styles of boxed
+    /// descendants and query-container geometry signatures — into the carried
+    /// cascade cache, so the next pass's container pass can diff against them.
+    pub(crate) fn set_cq_state(
+        &mut self,
+        boxed: HashMap<NodeId, Arc<ComputedStyle>>,
+        geom: HashMap<NodeId, (f32, f32)>,
+    ) {
+        self.styles.set_cq_state(boxed, geom);
     }
 
     /// Scroll containers each anchor-positioned box follows, keyed by `NodeId::index()` →
