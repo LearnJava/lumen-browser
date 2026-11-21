@@ -189,6 +189,30 @@ pub(crate) fn connect(
         unsafe {
             ffi::SSL_set_server_padding_request(ssl.as_ptr(), 0);
         }
+        // ALPS (draft-vvv-tls-alps, codepoint 17613): Chrome carries its h2
+        // SETTINGS payload inside the ClientHello. Without it the hello is
+        // missing the strongest remaining Chrome-only extension (BUG-1835).
+        // Only meaningful when "h2" is actually offered via ALPN.
+        if !h1_only {
+            // Wire-формат SETTINGS payload: (id:u16 BE, value:u32 BE) на
+            // запись — те же значения, что `chrome_manifest::CHROME_157.h2`
+            // шлёт первым SETTINGS-фреймом.
+            const ALPS_H2_SETTINGS: [u8; 24] = [
+                0x00, 0x01, 0x00, 0x01, 0x00, 0x00, // HEADER_TABLE_SIZE = 65536
+                0x00, 0x02, 0x00, 0x00, 0x00, 0x00, // ENABLE_PUSH = 0
+                0x00, 0x04, 0x00, 0x60, 0x00, 0x00, // INITIAL_WINDOW_SIZE = 6291456
+                0x00, 0x06, 0x00, 0x04, 0x00, 0x00, // MAX_HEADER_LIST_SIZE = 262144
+            ];
+            unsafe {
+                ffi::SSL_add_application_settings(
+                    ssl.as_ptr(),
+                    b"h2".as_ptr(),
+                    2,
+                    ALPS_H2_SETTINGS.as_ptr(),
+                    ALPS_H2_SETTINGS.len(),
+                );
+            }
+        }
     }
 
     let mut hs = ssl.setup_connect(tcp);

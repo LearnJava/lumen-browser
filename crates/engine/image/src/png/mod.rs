@@ -112,6 +112,11 @@ pub fn encode_png_rgba8(img: &Image) -> Result<Vec<u8>, crate::ImageError> {
     let mut encoder = png::Encoder::new(&mut out, img.width, img.height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
+    // Canvas `toDataURL` идёт в fp-коллекторы антиботов: Chrome кодирует
+    // через libpng с адаптивным фильтром и сильным deflate — дефолтные
+    // `Default`/`NonAdaptive`/`Sub` давали PNG в разы больше (BUG-1835).
+    encoder.set_compression(png::Compression::Best);
+    encoder.set_adaptive_filter(png::AdaptiveFilterType::Adaptive);
     let mut writer = encoder
         .write_header()
         .map_err(|e| crate::ImageError::Png(crate::DecodeError::Decode(e.to_string())))?;

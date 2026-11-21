@@ -6,7 +6,8 @@
 //! feature-detection logic that depends on the API's existence.
 //!
 //! Properties normalised:
-//! - `navigator.hardwareConcurrency` → 2 (Brave-style; exact core count leaks CPU model)
+//! - `navigator.hardwareConcurrency` → real logical-CPU count (Chrome parity — BUG-1835;
+//!   an exact count is what every shipping Chrome reports, a fixed `2` was the anomaly)
 //! - `navigator.deviceMemory`        → 8 (rounds to nearest power-of-two per spec)
 //! - `navigator.platform`            → "Win32" (most common desktop value)
 //! - `navigator.languages`           → ["en-US", "en"] (single common locale)
@@ -61,7 +62,10 @@ pub struct NavigatorProfile {
 impl Default for NavigatorProfile {
     fn default() -> Self {
         Self {
-            hardware_concurrency: 2,
+            // Chrome reports the real logical-processor count; a fixed `2`
+            // is a rarity no shipping desktop has (BUG-1835, Ozon abt).
+            hardware_concurrency: std::thread::available_parallelism()
+                .map_or(2, |n| n.get() as u32),
             device_memory: 8,
             platform: "Win32".to_string(),
             languages: vec!["en-US".to_string(), "en".to_string()],
@@ -566,11 +570,12 @@ mod tests {
     }
 
     #[test]
-    fn hardware_concurrency_is_two() {
+    fn hardware_concurrency_is_real_core_count() {
         let rt = make_rt();
         install_navigator_bindings_v8_with(&rt, &NavigatorProfile::default()).unwrap();
         let v = rt.eval("navigator.hardwareConcurrency").unwrap();
-        assert_eq!(v, JsValue::Number(2.0));
+        let expected = std::thread::available_parallelism().map_or(2, |n| n.get()) as f64;
+        assert_eq!(v, JsValue::Number(expected));
     }
 
     #[test]
@@ -786,7 +791,8 @@ mod tests {
     #[test]
     fn default_profile_matches_legacy_values() {
         let p = NavigatorProfile::default();
-        assert_eq!(p.hardware_concurrency, 2);
+        let expected_hc = std::thread::available_parallelism().map_or(2, |n| n.get() as u32);
+        assert_eq!(p.hardware_concurrency, expected_hc);
         assert_eq!(p.device_memory, 8);
         assert_eq!(p.platform, "Win32");
         assert_eq!(p.languages, vec!["en-US".to_string(), "en".to_string()]);
