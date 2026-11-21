@@ -284,7 +284,10 @@ impl Default for FingerprintProfile {
         Self {
             http_profile: HttpProfile::Chrome,
             tls_profile: None,
-            hardware_concurrency: 2,
+            // Как у Chrome — реальное число логических ядер, а не фиксированная
+            // двойка (BUG-1835). `NavigatorProfile::default` считает так же.
+            hardware_concurrency: std::thread::available_parallelism()
+                .map_or(2, |n| n.get() as u32),
             device_memory: 8,
             platform: "Win32".to_string(),
             languages: vec!["en-US".to_string(), "en".to_string()],
@@ -919,7 +922,8 @@ mod tests {
         assert_eq!(p.http_profile, HttpProfile::Chrome);
         assert_eq!(p.tls_profile, None);
         assert_eq!(p.effective_tls_profile(), TlsProfile::Standard);
-        assert_eq!(p.hardware_concurrency, 2);
+        let expected_hc = std::thread::available_parallelism().map_or(2, |n| n.get() as u32);
+        assert_eq!(p.hardware_concurrency, expected_hc);
         assert_eq!(p.device_memory, 8);
         assert_eq!(p.platform, "Win32");
         assert_eq!(p.languages, vec!["en-US".to_string(), "en".to_string()]);

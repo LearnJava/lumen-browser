@@ -639,7 +639,7 @@ EventTarget.call(performance);
 Object.defineProperty(Performance.prototype, 'memory', {
     get: function() {
         if (!(this instanceof Performance)) throw new TypeError('Illegal invocation');
-        return { jsHeapSizeLimit: 4395630592, totalJSHeapSize: 15728640, usedJSHeapSize: 8388608 };
+        return { jsHeapSizeLimit: 4395630592, totalJSHeapSize: 2752512, usedJSHeapSize: 1900544 };
     },
     enumerable: true, configurable: true,
 });
