@@ -21,7 +21,6 @@ use crate::font_palette::resolve_font_palette_overrides;
 use crate::style::substitute::{contains_env_call, env_calls_well_formed, substitution_value_well_formed};
 use crate::style::zoom::{apply_zoom_to_lengths, ZoomDeclared};
 use crate::style::CaseLang;
-use crate::style::presentational::is_svg_presentational_element;
 use crate::style::share_safety::selector_is_share_safe;
 use crate::style::{
     apply_align_presentational_hint, apply_background_image_presentational_hint,
@@ -633,6 +632,14 @@ pub(crate) fn compute_style_shareable(
             .map(parse_inline_style)
             .unwrap_or_default()
     };
+    // THREAD-4 срез N: `attr(<name>)` inside a `style=""` attribute names an
+    // attribute per node — the share key's relevant-attr set can only
+    // enumerate names from the *stylesheet*, so a node whose inline style
+    // expands `attr()` is never safe to share (the same `contains("attr(")`
+    // predicate the apply loop below uses decides both sides identically).
+    if inline_decls.iter().any(|d| d.value.contains("attr(")) {
+        shareable = false;
+    }
 
     // Собираем все matched declarations с их sort key:
     // (important, is_inline, layer_priority, specificity, rule_order, decl_index).
@@ -675,7 +682,10 @@ pub(crate) fn compute_style_shareable(
         lumen_dom::NodeData::Element { attrs, .. } => attrs,
         _ => &[],
     };
-    shareable &= is_svg_presentational_element(node_tag);
+    // THREAD-4 срез N: same predicate `share_cache::build_key` uses — the
+    // `shareable` flag and the key's eligibility must agree or a node could
+    // insert an entry a differently-shaped node later hits.
+    shareable &= crate::style::share_cache::share_key_eligible(doc, node);
 
     // LOAD-6: a full pass already matched this node in parallel (`style::pre_match`) —
     // its record is exactly what a restricted pass carries, with nothing invalidated, so

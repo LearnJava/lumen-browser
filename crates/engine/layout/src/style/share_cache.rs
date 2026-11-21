@@ -19,11 +19,16 @@
 //!
 //! # Why the key is safe
 //!
-//! The key is `(tag, every attribute name+value sorted, the address of the
-//! `inherited` [`ComputedStyle`] this call received)`. The first two pin
-//! everything [`compute_style`](crate::style::compute_style) reads off the
-//! node itself — full attributes, not just `class`/`id`, because presentation
-//! attributes (`fill`, `stroke`, …) and `style=""` feed the cascade too.
+//! The key is `(tag, the cascade-relevant attribute set sorted, the address
+//! of the `inherited` [`ComputedStyle`] this call received, plus the
+//! per-node dynamic bits — sibling position, `:focus-visible`, CSP-blocked
+//! `style`, the dynamic-selector fingerprint)`. The attribute set is
+//! *projected*: only names something in the cascade can actually read are
+//! pinned ([`sheet_relevant_attr_names`] ∪ [`DIRECT_READ_ATTRS`]) — analytics
+//! `data-*`/`aria-*` attributes no rule, hint or `attr()` references cannot
+//! change the result, so pinning them would only split keys that should
+//! collide. `style=""` and presentation attributes still feed the cascade
+//! and stay in the key via [`DIRECT_READ_ATTRS`].
 //!
 //! The third — `inherited` identity, not equality — is what makes CSS
 //! inheritance safe to skip: two calls that received the *very same*
@@ -61,10 +66,14 @@
 //! key the same way `is_first_child` is), plus Shadow DOM and `@scope`, still
 //! disqualify it (a sibling combinator has no field here at any depth); see
 //! [`crate::style::cascade::compute_style_shareable`]'s doc comment for the
-//! exact conditions, including why this slice is scoped to SVG
-//! presentational elements only.
+//! exact conditions. Eligibility was later extended from SVG presentational
+//! elements to all HTML-namespace elements ([`share_key_eligible`]) once the
+//! dynamic-state reads (`:focus-visible`, CSP-blocked `style`, the
+//! attribute projection) were pinned in the key — `LUMEN_NO_SHARE_CACHE=1`
+//! rolls the whole cache back, `LUMEN_SHARECACHE_VERIFY=1` recomputes every
+//! hit and reports any divergence.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use lumen_core::geom::Size;
@@ -81,8 +90,11 @@ use super::ComputedStyle;
 #[derive(PartialEq, Eq, Hash)]
 struct ShareKey {
     tag: Box<str>,
-    /// `(name, value)` pairs, sorted by name — full attribute set, not just
-    /// `class`/`id` (see module doc).
+    /// `(name, value)` pairs, sorted by name — the attribute set **projected
+    /// to names that can influence the cascade** ([`sheet_relevant_attr_names`]
+    /// ∪ [`DIRECT_READ_ATTRS`]), not the full set: analytics/`data-*`/`aria-*`
+    /// attributes no selector, hint or `attr()` ever reads cannot change the
+    /// result, so pinning them would only split keys that should collide.
     attrs: Vec<(Box<str>, Box<str>)>,
     /// `&ComputedStyle as *const _ as usize` — allocation identity of the
     /// `inherited` parameter, not its content (see module doc).
@@ -110,6 +122,18 @@ struct ShareKey {
     is_first_child: bool,
     /// See [`Self::is_first_child`].
     is_last_child: bool,
+    /// `doc.is_style_attr_csp_blocked(node)` — a `style=""` attribute a
+    /// `style-src-attr` policy forbids contributes no declarations
+    /// (`cascade.rs`), so two nodes equal on every other field still compute
+    /// different styles when only this bit differs.
+    style_csp_blocked: bool,
+    /// THREAD-4 срез N: whether [`super::matching::forms::matches_focus_visible`]
+    /// holds for this node *right now* — the one piece of live, unkeyed state
+    /// the UA phase reads outside selectors (`apply_ua_focus_ring`'s
+    /// `outline: 2px auto`). Cheap (a TLS focus-id compare plus, only for the
+    /// focused node, a tag/type check) and computed for every eligible node:
+    /// a focused element and its identical sibling must not share a style.
+    focus_visible: bool,
     /// BUG-1112 срез 8 (ancestor), срез 10 (subject): [`dynamic_fingerprint`]'s
     /// output for this node — one bit per candidate selector
     /// `share_safety::selector_is_share_safe` treats as `is_fingerprintable`
@@ -182,6 +206,200 @@ fn sheet_has_position_dependent_subject(sheet: &Stylesheet) -> bool {
         || sheet.supports_rules.iter().any(|s| rules_have_it(&s.rules))
 }
 
+/// Attribute names `compute_style_shareable` can read **outside** selector
+/// matching — the union of every literal `get_attr("…")` under
+/// `style/{presentational,ua,cascade,adjust,pseudo}.rs` plus the
+/// pseudo-class matchers' own read set
+/// ([`super::restyle::pseudo_class_read_attr_names`]). Kept deliberately
+/// over-inclusive: an extra name only splits a key that could have collided,
+/// a missing one hands a node a style computed for different attributes.
+/// All entries are lowercase; membership tests are ASCII case-insensitive
+/// (see [`attr_is_relevant`]).
+const DIRECT_READ_ATTRS: &[&str] = &[
+    "align", "background", "baseline-shift", "bgcolor", "border", "bordercolor", "cellpadding",
+    "cellspacing", "checked", "class", "clip-path", "clip-rule", "color", "color-interpolation-filters",
+    "contenteditable", "data-lumen-fullscreen", "data-lumen-interest-source",
+    "data-lumen-interest-target", "data-lumen-modal", "data-lumen-popover-open", "dir", "disabled",
+    "dominant-baseline", "exportparts", "face", "fill", "fill-opacity", "fill-rule", "filter",
+    "flood-color", "flood-opacity", "headingoffset", "headingreset", "height", "hidden", "href",
+    "hspace", "id", "inert", "lang", "lighting-color", "mask", "max", "maxlength", "min", "minlength",
+    "multiple", "name", "opacity", "open", "part", "placeholder", "readonly", "required", "reversed",
+    "selected", "size", "slot", "start", "stroke", "stroke-dasharray", "stroke-dashoffset",
+    "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "stroke-width",
+    "style", "text", "text-anchor", "type", "valign", "value", "vspace", "width", "xml:lang",
+];
+
+/// `data-lumen-state-<name>` is the one attribute family whose name is built
+/// at match time (`PseudoClass::State`, `restyle::pseudo_class_reads_attr`)
+/// — it cannot be enumerated, so projection keeps every attr carrying the
+/// prefix. These attributes are engine-internal and rare outside `:state()`
+/// usage, so the unconditional keep costs almost nothing.
+const DYNAMIC_STATE_ATTR_PREFIX: &str = "data-lumen-state-";
+
+/// Membership test for [`ShareKey::attrs`] projection: `local` is an
+/// attribute's `QualName::local` as stored in the DOM (HTML parser output is
+/// lowercase, SVG/MathML may keep camelCase such as `viewBox`). The relevant
+/// set is all-lowercase, so a name that is not already lowercase is retried
+/// lowercased — matching in this engine is ASCII case-insensitive for these
+/// reads (`get_attr`, `matches_attribute`), so keeping the attr whenever
+/// EITHER case form is relevant is the conservative direction.
+fn attr_is_relevant(relevant: &HashSet<String>, local: &str) -> bool {
+    if relevant.contains(local) {
+        return true;
+    }
+    if !local.bytes().any(|b| b.is_ascii_uppercase()) {
+        return false;
+    }
+    let lower = local.to_ascii_lowercase();
+    relevant.contains(lower.as_str())
+}
+
+/// Extracts the attribute names of every `attr(<name> …)` call in a
+/// declaration value. Over-inclusive by design: a hit inside a string
+/// literal or comment only adds a name to the relevant set (costing a few
+/// potential key collisions), while a miss would let two nodes with
+/// different attributes share a style — `cascade.rs` expands `attr()` at
+/// apply time, so the name must be pinned whenever it can appear.
+fn collect_attr_call_names(value: &str, out: &mut HashSet<String>) {
+    // ASCII-lowercase copy keeps `match_indices` positions identical (the
+    // transform never changes byte length) while catching `ATTR(`/`Attr(`.
+    let lower = value.to_ascii_lowercase();
+    let bytes = value.as_bytes();
+    let mut pos = 0;
+    while let Some(rel) = lower[pos..].find("attr(") {
+        let mut i = pos + rel + 5;
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        let name = if bytes[i] == b'\'' || bytes[i] == b'"' {
+            let quote = bytes[i];
+            let start = i + 1;
+            let end = bytes[start..].iter().position(|&b| b == quote).map(|p| start + p).unwrap_or(bytes.len());
+            &value[start..end]
+        } else {
+            let start = i;
+            while i < bytes.len()
+                && (bytes[i].is_ascii_alphanumeric() || matches!(bytes[i], b'-' | b'_' | b':'))
+            {
+                i += 1;
+            }
+            &value[start..i]
+        };
+        if !name.is_empty() {
+            out.insert(name.to_ascii_lowercase());
+        }
+        pos += rel + 5;
+    }
+}
+
+fn collect_selector_attr_names(sel: &lumen_css_parser::ComplexSelector, out: &mut HashSet<String>) {
+    fn compound(c: &lumen_css_parser::CompoundSelector, out: &mut HashSet<String>) {
+        for part in &c.parts {
+            match part {
+                lumen_css_parser::SimpleSelector::Attribute(a) => {
+                    out.insert(a.name.to_ascii_lowercase());
+                }
+                lumen_css_parser::SimpleSelector::PseudoClass(pc) => pseudo(pc, out),
+                // `::slotted()`'s argument lives in the shadow sheet, never in
+                // the document `sheet` this scan walks — but a `::part()`-style
+                // nested list is cheap to include if it ever appears.
+                lumen_css_parser::SimpleSelector::PseudoElement(
+                    lumen_css_parser::PseudoElementKind::Slotted(Some(list)),
+                ) => {
+                    for c in list {
+                        collect_selector_attr_names(c, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    fn pseudo(pc: &lumen_css_parser::PseudoClass, out: &mut HashSet<String>) {
+        use lumen_css_parser::PseudoClass as P;
+        match pc {
+            P::Not(list) | P::Is(list) | P::Where(list) | P::Host(Some(list)) => {
+                for c in list {
+                    collect_selector_attr_names(c, out);
+                }
+            }
+            P::NthChild(_, Some(list)) | P::NthLastChild(_, Some(list)) => {
+                for c in list {
+                    collect_selector_attr_names(c, out);
+                }
+            }
+            P::Has(rels) => {
+                for r in rels {
+                    collect_selector_attr_names(&r.selector, out);
+                }
+            }
+            // `:state(<ident>)` reads `data-lumen-state-<ident>` — a name built
+            // at match time; projection keeps the whole prefix unconditionally
+            // (see `DYNAMIC_STATE_ATTR_PREFIX`), so nothing to collect here.
+            P::State(_) => {}
+            other => {
+                for name in super::restyle::pseudo_class_read_attr_names(other) {
+                    out.insert((*name).to_string());
+                }
+            }
+        }
+    }
+    compound(&sel.head, out);
+    for (_, c) in &sel.tail {
+        compound(c, out);
+    }
+}
+
+/// The attribute names a node's computed style can possibly depend on, for
+/// this pass's `sheet` — see [`ShareKey::attrs`]. Union of:
+///
+/// * [`DIRECT_READ_ATTRS`] — every literal attribute the engine reads outside
+///   selector matching (UA sheet, presentational hints, inline `style`,
+///   `lang`/`xml:lang` case folding, CSP-blocked style attrs are covered by
+///   the separate [`ShareKey::style_csp_blocked`] bit instead);
+/// * every attribute-selector name in the sheet, at any nesting depth
+///   (`:is()`/`:not()`/`:where()`/`:has()`/`:nth-child(… of …)`/`::slotted()`);
+/// * every attribute name a pseudo-class matcher in the sheet reads
+///   ([`super::restyle::pseudo_class_read_attr_names`]) — redundant with the
+///   dynamic fingerprint for the match *result*, kept anyway so the key does
+///   not silently rely on that machinery staying enabled;
+/// * every `attr(<name>)` referenced by any declaration value.
+///
+/// Anything else — analytics `data-*`, `aria-*`, framework bookkeeping —
+/// provably cannot reach [`compute_style_shareable`]'s output, so two nodes
+/// differing only there MUST share a key (that is the whole point of the
+/// projection: github/habr markup repeats structure while varying exactly
+/// these attributes).
+fn sheet_relevant_attr_names(sheet: &Stylesheet) -> HashSet<String> {
+    let mut out: HashSet<String> = DIRECT_READ_ATTRS.iter().map(|s| (*s).to_string()).collect();
+    fn rule(r: &lumen_css_parser::Rule, out: &mut HashSet<String>) {
+        for sel in &r.selectors {
+            collect_selector_attr_names(sel, out);
+        }
+        for d in &r.declarations {
+            collect_attr_call_names(&d.value, out);
+        }
+    }
+    fn rules(rs: &[lumen_css_parser::Rule], out: &mut HashSet<String>) {
+        for r in rs {
+            rule(r, out);
+        }
+    }
+    rules(&sheet.rules, &mut out);
+    for l in &sheet.layers {
+        rules(&l.rules, &mut out);
+    }
+    for m in &sheet.media_rules {
+        rules(&m.rules, &mut out);
+    }
+    for s in &sheet.supports_rules {
+        rules(&s.rules, &mut out);
+    }
+    out
+}
+
 /// Builds the structural key for `node`, or `None` when `node` is not an
 /// element the cascade's SVG-only eligibility check
 /// ([`compute_style_shareable`]) could ever mark shareable — skipping the key
@@ -208,11 +426,12 @@ fn build_key(
     dark_mode: bool,
     track_position: bool,
     track_fingerprint: bool,
+    relevant_attrs: &HashSet<String>,
 ) -> Option<ShareKey> {
-    let NodeData::Element { name, attrs } = &doc.get(node).data else {
+    let NodeData::Element { name, attrs, .. } = &doc.get(node).data else {
         return None;
     };
-    if !super::presentational::is_svg_presentational_element(name.local.as_ref()) {
+    if !share_key_eligible(doc, node) {
         return None;
     }
     if doc.is_shadow_host(node)
@@ -223,6 +442,12 @@ fn build_key(
     }
     let mut pairs: Vec<(Box<str>, Box<str>)> = attrs
         .iter()
+        .filter(|a| {
+            let local = a.name.local.as_str();
+            attr_is_relevant(relevant_attrs, local)
+                || (local.len() >= DYNAMIC_STATE_ATTR_PREFIX.len()
+                    && local[..DYNAMIC_STATE_ATTR_PREFIX.len()].eq_ignore_ascii_case(DYNAMIC_STATE_ATTR_PREFIX))
+        })
         .map(|a| (Box::from(a.name.local.as_ref()), Box::from(a.value.as_str())))
         .collect();
     pairs.sort();
@@ -247,8 +472,36 @@ fn build_key(
         inherited_ptr: inherited as *const ComputedStyle as usize,
         is_first_child,
         is_last_child,
+        focus_visible: super::matching::forms::matches_focus_visible(doc, node),
+        style_csp_blocked: doc.is_style_attr_csp_blocked(node),
         dynamic_fingerprint_sig,
     })
+}
+
+/// THREAD-4 срез N — elements whose computed style may be shared across
+/// distinct nodes with an equal [`ShareKey`]. The SVG presentational set
+/// (срез 2, audited ancestor-independent) plus **HTML-namespace** elements:
+/// every UA hint/presentational pass in `compute_style_shareable` was audited
+/// for reads the key does not capture — ancestor walks (`cellpadding`,
+/// nested-list margins, `rtc > rt`) are covered by the `inherited_ptr`
+/// induction (equal keys ⇒ pairwise key-equal ancestor chains ⇒ identical
+/// ancestor attributes), sentinel attributes (`data-lumen-modal`,
+/// `data-lumen-fullscreen`, `open`, `inert`, `hidden`) are ordinary
+/// attributes, and the single live-state read — `:focus-visible` — is pinned
+/// by [`ShareKey::focus_visible`]. Excluded: UA-shadow internals
+/// (`ua_slot_role`/`ua_vtt_role`), whose style keys on a DOM role no key
+/// field captures, and every non-HTML/SVG-eligible namespace.
+pub(crate) fn share_key_eligible(doc: &Document, node: NodeId) -> bool {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return false;
+    };
+    if super::presentational::is_svg_presentational_element(name.local.as_ref()) {
+        return true;
+    }
+    if name.namespace != lumen_dom::Namespace::Html {
+        return false;
+    }
+    doc.ua_slot_role(node).is_none() && doc.ua_vtt_role(node).is_none()
 }
 
 /// Per-pass structural memo — see module doc.
@@ -275,9 +528,26 @@ pub(crate) struct ShareCache {
     /// result for this pass's `sheet`, cached the same way as
     /// [`Self::track_position`] and for the same reason.
     track_fingerprint: Option<bool>,
+    /// [`sheet_relevant_attr_names`]'s result for this pass's `sheet`,
+    /// computed on the first [`Self::compute`] call — one sheet walk per
+    /// pass, reused for every node's [`build_key`].
+    relevant_attrs: Option<HashSet<String>>,
+    /// `LUMEN_SHARECACHE_VERIFY=1` — on every hit, recompute the node fresh
+    /// and compare `(ComputedStyle, matched rules)` against the cached pair;
+    /// counts and prints (capped) mismatches. Verification only, never
+    /// changes the returned value.
+    verify_checked: usize,
+    verify_mismatch: usize,
 }
 
 impl ShareCache {
+    /// `LUMEN_NO_SHARE_CACHE=1` — compute every node fresh, no lookup, no
+    /// insert: the rollback switch for the HTML-eligibility extension.
+    fn disabled() -> bool {
+        static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *OFF.get_or_init(|| std::env::var_os("LUMEN_NO_SHARE_CACHE").is_some_and(|v| v != "0"))
+    }
+
     /// `LUMEN_SHARECACHE_STATS=1` — BUG-1112 срез 2. Reads the env var once per
     /// process (`OnceLock`, same pattern as `shell::relayout`'s
     /// `LUMEN_BUG935_M4_SWAP`): unset changes nothing for anyone who has not
@@ -287,6 +557,13 @@ impl ShareCache {
     fn stats_enabled() -> bool {
         static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         *ENABLED.get_or_init(|| std::env::var("LUMEN_SHARECACHE_STATS").ok().as_deref() == Some("1"))
+    }
+
+    /// `LUMEN_SHARECACHE_VERIFY=1` — see [`Self::verify_checked`]. Implies
+    /// the stats line too so a run reports hits and mismatches together.
+    fn verify_enabled() -> bool {
+        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ENABLED.get_or_init(|| std::env::var("LUMEN_SHARECACHE_VERIFY").ok().as_deref() == Some("1"))
     }
 
     /// The cascade result for `node` — the same [`Arc`] allocation a previous
@@ -304,15 +581,48 @@ impl ShareCache {
         viewport: Size,
         dark_mode: bool,
     ) -> (Arc<ComputedStyle>, Arc<[MatchedRule]>) {
+        if Self::disabled() {
+            let mut matched_rules = Vec::new();
+            let (style, _) = compute_style_shareable(
+                doc, node, sheet, inherited, viewport, dark_mode, None, &mut matched_rules, false,
+            );
+            return (Arc::new(style), Arc::from(matched_rules));
+        }
         let track_position =
             *self.track_position.get_or_insert_with(|| sheet_has_position_dependent_subject(sheet));
         let track_fingerprint = *self
             .track_fingerprint
             .get_or_insert_with(|| sheet_has_fingerprintable_selector(sheet));
-        let key = build_key(doc, node, sheet, inherited, viewport, dark_mode, track_position, track_fingerprint);
+        let relevant_attrs = self
+            .relevant_attrs
+            .get_or_insert_with(|| sheet_relevant_attr_names(sheet));
+        let key = build_key(
+            doc, node, sheet, inherited, viewport, dark_mode, track_position, track_fingerprint,
+            relevant_attrs,
+        );
         if let Some(hit) = key.as_ref().and_then(|k| self.entries.get(k)) {
             if Self::stats_enabled() {
                 self.hits += 1;
+            }
+            if Self::verify_enabled() {
+                self.verify_checked += 1;
+                let mut fresh_rules = Vec::new();
+                let (fresh_style, _) = compute_style_shareable(
+                    doc, node, sheet, inherited, viewport, dark_mode, None, &mut fresh_rules, false,
+                );
+                // Rule order is sheet order, identical for identical matches —
+                // compare the vectors directly.
+                if fresh_style != *hit.0 || fresh_rules[..] != hit.1[..] {
+                    self.verify_mismatch += 1;
+                    if self.verify_mismatch <= 20 {
+                        eprintln!(
+                            "[sharecache-verify] MISMATCH node={} style_eq={} rules_eq={}",
+                            node.index(),
+                            fresh_style == *hit.0,
+                            fresh_rules[..] == hit.1[..]
+                        );
+                    }
+                }
             }
             return (Arc::clone(&hit.0), Arc::clone(&hit.1));
         }
@@ -350,6 +660,12 @@ impl Drop for ShareCache {
             eprintln!(
                 "[sharecache] hit={} insert={} miss={} (key_none={} key_some_unshareable={})",
                 self.hits, self.inserts, self.misses, self.key_none, self.key_some_unshareable
+            );
+        }
+        if Self::verify_enabled() && self.verify_checked != 0 {
+            eprintln!(
+                "[sharecache-verify] checked={} mismatch={}",
+                self.verify_checked, self.verify_mismatch
             );
         }
     }
