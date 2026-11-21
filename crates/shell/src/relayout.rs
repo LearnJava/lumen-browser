@@ -533,7 +533,38 @@ impl Lumen {
         lumen_layout::set_cv_scroll(self.scroll_x, self.scroll_y);
         lumen_layout::set_cv_relevant(self.cv_relevant.clone());
         // GAP-CSSANIM срез 9: see `animated_heights_snapshot` doc comment.
-        lumen_layout::set_animated_heights(self.animated_heights_snapshot());
+        let animated_empty = {
+            let snap = self.animated_heights_snapshot();
+            let empty = snap.is_empty();
+            lumen_layout::set_animated_heights(snap);
+            empty
+        };
+        // PERF-RELAYOUT-JOB: сигнатура входов этого прохода — ляжет в
+        // `layout_basis_sig` после apply, чтобы следующее off-thread задание
+        // могло доказать совместимость `prev`-базиса.
+        let (doc_key, sheet_key) = self
+            .layout_source
+            .as_ref()
+            .map(|s| {
+                (
+                    std::sync::Arc::as_ptr(&s.document) as usize,
+                    std::sync::Arc::as_ptr(&s.stylesheet) as usize,
+                )
+            })
+            .unwrap_or((0, 0));
+        let basis_sig = relayout_basis_sig(
+            viewport,
+            self.zoom_factor,
+            &self.web_fonts,
+            self.dark_mode,
+            self.a11y_store.forced_colors(),
+            self.scroll_x,
+            self.scroll_y,
+            &self.cv_relevant,
+            animated_empty,
+            doc_key,
+            sheet_key,
+        );
         // CQ-SCROLL-STATE-2: a sheet with `scroll-state()` queries is restyled by a full pass that
         // starts every scroller at offset 0, so the pass is told the current offsets and puts
         // them back before the display list is built.
@@ -568,6 +599,7 @@ impl Lumen {
             #[cfg(feature = "v8")]
             None,
         );
+        self.layout_basis_sig = Some(basis_sig);
         if let Some(t0) = engine_t0 {
             let engine_ms = t0.elapsed().as_secs_f32() * 1000.0;
             self.engine_stats.record(engine_ms);
@@ -672,6 +704,15 @@ impl Lumen {
         // геометрию прошлого прохода переиспользовать нельзя, пусть вызывающий
         // сделает полный [`Self::relayout`].
         if self.refresh_dynamic_css() {
+            return false;
+        }
+        // Активные анимированные высоты — только полный проход: graft не видит
+        // thread-local overrides и переиспользовал бы боксы со старыми высотами
+        // (та же причина, что гейт `animated_heights.is_empty()` в
+        // `make_relayout_job`). Снимок пуст ⇒ `animated_empty` для сигнатуры
+        // базиса ниже всегда `true` на этом пути.
+        let animated_empty = self.animated_heights_snapshot().is_empty();
+        if !animated_empty {
             return false;
         }
         let Some(prev_lb) = self.layout_box.take() else {
@@ -952,6 +993,29 @@ impl Lumen {
         // longer conditional on which branch ran.
         self.page_prev_cascade_styles = Some(fresh_cascade_styles);
         self.page_prev_interactive = new_interactive;
+        let (doc_key, sheet_key) = self
+            .layout_source
+            .as_ref()
+            .map(|s| {
+                (
+                    std::sync::Arc::as_ptr(&s.document) as usize,
+                    std::sync::Arc::as_ptr(&s.stylesheet) as usize,
+                )
+            })
+            .unwrap_or((0, 0));
+        self.layout_basis_sig = Some(relayout_basis_sig(
+            viewport,
+            self.zoom_factor,
+            &self.web_fonts,
+            self.dark_mode,
+            self.a11y_store.forced_colors(),
+            self.scroll_x,
+            self.scroll_y,
+            &self.cv_relevant,
+            animated_empty,
+            doc_key,
+            sheet_key,
+        ));
         if !used_restyle {
             self.m4_full_cost_ms = Some(full_t0.elapsed().as_secs_f32() * 1000.0);
         }
@@ -1647,6 +1711,57 @@ pub(crate) fn system_font_faces() -> Arc<lumen_paint::SystemFaceSet> {
             ))
         })
         .clone()
+}
+
+/// PERF-RELAYOUT-JOB: сигнатура layout-входов, не видимых `ComputedStyle`,
+/// — гейт инкрементальных ступеней off-thread задания. Строится из тех же
+/// значений, что уходят в поток (`viewport`, dpr, web_fonts, dark/forced,
+/// cv-scroll/relevant, animated-empty); совпадение с
+/// `Lumen::layout_basis_sig` доказывает, что `prev`-дерево посчитано на
+/// совместимых входах.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn relayout_basis_sig(
+    viewport: Size,
+    device_pixel_ratio: f32,
+    web_fonts: &[LoadedWebFont],
+    dark_mode: bool,
+    forced_colors: bool,
+    cv_x: f32,
+    cv_y: f32,
+    cv_relevant: &std::collections::HashSet<lumen_dom::NodeId>,
+    animated_empty: bool,
+    doc: usize,
+    sheet: usize,
+) -> crate::engine_bridge::RelayoutBasisSig {
+    use std::hash::{Hash, Hasher};
+    let mut fonts = std::collections::hash_map::DefaultHasher::new();
+    web_fonts.len().hash(&mut fonts);
+    for f in web_fonts {
+        f.family.hash(&mut fonts);
+        f.weight.hash(&mut fonts);
+        std::mem::discriminant(&f.style).hash(&mut fonts);
+        f.bytes.len().hash(&mut fonts);
+        f.unicode_range.len().hash(&mut fonts);
+        f.ascent_override.map(f32::to_bits).hash(&mut fonts);
+        f.descent_override.map(f32::to_bits).hash(&mut fonts);
+        f.size_adjust.map(f32::to_bits).hash(&mut fonts);
+        f.line_gap_override.map(f32::to_bits).hash(&mut fonts);
+    }
+    let mut cv_sorted: Vec<lumen_dom::NodeId> = cv_relevant.iter().copied().collect();
+    cv_sorted.sort_by_key(|n| n.raw());
+    crate::engine_bridge::RelayoutBasisSig {
+        viewport,
+        dpr: device_pixel_ratio,
+        fonts: fonts.finish(),
+        dark_mode,
+        forced_colors,
+        cv_x,
+        cv_y,
+        cv_relevant: cv_sorted,
+        animated_empty,
+        doc,
+        sheet,
+    }
 }
 
 /// Измеритель для страницы: bundled Inter + @font-face-семьи + системные

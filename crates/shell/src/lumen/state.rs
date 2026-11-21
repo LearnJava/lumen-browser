@@ -1087,6 +1087,10 @@ pub(crate) struct Lumen {
     /// применении коммита, поэтому вытесненное задание не теряет свои
     /// DOM-изменения для следующего прохода.
     pub(crate) dom_touched_ack_reader: Option<crate::persistent_js::DomTouchedAckReader>,
+    /// PERF-RELAYOUT-JOB: сигнатура layout-входов последнего применённого
+    /// коммита — off-thread задание переиспользует `prev`-базис только при
+    /// точном совпадении (viewport/шрифты/тема/cv/анимации не менялись).
+    pub(crate) layout_basis_sig: Option<crate::engine_bridge::RelayoutBasisSig>,
     /// BUG-935 S43: UI-side lock-free clone of the JS runtime's "page has
     /// read `getComputedStyle(el, pseudoElt)`/`computedStyleMap()`'s
     /// pseudo-element path" flag. `None` before the first push (or a

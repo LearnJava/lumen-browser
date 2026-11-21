@@ -627,10 +627,39 @@ impl Lumen {
         // экономии прохода), зато `self.layout_box` остаётся `Some` всё время
         // полёта задания — hit-test/hover/клики не деградируют, а вытесненный
         // коммит не теряет согласованную пару «дерево+стили».
-        let prev_layout = self.layout_box.clone();
-        let prev_cascade = self.page_prev_cascade_styles.clone();
-        let prev_interactive = self.page_prev_interactive;
-        let touched_reader = self.dom_touched_ack_reader.clone();
+        // Гейт — `layout_basis_sig`: базис переиспользуется только когда
+        // layout-входы (viewport, шрифты-метрики, тема, cv, анимации)
+        // совпадают с теми, на которых он построен; иначе — полный проход.
+        let basis_sig = crate::relayout::relayout_basis_sig(
+            viewport,
+            device_pixel_ratio,
+            &web_fonts,
+            dark_mode,
+            forced_colors,
+            cv_x,
+            cv_y,
+            &cv_relevant,
+            animated_heights.is_empty(),
+            std::sync::Arc::as_ptr(&document) as usize,
+            std::sync::Arc::as_ptr(&stylesheet) as usize,
+        );
+        // Активные анимированные высоты — всегда полный проход: graft не видит
+        // thread-local overrides и переиспользовал бы боксы со старыми высотами.
+        // `LUMEN_NO_JOB_INCREMENTAL=1` — откат всего инкрементального блока
+        // задания к историческому полному проходу (A/B-замеры, регрессии).
+        let incremental_ok = animated_heights.is_empty()
+            && std::env::var_os("LUMEN_NO_JOB_INCREMENTAL").is_none()
+            && self.layout_basis_sig.as_ref() == Some(&basis_sig);
+        let (prev_layout, prev_cascade, prev_interactive, touched_reader) = if incremental_ok {
+            (
+                self.layout_box.clone(),
+                self.page_prev_cascade_styles.clone(),
+                self.page_prev_interactive,
+                self.dom_touched_ack_reader.clone(),
+            )
+        } else {
+            (None, None, (None, None, None), None)
+        };
         let job = move || {
             let t0 = std::time::Instant::now();
             // Interactive state is thread-local — set it on THIS (engine) thread.
@@ -779,6 +808,7 @@ impl Lumen {
                 cascade_styles,
                 interactive: (hovered, focused, active),
                 touched_ack,
+                basis_sig,
                 #[cfg(feature = "v8")]
                 precollected,
             }
@@ -870,7 +900,7 @@ impl Lumen {
         self.engine_applied_generation = self.engine_job_generation;
         #[cfg(feature = "v8")]
         let precollected = commit.precollected;
-        let EngineCommit { content, layout_box, viewport, compute_ms, touched_ack, .. } = commit;
+        let EngineCommit { content, layout_box, viewport, compute_ms, touched_ack, basis_sig, .. } = commit;
         self.apply_relayout_result(
             content,
             layout_box,
@@ -884,6 +914,7 @@ impl Lumen {
         if let Some((ack, epoch)) = touched_ack {
             ack(epoch);
         }
+        self.layout_basis_sig = Some(basis_sig);
         if lumen_paint::frame_log_enabled() {
             self.engine_stats.record(compute_ms);
             eprintln!(
@@ -919,7 +950,7 @@ impl Lumen {
         self.engine_applied_generation = commit.generation;
         #[cfg(feature = "v8")]
         let precollected = commit.precollected;
-        let EngineCommit { content, layout_box, viewport, compute_ms, cascade_styles, interactive, touched_ack, .. } = commit;
+        let EngineCommit { content, layout_box, viewport, compute_ms, cascade_styles, interactive, touched_ack, basis_sig, .. } = commit;
         // BUG-935 S27: `defer_js_push=true` — S23/S24 measured this call site
         // (the `poll_engine_commit` off-thread commit path) as the dominant
         // contributor to the `QUERY_TIMEOUT` tax on the UI thread (S24's
@@ -953,6 +984,7 @@ impl Lumen {
         if let Some((ack, epoch)) = touched_ack {
             ack(epoch);
         }
+        self.layout_basis_sig = Some(basis_sig);
         // ADR-016 M2.0/M2.2: record the off-thread compute cost. Unlike the
         // synchronous path this excludes the UI-thread apply (observers etc.),
         // and is tagged `(off-thread)` so the summary reflects the work moved off

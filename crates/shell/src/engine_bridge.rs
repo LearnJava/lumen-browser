@@ -51,9 +51,47 @@ pub(crate) struct EngineCommit {
     /// реальном применении коммита: вытесненное задание не сдвигает отметку,
     /// и его DOM-изменения достаются следующему чтению. `None` у полных
     /// проходов и у задач без JS-трекера.
-    pub(crate) touched_ack: Option<(std::sync::Arc<dyn Fn(u64) + Send + Sync>, u64)>,
+    pub(crate) touched_ack: TouchedAck,
+    /// PERF-RELAYOUT-JOB: сигнатура layout-входов, под которыми этот коммит
+    /// посчитан — ложится в `Lumen::layout_basis_sig` при применении, чтобы
+    /// следующее задание могло доказать совместимость `prev`-базиса.
+    pub(crate) basis_sig: crate::engine_bridge::RelayoutBasisSig,
     #[cfg(feature = "v8")]
     pub(crate) precollected: Option<crate::js_precollect::PrecollectedJsData>,
+}
+
+/// Ack-стиль колбэк водяного знака acked-читалки затронутых узлов
+/// (`EngineCommit::touched_ack`) — тип вынесен из-за `clippy::type_complexity`.
+pub(crate) type TouchedAck = Option<(std::sync::Arc<dyn Fn(u64) + Send + Sync>, u64)>;
+
+/// PERF-RELAYOUT-JOB: входы, меняющие геометрию layout **без** изменения
+/// `ComputedStyle` — инкрементальные ступени off-thread задания могут
+/// переиспользовать `prev`-дерево только когда базис построен на тех же
+/// значениях (viewport/zoom, web-fonts метрики, dark/forced-colors,
+/// content-visibility scroll-набор, анимированные высоты).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct RelayoutBasisSig {
+    pub(crate) viewport: Size,
+    pub(crate) dpr: f32,
+    /// Дешёвый отпечаток `web_fonts`: байты иммутабельны после загрузки,
+    /// поэтому `(family, weight, len, descriptors)` достаточно — контент
+    /// face-а не мутирует на месте, список только пополняется.
+    pub(crate) fonts: u64,
+    pub(crate) dark_mode: bool,
+    pub(crate) forced_colors: bool,
+    pub(crate) cv_x: f32,
+    pub(crate) cv_y: f32,
+    /// Отсортированный набор cv-relevant узлов — порядок HashSet недетерминирован.
+    pub(crate) cv_relevant: Vec<lumen_dom::NodeId>,
+    /// `animated_heights` был пуст на момент базиса: при активных
+    /// анимационных высотах инкрементальные ступени отключены.
+    pub(crate) animated_empty: bool,
+    /// `Arc::as_ptr` документа и листа на момент базиса — привязка к
+    /// конкретной странице: навигация/bfcache-thaw подменяет `LayoutSource`,
+    /// и чужое дерево не может быть принято за базис даже при совпадении
+    /// остальных входов.
+    pub(crate) doc: usize,
+    pub(crate) sheet: usize,
 }
 
 /// ADR-016 M2.2c-2b: персистентное состояние движкового потока `S` — «место»
