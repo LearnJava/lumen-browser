@@ -8608,7 +8608,9 @@ function _wa_motion_prune(nid) {
     // `type` намеренно отсутствует: Chrome desktop его не экспонирует
     // (BUG-1835 — Ozон abt сравнивает форму объекта с эталоном).
     effectiveType: '4g',
-    downlink:      10,
+    // Измеренной пропускной способности у нас нет — правдоподобная
+    // оценка для проводного broadband (Chrome округляет до сотых).
+    downlink:      4.35,
     // BUG-641: WICG Network Information §`downlinkMax` — with no knowledge of
     // the underlying link's max speed the UA reports +Infinity.
     downlinkMax:   Infinity,
