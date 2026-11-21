@@ -11,7 +11,7 @@ use crate::*;
 use crate::js_precollect::{
     DeferredJsCollect, PendingJsData, PrecollectedJsData, collect_js_data, collect_js_shift_data,
 };
-use crate::relayout::{compute_layout_with_counters, defer_js_push_override, m4_swap_override};
+use crate::relayout::{defer_js_push_override, m4_swap_override, page_measurer};
 
 impl Lumen {
     /// ADR-016 M2.2: post-layout UI-thread work shared by the synchronous
@@ -552,6 +552,7 @@ impl Lumen {
     /// web-fonts (invariant 1) and re-establishes the interactive/forced-colors/
     /// content-visibility thread-local state **on the engine thread** before
     /// computing layout.
+    #[allow(clippy::expect_used, clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn make_relayout_job(
         &mut self,
     ) -> Option<(u64, impl FnOnce() -> EngineCommit + Send + 'static)> {
@@ -621,6 +622,15 @@ impl Lumen {
             .as_ref()
             .map(|f| f.load(std::sync::atomic::Ordering::Relaxed))
             .unwrap_or(true);
+        // PERF-RELAYOUT-JOB: инкрементальный базис для задания — клоны, а не
+        // `take`: `LayoutBox::clone` глубокий (~1мс на сабмит против ~0.5с
+        // экономии прохода), зато `self.layout_box` остаётся `Some` всё время
+        // полёта задания — hit-test/hover/клики не деградируют, а вытесненный
+        // коммит не теряет согласованную пару «дерево+стили».
+        let prev_layout = self.layout_box.clone();
+        let prev_cascade = self.page_prev_cascade_styles.clone();
+        let prev_interactive = self.page_prev_interactive;
+        let touched_reader = self.dom_touched_ack_reader.clone();
         let job = move || {
             let t0 = std::time::Instant::now();
             // Interactive state is thread-local — set it on THIS (engine) thread.
@@ -631,8 +641,100 @@ impl Lumen {
             lumen_layout::set_cv_scroll(cv_x, cv_y);
             lumen_layout::set_cv_relevant(cv_relevant);
             lumen_layout::set_animated_heights(animated_heights);
-            let (content, layout_box, counters) =
-                compute_layout_with_counters(&document, &stylesheet, viewport, &*hp, dark_mode, &web_fonts);
+            let font = lumen_font::Font::parse(crate::assets::INTER_FONT).expect("bundled Inter не парсится");
+            let measurer = page_measurer(&font, &web_fonts);
+            // Один лок на всё вычисление: чтение трекера и постройка дельты
+            // идут внутри того же критического участка, что и layout —
+            // DOM-мутация не может вклиниться между снимком документа и
+            // отметкой epoch (она встаёт на этот же мьютекс).
+            let doc = document.lock().unwrap_or_else(|e| e.into_inner());
+            let touched = touched_reader.as_ref().map(|r| (r.read)());
+            // Водяной знак подтверждается только при применении коммита
+            // (poll_engine_commit/readback): вытесненное задание не «сжигает»
+            // свои изменения — следующее чтение увидит их снова.
+            let touched_ack = touched
+                .as_ref()
+                .zip(touched_reader.as_ref())
+                .map(|(s, r)| (std::sync::Arc::clone(&r.ack), s.epoch));
+            let use_restyle = touched.as_ref().is_some_and(|s| !s.unattributed)
+                && prev_layout.is_some()
+                && prev_cascade.is_some();
+            let (layout, counters) = match (use_restyle, prev_layout, prev_cascade) {
+                (true, Some(prev_lb), Some(prev_styles)) => {
+                    let summary = touched.unwrap_or_default();
+                    let (prev_hover, prev_focus, prev_active) = prev_interactive;
+                    // Зеркало ветки `try_relayout_raf_incremental` (relayout.rs):
+                    // те же state/node-индексы, корни и invalidation — только
+                    // doc уже под локом, а интерактивная тройка приехала
+                    // снимком, а не полем `self`.
+                    let state_index = lumen_layout::style::restyle_state_index(&doc, &stylesheet);
+                    let mut dirty_roots = std::collections::HashSet::new();
+                    dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                        &doc, prev_hover, hovered, &state_index,
+                    ));
+                    dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                        &doc, prev_focus, focused, &state_index,
+                    ));
+                    dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                        &doc, prev_active, active, &state_index,
+                    ));
+                    let mut node_index = lumen_layout::style::restyle_node_index(&doc, &stylesheet);
+                    node_index.set_attr_narrowing(crate::persistent_js::attr_narrowing_enabled());
+                    let roots = lumen_layout::style::restyle_roots_for_node_changes_with_basis(
+                        &doc,
+                        summary.changes.iter().map(|(n, c)| (*n, c.as_node_change())),
+                        &node_index,
+                        &|n| !crate::persistent_js::fresh_node_roots_enabled() || prev_styles.contains_key(&n),
+                        None,
+                    );
+                    dirty_roots.extend(roots.deep);
+                    let invalidation = (prev_styles.sheet_revision() == Some(stylesheet.revision()))
+                        .then(|| {
+                            let changes: Vec<_> =
+                                summary.changes.iter().map(|(n, c)| (*n, c.as_node_change())).collect();
+                            node_index.invalidated_rules(
+                                &doc,
+                                &changes,
+                                prev_hover != hovered || prev_active != active,
+                                prev_focus != focused,
+                            )
+                        })
+                        .flatten();
+                    let content_dirty = if summary.changes.is_empty() {
+                        lumen_layout::counters::ContentDirty::Nothing
+                    } else {
+                        lumen_layout::counters::ContentDirty::Untracked
+                    };
+                    let delta = lumen_layout::counters::RestyleDelta {
+                        invalidation,
+                        prev_styles,
+                        dirty_roots,
+                        content_dirty,
+                        shallow_roots: roots.shallow,
+                        point_roots: roots.point,
+                    };
+                    lumen_layout::counters::set_incremental_restyle(true);
+                    lumen_layout::box_tree::set_incremental_box_build(true);
+                    let out = lumen_layout::box_tree::layout_mutation_incremental_restyle(
+                        &doc, &stylesheet, viewport, &measurer, &*hp, dark_mode, prev_lb, delta,
+                    );
+                    lumen_layout::box_tree::set_incremental_box_build(false);
+                    lumen_layout::counters::set_incremental_restyle(false);
+                    out
+                }
+                // Базис дерева есть, а стили/трекер не позволяют restyle —
+                // полный каскад с переиспользованием геометрии чистых
+                // поддеревьев (та же ступень, что `relayout_page_incremental`).
+                (_, Some(prev_lb), _) => lumen_layout::layout_mutation_incremental_with_counters(
+                    &doc, &stylesheet, viewport, &measurer, &*hp, dark_mode, &prev_lb,
+                ),
+                _ => lumen_layout::layout_measured_hyp_with_counters(
+                    &doc, &stylesheet, viewport, &measurer, &*hp, dark_mode,
+                ),
+            };
+            drop(doc);
+            let layout_box = layout;
+            let content = crate::display_list_metrics::paint_ordered_in(&layout_box, viewport);
             let cascade_styles = want_cascade_styles.then(|| counters.into_styles());
             lumen_layout::clear_interactive_state();
             lumen_layout::clear_animated_heights();
@@ -676,6 +778,7 @@ impl Lumen {
                 compute_ms,
                 cascade_styles,
                 interactive: (hovered, focused, active),
+                touched_ack,
                 #[cfg(feature = "v8")]
                 precollected,
             }
@@ -767,7 +870,7 @@ impl Lumen {
         self.engine_applied_generation = self.engine_job_generation;
         #[cfg(feature = "v8")]
         let precollected = commit.precollected;
-        let EngineCommit { content, layout_box, viewport, compute_ms, .. } = commit;
+        let EngineCommit { content, layout_box, viewport, compute_ms, touched_ack, .. } = commit;
         self.apply_relayout_result(
             content,
             layout_box,
@@ -776,6 +879,11 @@ impl Lumen {
             #[cfg(feature = "v8")]
             precollected,
         );
+        // PERF-RELAYOUT-JOB: readback применён синхронно — подтверждаем
+        // водяной знак сразу, как сделал бы poll-путь ниже.
+        if let Some((ack, epoch)) = touched_ack {
+            ack(epoch);
+        }
         if lumen_paint::frame_log_enabled() {
             self.engine_stats.record(compute_ms);
             eprintln!(
@@ -811,7 +919,7 @@ impl Lumen {
         self.engine_applied_generation = commit.generation;
         #[cfg(feature = "v8")]
         let precollected = commit.precollected;
-        let EngineCommit { content, layout_box, viewport, compute_ms, cascade_styles, interactive, .. } = commit;
+        let EngineCommit { content, layout_box, viewport, compute_ms, cascade_styles, interactive, touched_ack, .. } = commit;
         // BUG-935 S27: `defer_js_push=true` — S23/S24 measured this call site
         // (the `poll_engine_commit` off-thread commit path) as the dominant
         // contributor to the `QUERY_TIMEOUT` tax on the UI thread (S24's
@@ -837,6 +945,13 @@ impl Lumen {
         if let Some(styles) = cascade_styles {
             self.page_prev_cascade_styles = Some(styles);
             self.page_prev_interactive = interactive;
+        }
+        // PERF-RELAYOUT-JOB: коммит применён — сдвигаем водяной знак
+        // acked-читалки до эпохи, которую это задание реально видело.
+        // Вытесненный коммит (return выше) ack не получает: его изменения
+        // перечитает следующее задание.
+        if let Some((ack, epoch)) = touched_ack {
+            ack(epoch);
         }
         // ADR-016 M2.0/M2.2: record the off-thread compute cost. Unlike the
         // synchronous path this excludes the UI-thread apply (observers etc.),

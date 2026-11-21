@@ -1082,6 +1082,11 @@ pub(crate) struct Lumen {
     /// движковым потоком пуст). `None` — нет JS или нет движкового потока.
     /// Срез 81: читатель с собственной отметкой эпохи, трекер не сбрасывает.
     pub(crate) dom_touched_drain: Option<crate::persistent_js::DomTouchedDrain>,
+    /// PERF-RELAYOUT-JOB: acked-вариант читателя затронутых узлов для
+    /// off-thread relayout-заданий — водяной знак двигается только при
+    /// применении коммита, поэтому вытесненное задание не теряет свои
+    /// DOM-изменения для следующего прохода.
+    pub(crate) dom_touched_ack_reader: Option<crate::persistent_js::DomTouchedAckReader>,
     /// BUG-935 S43: UI-side lock-free clone of the JS runtime's "page has
     /// read `getComputedStyle(el, pseudoElt)`/`computedStyleMap()`'s
     /// pseudo-element path" flag. `None` before the first push (or a

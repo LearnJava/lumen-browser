@@ -109,6 +109,10 @@ pub struct DomChanges {
     /// An untracked mutation happened since the last read (or this is the first read) —
     /// `changes` is not a safe root-set, the caller recascades everything.
     pub unattributed: bool,
+    /// The tracker epoch this read corresponds to — what an off-thread consumer
+    /// acks once its layout actually commits (see
+    /// [`V8JsRuntime::dom_changes_reader_acked`]).
+    pub epoch: u64,
 }
 
 /// BUG-935 срез 68: the attributes whose old value [`DomTouched::value_log`] keeps — the
@@ -270,6 +274,13 @@ impl DomTouched {
     /// of everything it holds.
     pub fn log_floor(&self) -> u64 {
         self.log_floor
+    }
+
+    /// PERF-RELAYOUT-JOB: текущая эпоха трекера — метка, которую acked-читатель
+    /// возвращает в [`DomChanges::epoch`] и которую потребитель подтверждает
+    /// после применения своего layout.
+    pub fn epoch(&self) -> u64 {
+        self.epoch
     }
 }
 

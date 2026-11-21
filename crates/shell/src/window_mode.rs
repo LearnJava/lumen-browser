@@ -634,6 +634,7 @@ fn run_window_mode_inner(
         dom_dirty_flag: None,
         navigate_listeners_flag: None,
         dom_touched_drain: None,
+        dom_touched_ack_reader: None,
         pseudo_styles_needed_flag: None,
         custom_props_needed_flag: None,
         computed_styles_needed_flag: None,

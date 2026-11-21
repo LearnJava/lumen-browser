@@ -277,7 +277,7 @@ fn pick_canvas_face(
 fn canvas_font_data(font_str: &str) -> Arc<[u8]> {
     static CACHE: OnceLock<Mutex<HashMap<String, Arc<[u8]>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(hit) = cache.lock().unwrap().get(font_str) {
+    if let Some(hit) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(font_str) {
         return hit.clone();
     }
     let effective = if font_str.trim().is_empty() {
@@ -305,7 +305,7 @@ fn canvas_font_data(font_str: &str) -> Arc<[u8]> {
     let data = data.unwrap_or_else(|| Arc::from(BUNDLED_FONT));
     cache
         .lock()
-        .unwrap()
+        .unwrap_or_else(|e| e.into_inner())
         .insert(font_str.to_string(), data.clone());
     data
 }

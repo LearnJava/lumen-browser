@@ -151,7 +151,7 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// back to a full cascade — preserves those engines' existing behaviour
     /// exactly.
     fn take_dom_touched(&self) -> DomTouchedSummary {
-        DomTouchedSummary { changes: Vec::new(), unattributed: true }
+        DomTouchedSummary { changes: Vec::new(), unattributed: true, ..Default::default() }
     }
     /// BUG-272/BUG-306 diagnostics: JS engine heap `(total_heap_size,
     /// used_heap_size)` in bytes; `(-1, -1)` when the runtime does not expose
@@ -206,6 +206,11 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// BUG-935 срез 81: трекер не сбрасывается — читатель держит свою отметку эпохи
     /// (`V8JsRuntime::dom_changes_reader`), и флаш движкового потока видит всё.
     fn dom_touched_drain(&self) -> Option<DomTouchedDrain> {
+        None
+    }
+    /// PERF-RELAYOUT-JOB: acked-вариант [`Self::dom_touched_drain`] для
+    /// off-thread relayout-заданий — `None`, когда трекера нет (по умолчанию).
+    fn dom_touched_ack_reader(&self) -> Option<DomTouchedAckReader> {
         None
     }
     /// BUG-935 срез 94: оболочка дописала в DOM презентационные атрибуты
@@ -1218,6 +1223,7 @@ impl PersistentJs for V8PersistentJs {
         DomTouchedSummary {
             changes: t.changes_since(t.log_floor(), lumen_js::child_list_narrowing_enabled(), false),
             unattributed: t.unattributed,
+            epoch: t.epoch(),
         }
     }
     fn debug_js_heap(&self) -> (i64, i64) {
@@ -1252,8 +1258,18 @@ impl PersistentJs for V8PersistentJs {
         let read = self.rt.dom_changes_reader();
         Some(Arc::new(move || {
             let t = read();
-            DomTouchedSummary { changes: t.changes, unattributed: t.unattributed }
+            DomTouchedSummary { changes: t.changes, unattributed: t.unattributed, epoch: t.epoch }
         }))
+    }
+    fn dom_touched_ack_reader(&self) -> Option<DomTouchedAckReader> {
+        let (read, ack) = self.rt.dom_changes_reader_acked();
+        Some(DomTouchedAckReader {
+            read: Arc::new(move || {
+                let t = read();
+                DomTouchedSummary { changes: t.changes, unattributed: t.unattributed, epoch: t.epoch }
+            }),
+            ack: Arc::new(ack),
+        })
     }
     fn pseudo_styles_needed_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
         Some(self.rt.pseudo_styles_needed_flag())
@@ -1796,4 +1812,18 @@ pub(crate) struct DomTouchedSummary {
     /// the caller must fall back to a full cascade. See
     /// `lumen_js::DomTouched::unattributed`.
     pub(crate) unattributed: bool,
+    /// Эпоха трекера, которой соответствует это чтение (PERF-RELAYOUT-JOB) —
+    /// её подтверждает [`DomTouchedAckReader::ack`], когда layout коммита
+    /// реально применён. У небранчевых источников — 0.
+    pub(crate) epoch: u64,
+}
+
+/// PERF-RELAYOUT-JOB: пара «прочитать → подтвердить» для off-thread
+/// restyle-заданий. `read` отдаёт [`DomTouchedSummary`] с эпохой и НЕ двигает
+/// водяной знак читателя; `ack(epoch)` вызывается только при применении
+/// коммита — вытесненное задание не сжигает свои изменения для следующего.
+#[derive(Clone)]
+pub(crate) struct DomTouchedAckReader {
+    pub(crate) read: DomTouchedDrain,
+    pub(crate) ack: Arc<dyn Fn(u64) + Send + Sync>,
 }

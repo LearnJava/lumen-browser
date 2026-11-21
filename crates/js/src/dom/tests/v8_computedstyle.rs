@@ -132,7 +132,7 @@ fn get_computed_style_pseudo_element_reads_pseudo_map() {
     let mut before_props = std::collections::HashMap::new();
     before_props.insert("color".to_string(), "blue".to_string());
     let mut pseudo = std::collections::HashMap::new();
-    pseudo.insert((nid, "before".to_string()), before_props);
+    pseudo.insert((nid, "before".to_string()), std::sync::Arc::new(before_props));
     rt.update_pseudo_computed_styles(pseudo);
     let own = rt
         .eval("window.getComputedStyle(document.getElementById('main')).getPropertyValue('color')")

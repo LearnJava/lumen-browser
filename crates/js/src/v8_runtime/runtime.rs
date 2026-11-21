@@ -1007,13 +1007,53 @@ impl V8JsRuntime {
             let mut mark = mark.lock().unwrap_or_else(|e| e.into_inner());
             // Первое чтение не знает, что видел прошлый проход, — пусть каскад будет полным.
             let Some(basis) = mark.replace(t.epoch) else {
-                return DomChanges { changes: Vec::new(), unattributed: true };
+                return DomChanges { changes: Vec::new(), unattributed: true, epoch: t.epoch };
             };
             DomChanges {
                 changes: t.changes_since(basis, super::style_flush::child_list_narrowing_enabled(), false),
                 unattributed: t.unattributed_since(basis),
+                epoch: t.epoch,
             }
         }
+    }
+
+    /// PERF-RELAYOUT-JOB: acked вариант [`Self::dom_changes_reader`] для
+    /// off-thread потребителей. `read` отчитывается об изменениях с последней
+    /// **подтверждённой** эпохи и НЕ двигает водяной знак; `ack(epoch)` сдвигает
+    /// его только когда соответствующий layout реально применён. У обычного
+    /// читателя отметка двигается самим чтением — для синхронного UI-пути это
+    /// то же самое (прочитал → тут же закоммитил), а для задания, которое могут
+    /// вытеснить до коммита, чтение без ack теряло бы его изменения навсегда:
+    /// следующий читатель начал бы после уже «съеденной» отметки.
+    pub fn dom_changes_reader_acked(&self) -> (
+        impl Fn() -> DomChanges + Send + Sync + 'static,
+        impl Fn(u64) + Send + Sync + 'static,
+    ) {
+        let touched = Arc::clone(&self.dom_touched);
+        let mark = Arc::new(Mutex::new(None::<u64>));
+        let read_mark = Arc::clone(&mark);
+        let read = move || {
+            let t = touched.lock().unwrap_or_else(|e| e.into_inner());
+            let basis = *read_mark.lock().unwrap_or_else(|e| e.into_inner());
+            // До первого ack покрытие неизвестно — полный каскад, как у
+            // обычного читателя.
+            let Some(basis) = basis else {
+                return DomChanges { changes: Vec::new(), unattributed: true, epoch: t.epoch };
+            };
+            DomChanges {
+                changes: t.changes_since(basis, super::style_flush::child_list_narrowing_enabled(), false),
+                unattributed: t.unattributed_since(basis),
+                epoch: t.epoch,
+            }
+        };
+        let ack = move |epoch: u64| {
+            let mut m = mark.lock().unwrap_or_else(|e| e.into_inner());
+            // Монотонно: чужой более поздний коммит уже подтвердил эпоху новее.
+            if m.is_none_or(|cur| epoch > cur) {
+                *m = Some(epoch);
+            }
+        };
+        (read, ack)
     }
 
     /// Returns `true` if `requestAnimationFrame` was called since the last call,

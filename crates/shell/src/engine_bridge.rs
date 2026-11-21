@@ -46,6 +46,12 @@ pub(crate) struct EngineCommit {
     /// was built without a JS context present (`js_present=false` at
     /// submission time); `apply_relayout_result` then falls back to its own
     /// inline collection, matching pre-S41 behaviour.
+    /// PERF-RELAYOUT-JOB: для инкрементальных off-thread заданий — ack
+    /// водяного знака acked-читалки затронутых узлов. Вызывается только при
+    /// реальном применении коммита: вытесненное задание не сдвигает отметку,
+    /// и его DOM-изменения достаются следующему чтению. `None` у полных
+    /// проходов и у задач без JS-трекера.
+    pub(crate) touched_ack: Option<(std::sync::Arc<dyn Fn(u64) + Send + Sync>, u64)>,
     #[cfg(feature = "v8")]
     pub(crate) precollected: Option<crate::js_precollect::PrecollectedJsData>,
 }

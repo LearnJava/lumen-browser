@@ -696,7 +696,7 @@ impl Lumen {
         // не оставлять.
         let touched = if self.engine_thread.is_some() {
             self.dom_touched_drain.as_ref().map(|drain| drain()).unwrap_or_else(|| {
-                crate::persistent_js::DomTouchedSummary { changes: Vec::new(), unattributed: true }
+                crate::persistent_js::DomTouchedSummary { changes: Vec::new(), unattributed: true, ..Default::default() }
             })
         } else {
             self.js_ctx.as_ref().map(|js| js.take_dom_touched()).unwrap_or_default()
@@ -1502,6 +1502,7 @@ impl Lumen {
                 self.dom_dirty_flag = handle.as_ref().and_then(|h| h.dom_dirty_flag());
                 self.navigate_listeners_flag = handle.as_ref().and_then(|h| h.navigate_listeners_flag());
                 self.dom_touched_drain = handle.as_ref().and_then(|h| h.dom_touched_drain());
+                self.dom_touched_ack_reader = handle.as_ref().and_then(|h| h.dom_touched_ack_reader());
                 self.js_ctx = None;
                 engine.task(move |state| state.js = handle);
             }
