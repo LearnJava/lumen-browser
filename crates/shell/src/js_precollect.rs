@@ -36,8 +36,7 @@ pub(crate) struct PrecollectedJsData {
     /// wipe out a valid snapshot a same-tick CSSOM-4 flush (`style_flush.rs`)
     /// had already populated via a different, non-gated write path.
     pub(crate) styles: Option<std::collections::HashMap<u32, lumen_layout::StyleMap>>,
-    pub(crate) pseudo_styles:
-        Option<std::collections::HashMap<(u32, String), std::collections::HashMap<String, String>>>,
+    pub(crate) pseudo_styles: Option<lumen_layout::PseudoComputedStyles>,
     pub(crate) customs:
         Option<std::collections::HashMap<u32, Arc<std::collections::HashMap<String, String>>>>,
     pub(crate) scroll_states: std::collections::HashMap<u32, [f32; 4]>,

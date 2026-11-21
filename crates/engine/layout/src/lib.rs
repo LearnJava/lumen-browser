@@ -1260,10 +1260,18 @@ fn collect_computed_styles_parts(
 /// positioned and `inline` otherwise — neither ever exposes the author's own
 /// `display`. `::before`/`::after` are ordinary boxes and report their
 /// cascaded `display` as-is.
-pub fn collect_pseudo_computed_styles(
-    root: &LayoutBox,
-) -> std::collections::HashMap<(u32, String), std::collections::HashMap<String, String>> {
-    let mut out = std::collections::HashMap::new();
+/// One published pseudo-element entry: the serialised property map, shared
+/// between every pseudo box whose cascaded style (and used-`display` flavour)
+/// serialises identically — icon-font `::before`s on heavy pages used to pay a
+/// full ~200-property `computed_style_to_map` per box per flush.
+pub type PseudoStyleMap = std::sync::Arc<std::collections::HashMap<String, String>>;
+
+/// `(node index, pseudo name)` → serialised pseudo style.
+pub type PseudoComputedStyles =
+    std::collections::HashMap<(u32, String), PseudoStyleMap>;
+
+pub fn collect_pseudo_computed_styles(root: &LayoutBox) -> PseudoComputedStyles {
+    let mut out = PseudoComputedStyles::new();
     collect_pseudo_computed_styles_rec(root, root.node, &mut out);
     out
 }
@@ -1311,20 +1319,66 @@ fn pseudo_used_display(kind: PseudoKind, style: &ComputedStyle) -> Option<&'stat
 /// values CSSOM reports for it — `display` is `inline` for an inside marker and a block
 /// container (`block`) for an outside one (CSS Lists L3 §3.1), `width`/`height` the marker
 /// box's resolved size.
-fn marker_style_map(b: &LayoutBox, position: ListStylePosition) -> std::collections::HashMap<String, String> {
+fn marker_style_map(b: &LayoutBox, position: ListStylePosition) -> PseudoStyleMap {
     let mut map = computed_style_to_map(&b.style);
     let display = if position == ListStylePosition::Outside { "block" } else { "inline" };
     map.insert("display".to_string(), display.to_string());
     map.insert("width".to_string(), selector_query::px_str(b.rect.width));
     map.insert("height".to_string(), selector_query::px_str(b.rect.height));
-    map
+    std::sync::Arc::new(map)
 }
 
-fn pseudo_style_map(style: &ComputedStyle, kind: PseudoKind) -> std::collections::HashMap<String, String> {
-    let mut map = computed_style_to_map(style);
-    if let Some(used_display) = pseudo_used_display(kind, style) {
-        map.insert("display".to_string(), used_display.to_string());
+/// `display`-override flavour of [`pseudo_used_display`]: the serialised map is
+/// shared per `(style, flavour)`, and the used display is the only kind-dependent
+/// entry — `0` keeps the cascaded value, `1`/`2` are the two fixed overrides.
+fn pseudo_display_flavour(kind: PseudoKind, style: &ComputedStyle) -> u8 {
+    match pseudo_used_display(kind, style) {
+        None => 0,
+        Some("inline") => 1,
+        Some("block") => 2,
+        _ => 0,
     }
+}
+
+fn pseudo_style_map(style: &std::sync::Arc<ComputedStyle>, kind: PseudoKind) -> PseudoStyleMap {
+    pseudo_serialized_map(style, pseudo_display_flavour(kind, style))
+}
+
+/// Serialised pseudo style shared per `(Arc<ComputedStyle>, display flavour)`.
+/// Same memo discipline as `style_map`'s `shared_base`: the stored `Arc` pins
+/// the style's address, `strong_count > 1` keeps only still-published styles.
+fn pseudo_serialized_map(
+    style: &std::sync::Arc<ComputedStyle>,
+    flavour: u8,
+) -> PseudoStyleMap {
+    use std::sync::{Mutex, OnceLock, PoisonError};
+    const CAP: usize = 8192;
+    type Memo = std::collections::HashMap<(usize, u8), (std::sync::Arc<ComputedStyle>, PseudoStyleMap)>;
+    static MEMO: OnceLock<Mutex<Memo>> = OnceLock::new();
+    let memo = MEMO.get_or_init(Mutex::default);
+    let key = (std::sync::Arc::as_ptr(style) as usize, flavour);
+    let mut m = memo.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((_, map)) = m.get(&key) {
+        return std::sync::Arc::clone(map);
+    }
+    if m.len() >= CAP {
+        m.retain(|_, (s, _)| std::sync::Arc::strong_count(s) > 1);
+        if m.len() >= CAP {
+            m.clear();
+        }
+    }
+    let mut map = computed_style_to_map(style);
+    match flavour {
+        1 => {
+            map.insert("display".to_string(), "inline".to_string());
+        }
+        2 => {
+            map.insert("display".to_string(), "block".to_string());
+        }
+        _ => {}
+    }
+    let map = std::sync::Arc::new(map);
+    m.insert(key, (std::sync::Arc::clone(style), std::sync::Arc::clone(&map)));
     map
 }
 
@@ -1347,7 +1401,7 @@ fn pseudo_style_map(style: &ComputedStyle, kind: PseudoKind) -> std::collections
 fn collect_pseudo_computed_styles_rec(
     root: &LayoutBox,
     root_owner: lumen_dom::NodeId,
-    out: &mut std::collections::HashMap<(u32, String), std::collections::HashMap<String, String>>,
+    out: &mut PseudoComputedStyles,
 ) {
     let mut stack: Vec<(&LayoutBox, lumen_dom::NodeId)> = vec![(root, root_owner)];
     while let Some((b, container_owner)) = stack.pop() {
@@ -1367,7 +1421,7 @@ pub(crate) fn collect_pseudo_computed_styles_box(
     b: &LayoutBox,
     container_owner: lumen_dom::NodeId,
     held: Option<&scoped_collect::PseudoMaps>,
-    out: &mut std::collections::HashMap<(u32, String), std::collections::HashMap<String, String>>,
+    out: &mut PseudoComputedStyles,
 ) {
     // `::marker` — the list item's marker box (`BoxKind::Marker`, not a `BoxRole::Pseudo`).
     if let box_tree::BoxKind::Marker { position, .. } = &b.kind {
@@ -1448,10 +1502,7 @@ const PSEUDO_NAMES: [&str; 15] = [
 
 /// Drops every pseudo-element entry owned by the node with `NodeId::index` `node`
 /// (BUG-935 срез 95: the scoped flush evicts the entries of what it rebuilds).
-pub fn forget_pseudo_computed_styles(
-    out: &mut std::collections::HashMap<(u32, String), std::collections::HashMap<String, String>>,
-    node: u32,
-) {
+pub fn forget_pseudo_computed_styles(out: &mut PseudoComputedStyles, node: u32) {
     if out.is_empty() {
         return;
     }

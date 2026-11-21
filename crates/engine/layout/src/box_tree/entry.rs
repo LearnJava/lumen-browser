@@ -200,12 +200,24 @@ pub fn layout_measured_hyp_with_counters(
     {
         let _prof = lumen_core::profile::scope("post_layout_passes");
         lumen_core::tracy_zone!("post_layout_passes");
-        apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);
-        apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode, &mut counters);
+        {
+            let _prof = lumen_core::profile::scope_detail("post.first_line");
+            apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);
+        }
+        {
+            let _prof = lumen_core::profile::scope_detail("post.container_styles");
+            apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode, &mut counters);
+        }
         // CSS Anchor Positioning L1: post-layout pass repositions anchored elements.
-        apply_anchor_positions(&mut root, doc, &mut counters, viewport);
+        {
+            let _prof = lumen_core::profile::scope_detail("post.anchor_positions");
+            apply_anchor_positions(&mut root, doc, &mut counters, viewport);
+        }
         // CSS Pseudo-elements L4 §3.1: split first formatted lines into own boxes (BB-1).
-        split_first_line_boxes(&mut root);
+        {
+            let _prof = lumen_core::profile::scope_detail("post.split_first_line");
+            split_first_line_boxes(&mut root);
+        }
     }
     #[cfg(debug_assertions)]
     crate::invariants::check_geometry(&root);

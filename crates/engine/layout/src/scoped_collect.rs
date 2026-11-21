@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 type StyleMaps = HashMap<u32, crate::StyleMap>;
 /// The published pseudo-element computed styles, keyed by `(owner node index, pseudo name)`.
-pub type PseudoMaps = HashMap<(u32, String), HashMap<String, String>>;
+pub type PseudoMaps = crate::PseudoComputedStyles;
 /// The published resolved custom properties, keyed by node index.
 pub type CustomPropMaps = HashMap<u32, Arc<HashMap<String, String>>>;
 

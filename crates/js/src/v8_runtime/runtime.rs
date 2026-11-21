@@ -21,7 +21,7 @@ pub type CustomPropertySnapshot = HashMap<u32, Arc<HashMap<String, String>>>;
 
 /// CSSOM-6 (BUG-490): computed CSS styles per `(node, pseudo-element name)` —
 /// see [`V8JsRuntime::pseudo_computed_styles`].
-pub type PseudoComputedStyles = HashMap<(u32, String), HashMap<String, String>>;
+pub type PseudoComputedStyles = lumen_layout::PseudoComputedStyles;
 
 /// V8-backed JS runtime implementing [`JsRuntime`].
 ///

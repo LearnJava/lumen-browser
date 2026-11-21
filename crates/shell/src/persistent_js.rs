@@ -13,7 +13,7 @@ use crate::*;
 /// local alias (rather than depending on `lumen_js::PseudoComputedStyles`) to
 /// keep this trait engine-agnostic, matching [`Self::update_custom_properties`]'s
 /// own inline `HashMap` param.
-type PseudoComputedStyles = HashMap<(u32, String), HashMap<String, String>>;
+type PseudoComputedStyles = lumen_layout::PseudoComputedStyles;
 
 /// LONGTASK-1 (W3C Long Tasks API §3.1): a UI-thread task running at least
 /// this long qualifies as a `longtask`/contributes to a `long-animation-frame`

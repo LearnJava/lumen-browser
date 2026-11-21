@@ -482,6 +482,15 @@ fn apply_first_line_pseudo_styles_inner(
     if !matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot) {
         return;
     }
+    // PERF: `::first-line` can only style a first *line box* — a block whose
+    // children hold no inline run / inline-block row has none, so the pseudo
+    // cascade probe below (a full selector match per block per flush) is pure
+    // waste on block-only subtrees, which dominate real pages.
+    if !b.children.iter().any(|c| {
+        matches!(c.kind, BoxKind::InlineRun { .. } | BoxKind::InlineBlockRow)
+    }) {
+        return;
+    }
     let Some(fl_style) = compute_pseudo_element_style(doc, b.node, "first-line", sheet, &b.style, viewport, dark_mode) else {
         return;
     };

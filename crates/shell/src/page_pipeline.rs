@@ -990,8 +990,7 @@ pub(crate) struct JsLayoutSnapshot {
     pub(crate) styles: std::collections::HashMap<u32, lumen_layout::StyleMap>,
     /// CSSOM-6 (BUG-490): `(node index, pseudo name) -> property -> serialized
     /// computed value` — backs `getComputedStyle(el, pseudoElt)`.
-    pub(crate) pseudo_styles:
-        std::collections::HashMap<(u32, String), std::collections::HashMap<String, String>>,
+    pub(crate) pseudo_styles: lumen_layout::PseudoComputedStyles,
     /// `node index -> custom property -> value`.
     pub(crate) customs:
         std::collections::HashMap<u32, Arc<std::collections::HashMap<String, String>>>,
