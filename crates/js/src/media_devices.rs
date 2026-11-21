@@ -235,6 +235,9 @@ const MEDIA_DEVICES_SHIM: &str = r#"(function() {
             'NotAllowedError'
           );
         }
+        // Media Capture §9.1: после grant'а enumerateDevices вправе отдавать
+        // реальные deviceId/label — фиксируем факт разрешения (BUG-1835).
+        window.__lumen_media_granted = true;
 
         // Get device info from the native handle.
         var info = {};
@@ -312,18 +315,40 @@ const MEDIA_DEVICES_SHIM: &str = r#"(function() {
     // W3C Media Capture §4.3.3 — enumerateDevices
     // Phase 1: returns real audio input devices when AudioCaptureProvider is installed.
     // Labels are populated after a getUserMedia grant (privacy-first, ADR-007 Layer 4).
+    // Без grant'а deviceId/groupId/label обязаны быть пустыми (§9.1), при этом
+    // Chrome всё равно перечисляет по одной записи на kind — отдаём те же
+    // три placeholder'а, что и headless Chrome (BUG-1835).
     enumerateDevices: function() {
+      if (window.__lumen_media_granted !== true) {
+        return Promise.resolve([
+          new MediaDeviceInfo('', '', 'audioinput', ''),
+          new MediaDeviceInfo('', '', 'videoinput', ''),
+          new MediaDeviceInfo('', '', 'audiooutput', '')
+        ]);
+      }
       if (typeof __lumen_enumerate_audio_devices === 'function') {
         try {
           var devs = JSON.parse(__lumen_enumerate_audio_devices());
           if (Array.isArray(devs)) {
-            return Promise.resolve(devs.map(function(d) {
+            var list = devs.map(function(d) {
               return new MediaDeviceInfo(d.device_id, d.group_id, d.kind, d.label);
-            }));
+            });
+            // Провайдер отдаёт только audioinput — video/audiooutput
+            // добиваем placeholder'ами, чтобы набор kind'ов совпадал с Chrome.
+            ['videoinput', 'audiooutput'].forEach(function(kind) {
+              if (!list.some(function(d) { return d.kind === kind; })) {
+                list.push(new MediaDeviceInfo('', '', kind, ''));
+              }
+            });
+            return Promise.resolve(list);
           }
         } catch(e) {}
       }
-      return Promise.resolve([]);
+      return Promise.resolve([
+        new MediaDeviceInfo('', '', 'audioinput', ''),
+        new MediaDeviceInfo('', '', 'videoinput', ''),
+        new MediaDeviceInfo('', '', 'audiooutput', '')
+      ]);
     },
 
     // Screen Capture API §4.1 — getDisplayMedia

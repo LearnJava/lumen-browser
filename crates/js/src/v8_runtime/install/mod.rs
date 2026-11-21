@@ -40,11 +40,11 @@ pub(super) use stylesheets::*;
 /// Регистрация натива под именем `$name` — та же синтаксическая форма площадки,
 /// что была у локального `reg!` внутри `install_dom`, плюс приставка контекста.
 ///
-/// Ветвей 16: арности 0–7 в двух формах возврата (`$body:expr` и
+/// Ветвей 18: арности 0–8 в двух формах возврата (`$body:expr` и
 /// `-> $R:ty $body:block`), с необязательным ведущим `move`.
 ///
 /// Имена в теле макроса разрешаются на ПЛОЩАДКЕ (`macro_rules!` не гигиеничен
-/// для путей), поэтому файл секций обязан видеть `into_v8_fn0`…`into_v8_fn7` и
+/// для путей), поэтому файл секций обязан видеть `into_v8_fn0`…`into_v8_fn8` и
 /// `register_v8_native` — их даёт `use super::super::*;`.
 macro_rules! reg {
     // arity 0
@@ -117,6 +117,15 @@ macro_rules! reg {
     }};
     ($sc:expr, $cx:expr, $st:expr, $name:expr, $(move)? |$a:ident: $A:ty, $b:ident: $B:ty, $c:ident: $C:ty, $d:ident: $D:ty, $e:ident: $E:ty, $g:ident: $G:ty, $h:ident: $H:ty| $body:expr) => {{
         let native = into_v8_fn7(move |$a: $A, $b: $B, $c: $C, $d: $D, $e: $E, $g: $G, $h: $H| { $body });
+        register_v8_native($sc, $cx, $st, $name, native)?;
+    }};
+    // arity 8
+    ($sc:expr, $cx:expr, $st:expr, $name:expr, $(move)? |$a:ident: $A:ty, $b:ident: $B:ty, $c:ident: $C:ty, $d:ident: $D:ty, $e:ident: $E:ty, $g:ident: $G:ty, $h:ident: $H:ty, $i:ident: $I:ty| -> $R:ty $body:block) => {{
+        let native = into_v8_fn8(move |$a: $A, $b: $B, $c: $C, $d: $D, $e: $E, $g: $G, $h: $H, $i: $I| -> $R { $body });
+        register_v8_native($sc, $cx, $st, $name, native)?;
+    }};
+    ($sc:expr, $cx:expr, $st:expr, $name:expr, $(move)? |$a:ident: $A:ty, $b:ident: $B:ty, $c:ident: $C:ty, $d:ident: $D:ty, $e:ident: $E:ty, $g:ident: $G:ty, $h:ident: $H:ty, $i:ident: $I:ty| $body:expr) => {{
+        let native = into_v8_fn8(move |$a: $A, $b: $B, $c: $C, $d: $D, $e: $E, $g: $G, $h: $H, $i: $I| { $body });
         register_v8_native($sc, $cx, $st, $name, native)?;
     }};
 }

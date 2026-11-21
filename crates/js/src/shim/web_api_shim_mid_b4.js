@@ -1817,6 +1817,13 @@ var _mqlPrefs = { dark: false, reducedMotion: false, forcedColors: false };
 function _mqlDpr() {
     return (typeof _lumen_get_zoom_factor === 'function') ? _lumen_get_zoom_factor() : 1;
 }
+// `device-width`/`device-height` media features меряют экран устройства,
+// а не viewport — Chrome отдаёт `screen.width`/`screen.height` в CSS px.
+function _mqlDeviceSize() {
+    var w = (typeof screen !== 'undefined' && screen.width)  ? screen.width  : 0;
+    var h = (typeof screen !== 'undefined' && screen.height) ? screen.height : 0;
+    return [w, h];
+}
 
 function MediaQueryListEvent(type, init) {
     Event.call(this, type, init || {});
@@ -1834,7 +1841,8 @@ function MediaQueryList(media) {
     // canonical serialization (whitespace collapsed, invalid clauses folded
     // into `not all`), not an echo of the constructor argument.
     this.media       = _lumen_serialize_media_query(raw);
-    this.matches     = !!_lumen_match_media(raw, vp[0], vp[1], _mqlPrefs.dark, _mqlPrefs.reducedMotion, _mqlPrefs.forcedColors, _mqlDpr());
+    var dv = _mqlDeviceSize();
+    this.matches     = !!_lumen_match_media(raw, vp[0], vp[1], _mqlPrefs.dark, _mqlPrefs.reducedMotion, _mqlPrefs.forcedColors, _mqlDpr(), dv);
     this.onchange    = null;
     this._listeners  = [];
 }
@@ -1899,7 +1907,8 @@ function _lumen_deliver_media_changes(w, h, dark, reducedMotion, forcedColors) {
     for (var i = 0; i < _mqlRegistry.length; i++) {
         var mql = _mqlRegistry[i];
         if (!mql) continue;
-        var newM = !!_lumen_match_media(mql.media, w, h, darkB, rmB, fcB, _mqlDpr());
+        var dv = _mqlDeviceSize();
+        var newM = !!_lumen_match_media(mql.media, w, h, darkB, rmB, fcB, _mqlDpr(), dv);
         if (mql.matches !== newM) mql._fire(newM);
     }
 }

@@ -121,8 +121,8 @@ pub use webgl::{ARRAY_BUFFER, COLOR_BUFFER_BIT, FRAGMENT_SHADER, TRIANGLES, VERT
 /// for good (BUG-348).
 #[cfg(feature = "v8-backend")]
 const WEBGL_SHIM: &str = r#"(function() {
-  var _vendor   = (typeof _LUMEN_GPU_VENDOR   !== 'undefined') ? _LUMEN_GPU_VENDOR   : 'WebKit';
-  var _renderer = (typeof _LUMEN_GPU_RENDERER !== 'undefined') ? _LUMEN_GPU_RENDERER : 'Generic GPU';
+  var _vendor   = (typeof _LUMEN_GPU_VENDOR   !== 'undefined') ? _LUMEN_GPU_VENDOR   : 'Google Inc. (Intel)';
+  var _renderer = (typeof _LUMEN_GPU_RENDERER !== 'undefined') ? _LUMEN_GPU_RENDERER : 'ANGLE (Intel, Intel(R) Iris(R) Plus Graphics (0x00008A52) Direct3D11 vs_5_0 ps_5_0, D3D11)';
 
   // Opaque GL object wrappers carry the backend handle in `__wid`.
   function _wrap(n) { return n ? { __wid: n } : null; }
@@ -193,6 +193,14 @@ const WEBGL_SHIM: &str = r#"(function() {
     VENDOR: 0x1F00, RENDERER: 0x1F01, VERSION: 0x1F02, SHADING_LANGUAGE_VERSION: 0x8B8C,
     MAX_TEXTURE_SIZE: 0x0D33, MAX_VIEWPORT_DIMS: 0x0D3A,
     MAX_VERTEX_ATTRIBS: 0x8869, MAX_COMBINED_TEXTURE_IMAGE_UNITS: 0x8B4D,
+    MAX_VERTEX_UNIFORM_VECTORS: 0x8DFB, MAX_VARYING_VECTORS: 0x8DFC,
+    MAX_FRAGMENT_UNIFORM_VECTORS: 0x8DFD, MAX_CUBE_MAP_TEXTURE_SIZE: 0x851C,
+    MAX_RENDERBUFFER_SIZE: 0x84E8, MAX_VERTEX_TEXTURE_IMAGE_UNITS: 0x8B4C,
+    MAX_TEXTURE_IMAGE_UNITS: 0x8872, MAX_SAMPLES: 0x8D57,
+    ALIASED_LINE_WIDTH_RANGE: 0x846E, ALIASED_POINT_SIZE_RANGE: 0x846D,
+    RED_BITS: 0x0D52, GREEN_BITS: 0x0D53, BLUE_BITS: 0x0D54,
+    ALPHA_BITS: 0x0D55, DEPTH_BITS: 0x0D56, STENCIL_BITS: 0x0D57,
+    SUBPIXEL_BITS: 0x0D50, SAMPLES: 0x80A9, SAMPLE_BUFFERS: 0x80A8,
     UNMASKED_VENDOR_WEBGL: 0x9245, UNMASKED_RENDERER_WEBGL: 0x9246
   };
   // WebGL 2.0 §3.1: pixel formats, buffer targets and query object enums
@@ -254,8 +262,13 @@ const WEBGL_SHIM: &str = r#"(function() {
     getError: function() { _glState(this); return 0; },
     getContextAttributes: function() {
       _glState(this);
-      return { alpha: true, antialias: false, depth: true, premultipliedAlpha: true,
-               preserveDrawingBuffer: false, stencil: false };
+      // WebGL spec defaults + Chrome's extended dictionary: antialias
+      // defaults to TRUE (Lumen wrongly reported false), plus the
+      // Chrome-only keys a fingerprint probe enumerates.
+      return { alpha: true, antialias: true, depth: true, stencil: false,
+               premultipliedAlpha: true, preserveDrawingBuffer: false,
+               powerPreference: 'default', failIfMajorPerformanceCaveat: false,
+               desynchronized: false, xrCompatible: false };
     },
 
     viewport: function(x, y, w, h) { _lumen_webgl_viewport(_glState(this).cid, x|0, y|0, w|0, h|0); },
@@ -392,20 +405,44 @@ const WEBGL_SHIM: &str = r#"(function() {
     },
 
     // ── Parameters (fingerprint-normalized, ADR-007 Layer 4) ──
+    // Chrome splits the pair: VENDOR/RENDERER are the masked WebKit strings,
+    // UNMASKED_* (behind WEBGL_debug_renderer_info) carry the real ANGLE
+    // adapter description. Returning the same value for both is a tell.
     getParameter: function(pname) {
       var st = _glState(this);
       switch (pname) {
-        case this.UNMASKED_VENDOR_WEBGL:
-        case this.VENDOR: return _vendor;
-        case this.UNMASKED_RENDERER_WEBGL:
-        case this.RENDERER: return _renderer;
+        case this.VENDOR: return 'WebKit';
+        case this.RENDERER: return 'WebKit WebGL';
+        case this.UNMASKED_VENDOR_WEBGL: return _vendor;
+        case this.UNMASKED_RENDERER_WEBGL: return _renderer;
         case this.VERSION: return st.isWebgl2 ? 'WebGL 2.0' : 'WebGL 1.0';
         case this.SHADING_LANGUAGE_VERSION:
           return st.isWebgl2 ? 'WebGL GLSL ES 3.00' : 'WebGL GLSL ES 1.0';
-        case this.MAX_TEXTURE_SIZE: return 4096;
-        case this.MAX_VIEWPORT_DIMS: return [4096, 4096];
+        // Limits reported by a stock Chrome/ANGLE D3D11 backend — the values
+        // anti-bot probes compare against a real desktop GPU profile.
+        case this.MAX_TEXTURE_SIZE: return 16384;
+        case this.MAX_CUBE_MAP_TEXTURE_SIZE: return 16384;
+        case this.MAX_RENDERBUFFER_SIZE: return 16384;
+        case this.MAX_VIEWPORT_DIMS: return [32767, 32767];
         case this.MAX_VERTEX_ATTRIBS: return 16;
-        case this.MAX_COMBINED_TEXTURE_IMAGE_UNITS: return 8;
+        case this.MAX_VERTEX_UNIFORM_VECTORS: return 4096;
+        case this.MAX_VARYING_VECTORS: return 30;
+        case this.MAX_FRAGMENT_UNIFORM_VECTORS: return 1024;
+        case this.MAX_COMBINED_TEXTURE_IMAGE_UNITS: return 32;
+        case this.MAX_VERTEX_TEXTURE_IMAGE_UNITS: return 16;
+        case this.MAX_TEXTURE_IMAGE_UNITS: return 16;
+        case this.MAX_SAMPLES: return 4;
+        case this.ALIASED_LINE_WIDTH_RANGE: return new Float32Array([1, 1]);
+        case this.ALIASED_POINT_SIZE_RANGE: return new Float32Array([1, 1024]);
+        case this.RED_BITS: return 8;
+        case this.GREEN_BITS: return 8;
+        case this.BLUE_BITS: return 8;
+        case this.ALPHA_BITS: return 8;
+        case this.DEPTH_BITS: return 24;
+        case this.STENCIL_BITS: return 0;
+        case this.SUBPIXEL_BITS: return 4;
+        case this.SAMPLES: return 0;
+        case this.SAMPLE_BUFFERS: return 0;
         default: return null;
       }
     },
@@ -417,11 +454,26 @@ const WEBGL_SHIM: &str = r#"(function() {
       if (name === 'WEBGL_lose_context') {
         return { loseContext: function() { _lumen_webgl_destroy(st.cid); }, restoreContext: function() {} };
       }
-      return null;
+      // ANGLE exposes the rest as inert handles; scripts feature-detect on
+      // presence, and a null here reads as "no extensions at all".
+      return { __lumen_gl_ext: name };
     },
     getSupportedExtensions: function() {
       _glState(this);
-      return ['WEBGL_debug_renderer_info', 'WEBGL_lose_context'];
+      return ['ANGLE_instanced_arrays', 'EXT_blend_minmax', 'EXT_color_buffer_half_float',
+        'EXT_disjoint_timer_query', 'EXT_float_blend', 'EXT_frag_depth',
+        'EXT_shader_texture_lod', 'EXT_texture_compression_bptc',
+        'EXT_texture_compression_rgtc', 'EXT_texture_filter_anisotropic', 'EXT_sRGB',
+        'KHR_parallel_shader_compile', 'OES_element_index_uint', 'OES_fbo_render_mipmap',
+        'OES_standard_derivatives', 'OES_texture_float', 'OES_texture_float_linear',
+        'OES_texture_half_float', 'OES_texture_half_float_linear',
+        'OES_vertex_array_object', 'WEBGL_color_buffer_float',
+        'WEBGL_compressed_texture_astc', 'WEBGL_compressed_texture_etc',
+        'WEBGL_compressed_texture_etc1', 'WEBGL_compressed_texture_pvrtc',
+        'WEBGL_compressed_texture_s3tc', 'WEBGL_compressed_texture_s3tc_srgb',
+        'WEBGL_debug_renderer_info', 'WEBGL_debug_shaders', 'WEBGL_depth_texture',
+        'WEBGL_draw_buffers', 'WEBGL_lose_context', 'WEBGL_multi_draw',
+        'WEBGL_polygon_mode'];
     },
 
     // ── Textures ──────────────────────────────────────────────────────────

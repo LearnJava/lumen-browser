@@ -22,7 +22,7 @@ use crate::dom::{
 use crate::heap_snapshot;
 use crate::v8_compat::{
     OwnedNativeFn, into_v8_fn0, into_v8_fn1, into_v8_fn2, into_v8_fn3, into_v8_fn4, into_v8_fn5,
-    into_v8_fn6, into_v8_fn7, register_v8_native,
+    into_v8_fn6, into_v8_fn7, into_v8_fn8, register_v8_native,
 };
 use lumen_core::ext::{AbortToken, JsSseEvent, JsWsEvent};
 use lumen_core::url::Url;
@@ -1138,10 +1138,7 @@ impl V8JsRuntime {
         // Ph3 V8 migration S8: canvas2d + webgl_canvas (hand-port, not part of the
         // simple-module S5-S7 batch, but same best-effort orchestration). Mirrors
         // lib.rs::install_dom's ordering (webgl before canvas2d).
-        let fingerprint = lumen_paint::GpuFingerprint {
-            vendor: "WebKit".to_string(),
-            renderer: "Generic GPU".to_string(),
-        };
+        let fingerprint = lumen_paint::GpuFingerprint::normalized();
         if let Err(e) = crate::webgl_canvas::install_webgl_canvas_v8(self, &fingerprint) {
             eprintln!("v8: webgl_canvas::install_webgl_canvas_v8 failed: {e}");
         }
@@ -1176,8 +1173,6 @@ impl V8JsRuntime {
         install_v8!(broadcast_channel::install_broadcast_channel_bindings_v8);
         install_v8!(close_watcher::install_close_watcher_v8);
         install_v8!(compute_pressure::install_compute_pressure_bindings_v8);
-        install_v8!(contacts::install_contacts_manager_v8);
-        install_v8!(content_index::install_content_index_api_v8);
         // Default: enabled (mirrors lib.rs::install_dom's `self.cookie_banner_dismiss`
         // AtomicBool read; extra-arg call since the flag lives on `self`, not `&ctx`).
         let cb_enabled = self.cookie_banner_dismiss.load(Ordering::Relaxed);
@@ -1301,8 +1296,6 @@ impl V8JsRuntime {
         install_v8!(screen_orientation::install_screen_orientation_bindings_v8);
         install_v8!(scroll_snap_events::install_scroll_snap_events_bindings_v8);
         install_v8!(scroll_timeline::install_scroll_timeline_bindings_v8);
-        install_v8!(shape_detection::install_shape_detection_bindings_v8);
-        install_v8!(shared_storage::install_shared_storage_v8);
         install_v8!(soft_navigation::install_soft_navigation_api_v8);
         install_v8!(speculation_rules::install_speculation_rules_api_v8);
         install_v8!(speech::install_speech_bindings_v8);
@@ -1368,7 +1361,6 @@ impl V8JsRuntime {
             eprintln!("v8: webtransport::install_webtransport_v8 failed: {e}");
         }
         install_v8!(webxr::install_webxr_bindings_v8);
-        install_v8!(window_management::install_window_management_api_v8);
         install_v8!(xhr::install_xhr_bindings_v8);
         // GAP-XPATH (BUG-891): must run after DOM install so `Document.prototype`,
         // `Node.prototype.lookupNamespaceURI`/`compareDocumentPosition` and

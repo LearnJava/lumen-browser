@@ -389,7 +389,7 @@ pub(crate) fn resolve_import_url(
             .get(key)
             .map(|e| String::from_utf8_lossy(&e.bytes).into_owned())
     } else {
-        fetch_worker_script(fetch_provider, url).map(|(body, _final_url)| body)
+        fetch_worker_script(fetch_provider, url, "worker").map(|(body, _final_url)| body)
     }
 }
 
@@ -749,7 +749,7 @@ fn install_worker_constructor_v8(
                     *lcb.lock().unwrap() = Some((blocked_uri, original_policy));
                     return None;
                 }
-                let (body, final_url) = fetch_worker_script(fp.as_deref(), &url)?;
+                let (body, final_url) = fetch_worker_script(fp.as_deref(), &url, "worker")?;
                 *lfu.lock().unwrap() = Some(final_url);
                 Some(body)
             }),
@@ -863,8 +863,24 @@ pub(crate) fn import_scripts_csp_blocked(
 pub(crate) fn fetch_worker_script(
     provider: Option<&dyn lumen_core::ext::JsFetchProvider>,
     url: &str,
+    destination: &str,
 ) -> Option<(String, String)> {
-    let resp = provider?.fetch_sync(url, "GET").ok()?;
+    // Chrome marks a worker script fetch `Sec-Fetch-Dest: worker|sharedworker`
+    // and `Sec-Fetch-Mode: same-origin` — the legacy `fetch_sync` path has no
+    // fields for either, so this goes through `fetch_request` (its default
+    // impl degrades to `fetch_sync` for test doubles that do not care).
+    let resp = provider?
+        .fetch_request(&lumen_core::ext::JsFetchRequest {
+            url,
+            method: "GET",
+            headers: &[],
+            body: None,
+            mode: "same-origin",
+            destination,
+            cache: "",
+            token: None,
+        })
+        .ok()?;
     if !(200..300).contains(&resp.status) {
         return None;
     }

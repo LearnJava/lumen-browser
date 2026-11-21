@@ -118,7 +118,10 @@ pub fn compute_referrer(policy: ReferrerPolicy, referrer_url: &Url, target_url: 
             .is_some_and(Origin::is_potentially_trustworthy);
 
     let full = || format!("{}{}", referrer_origin.serialize(), referrer_url.path_and_query());
-    let origin_only = || referrer_origin.serialize();
+    // Referer is a serialized URL, not an `Origin` header value: the
+    // origin-only form Chrome emits is `https://example.com/` — trailing
+    // slash included (measured on httpbin.org both same- and cross-origin).
+    let origin_only = || format!("{}/", referrer_origin.serialize());
 
     let result = match policy {
         ReferrerPolicy::NoReferrer => unreachable!("handled above"),
@@ -196,7 +199,7 @@ mod tests {
             &url("https://example.com/page"),
             &url("https://other.example/api"),
         );
-        assert_eq!(r.as_deref(), Some("https://example.com"));
+        assert_eq!(r.as_deref(), Some("https://example.com/"));
     }
 
     #[test]
@@ -259,7 +262,7 @@ mod tests {
             &url(&format!("https://example.com{long_path}")),
             &url("https://example.com/api"),
         );
-        assert_eq!(r.as_deref(), Some("https://example.com"));
+        assert_eq!(r.as_deref(), Some("https://example.com/"));
     }
 
     #[test]

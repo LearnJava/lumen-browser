@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "revision": 1,
+  "revision": 2,
   "entries": [
     {
       "id": "fiverr-com-identity-unbranded",
@@ -10,6 +10,16 @@
       "action": { "kind": "identity", "profile": "chrome_unbranded" },
       "bug": "BUG-1832",
       "review_by": "2027-02-19",
+      "tests": ["crates/update-manifest/src/compat_pack/tests.rs"]
+    },
+    {
+      "id": "ozon-ru-identity-unbranded",
+      "root_cause": "gate-antibot-ua-token",
+      "matches": ["ozon.ru"],
+      "site_class": "general",
+      "action": { "kind": "identity", "profile": "chrome_unbranded" },
+      "bug": "BUG-1835",
+      "review_by": "2027-02-20",
       "tests": ["crates/update-manifest/src/compat_pack/tests.rs"]
     }
   ]

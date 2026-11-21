@@ -180,6 +180,62 @@ pub enum MediaFeature {
     OverflowInline(MediaOverflowInline),
     /// `(overflow-block: none | scroll | paged)` (Media Queries L4 §6.3).
     OverflowBlock(MediaOverflowBlock),
+    /// `(color-gamut: srgb | p3 | rec2020)` — цветовой охват устройства
+    /// вывода (Media Queries L5 §6.7).
+    ColorGamut(MediaColorGamut),
+    /// `(min-color-gamut: …)` — охват не уже указанного.
+    MinColorGamut(MediaColorGamut),
+    /// `(max-color-gamut: …)` — охват не шире указанного.
+    MaxColorGamut(MediaColorGamut),
+    /// `(monochrome: <number>)` — битовая глубина монохромного канала;
+    /// 0 на любом цветном дисплее (Media Queries L4 §6.4).
+    Monochrome(f32),
+    /// `(min-monochrome: <number>)`.
+    MinMonochrome(f32),
+    /// `(max-monochrome: <number>)`.
+    MaxMonochrome(f32),
+    // Device dimensions (Media Queries L4 §5.1) — размер экрана устройства
+    // в CSS px; на desktop-мониторе ≠ viewport (`width`/`height`).
+    /// `(device-width: <length>)`.
+    DeviceWidth(f32),
+    /// `(min-device-width: <length>)`.
+    MinDeviceWidth(f32),
+    /// `(max-device-width: <length>)`.
+    MaxDeviceWidth(f32),
+    /// `(device-height: <length>)`.
+    DeviceHeight(f32),
+    /// `(min-device-height: <length>)`.
+    MinDeviceHeight(f32),
+    /// `(max-device-height: <length>)`.
+    MaxDeviceHeight(f32),
+    // Color capabilities (Media Queries L4 §6.4-6.6).
+    /// `(color: <number>)` — бит на цветовой компонент (8 при 24bpp).
+    ColorDepth(f32),
+    /// `(min-color: <number>)`.
+    MinColorDepth(f32),
+    /// `(max-color: <number>)`.
+    MaxColorDepth(f32),
+    /// `(color-index: <number>)` — индексированных цветов; 0 на
+    /// true-color дисплеях.
+    ColorIndex(f32),
+    /// `(min-color-index: <number>)`.
+    MinColorIndex(f32),
+    /// `(max-color-index: <number>)`.
+    MaxColorIndex(f32),
+    /// `(grid: <number>)` — 1 для кадровых дисплеев, 0 для растровых.
+    Grid(f32),
+    /// `(min-grid: <number>)`.
+    MinGrid(f32),
+    /// `(max-grid: <number>)`.
+    MaxGrid(f32),
+    // `device-pixel-ratio` — не-префиксный alias `resolution` (dppx),
+    // Chrome поддерживает его наравне с `-webkit-device-pixel-ratio`.
+    /// `(device-pixel-ratio: <number>)`.
+    DevicePixelRatio(f32),
+    /// `(min-device-pixel-ratio: <number>)`.
+    MinDevicePixelRatio(f32),
+    /// `(max-device-pixel-ratio: <number>)`.
+    MaxDevicePixelRatio(f32),
     /// Boolean-context form (bare `(feature)`, no `: value`) of a discrete
     /// feature whose value form is one of the arms above. See
     /// [`BooleanFeature`] — kept as its own small enum rather than one
@@ -187,6 +243,33 @@ pub enum MediaFeature {
     /// answer from `MediaContext` directly instead of carrying a parsed
     /// value literal.
     BooleanContext(BooleanFeature),
+}
+
+/// Media Queries L5 §6.7 — `color-gamut`: цветовой охват устройства вывода.
+/// Варианты упорядочены по ширине охвата — `min-`/`max-` формы сравнивают
+/// через `PartialOrd`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MediaColorGamut {
+    Srgb,
+    P3,
+    Rec2020,
+}
+
+fn color_gamut_str(g: MediaColorGamut) -> &'static str {
+    match g {
+        MediaColorGamut::Srgb => "srgb",
+        MediaColorGamut::P3 => "p3",
+        MediaColorGamut::Rec2020 => "rec2020",
+    }
+}
+
+fn parse_color_gamut(val: &str) -> Option<MediaColorGamut> {
+    Some(match val.to_ascii_lowercase().as_str() {
+        "srgb" => MediaColorGamut::Srgb,
+        "p3" => MediaColorGamut::P3,
+        "rec2020" => MediaColorGamut::Rec2020,
+        _ => return None,
+    })
 }
 
 /// Which already-implemented discrete feature a bare `(feature)` boolean
@@ -223,6 +306,12 @@ pub enum BooleanFeature {
     OverflowBlock,
     WebkitDevicePixelRatio,
     WebkitTransform3d,
+    // Range-фичи в boolean-context («значение не ноль», CSS Values L4).
+    DeviceWidth,
+    DeviceHeight,
+    ColorIndex,
+    Grid,
+    DevicePixelRatio,
 }
 
 impl BooleanFeature {
@@ -255,6 +344,11 @@ impl BooleanFeature {
             Self::OverflowBlock => ctx.overflow_block != MediaOverflowBlock::None,
             Self::WebkitDevicePixelRatio => ctx.resolution_dppx != 0.0,
             Self::WebkitTransform3d => true,
+            Self::DeviceWidth => ctx.device_width != 0.0,
+            Self::DeviceHeight => ctx.device_height != 0.0,
+            Self::ColorIndex => ctx.color_index != 0.0,
+            Self::Grid => ctx.grid != 0.0,
+            Self::DevicePixelRatio => ctx.resolution_dppx != 0.0,
         }
     }
 
@@ -284,6 +378,11 @@ impl BooleanFeature {
             Self::OverflowBlock => "overflow-block",
             Self::WebkitDevicePixelRatio => "-webkit-device-pixel-ratio",
             Self::WebkitTransform3d => "-webkit-transform-3d",
+            Self::DeviceWidth => "device-width",
+            Self::DeviceHeight => "device-height",
+            Self::ColorIndex => "color-index",
+            Self::Grid => "grid",
+            Self::DevicePixelRatio => "device-pixel-ratio",
         }
     }
 
@@ -317,6 +416,11 @@ impl BooleanFeature {
             "overflow-block" => Self::OverflowBlock,
             "-webkit-device-pixel-ratio" => Self::WebkitDevicePixelRatio,
             "-webkit-transform-3d" => Self::WebkitTransform3d,
+            "device-width" => Self::DeviceWidth,
+            "device-height" => Self::DeviceHeight,
+            "color-index" => Self::ColorIndex,
+            "grid" => Self::Grid,
+            "device-pixel-ratio" => Self::DevicePixelRatio,
             _ => return None,
         })
     }
@@ -579,6 +683,27 @@ pub struct MediaContext {
     pub overflow_inline: MediaOverflowInline,
     /// Обработка переполнения вдоль block-оси (`overflow-block`).
     pub overflow_block: MediaOverflowBlock,
+    /// Цветовой охват устройства вывода (`color-gamut` media feature).
+    /// Lumen композитит в sRGB — desktop-дефолт `Srgb`, как у Chrome на
+    /// обычном sRGB-мониторе.
+    pub color_gamut: MediaColorGamut,
+    /// Битовая глубина монохромного канала (`monochrome` media feature);
+    /// 0 на любом цветном дисплее — desktop-дефолт Lumen.
+    pub monochrome: f32,
+    /// Ширина экрана устройства в CSS px (`device-width` media feature).
+    /// 0 = неизвестно (контексты без данных о дисплее); `matchMedia`
+    /// заполняет реальным `screen.width`.
+    pub device_width: f32,
+    /// Высота экрана устройства в CSS px (`device-height` media feature).
+    pub device_height: f32,
+    /// Бит на цветовой компонент (`color` media feature); 8 при 24bpp —
+    /// дефолт Lumen.
+    pub color_depth_bits: f32,
+    /// Число индексированных цветов (`color-index` media feature); 0 на
+    /// true-color дисплеях.
+    pub color_index: f32,
+    /// Признак кадрового дисплея (`grid` media feature); 0 на растровых.
+    pub grid: f32,
 }
 
 impl Default for MediaContext {
@@ -615,6 +740,13 @@ impl Default for MediaContext {
             navigation_controls: MediaNavigationControls::BackButton,
             overflow_inline: MediaOverflowInline::Scroll,
             overflow_block: MediaOverflowBlock::Scroll,
+            color_gamut: MediaColorGamut::Srgb,
+            monochrome: 0.0,
+            device_width: 0.0,
+            device_height: 0.0,
+            color_depth_bits: 8.0,
+            color_index: 0.0,
+            grid: 0.0,
         }
     }
 }
@@ -727,6 +859,30 @@ impl MediaFeature {
             Self::NavigationControls(n) => ctx.navigation_controls == *n,
             Self::OverflowInline(o) => ctx.overflow_inline == *o,
             Self::OverflowBlock(o) => ctx.overflow_block == *o,
+            Self::ColorGamut(g) => ctx.color_gamut == *g,
+            Self::MinColorGamut(g) => ctx.color_gamut >= *g,
+            Self::MaxColorGamut(g) => ctx.color_gamut <= *g,
+            Self::Monochrome(v) => (ctx.monochrome - v).abs() < 0.001,
+            Self::MinMonochrome(v) => ctx.monochrome >= *v,
+            Self::MaxMonochrome(v) => ctx.monochrome <= *v,
+            Self::DeviceWidth(px) => (ctx.device_width - px).abs() < 0.5,
+            Self::MinDeviceWidth(px) => ctx.device_width >= *px,
+            Self::MaxDeviceWidth(px) => ctx.device_width <= *px,
+            Self::DeviceHeight(px) => (ctx.device_height - px).abs() < 0.5,
+            Self::MinDeviceHeight(px) => ctx.device_height >= *px,
+            Self::MaxDeviceHeight(px) => ctx.device_height <= *px,
+            Self::ColorDepth(v) => (ctx.color_depth_bits - v).abs() < 0.001,
+            Self::MinColorDepth(v) => ctx.color_depth_bits >= *v,
+            Self::MaxColorDepth(v) => ctx.color_depth_bits <= *v,
+            Self::ColorIndex(v) => (ctx.color_index - v).abs() < 0.001,
+            Self::MinColorIndex(v) => ctx.color_index >= *v,
+            Self::MaxColorIndex(v) => ctx.color_index <= *v,
+            Self::Grid(v) => (ctx.grid - v).abs() < 0.001,
+            Self::MinGrid(v) => ctx.grid >= *v,
+            Self::MaxGrid(v) => ctx.grid <= *v,
+            Self::DevicePixelRatio(n) => (ctx.resolution_dppx - n).abs() < 0.001,
+            Self::MinDevicePixelRatio(n) => ctx.resolution_dppx >= *n,
+            Self::MaxDevicePixelRatio(n) => ctx.resolution_dppx <= *n,
             Self::BooleanContext(b) => b.matches(ctx),
         }
     }
@@ -928,6 +1084,30 @@ impl MediaFeature {
                     MediaOverflowBlock::Paged => "paged",
                 }
             ),
+            Self::ColorGamut(g) => format!("color-gamut: {}", color_gamut_str(*g)),
+            Self::MinColorGamut(g) => format!("min-color-gamut: {}", color_gamut_str(*g)),
+            Self::MaxColorGamut(g) => format!("max-color-gamut: {}", color_gamut_str(*g)),
+            Self::Monochrome(v) => format!("monochrome: {v}"),
+            Self::MinMonochrome(v) => format!("min-monochrome: {v}"),
+            Self::MaxMonochrome(v) => format!("max-monochrome: {v}"),
+            Self::DeviceWidth(px) => format!("device-width: {px}px"),
+            Self::MinDeviceWidth(px) => format!("min-device-width: {px}px"),
+            Self::MaxDeviceWidth(px) => format!("max-device-width: {px}px"),
+            Self::DeviceHeight(px) => format!("device-height: {px}px"),
+            Self::MinDeviceHeight(px) => format!("min-device-height: {px}px"),
+            Self::MaxDeviceHeight(px) => format!("max-device-height: {px}px"),
+            Self::ColorDepth(v) => format!("color: {v}"),
+            Self::MinColorDepth(v) => format!("min-color: {v}"),
+            Self::MaxColorDepth(v) => format!("max-color: {v}"),
+            Self::ColorIndex(v) => format!("color-index: {v}"),
+            Self::MinColorIndex(v) => format!("min-color-index: {v}"),
+            Self::MaxColorIndex(v) => format!("max-color-index: {v}"),
+            Self::Grid(v) => format!("grid: {v}"),
+            Self::MinGrid(v) => format!("min-grid: {v}"),
+            Self::MaxGrid(v) => format!("max-grid: {v}"),
+            Self::DevicePixelRatio(n) => format!("device-pixel-ratio: {n}"),
+            Self::MinDevicePixelRatio(n) => format!("min-device-pixel-ratio: {n}"),
+            Self::MaxDevicePixelRatio(n) => format!("max-device-pixel-ratio: {n}"),
             // Boolean context — bare feature name, no `: value` (same shape
             // as `Self::Color` above).
             Self::BooleanContext(b) => b.feature_name().to_string(),
@@ -1292,6 +1472,9 @@ pub(crate) fn parse_media_feature(s: &str) -> MediaCondition {
         let bare = s.trim().to_ascii_lowercase();
         return match bare.as_str() {
             "color" => MediaCondition::Feature(MediaFeature::Color),
+            // Boolean-context форма range-фичи — «значение не ноль»
+            // (CSS Values L4): на цветном дисплее monochrome=0 → false.
+            "monochrome" => MediaCondition::Feature(MediaFeature::MinMonochrome(1.0)),
             _ => match BooleanFeature::from_name(&bare) {
                 Some(b) => MediaCondition::Feature(MediaFeature::BooleanContext(b)),
                 None => MediaCondition::Unsupported,
@@ -1486,6 +1669,83 @@ pub(crate) fn parse_media_feature(s: &str) -> MediaCondition {
             "paged" => MediaCondition::Feature(MediaFeature::OverflowBlock(MediaOverflowBlock::Paged)),
             _ => MediaCondition::Unsupported,
         },
+        "color-gamut" | "min-color-gamut" | "max-color-gamut" => {
+            let Some(g) = parse_color_gamut(val) else {
+                return MediaCondition::Unsupported;
+            };
+            MediaCondition::Feature(match key.as_str() {
+                "color-gamut" => MediaFeature::ColorGamut(g),
+                "min-color-gamut" => MediaFeature::MinColorGamut(g),
+                _ => MediaFeature::MaxColorGamut(g),
+            })
+        }
+        "monochrome" | "min-monochrome" | "max-monochrome" => {
+            // Chrome принимает неотрицательный `<number>` (битовая глубина).
+            let Some(n) = val.parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 0.0) else {
+                return MediaCondition::Unsupported;
+            };
+            MediaCondition::Feature(match key.as_str() {
+                "monochrome" => MediaFeature::Monochrome(n),
+                "min-monochrome" => MediaFeature::MinMonochrome(n),
+                _ => MediaFeature::MaxMonochrome(n),
+            })
+        }
+        "device-width" | "min-device-width" | "max-device-width"
+        | "device-height" | "min-device-height" | "max-device-height" => {
+            let Some(px) = parse_media_length_px(val) else {
+                return MediaCondition::Unsupported;
+            };
+            MediaCondition::Feature(match key.as_str() {
+                "device-width" => MediaFeature::DeviceWidth(px),
+                "min-device-width" => MediaFeature::MinDeviceWidth(px),
+                "max-device-width" => MediaFeature::MaxDeviceWidth(px),
+                "device-height" => MediaFeature::DeviceHeight(px),
+                "min-device-height" => MediaFeature::MinDeviceHeight(px),
+                _ => MediaFeature::MaxDeviceHeight(px),
+            })
+        }
+        "color" | "min-color" | "max-color" => {
+            // `<number>` бит на компонент; `color` без min/max — точное.
+            let Some(n) = val.parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 0.0) else {
+                return MediaCondition::Unsupported;
+            };
+            MediaCondition::Feature(match key.as_str() {
+                "color" => MediaFeature::ColorDepth(n),
+                "min-color" => MediaFeature::MinColorDepth(n),
+                _ => MediaFeature::MaxColorDepth(n),
+            })
+        }
+        "color-index" | "min-color-index" | "max-color-index" => {
+            let Some(n) = val.parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 0.0) else {
+                return MediaCondition::Unsupported;
+            };
+            MediaCondition::Feature(match key.as_str() {
+                "color-index" => MediaFeature::ColorIndex(n),
+                "min-color-index" => MediaFeature::MinColorIndex(n),
+                _ => MediaFeature::MaxColorIndex(n),
+            })
+        }
+        "grid" | "min-grid" | "max-grid" => {
+            let Some(n) = val.parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 0.0) else {
+                return MediaCondition::Unsupported;
+            };
+            MediaCondition::Feature(match key.as_str() {
+                "grid" => MediaFeature::Grid(n),
+                "min-grid" => MediaFeature::MinGrid(n),
+                _ => MediaFeature::MaxGrid(n),
+            })
+        }
+        "device-pixel-ratio" | "min-device-pixel-ratio" | "max-device-pixel-ratio" => {
+            // Chrome: неотрицательный `<number>` (dppx), как у -webkit- формы.
+            let Some(n) = val.parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 0.0) else {
+                return MediaCondition::Unsupported;
+            };
+            MediaCondition::Feature(match key.as_str() {
+                "device-pixel-ratio" => MediaFeature::DevicePixelRatio(n),
+                "min-device-pixel-ratio" => MediaFeature::MinDevicePixelRatio(n),
+                _ => MediaFeature::MaxDevicePixelRatio(n),
+            })
+        }
         _ => MediaCondition::Unsupported,
     }
 }

@@ -806,7 +806,8 @@ pub(crate) fn install_shared_worker_bindings_v8(
                     *lcb.lock().unwrap() = Some((blocked_uri, original_policy));
                     return None;
                 }
-                let (body, final_url) = crate::worker::fetch_worker_script(fp.as_deref(), &url)?;
+                let (body, final_url) =
+                    crate::worker::fetch_worker_script(fp.as_deref(), &url, "sharedworker")?;
                 *lfu.lock().unwrap() = Some(final_url);
                 Some(body)
             }),
