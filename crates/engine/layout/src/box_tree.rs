@@ -135,6 +135,14 @@ thread_local! {
     static INCREMENTAL_LAYOUT_MODE: Cell<bool> = const { Cell::new(false) };
 }
 
+/// Whether the deferred-clear incremental window is open — dirty bits are
+/// meaningful only inside it (post-`lay_out_incremental_begin`, pre-`_finish`).
+/// `apply_container_styles` uses this to tell "clean because reused" from
+/// "clean because the tree is fresh" (fresh boxes default to `CLEAN`).
+pub(crate) fn incremental_layout_mode() -> bool {
+    INCREMENTAL_LAYOUT_MODE.with(|m| m.get())
+}
+
 thread_local! {
     /// BUG-341 S4 — master on/off switch for incremental box-build
     /// (`build_box_or_reuse`'s whole-subtree clone path), mirroring

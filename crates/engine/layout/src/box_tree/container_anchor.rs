@@ -205,6 +205,7 @@ fn apply_container_inner(
             set_cq_axes(axes.0, axes.1);
             // Re-apply container rules to all direct + indirect descendants.
             let _p = lumen_core::profile::scope_detail("cq.restype");
+            let mut any_changed = false;
             if let Some(sweep) = sweep {
                 sweep.run(b, Some(Arc::clone(&ctx)), content_h_val, boxless, pending);
                 // The sweep restyles without a per-node change probe: inside the
@@ -218,6 +219,7 @@ fn apply_container_inner(
                 for child in &mut b.children {
                     let mut changed = false;
                     re_style_subtree(child, doc, sheet, &ctx, viewport, dark_mode, shadowed, &mut seen, axes, &mut changed, boxed_prev, boxed_new);
+                    any_changed |= changed;
                     // A change anywhere in the child's subtree must reach
                     // geometry: mark the whole child subtree dirty so `lay_out`
                     // re-lays it for real instead of translate-skipping the
@@ -262,12 +264,39 @@ fn apply_container_inner(
             // changed axis set forces real re-layout even when every restyled
             // value compared equal to last pass.
             let sig = (content_w, content_h_val);
-            if counters.styles().cq_geom().get(&b.node).is_none_or(|prev| *prev != sig) {
+            let geom_same = counters.styles().cq_geom().get(&b.node).is_some_and(|prev| *prev == sig);
+            if !geom_same {
                 for child in &mut b.children {
                     crate::incremental::mark_subtree_dirty(child);
                 }
             }
             geom_new.insert(b.node, sig);
+            // CQ-INCR-SKIP: inside the deferred-clear incremental window a
+            // CLEAN bit means "reused, not touched this pass". When the
+            // container itself and every child are clean, no @container rule
+            // changed anything (`any_changed`), there is no `style()` sweep
+            // and the cq axes are unchanged, each descendant's geometry still
+            // holds last pass's cq-resolved result — the main `lay_out`
+            // already translated it into place. Re-running `lay_out` per child
+            // would be a pure O(subtree) no-op (on habr: hundreds of
+            // containers × their subtrees on every flush). Outside the
+            // incremental window (full/metrics passes) dirty bits are
+            // meaningless — fresh boxes default to CLEAN — so the gate
+            // requires the mode to be on.
+            if geom_same
+                && !any_changed
+                && sweep.is_none()
+                && super::incremental_layout_mode()
+                && b.dirty.is_clean()
+                && b.children.iter().all(|c| c.dirty.is_clean())
+            {
+                clear_cq_context();
+                drop(_p);
+                for child in &mut b.children {
+                    stack.push((child, child_pcb, content_h_val, Some(Arc::clone(&ctx)), size_h));
+                }
+                continue;
+            }
             let mut child_y = content_y;
             for child in &mut b.children {
                 if matches!(child.style.position, Position::Absolute | Position::Fixed) {
