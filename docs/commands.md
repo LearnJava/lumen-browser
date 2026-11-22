@@ -89,6 +89,15 @@ python tests/wpt/run_diff.py docs/wpt/runs/A.json docs/wpt/runs/B.json --prefix 
 # before/after numbers — docs/wpt/pass-rate.md §«Память полного прогона».
 python tests/wpt/run_corpus.py --all --parallel-shards 3 --processes auto --shared-queue \
     --batch-small 150 --max-browser-gb 4 --min-free-gb 6 --kill-free-gb 2
+
+# Green regression suite (~26k ids, ~2-3 h): only ids that scored 1.0 in the last
+# verification run — tests/wpt/green_ids.txt. Denominator is exactly the file, not
+# the corpus; this is a regression gate, not a pass-rate headline. Recipe and
+# regeneration rules — docs/wpt/pass-rate.md §«Зелёный регрессионный набор».
+python tests/wpt/run_corpus.py --only-ids tests/wpt/green_ids.txt \
+    --parallel-shards 2 --processes 3 --batch-small 150 --shared-queue \
+    --max-browser-gb 3 --min-free-gb 2 --kill-free-gb 1.5 \
+    --run-json docs/wpt/runs/<date>-green.json
 ```
 
 ---

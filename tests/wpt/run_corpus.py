@@ -201,17 +201,37 @@ def _under(test_id: str, prefix: str) -> bool:
     return path == prefix or path.startswith((prefix + "/", prefix + "?"))
 
 
-def id_selected(test_id: str, prefixes: list, exclude_prefixes: list) -> bool:
-    """The `--prefixes` / `--exclude-prefixes` filter: no `prefixes` means
-    everything; an exclusion always wins over an inclusion."""
+def id_selected(test_id: str, prefixes: list, exclude_prefixes: list,
+                only: set = None) -> bool:
+    """The `--prefixes` / `--exclude-prefixes` / `--only-ids` filters: no
+    `prefixes` means everything; an exclusion always wins over an inclusion;
+    `only` (an exact id set from `--only-ids`) is the base set everything else
+    narrows further."""
+    if only is not None and test_id not in only:
+        return False
     if exclude_prefixes and any(_under(test_id, p) for p in exclude_prefixes):
         return False
     return not prefixes or any(_under(test_id, p) for p in prefixes)
 
 
+def load_only_ids(path: str) -> set:
+    """`--only-ids FILE`: one manifest test id per line, `/`-prefixed, `?variant`
+    counts as its own id. The file *is* the selection — an exact set rather
+    than a path prefix, for suites (the all-green regression set) whose members
+    share no directory. Blank lines and `#` comments are ignored."""
+    ids = set()
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            ids.add(line if line.startswith("/") else "/" + line)
+    return ids
+
+
 def plan_shards(manifest: dict, categories: list, prefixes: list = None,
                 exclude_prefixes: list = None, heavy: dict = None,
-                serial: dict = None) -> list:
+                serial: dict = None, only: set = None) -> list:
     """Split the selected categories into runnable shards.
 
     `prefixes` / `exclude_prefixes` (WPT-RUN-14) narrow the plan to a part of a
@@ -267,7 +287,7 @@ def plan_shards(manifest: dict, categories: list, prefixes: list = None,
 
     shards = []
     dropped = 0
-    filtered = bool(prefixes or exclude_prefixes)
+    filtered = bool(prefixes or exclude_prefixes or only is not None)
     for category in categories:
         ids = by_category.get(category)
         if not ids:
@@ -275,7 +295,8 @@ def plan_shards(manifest: dict, categories: list, prefixes: list = None,
             continue
         planned = _split([category], ids, automatable, long_tests)
         if filtered:
-            selected = {i for i in ids if id_selected(i, prefixes or [], exclude_prefixes or [])}
+            selected = {i for i in ids
+                        if id_selected(i, prefixes or [], exclude_prefixes or [], only)}
             planned = [piece for shard in planned
                        for piece in _narrow(shard, ids, selected, automatable, long_tests)]
         for shard in planned:
@@ -297,7 +318,7 @@ def plan_shards(manifest: dict, categories: list, prefixes: list = None,
             if flag == "heavy":
                 members -= serial_ids
             lane = sorted(i for i in members if i in automatable
-                          and id_selected(i, prefixes or [], exclude_prefixes or []))
+                          and id_selected(i, prefixes or [], exclude_prefixes or [], only))
             if lane:
                 shard = _shard(f"{category}{suffix}", None, lane, automatable, long_tests)
                 shard["test_ids"] = lane
@@ -420,6 +441,28 @@ def _shard(name: str, prefix, ids: list, automatable: set, long_tests: set) -> d
             "long_ids": sum(1 for test_id in auto if test_id in long_tests)}
 
 
+#: Characters a shard name may carry that Windows forbids in file names. Shard
+#: names are built from manifest ids, and a `?variant` query can itself hold a
+#: literal `?` (and, through `_cover`'s segment grouping, even `/`-bearing
+#: queries end up inside a `(bare)` name) — a plain `/`→`__` swap then produces
+#: a path Windows refuses (Errno 22, the first `--only-ids` batches died in
+#: `split_batch` on `…?mimeType=video (bare).json`).
+_SHARD_NAME_INVALID = '<>:"\\|?*'
+
+
+def shard_stem(name: str) -> str:
+    """Filesystem stem for a shard's report/log/raw files.
+
+    `/` becomes `__` exactly as before (every existing out-dir keeps working);
+    any other character Windows forbids — `?` above all — becomes `%XX`, which
+    is injective, so two different shard names cannot collide on one file.
+    """
+    return "".join(
+        "__" if c == "/" else (c if c not in _SHARD_NAME_INVALID and ord(c) >= 32
+                               else f"%{ord(c):02X}")
+        for c in name)
+
+
 def shard_report_path(out_dir: str, shard: dict) -> str:
     # A batch (`plan_units`) keeps its own report out of `out_dir`'s top level:
     # `load_results` reads every `*.json` there as a shard report, and the
@@ -427,7 +470,7 @@ def shard_report_path(out_dir: str, shard: dict) -> str:
     # writes instead.
     if shard.get("report_path"):
         return shard["report_path"]
-    return os.path.join(out_dir, shard["name"].replace("/", "__") + ".json")
+    return os.path.join(out_dir, shard_stem(shard["name"]) + ".json")
 
 
 def _descendant_pids(root: int) -> list:
@@ -535,7 +578,7 @@ def shard_timeout(shard: dict, base: int, per_id, processes: int = 1) -> int:
 
 
 def https_ids(manifest: dict, scope: set = None, prefixes: list = None,
-              exclude_prefixes: list = None) -> list:
+              exclude_prefixes: list = None, only: set = None) -> list:
     """Every `.https.` test id.
 
     BUG-785 (fixed 2026-08-20) made these unreachable at the TLS layer,
@@ -553,7 +596,7 @@ def https_ids(manifest: dict, scope: set = None, prefixes: list = None,
                    if ".https." in i
                    and t not in corpus_stats.NON_AUTOMATABLE_TYPES
                    and (scope is None or c in scope)
-                   and id_selected(i, prefixes or [], exclude_prefixes or [])})
+                   and id_selected(i, prefixes or [], exclude_prefixes or [], only)})
 
 
 NO_TESTS_MARKERS = ("Unable to find any tests at the path(s)", "No tests ran")
@@ -662,17 +705,27 @@ def shard_produced_nothing(out_dir: str, shard: dict) -> bool:
 
 def shard_targets(shard: dict) -> list:
     """The positional test filters wptrunner gets for a shard or a batch."""
+    prefixes, _explicit = shard_targets_split(shard)
+    return prefixes
+
+
+def shard_targets_split(shard: dict) -> tuple:
+    """`(prefix targets, explicit test ids)` for a shard or a batch.
+
+    Prefix shards stay positional arguments (one short string each). Explicit
+    `test_ids` members — `(bare)` shards and the heavy/serial lanes — are
+    returned separately so `run_shard` can hand them to wptrunner through
+    `--include-file`: spelled out on the command line they overflow Windows'
+    32 767-char limit as soon as a batch gathers a few hundred of them.
+    """
     members = shard.get("members") or [shard]
-    targets = []
+    prefixes, explicit = [], set()
     for member in members:
-        if is_heavy(member):
-            # A path without a query selects every variant of the file, and a
-            # heavy shard holds whole files — 170 `html5lib_*.html?file=…` ids
-            # would be a 15 KB command line against Windows' 32 767.
-            targets.extend(sorted({test_id.split("?")[0] for test_id in member["test_ids"]}))
-        else:
-            targets.extend(member["test_ids"] if member.get("test_ids") else [member["prefix"]])
-    return targets
+        if member.get("test_ids"):
+            explicit.update(member["test_ids"])
+        elif member.get("prefix"):
+            prefixes.append(member["prefix"])
+    return prefixes, explicit
 
 
 #: `--shared-queue`: how a shard's tests are handed to its `--processes`
@@ -722,7 +775,20 @@ def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: i
         argv.append(f"--processes={processes}")
     if shared_queue:
         argv.extend(SHARED_QUEUE_ARGS)
-    argv.extend(shard_targets(shard))
+    prefix_targets, explicit_ids = shard_targets_split(shard)
+    if explicit_ids:
+        # Exact-id members go through `--include-file`, not argv: a batch of
+        # `(bare)` shards can carry hundreds of ids and Windows caps a command
+        # line at 32 767 chars (WinError 206 killed the first `--only-ids`
+        # sample run). `read_test_prefixes_from_file` accepts one url per line
+        # and `?variant` queries select exactly that variant, so the file is
+        # the same set `shard_targets` used to spell out — just off the
+        # command line.
+        include_path = os.path.splitext(report_path)[0] + ".include.txt"
+        with open(include_path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("\n".join(sorted(explicit_ids)) + "\n")
+        argv.append(f"--include-file={include_path}")
+    argv.extend(prefix_targets)
     env = dict(os.environ, **extra_env) if extra_env else None
 
     # A shard that dies before its first test is worth one immediate second
@@ -1075,7 +1141,7 @@ def plan_units(shards: list, small: int, max_ids: int, out_dir: str) -> list:
         if len(batch) == 1:
             units.append(batch[0])
         else:
-            first = batch[0]["name"].replace("/", "__").replace(" ", "_")
+            first = shard_stem(batch[0]["name"]).replace(" ", "_")
             name = f"batch {first} +{len(batch) - 1}"
             units.append({
                 "name": name, "prefix": None, "members": list(batch),
@@ -1184,7 +1250,7 @@ def split_batch(batch: dict, state: dict, out_dir: str) -> list:
     states = []
     for member in batch["members"]:
         mine = by_member[member["name"]]
-        member_path = os.path.join(out_dir, member["name"].replace("/", "__") + ".json")
+        member_path = os.path.join(out_dir, shard_stem(member["name"]) + ".json")
         outcome = state["outcome"]
         if mine:
             with open(member_path, "w", encoding="utf-8") as fh:
@@ -1720,7 +1786,7 @@ def resumable_states(previous: list, out_dir: str, retry_timeouts: bool,
 
 
 def coverage_breakdown(manifest: dict, results: dict, empty_shards: list,
-                       shard_states: list) -> dict:
+                       shard_states: list, only: set = None) -> dict:
     """Why the ids with no verdict have none, as part of the run's own summary.
 
     `never ran: N` is three unrelated things added together: types no executor
@@ -1741,7 +1807,8 @@ def coverage_breakdown(manifest: dict, results: dict, empty_shards: list,
     """
     import score_audit  # noqa: PLC0415 — circular at module level, by design
 
-    acc = score_audit.accounting(manifest, {"shards": shard_states}, results, empty_shards)
+    acc = score_audit.accounting(manifest, {"shards": shard_states, "only_ids": only},
+                                 results, empty_shards)
     cause = acc["cause"]
     lost = acc["lost_by_shard"]
     return {
@@ -1759,7 +1826,8 @@ def coverage_breakdown(manifest: dict, results: dict, empty_shards: list,
 
 def score_reports(manifest: dict, out_dir: str, scope: set = None,
                   shard_states: list = None, prefixes: list = None,
-                  exclude_prefixes: list = None, per_test: list = None) -> dict:
+                  exclude_prefixes: list = None, per_test: list = None,
+                  only: set = None) -> dict:
     """Score every automatable manifest id against whatever the shards produced.
 
     Ids with no result score 0 — that is the whole point of scoring against the
@@ -1784,7 +1852,7 @@ def score_reports(manifest: dict, out_dir: str, scope: set = None,
             continue
         if scope is not None and category not in scope:
             continue
-        if not id_selected(test_id, prefixes or [], exclude_prefixes or []):
+        if not id_selected(test_id, prefixes or [], exclude_prefixes or [], only):
             continue
         expected[test_id] = {"type": test_type, "category": category}
 
@@ -1851,7 +1919,7 @@ def score_reports(manifest: dict, out_dir: str, scope: set = None,
     totals["score"] = round(totals["score"], 2)
     totals["pass_rate"] = round(totals["score"] / totals["ids"], 4) if totals["ids"] else 0.0
 
-    coverage = coverage_breakdown(manifest, results, empty_shards, shard_states or [])
+    coverage = coverage_breakdown(manifest, results, empty_shards, shard_states or [], only)
     coverage["dropped"] = len(dropped)
     coverage["dropped_examples"] = sorted(dropped)[:10]
     return {"totals": totals, "status_counts": status_counts, "per_category": per_category,
@@ -1861,7 +1929,8 @@ def score_reports(manifest: dict, out_dir: str, scope: set = None,
 
 def attribute_shards(manifest: dict, per_test: list, shard_states: list,
                      prefixes: list = None, exclude_prefixes: list = None,
-                     heavy: dict = None, serial: dict = None) -> list:
+                     heavy: dict = None, serial: dict = None,
+                     only: set = None) -> list:
     """`per_test` rows with the shard that carried each id filled in.
 
     The attribution is `score_audit.shard_index`'s — the one rule every other
@@ -1877,7 +1946,8 @@ def attribute_shards(manifest: dict, per_test: list, shard_states: list,
         manifest, {"shards": shard_states, "prefixes": prefixes or [],
                    "exclude_prefixes": exclude_prefixes or [],
                    "heavy_tests": sorted(heavy or {}),
-                   "serial_tests": sorted(serial or {})})
+                   "serial_tests": sorted(serial or {}),
+                   "only_ids": only})
     return [row[:6] + (owner(row[0]) or "",) for row in per_test]
 
 
@@ -2076,8 +2146,9 @@ def _selftest_heavy() -> list:
                        and lanes["html (heavy)"]["auto_ids"] == 2))
         checks.append(("plan: the ordinary shards are unchanged (the denominator stays)",
                        [s for s in shards if not is_heavy(s)] == plain))
-        checks.append(("targets: a heavy shard is addressed by file, not by variant",
-                       shard_targets(lanes["html (heavy)"]) == ["/html/syntax/w.html"]))
+        checks.append(("targets: a heavy shard's ids go to --include-file, not argv",
+                       shard_targets_split(lanes["html (heavy)"])
+                       == ([], {"/html/syntax/w.html?f=a", "/html/syntax/w.html?f=b"})))
         checks.append(("exclusions: the ordinary shards skip the heavy files",
                        heavy_exclusions(shards) == ["/html/syntax/w.html", "/ws/big.html"]))
         checks.append(("exclusions: the regular exclude file goes to ordinary units only",
@@ -2146,9 +2217,9 @@ def _selftest_serial(manifest: dict, heavy: dict, tmp: str) -> list:
                    unit_processes(units[-1], 14) == SERIAL_PROCESSES == 1
                    and unit_processes(by_name["dom (serial)"], 14) == 1
                    and unit_processes(units[-2], 14) == HEAVY_PROCESSES))
-    checks.append(("serial: the lane is addressed by file",
-                   sorted(shard_targets(units[-1])) == ["/dom/d.html", "/html/syntax/ok.html",
-                                                        "/ws/big.html"]))
+    checks.append(("serial: the lane's ids go to --include-file",
+                   shard_targets_split(units[-1])[1]
+                   == {"/dom/d.html", "/html/syntax/ok.html", "/ws/big.html?x=1"}))
 
     binary = os.path.join(tmp, "bin", "lumen.exe")
     store = idb_store_dir(binary)
@@ -2357,7 +2428,8 @@ def _selftest_batches() -> list:
             ("batch: budget sums the members", batch.get("auto_ids") == 10
              and batch.get("long_ids") == 1),
             ("batch: wptrunner gets every member's filter",
-             shard_targets(batch) == ["/a/x/", "/a/xx/", "/a/top.html", "/empty/"]),
+             shard_targets(batch) == ["/a/x/", "/a/xx/", "/empty/"]
+             and shard_targets_split(batch)[1] == {"/a/top.html"}),
             ("batch: its own report is out of load_results' reach",
              os.path.dirname(shard_report_path(out_dir, batch)) != out_dir
              and len(loaded) == 3),
@@ -2601,6 +2673,12 @@ def main() -> int:
     parser.add_argument("--exclude-prefixes", default=None,
                         help="comma-separated WPT path prefixes to leave out of the selection "
                              "(applies on top of --prefixes; an exclusion always wins)")
+    parser.add_argument("--only-ids", default=None,
+                        help="file with one manifest test id per line — run and score exactly "
+                             "this set (an exact-id filter, not a path prefix; `?variant` ids "
+                             "count separately). Combines with --categories/--prefixes as an "
+                             "intersection. The file is recorded in state.json/snapshot and a "
+                             "--resume/--aggregate-only with a different file is refused")
     parser.add_argument("--resume", action="store_true", help="skip shards that already produced a report")
     parser.add_argument("--retry-timeouts", action="store_true",
                         help="on --resume, run budget-killed shards again instead of keeping "
@@ -2656,6 +2734,17 @@ def main() -> int:
     manifest = load_manifest()
     prefixes = parse_prefixes(args.prefixes)
     exclude_prefixes = parse_prefixes(args.exclude_prefixes)
+    only = load_only_ids(args.only_ids) if args.only_ids else None
+    if only is not None and not only:
+        print(f"--only-ids {args.only_ids}: no ids in file", file=sys.stderr)
+        return 1
+    if only is not None:
+        unknown = only - {i for _t, _c, i in corpus_stats.iter_ids(manifest)}
+        if unknown:
+            print(f"--only-ids {args.only_ids}: {len(unknown)} id(s) not in the manifest, "
+                  f"e.g. {sorted(unknown)[:3]} — fix the file or they score 0 forever",
+                  file=sys.stderr)
+            return 1
     heavy, serial, memory = {}, {}, {}
     try:
         if not (args.no_heavy_lane or args.aggregate_only):
@@ -2680,15 +2769,21 @@ def main() -> int:
                   f"same name would cover different ids - use a separate --out-dir, or "
                   f"--no-serial-lane / --serial-tests to match the recorded run", file=sys.stderr)
             return 1
-        recorded_filter = (recorded.get("prefixes") or [], recorded.get("exclude_prefixes") or [])
-        if args.aggregate_only and not (prefixes or exclude_prefixes):
+        recorded_filter = (recorded.get("prefixes") or [], recorded.get("exclude_prefixes") or [],
+                           recorded.get("only_ids"))
+        if args.aggregate_only and not (prefixes or exclude_prefixes or args.only_ids):
             # Scoring an existing run: the filter belongs to the run, as the
             # binary and the commit do.
-            prefixes, exclude_prefixes = recorded_filter
-        elif (args.resume or args.aggregate_only) and recorded_filter != (prefixes, exclude_prefixes):
+            prefixes, exclude_prefixes = recorded_filter[0], recorded_filter[1]
+            if recorded_filter[2]:
+                args.only_ids = recorded_filter[2]
+                only = load_only_ids(args.only_ids)
+        elif (args.resume or args.aggregate_only) and \
+                recorded_filter != (prefixes, exclude_prefixes, args.only_ids):
             print(f"{state_path} was written with --prefixes={recorded_filter[0]} "
-                  f"--exclude-prefixes={recorded_filter[1]}; this command asks for "
-                  f"{prefixes} / {exclude_prefixes}. Shards of the same name would cover "
+                  f"--exclude-prefixes={recorded_filter[1]} --only-ids={recorded_filter[2]}; "
+                  f"this command asks for {prefixes} / {exclude_prefixes} / "
+                  f"{args.only_ids}. Shards of the same name would cover "
                   f"different ids — use a separate --out-dir", file=sys.stderr)
             return 1
 
@@ -2737,12 +2832,15 @@ def main() -> int:
             categories = list(PILOT_CATEGORIES)
         elif args.categories:
             categories = [c.strip() for c in args.categories.split(",") if c.strip()]
+        elif only is not None:
+            # `--only-ids` alone: the categories are whichever hold a listed id.
+            categories = sorted({c for _t, c, i in corpus_stats.iter_ids(manifest) if i in only})
         else:
-            print("pick a selection: --all, --pilot or --categories", file=sys.stderr)
+            print("pick a selection: --all, --pilot, --categories or --only-ids", file=sys.stderr)
             return 1
 
         shards = plan_shards(manifest, categories, prefixes, exclude_prefixes, heavy or None,
-                             serial or None)
+                             serial or None, only)
         # A heavy/serial shard re-lists ids its ordinary shard still counts
         # (the exclude file is what keeps them from running twice).
         counted = [s for s in shards if not is_heavy(s)]
@@ -2770,7 +2868,7 @@ def main() -> int:
         https_file = heavy_file = exclude_file = None
         skipped = []
         if args.skip_https:
-            skipped = https_ids(manifest, set(categories), prefixes, exclude_prefixes)
+            skipped = https_ids(manifest, set(categories), prefixes, exclude_prefixes, only)
             https_file = os.path.join(args.out_dir, "exclude-https.txt")
             with open(https_file, "w", encoding="utf-8") as fh:
                 fh.write("\n".join(skipped) + "\n")
@@ -2818,6 +2916,7 @@ def main() -> int:
             with open(state_path, "w", encoding="utf-8") as fh:
                 json.dump({"binary": binary, "commit": run_commit, "shards": shard_states,
                            "prefixes": prefixes, "exclude_prefixes": exclude_prefixes,
+                           "only_ids": args.only_ids,
                            "heavy_tests": sorted(heavy), "serial_tests": sorted(serial),
                            "processes": args.processes,
                            "skipped_https": len(skipped) if args.skip_https else 0}, fh, indent=2)
@@ -2903,17 +3002,19 @@ def main() -> int:
     # itself as partial.
     all_categories = {c for t, c, _i in corpus_stats.iter_ids(manifest)
                       if t not in corpus_stats.NON_AUTOMATABLE_TYPES}
-    if scope and scope >= all_categories and not (prefixes or exclude_prefixes):
+    if scope and scope >= all_categories and not (prefixes or exclude_prefixes or only):
         scope = None
     per_test = [] if args.run_json else None
     scored = score_reports(manifest, args.out_dir, scope, shard_states, prefixes,
-                           exclude_prefixes, per_test)
+                           exclude_prefixes, per_test, only)
     if scope:
         print(f"\nscope: {len(scope)} of {len(all_categories)} categories "
               f"(partial run — denominator covers only what was selected)")
-    if prefixes or exclude_prefixes:
+    if prefixes or exclude_prefixes or args.only_ids:
         print(f"filter: --prefixes {','.join(prefixes) or '(none)'}"
               + (f" --exclude-prefixes {','.join(exclude_prefixes)}" if exclude_prefixes else "")
+              + (f" --only-ids {args.only_ids} ({len(only) if only else 0} ids)"
+                 if args.only_ids else "")
               + " — the denominator is the ids under it, not the whole category")
     print_summary(scored, shard_states)
 
@@ -2953,6 +3054,7 @@ def main() -> int:
             "scope": sorted(scope) if scope else "full-corpus",
             "prefixes": prefixes,
             "exclude_prefixes": exclude_prefixes,
+            "only_ids": args.only_ids,
             "shards": shard_states,
             "scored": scored,
         }
@@ -2961,7 +3063,8 @@ def main() -> int:
         # are deleted after the run (WPT-RUN-17).
         ids_path = ids_file.ids_path_for(args.run_json)
         size = ids_file.write(ids_path, attribute_shards(manifest, per_test, shard_states,
-                                                         prefixes, exclude_prefixes, heavy, serial))
+                                                         prefixes, exclude_prefixes, heavy, serial,
+                                                         only))
         snapshot["ids_file"] = os.path.basename(ids_path)
         with open(args.run_json, "w", encoding="utf-8") as fh:
             json.dump(snapshot, fh, indent=2, sort_keys=True)
