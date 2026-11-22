@@ -122,7 +122,12 @@ pub(in crate::style) struct CascadeIndex {
     /// node's tag/classes, plus all universal ones) were almost all thrown away
     /// one by one. On ria.ru that probe was 86 % of the incremental box build
     /// (4.3 of 5.0 s over a census run).
-    pub(in crate::style) pseudo_rules: RuleIndex,
+    /// PERF-PSEUDO-BY-NAME: per-pseudo-name indexes — a `::before` probe used
+    /// to get `::after`/`::marker` candidates too and reject them inside
+    /// `matches_complex_for_pseudo`. Names are the lowercased
+    /// [`Self::pseudo_subjects`] entries; a probe whose name is absent here
+    /// has no top-level pseudo rules at all and skips the loop entirely.
+    pub(in crate::style) pseudo_rules_by_name: Vec<(Box<str>, RuleIndex)>,
     /// The `@media` blocks that hold at least one pseudo-subject rule, with the
     /// global rule index their first rule has in `compute_pseudo_element_style`'s
     /// running numbering (`sheet.rules.len()` + the rules of every earlier media
@@ -237,7 +242,7 @@ impl CascadeIndex {
             has_quote_content: false,
             has_pseudo_counters: false,
             pseudo_subjects: Vec::new(),
-            pseudo_rules: RuleIndex::empty(),
+            pseudo_rules_by_name: Vec::new(),
             pseudo_media: Vec::new(),
             pseudo_supports: Vec::new(),
             order: RuleOrder::default(),
@@ -311,9 +316,17 @@ impl CascadeIndex {
             }
         }
         let has_pseudo_subject = |r: &Rule| r.selectors.iter().any(|s| selector_pseudo_subjects(s).next().is_some());
-        let pseudo_rules = RuleIndex::build_from_indexed(
-            sheet.rules.iter().enumerate().filter(|(_, r)| has_pseudo_subject(r)),
-        );
+        let pseudo_rules_by_name: Vec<(Box<str>, RuleIndex)> = pseudo_subjects
+            .iter()
+            .map(|name| {
+                let index = RuleIndex::build_from_indexed(sheet.rules.iter().enumerate().filter(|(_, r)| {
+                    r.selectors.iter().any(|s| {
+                        selector_pseudo_subjects(s).any(|n| n.eq_ignore_ascii_case(name))
+                    })
+                }));
+                (name.clone(), index)
+            })
+            .collect();
         let order = RuleOrder::build(sheet);
         let mut pseudo_media = Vec::new();
         for (block, m) in sheet.media_rules.iter().enumerate() {
@@ -349,7 +362,7 @@ impl CascadeIndex {
             has_quote_content,
             has_pseudo_counters,
             pseudo_subjects,
-            pseudo_rules,
+            pseudo_rules_by_name,
             pseudo_media,
             pseudo_supports,
             order,

@@ -624,9 +624,22 @@ fn compute_pseudo_element_style_inner(
     // BUG-1800 срез 8: style-ключ берётся лениво, на сматченном правиле, — сбор `keys`
     // для всех кандидатов был аллокацией на каждую пробу (~16k на флаш pikabu), читался
     // же лишь сматчившими (~200).
+    // PERF-PSEUDO-BY-NAME: top-level candidates come from the index built for
+    // THIS pseudo name only — `::before` probes no longer wade through
+    // `::after`/`::marker` rules that `matches_complex_for_pseudo` would
+    // reject one selector at a time. A name absent from the map has no
+    // top-level pseudo rules, so the loop is skipped entirely.
+    let pseudo_base = split_pseudo_request(pseudo).0;
     with_front_cascade_index(|idx| {
+        let Some((_, top_index)) = idx
+            .pseudo_rules_by_name
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(pseudo_base))
+        else {
+            return;
+        };
         for rule_idx in
-            idx.pseudo_rules.candidates_into(node_tag, node_id, class_attr.split_whitespace(), node_attrs, &mut cand)
+            top_index.candidates_into(node_tag, node_id, class_attr.split_whitespace(), node_attrs, &mut cand)
         {
             let rule = &sheet.rules[*rule_idx];
             let mut best: Option<Specificity> = None;
