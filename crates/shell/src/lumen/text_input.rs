@@ -108,6 +108,8 @@ impl Lumen {
     /// (`"Space"` → `" "`, everything else passes through unchanged).
     /// Events have `isTrusted=true`; JS `dispatchEvent()` is never used.
     pub(crate) fn inject_special_key(&mut self, code: &str) {
+        // A special-key press is keyboard input (`:focus-visible` modality).
+        self.focus_from_keyboard = true;
         let key = input::native::code_to_key(code);
         self.inject_key_events(key, code, &["keydown", "keyup"]);
     }
@@ -476,6 +478,9 @@ impl Lumen {
     /// listener reading `this.value` observes the character just typed.
     /// Returns `true` when a form control accepted the character.
     pub(crate) fn inject_char(&mut self, ch: char) -> bool {
+        // Typed characters are keyboard input — same modality rule as a
+        // real/synthetic keydown (`:focus-visible`, CSS UI L4 §3.3).
+        self.focus_from_keyboard = true;
         let node_id = self.focused_node.map(|n| n.index()).unwrap_or(0);
         let key = escape_js_string_char(ch);
         // ADR-016 M2.2c-2d (10): same read-after-eval routing as `inject_special_key`

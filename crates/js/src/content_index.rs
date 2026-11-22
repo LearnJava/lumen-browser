@@ -15,6 +15,7 @@
 /// is already defined on `globalThis`. Evaluates the JS shim via
 /// [`lumen_core::ext::JsRuntime::eval`] on the default (V8) engine.
 #[cfg(feature = "v8-backend")]
+#[cfg_attr(not(test), allow(dead_code))]  // installed only by this module's own tests since BUG-1835 parity trim
 pub(crate) fn install_content_index_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
     rt.eval(CONTENT_INDEX_SHIM)?;
@@ -22,6 +23,7 @@ pub(crate) fn install_content_index_api_v8(rt: &crate::v8_runtime::V8JsRuntime) 
 }
 
 #[cfg(feature = "v8-backend")]
+#[cfg_attr(not(test), allow(dead_code))]  // installed only by this module's own tests since BUG-1835 parity trim
 const CONTENT_INDEX_SHIM: &str = r#"(function() {
   'use strict';
 

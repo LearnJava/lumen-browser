@@ -321,6 +321,12 @@ impl Lumen {
         // UX-PAGE-KEYDOWN: from here on the key is the page's to see first. A
         // handler that cancels `keydown` stops every default action below —
         // scrolling, hint mode, caret movement, typing, Tab focus.
+        //
+        // Keyboard modality for `:focus-visible` (CSS UI L4 §3.3): a key
+        // that reaches the page marks the last interaction as keyboard.
+        // Pointer presses clear it (`click.rs`), programmatic `focus()`
+        // preserves it (the `about_to_wait` focus-request branch).
+        self.focus_from_keyboard = true;
         if self.page_keydown_cancelled(physical, key_event) {
             return;
         }

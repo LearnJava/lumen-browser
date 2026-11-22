@@ -7,6 +7,7 @@
 /// S5-S7, rquickjs side removed in S12b-7): identical JS shim, evaluated via
 /// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
+#[cfg_attr(not(test), allow(dead_code))]  // installed only by this module's own tests since BUG-1835 parity trim
 pub(crate) fn install_shape_detection_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
     rt.eval(SHAPE_DETECTION_SHIM)?;
@@ -15,6 +16,7 @@ pub(crate) fn install_shape_detection_bindings_v8(rt: &crate::v8_runtime::V8JsRu
 
 /// JavaScript shim: Shape Detection API (Phase 0 - always returns empty arrays)
 #[cfg(feature = "v8-backend")]
+#[cfg_attr(not(test), allow(dead_code))]  // installed only by this module's own tests since BUG-1835 parity trim
 const SHAPE_DETECTION_SHIM: &str = r#"
 (function() {
   // WebIDL shape (BUG-677): every constructor takes

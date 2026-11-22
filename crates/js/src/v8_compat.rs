@@ -607,6 +607,7 @@ where
     })
 }
 
+#[allow(clippy::type_complexity)] // same 8-arg fn-pointer shape as NativeFn1..7
 pub(crate) struct NativeFn8<A, B, C, D, E, G, H, I, R, F> {
     pub(crate) f: F,
     _ph: PhantomData<fn(A, B, C, D, E, G, H, I) -> R>,

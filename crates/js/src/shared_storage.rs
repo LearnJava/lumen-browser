@@ -33,6 +33,7 @@
 ///
 /// Must run after the DOM shim so that `window` is available.
 #[cfg(feature = "v8-backend")]
+#[cfg_attr(not(test), allow(dead_code))]  // installed only by this module's own tests since BUG-1835 parity trim
 pub(crate) fn install_shared_storage_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
     rt.eval(SHARED_STORAGE_SHIM)?;
@@ -40,6 +41,7 @@ pub(crate) fn install_shared_storage_v8(rt: &crate::v8_runtime::V8JsRuntime) -> 
 }
 
 #[cfg(feature = "v8-backend")]
+#[cfg_attr(not(test), allow(dead_code))]  // installed only by this module's own tests since BUG-1835 parity trim
 const SHARED_STORAGE_SHIM: &str = r#"(function(global) {
   'use strict';
 
