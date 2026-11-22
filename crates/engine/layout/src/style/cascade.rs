@@ -786,7 +786,7 @@ pub(crate) fn compute_style_shareable(
     // THREAD-4 срез N: same predicate `share_cache::build_key` uses — the
     // `shareable` flag and the key's eligibility must agree or a node could
     // insert an entry a differently-shaped node later hits.
-    shareable &= crate::style::share_cache::share_key_eligible(doc, node);
+    shareable = shareable && crate::style::share_cache::share_key_eligible(doc, node);
 
     // LOAD-6: a full pass already matched this node in parallel (`style::pre_match`) —
     // its record is exactly what a restricted pass carries, with nothing invalidated, so
@@ -861,7 +861,7 @@ pub(crate) fn compute_style_shareable(
             for &rule_idx in buf.iter() {
                 let rule_key = with_front_cascade_index(|idx| idx.order.style(rule_idx));
                 let rule = &sheet.rules[rule_idx];
-                shareable &= rule.selectors.iter().all(selector_is_share_safe);
+                shareable = shareable && rule.selectors.iter().all(selector_is_share_safe);
                 if let Some((spec, selector)) = best_match(rule, doc, node) {
                     push_declarations(rule, spec, rule_key, layer_n, 0, None, &mut matched);
                     matched_rules.push(MatchedRule { block: RuleBlock::Top, rule: rule_idx as u32, selector });
@@ -950,7 +950,7 @@ pub(crate) fn compute_style_shareable(
             let Some(rule) = sheet.layers.get(block).and_then(|l| l.rules.get(rule_idx)) else {
                 continue;
             };
-            shareable &= rule.selectors.iter().all(selector_is_share_safe);
+            shareable = shareable && rule.selectors.iter().all(selector_is_share_safe);
             if let Some((spec, selector)) = best_match(rule, doc, node) {
                 push_declarations(rule, spec, layer_rule_base + flat, layer_idx, 0, None, &mut matched);
                 matched_rules.push(MatchedRule { block: RuleBlock::Layer, rule: flat as u32, selector });
@@ -1009,7 +1009,7 @@ pub(crate) fn compute_style_shareable(
             let buf = cell.borrow();
             for &rule_idx in buf.iter() {
                 let rule = &media.rules[rule_idx];
-                shareable &= rule.selectors.iter().all(selector_is_share_safe);
+                shareable = shareable && rule.selectors.iter().all(selector_is_share_safe);
                 if let Some((spec, selector)) = best_match(rule, doc, node) {
                     push_declarations(rule, spec, media_base + rule_idx, layer_n, 0, None, &mut matched);
                     matched_rules.push(MatchedRule { block: RuleBlock::Media(media_i as u32), rule: rule_idx as u32, selector });
@@ -1059,7 +1059,7 @@ pub(crate) fn compute_style_shareable(
             let buf = cell.borrow();
             for &rule_idx in buf.iter() {
                 let rule = &supports.rules[rule_idx];
-                shareable &= rule.selectors.iter().all(selector_is_share_safe);
+                shareable = shareable && rule.selectors.iter().all(selector_is_share_safe);
                 if let Some((spec, selector)) = best_match(rule, doc, node) {
                     push_declarations(rule, spec, supports_base + rule_idx, layer_n, 0, None, &mut matched);
                     matched_rules
@@ -1152,7 +1152,7 @@ pub(crate) fn compute_style_shareable(
     // node that is none of the three never touches `SHADOW_HOST_SCOPE` or a
     // shadow stylesheet during its own cascade above, so an unrelated
     // shadow tree elsewhere in the document cannot change its result.
-    shareable &= own_shadow.is_none() && host_shadow.is_none() && interior_shadow.is_none();
+    shareable = shareable && own_shadow.is_none() && host_shadow.is_none() && interior_shadow.is_none();
     // LOAD-6: the parallel pre-pass wants only the document-sheet record, not a style — its
     // inherited parent is a placeholder, so everything after this point (`:host`/`::slotted`
     // matching, shadow-interior matching, `::part()`, inline declarations, the revert prepass,
