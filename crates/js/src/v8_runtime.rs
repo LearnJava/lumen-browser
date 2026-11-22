@@ -32,7 +32,7 @@ use lumen_dom::{
     Range as DomRange, Selection, ShadowRootMode, node_child_count, node_length, node_text_content,
     range_text, utf16_to_byte_offset,
 };
-use lumen_layout::{matches_selector, query_all, query_all_scoped, query_all_within};
+use lumen_layout::{find_first_dom_node_by_selector, find_first_within, matches_selector, query_all, query_all_scoped, query_all_within};
 use std::collections::{HashMap, HashSet};
 use v8::{ValueDeserializerHelper, ValueSerializerHelper};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};

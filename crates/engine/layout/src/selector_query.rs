@@ -9,6 +9,29 @@
 use std::collections::HashMap;
 
 use lumen_css_parser::{parse_selector_list, ComplexSelector};
+
+/// Parsed-selector cache (PERF-QS-PARSE): JS `querySelector*`/`matches` calls
+/// repeat the same handful of selector strings hundreds of thousands of times
+/// per page — re-parsing each call was measurable on habr (~110k
+/// `_lumen_query_selector` invocations). `ComplexSelector` is pure data, so
+/// entries never invalidate; the map is capped and cleared wholesale on
+/// overflow (distinct selectors per page are few).
+fn parsed_selector_list(sel: &str) -> std::sync::Arc<Vec<ComplexSelector>> {
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<String, std::sync::Arc<Vec<ComplexSelector>>>>> =
+        OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(hit) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(sel) {
+        return hit.clone();
+    }
+    let parsed = std::sync::Arc::new(parse_selector_list(sel));
+    let mut map = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if map.len() >= 2048 {
+        map.clear();
+    }
+    map.insert(sel.to_owned(), parsed.clone());
+    parsed
+}
 use lumen_dom::{Document, NodeId};
 use lumen_core::{ColorSpace, Size};
 
@@ -240,7 +263,7 @@ pub fn find_box_by_selector<'a>(
     doc: &Document,
     sel: &str,
 ) -> Option<&'a LayoutBox> {
-    let selectors = parse_selector_list(sel);
+    let selectors = parsed_selector_list(sel);
     if selectors.is_empty() {
         return None;
     }
@@ -299,7 +322,7 @@ fn node_matches(node: lumen_dom::NodeId, doc: &Document, selectors: &[ComplexSel
 /// (DEVX-10) that must distinguish "not in the DOM" from "in the DOM but
 /// excluded from layout".
 pub fn find_first_dom_node_by_selector(doc: &Document, sel: &str) -> Option<lumen_dom::NodeId> {
-    let selectors = parse_selector_list(sel);
+    let selectors = parsed_selector_list(sel);
     if selectors.is_empty() {
         return None;
     }
@@ -322,6 +345,25 @@ fn find_dom_rec(
             return Some(id);
         }
         stack.extend(doc.get(id).children.iter().rev().copied());
+    }
+    None
+}
+
+/// First descendant of `start` (excluding `start` itself) matching `sel`, in
+/// document order — the scoped `querySelector` fast path. The collect-all
+/// variants ([`query_all_scoped`]/[`query_all_within`]) traverse the whole
+/// subtree even when the match is the first node; JS calls this shape
+/// hundreds of thousands of times per page, so the early exit is the win.
+/// Semantics are identical to `query_all_*(…).into_iter().next()`.
+pub fn find_first_within(doc: &Document, start: NodeId, sel: &str) -> Option<NodeId> {
+    let selectors = parsed_selector_list(sel);
+    if selectors.is_empty() {
+        return None;
+    }
+    for &child in &doc.get(start).children.clone() {
+        if let Some(hit) = find_dom_rec(doc, child, &selectors) {
+            return Some(hit);
+        }
     }
     None
 }
@@ -353,7 +395,7 @@ pub fn find_all_by_selector<'a>(
     doc: &Document,
     sel: &str,
 ) -> Vec<&'a LayoutBox> {
-    let selectors = parse_selector_list(sel);
+    let selectors = parsed_selector_list(sel);
     if selectors.is_empty() {
         return Vec::new();
     }
@@ -390,7 +432,7 @@ fn find_all_rec<'a>(
 /// Implements `document.querySelectorAll` semantics. Returns an empty Vec when
 /// `sel` is empty, all selectors are invalid, or no node matches.
 pub fn query_all(doc: &Document, sel: &str) -> Vec<NodeId> {
-    let selectors = parse_selector_list(sel);
+    let selectors = parsed_selector_list(sel);
     if selectors.is_empty() {
         return Vec::new();
     }
@@ -408,7 +450,7 @@ pub fn query_all(doc: &Document, sel: &str) -> Vec<NodeId> {
 /// document root and therefore never finds matches inside a detached
 /// subtree (a node created but not yet attached to the document).
 pub fn query_all_within(doc: &Document, start: NodeId, sel: &str) -> Vec<NodeId> {
-    let selectors = parse_selector_list(sel);
+    let selectors = parsed_selector_list(sel);
     if selectors.is_empty() {
         return Vec::new();
     }
@@ -453,7 +495,7 @@ fn query_all_rec(
 /// `doc.root()`). Returns an empty Vec when `sel` is empty/invalid or no
 /// descendant matches.
 pub fn query_all_scoped(doc: &Document, scope: NodeId, sel: &str) -> Vec<NodeId> {
-    let selectors = parse_selector_list(sel);
+    let selectors = parsed_selector_list(sel);
     if selectors.is_empty() {
         return Vec::new();
     }
@@ -477,7 +519,7 @@ pub fn query_all_scoped(doc: &Document, scope: NodeId, sel: &str) -> Vec<NodeId>
 ///
 /// Implements `element.matches()` semantics.
 pub fn matches_selector(doc: &Document, node: NodeId, sel: &str) -> bool {
-    let selectors = parse_selector_list(sel);
+    let selectors = parsed_selector_list(sel);
     if selectors.is_empty() {
         return false;
     }

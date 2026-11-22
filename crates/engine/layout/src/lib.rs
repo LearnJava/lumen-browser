@@ -172,7 +172,7 @@ pub use style::{
 pub use selector_query::{
     computed_style_by_selector, computed_style_json, computed_style_json_by_selector,
     computed_style_to_map, find_all_by_selector, find_box_by_selector, find_first_dom_node_by_selector,
-    matched_rules_for_node, matches_selector, query_all, query_all_scoped, query_all_within,
+    find_first_within, matched_rules_for_node, matches_selector, query_all, query_all_scoped, query_all_within,
     ComputedStyleSnapshot, MatchedRule,
     element_matches_dir,
 };

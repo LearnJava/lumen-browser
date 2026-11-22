@@ -2025,7 +2025,7 @@ pub(crate) fn install_frame_bridge_v8(
             "_lumen_f_query",
             into_v8_fn2(move |bid: u32, sel: String| -> Option<u32> {
                 with_accessible_doc(&reg, bid, |d| {
-                    lumen_layout::query_all(d, &sel).into_iter().next().map(|n| n.raw())
+                    lumen_layout::find_first_dom_node_by_selector(d, &sel).map(|n| n.raw())
                 }, None)
             }),
         )?;

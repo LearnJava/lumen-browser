@@ -473,7 +473,7 @@ pub(crate) fn install_node_lookup(
         reg!(scope, ctx, store, "_lumen_query_selector", move |sel: String| -> Option<u32> {
             with_focus_state(&fnid, || {
                 let doc = d.lock().unwrap();
-                query_all(&doc, &sel).into_iter().next().map(|n| n.raw())
+                find_first_dom_node_by_selector(&doc, &sel).map(|n| n.raw())
             })
         });
         let d = Arc::clone(&doc);
@@ -503,7 +503,7 @@ pub(crate) fn install_node_lookup(
                 with_focus_state(&fnid, || {
                     let doc = d.lock().unwrap();
                     let scope = NodeId::from_raw(node_id);
-                    query_all_scoped(&doc, scope, &sel).into_iter().next().map(|n| n.raw())
+                    find_first_within(&doc, scope, &sel).map(|n| n.raw())
                 })
             }
         );
@@ -568,7 +568,7 @@ pub(crate) fn install_node_lookup(
                     if !doc.contains_id(nid) {
                         return None;
                     }
-                    query_all_within(&doc, nid, &sel).into_iter().next().map(|n| n.raw())
+                    find_first_within(&doc, nid, &sel).map(|n| n.raw())
                 })
             }
         );
