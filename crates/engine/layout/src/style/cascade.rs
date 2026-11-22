@@ -235,6 +235,49 @@ fn push_declarations<'a>(
     }
 }
 
+// PERF-MATCHED-SCAN — один проход по `matched` после сортировки собирает
+// биты «в каскаде есть свойство X», чтобы каждый pre-pass (~6 обходов
+// `matched` на узел: custom-props, zoom, font-size, color-scheme,
+// appearance×3, fieldset writing-mode) пропускался целиком, когда его
+// триггеров нет. Биты только гасит работу: все проверки внутри проходов
+// остаются прежними, ложноположительный бит лишь возвращает старый обход.
+#[derive(Default)]
+struct MatchedScan {
+    has_custom_prop: bool,
+    has_zoom_or_all: bool,
+    has_fontsize_or_all: bool,
+    has_color_scheme: bool,
+    has_appearance: bool,
+    has_disabling: bool,
+    has_writing_mode: bool,
+}
+
+impl MatchedScan {
+    fn observe(&mut self, prop: &str) {
+        if prop.starts_with("--") {
+            self.has_custom_prop = true;
+        }
+        if prop.eq_ignore_ascii_case("zoom") || prop == "all" {
+            self.has_zoom_or_all = true;
+        }
+        if matches!(prop, "font" | "font-size" | "all") {
+            self.has_fontsize_or_all = true;
+        }
+        if prop.eq_ignore_ascii_case("color-scheme") {
+            self.has_color_scheme = true;
+        }
+        if matches!(prop, "appearance" | "-webkit-appearance") {
+            self.has_appearance = true;
+        }
+        if crate::style::ua::is_appearance_disabling_property(prop) {
+            self.has_disabling = true;
+        }
+        if prop.eq_ignore_ascii_case("writing-mode") {
+            self.has_writing_mode = true;
+        }
+    }
+}
+
 /// PERF-INVALIDATION-S1 — one `@media`/`@supports` block in a restricted pass: the previous
 /// matched rules of that block plus the invalidated ones, nothing else.
 #[allow(clippy::too_many_arguments)]
@@ -1264,6 +1307,13 @@ pub(crate) fn compute_style_shareable(
     matched.sort_by_key(|&(imp, inline, lp, spec, rule_idx, decl_idx, _, _)| {
         (imp, inline, lp, spec, rule_idx, decl_idx)
     });
+    // PERF-MATCHED-SCAN: битовая карта «что вообще есть в matched» — гейт для
+    // всех pre-pass-ов ниже. `retain` в revert-prepass только удаляет
+    // декларации, поэтому биты остаются консервативно истинными.
+    let mut scan = MatchedScan::default();
+    for m in &matched {
+        scan.observe(m.6.property.as_str());
+    }
     drop(prof_match);
     let prof_revert = lumen_core::profile::scope_detail("cs_revert_prepass");
 
@@ -1398,8 +1448,9 @@ pub(crate) fn compute_style_shareable(
     // значение (родительское inherited или initial-value) остаётся.
     // value, содержащее `var(`, пропускается без валидации — резолв
     // происходит позже, и итоговая строка может быть валидной.
-    for (_, _, _, _, _, _, decl, _) in &matched {
-        if let Some(name) = decl.property.strip_prefix("--") {
+    if scan.has_custom_prop {
+        for (_, _, _, _, _, _, decl, _) in &matched {
+            if let Some(name) = decl.property.strip_prefix("--") {
             let key = format!("--{name}");
             // BUG-1500: `var()`/`env()` с недопустимым телом (`!`/`;` в fallback-е,
             // лишний `!important`) — ошибка разбора, декларации как будто нет.
@@ -1445,6 +1496,7 @@ pub(crate) fn compute_style_shareable(
             }
             style.custom_props.make_mut().insert(key, decl.value.clone());
         }
+        }
     }
 
     // CSS Properties and Values L1 §1.1: для каждого зарегистрированного
@@ -1461,19 +1513,21 @@ pub(crate) fn compute_style_shareable(
     // before any other length is resolved, because it multiplies all of them.
     // `matched` is cascade-sorted, so the last parseable declaration wins.
     let mut own_zoom = 1.0f32;
-    for (_, _, _, _, _, _, decl, _) in &matched {
-        if decl.property.eq_ignore_ascii_case("zoom")
-            && let Some(z) = parse_zoom(&decl.value, inherited.font_size)
-        {
-            own_zoom = z;
-        }
-        // `all: initial|unset|revert` сбрасывает и `zoom` (не наследуется,
-        // initial и UA-значение — 1). `all: inherit` взял бы собственный
-        // множитель родителя, которого стиль не хранит — оставляем как есть.
-        if decl.property == "all"
-            && parse_css_wide_keyword(decl.value.trim()).is_some_and(|kw| kw != CssWideKeyword::Inherit)
-        {
-            own_zoom = 1.0;
+    if scan.has_zoom_or_all {
+        for (_, _, _, _, _, _, decl, _) in &matched {
+            if decl.property.eq_ignore_ascii_case("zoom")
+                && let Some(z) = parse_zoom(&decl.value, inherited.font_size)
+            {
+                own_zoom = z;
+            }
+            // `all: initial|unset|revert` сбрасывает и `zoom` (не наследуется,
+            // initial и UA-значение — 1). `all: inherit` взял бы собственный
+            // множитель родителя, которого стиль не хранит — оставляем как есть.
+            if decl.property == "all"
+                && parse_css_wide_keyword(decl.value.trim()).is_some_and(|kw| kw != CssWideKeyword::Inherit)
+            {
+                own_zoom = 1.0;
+            }
         }
     }
     style.effective_zoom = inherited.effective_zoom * own_zoom;
@@ -1484,11 +1538,13 @@ pub(crate) fn compute_style_shareable(
     // below. No declaration applies → the value is the inherited (or UA-hinted
     // `em`) one, i.e. parent-relative.
     let mut fs_basis = FontSizeBasis::ParentRelative;
-    for (_, _, _, _, _, _, decl, _) in &matched {
-        if let Some(basis) =
-            apply_font_size(&mut style, decl, parent_fs, ua_baseline_font_size, viewport, is_quirks)
-        {
-            fs_basis = basis;
+    if scan.has_fontsize_or_all {
+        for (_, _, _, _, _, _, decl, _) in &matched {
+            if let Some(basis) =
+                apply_font_size(&mut style, decl, parent_fs, ua_baseline_font_size, viewport, is_quirks)
+            {
+                fs_basis = basis;
+            }
         }
     }
 
@@ -1523,9 +1579,11 @@ pub(crate) fn compute_style_shareable(
     // цвета (Canvas, ButtonFace, …) резолвились против правильной темы
     // ещё в ходе main-pass (для поля `color: Color`; CssColor-поля
     // резолвятся отдельным post-pass в конце compute_style).
-    for (_, _, _, _, _, _, decl, _) in &matched {
-        if decl.property.eq_ignore_ascii_case("color-scheme") {
-            apply_declaration(&mut style, decl, parent_fs, viewport, FontWeight::NORMAL, inherited, ua_baseline_ref, is_quirks, dark_mode);
+    if scan.has_color_scheme {
+        for (_, _, _, _, _, _, decl, _) in &matched {
+            if decl.property.eq_ignore_ascii_case("color-scheme") {
+                apply_declaration(&mut style, decl, parent_fs, viewport, FontWeight::NORMAL, inherited, ua_baseline_ref, is_quirks, dark_mode);
+            }
         }
     }
 
@@ -1548,27 +1606,30 @@ pub(crate) fn compute_style_shareable(
     // *before* the author cascade. Stripping after the cascade clobbered
     // author-specified border/background/padding (BUG-211).
     let mut appearance_none = false;
-    for (_, _, _, _, _, _, decl, _) in &matched {
-        match decl.property.as_str() {
-            "appearance" | "-webkit-appearance" => {
-                appearance_none = decl.value.trim().eq_ignore_ascii_case("none");
-            }
-            _ => {}
-        }
-    }
-    // CSS UI L4 §appearance-disabling-properties / HTML LS §15.5: an author
-    // `background-*`/`border-*`/`padding-*` on a widget with `appearance: auto`
-    // switches it to used `none`. UA defaults are programmatic (not in
-    // `matched`), so any such declaration here is the author's.
     let mut appearance_auto = true;
-    for (_, _, _, _, _, _, decl, _) in &matched {
-        if matches!(decl.property.as_str(), "appearance" | "-webkit-appearance") {
-            appearance_auto = decl.value.trim().eq_ignore_ascii_case("auto");
+    let mut disabled_by_author = false;
+    if scan.has_appearance || scan.has_disabling {
+        for (_, _, _, _, _, _, decl, _) in &matched {
+            match decl.property.as_str() {
+                "appearance" | "-webkit-appearance" => {
+                    appearance_none = decl.value.trim().eq_ignore_ascii_case("none");
+                }
+                _ => {}
+            }
         }
+        // CSS UI L4 §appearance-disabling-properties / HTML LS §15.5: an author
+        // `background-*`/`border-*`/`padding-*` on a widget with `appearance: auto`
+        // switches it to used `none`. UA defaults are programmatic (not in
+        // `matched`), so any such declaration here is the author's.
+        for (_, _, _, _, _, _, decl, _) in &matched {
+            if matches!(decl.property.as_str(), "appearance" | "-webkit-appearance") {
+                appearance_auto = decl.value.trim().eq_ignore_ascii_case("auto");
+            }
+        }
+        disabled_by_author = appearance_auto
+            && matched.iter().any(|(_, _, _, _, _, _, decl, _)| is_appearance_disabling_property(&decl.property))
+            && is_disableable_widget(doc, node);
     }
-    let disabled_by_author = appearance_auto
-        && matched.iter().any(|(_, _, _, _, _, _, decl, _)| is_appearance_disabling_property(&decl.property))
-        && is_disableable_widget(doc, node);
     if appearance_none || disabled_by_author {
         strip_ua_appearance_box_styling(doc, node, &mut style);
     }
@@ -1594,6 +1655,7 @@ pub(crate) fn compute_style_shareable(
     // знает только унаследованный `writing-mode`. Собственный режим из автор-CSS (последнее
     // объявление-ключевое слово в каскаде) повторяет UA-фазу для него до автор-деклараций.
     if let Some(pre) = ua_fieldset_pre
+        && scan.has_writing_mode
         && let Some(wm) = matched
             .iter()
             .rev()
