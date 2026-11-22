@@ -77,6 +77,12 @@ def shard_index(manifest: dict, state: dict) -> tuple:
     # without it would give shards the run never had, and the ids of the narrowed
     # ones would be blamed on a wider shard that is "not attempted" — i.e. a lost
     # id would pass as nobody's.
+    only = state.get("only_ids")
+    if isinstance(only, str):
+        # `state.json` records the `--only-ids` file path, not the set — the
+        # in-memory callers (`coverage_breakdown`, `attribute_shards`) pass the
+        # set itself under the same key.
+        only = run_corpus.load_only_ids(only) if os.path.isfile(only) else None
     planned = {s["name"]: s for s in run_corpus.plan_shards(
         manifest, categories, state.get("prefixes") or [],
         state.get("exclude_prefixes") or [],
@@ -84,7 +90,8 @@ def shard_index(manifest: dict, state: dict) -> tuple:
         # recorded in the state — not from today's `heavy_tests.txt`; the
         # serial lane (WPT-IDB-RUNNER) likewise.
         {path: "" for path in state.get("heavy_tests") or []} or None,
-        {path: "" for path in state.get("serial_tests") or []} or None)}
+        {path: "" for path in state.get("serial_tests") or []} or None,
+        only)}
     # Longest prefix wins: `/css/CSS2/` must not swallow `/css/CSS2/floats/`.
     prefixes = sorted(((s["prefix"], name) for name, s in planned.items() if s["prefix"]),
                       key=lambda pair: -len(pair[0]))
@@ -129,7 +136,7 @@ def accounting(manifest: dict, state: dict, results: dict, empty: list) -> dict:
             continue
         if outcome[name] != "ran":
             label = "shard-killed"
-        elif name.replace("/", "__") in empty_set:
+        elif run_corpus.shard_stem(name) in empty_set:
             # `empty` (from `load_results`) holds on-disk report names, which
             # replace "/" with "__" the same way run_corpus.py's own report
             # paths do; `name` here is the state.json shard name and keeps
@@ -166,7 +173,7 @@ def kill_cost(manifest: dict, state: dict, out_dir: str) -> dict:
         if shard["outcome"] == "ran":
             continue
         name = shard["name"]
-        raw = os.path.join(out_dir, name.replace("/", "__") + run_corpus.RAW_SUFFIX)
+        raw = os.path.join(out_dir, run_corpus.shard_stem(name) + run_corpus.RAW_SUFFIX)
         rescued = run_corpus.rescue_results(raw)
         score = 0.0
         subtests_total = subtests_passed = 0
@@ -206,7 +213,7 @@ def wall_clock(state: dict, out_dir: str, min_results: int = 20) -> dict:
     for shard in state["shards"]:
         if shard["outcome"] != "ran":
             continue
-        path = os.path.join(out_dir, shard["name"].replace("/", "__") + ".json")
+        path = os.path.join(out_dir, run_corpus.shard_stem(shard["name"]) + ".json")
         if not os.path.isfile(path) or os.path.getsize(path) == 0:
             continue
         try:
@@ -344,7 +351,7 @@ def snapshot_accounting(snapshot: dict, manifest: dict = None) -> dict:
     # lost (the Windows half's 158) is the tool crying wolf on its own output.
     runnable = runnable_ids_per_shard(shards, manifest)
     for shard in shards:
-        produced_nothing = shard["name"].replace("/", "__") in empty
+        produced_nothing = run_corpus.shard_stem(shard["name"]) in empty
         shard["runnable_ids"] = runnable.get(shard["name"])
         shard["no_runnable_type"] = bool(
             produced_nothing
