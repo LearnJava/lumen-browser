@@ -535,10 +535,10 @@ pub fn compute_pseudo_element_style(
     }
     // BUG-341 S20 census hook — see `PseudoCascadeStats`.
     if !PSEUDO_STATS_ON.load(std::sync::atomic::Ordering::Relaxed) {
-        return compute_pseudo_element_style_inner(doc, node, pseudo, sheet, parent, viewport, dark_mode, &[]);
+        return compute_pseudo_element_style_inner(doc, node, pseudo, sheet, parent, viewport, dark_mode, &[], None);
     }
     let t_pseudo = std::time::Instant::now();
-    let out = compute_pseudo_element_style_inner(doc, node, pseudo, sheet, parent, viewport, dark_mode, &[]);
+    let out = compute_pseudo_element_style_inner(doc, node, pseudo, sheet, parent, viewport, dark_mode, &[], None);
     note_pseudo_cascade(pseudo, t_pseudo.elapsed().as_nanos() as u64, out.is_some());
     out
 }
@@ -570,7 +570,25 @@ pub fn compute_pseudo_element_style_cached(
     if let Some(hit) = store.lookup(node, pseudo, key) {
         return hit.map(|arc| (*arc).clone());
     }
-    let out = compute_pseudo_element_style(doc, node, pseudo, sheet, parent, viewport, dark_mode);
+    if !matches!(doc.get(node).data, NodeData::Element { .. }) {
+        return None;
+    }
+    // Same census as `compute_pseudo_element_style`, but the match-record
+    // lookup/store below goes through the caller's `store` — box build runs
+    // its children scan on rayon workers whose `CURRENT` thread-local is
+    // empty, so the thread-local road alone missed every parallel probe.
+    let out = if PSEUDO_STATS_ON.load(std::sync::atomic::Ordering::Relaxed) {
+        let t_pseudo = std::time::Instant::now();
+        let out = compute_pseudo_element_style_inner(
+            doc, node, pseudo, sheet, parent, viewport, dark_mode, &[], Some(store),
+        );
+        note_pseudo_cascade(pseudo, t_pseudo.elapsed().as_nanos() as u64, out.is_some());
+        out
+    } else {
+        compute_pseudo_element_style_inner(
+            doc, node, pseudo, sheet, parent, viewport, dark_mode, &[], Some(store),
+        )
+    };
     store.store(node, pseudo, key, out.clone());
     out
 }
@@ -831,6 +849,7 @@ fn compute_pseudo_element_style_inner(
     viewport: Size,
     dark_mode: bool,
     ua_decls: &[Declaration],
+    match_cache: Option<&crate::counters::PseudoCache>,
 ) -> Option<ComputedStyle> {
     let _prof = lumen_core::profile::scope_detail("pseudo_style");
     // CSS Color L5 §5.3 — see `compute_style_shareable`.
@@ -879,6 +898,16 @@ fn compute_pseudo_element_style_inner(
     // Functional requests (`::view-transition-old(name)`, `::scroll-button(dir)`,
     // `::highlight(name)`) match on their argument, which the bare-name record
     // does not carry — they always take the sequential road.
+    // `match_cache` is the caller-passed cache (rayon-safe); callers without
+    // one still see the pass-installed thread-local.
+    let current_cache;
+    let match_cache = match match_cache {
+        Some(c) => Some(c),
+        None => {
+            current_cache = crate::counters::PseudoCache::current();
+            current_cache.as_deref()
+        }
+    };
     let pre = (ua_decls.is_empty() && split_pseudo_request(pseudo).1.is_none())
         .then(|| {
             super::pre_match::pseudo_lookup(node, pseudo_base, sheet, viewport, dark_mode).or_else(|| {
@@ -886,7 +915,7 @@ fn compute_pseudo_element_style_inner(
                 // records were bulk-loaded into the pass's `PseudoCache`, which
                 // `box_tree::entry` installs for the duration of the build.
                 let key = crate::counters::pseudo_pass_key(doc, sheet, viewport, dark_mode);
-                crate::counters::PseudoCache::current()?.lookup_match(node, pseudo_base, key)
+                match_cache?.lookup_match(node, pseudo_base, key)
             })
         })
         .flatten();
@@ -903,7 +932,7 @@ fn compute_pseudo_element_style_inner(
                 eprintln!(
                     "[pseudo-pre] seq #{n} pseudo={pseudo:?} table={} cache={} ua_decls={} tid={:?}",
                     super::pre_match::pseudo_lookup(node, pseudo_base, sheet, viewport, dark_mode).is_some(),
-                    crate::counters::PseudoCache::current().is_some(),
+                    match_cache.is_some(),
                     ua_decls.is_empty(),
                     std::thread::current().id(),
                 );
@@ -915,9 +944,7 @@ fn compute_pseudo_element_style_inner(
         matched_vec.sort_by_key(|m| (m.important, m.spec, m.key, m.decl_idx));
         // A sequential answer is still a pure function of the pass inputs —
         // keep it so the next probe of this (node, pseudo) skips the scan.
-        // Only possible where a pass installed its `PseudoCache` (box build);
-        // elsewhere `current()` is `None` and nothing is stored.
-        if let Some(cache) = crate::counters::PseudoCache::current() {
+        if let Some(cache) = match_cache {
             let key = crate::counters::pseudo_pass_key(doc, sheet, viewport, dark_mode);
             cache.store_match(node, pseudo_base, key, std::sync::Arc::from(matched_vec.clone()));
         }
@@ -1243,7 +1270,7 @@ pub fn compute_view_transition_tree_style(
         let parent_map = crate::computed_style_to_map(&parent);
         let own_copied = if step == Some(ViewTransitionPart::Group) { copied } else { &[] };
         let decls = view_transition_ua_decls(step, name, own_copied, &parent_map);
-        parent = compute_pseudo_element_style_inner(doc, root, &request, sheet, &parent, viewport, dark_mode, &decls)?;
+        parent = compute_pseudo_element_style_inner(doc, root, &request, sheet, &parent, viewport, dark_mode, &decls, None)?;
     }
     Some(parent)
 }
