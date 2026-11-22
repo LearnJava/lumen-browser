@@ -144,6 +144,68 @@ fn the_pre_matched_walk_agrees_with_the_sequential_one_in_a_shadow_tree() {
     );
 }
 
+/// PERF-PSEUDO-PRE — the pseudo-element probe must produce the sequential
+/// road's `Option<ComputedStyle>` byte for byte: the worker's `PseudoMatch`
+/// record and the in-place candidate scan have to agree on every rule group
+/// (top-level, `@media`, `@supports`, and the empty-match `None` cases).
+#[test]
+fn pseudo_pre_match_reproduces_the_sequential_pseudo_cascade() {
+    const PSEUDO_CSS: &str = "
+        .wrap::before { content: \"B\"; color: rgb(1, 2, 3); }
+        .wrap::after { content: \"A\"; margin: 1px; }
+        .cell::before { content: \"c\"; font-weight: 700; }
+        .cell:hover::after { content: \"h\"; }
+        @media (min-width: 800px) { .block::after { content: \"m\"; padding: 1px; } }
+        @supports (display: grid) { .wrap::first-line { color: rgb(9, 9, 9); } }
+        ul::marker { color: rgb(4, 5, 6); }
+        .nomatch::before { content: \"x\"; }
+    ";
+    let mut html = String::from("<html><body>");
+    for w in 0..4 {
+        html.push_str(&format!("<div class=\"wrap w{w}\">"));
+        for b in 0..8 {
+            html.push_str(&format!("<div class=\"block b{b}\">"));
+            for c in 0..3 {
+                html.push_str(&format!("<span class=\"cell c{c}\">x</span>"));
+            }
+            html.push_str("</div>");
+        }
+        html.push_str("<ul><li>i1</li><li>i2</li></ul>");
+        html.push_str("</div>");
+    }
+    html.push_str("</body></html>");
+    let doc = lumen_html_parser::parse(&html);
+    let sheet = lumen_css_parser::parse(PSEUDO_CSS);
+    let flat = lumen_dom::build_flat_tree(&doc);
+    let vp = Size::new(1280.0, 800.0);
+    let els = elements(&doc, &flat);
+    assert!(els.len() >= 64, "fixture must arm the fan-out");
+    let parent = crate::style::ComputedStyle::root();
+    let pseudos = ["before", "after", "marker", "first-line", "first-letter", "selection"];
+
+    crate::style::set_interactive_state(None, None, None);
+    let mut sequential = Vec::new();
+    for &n in &els {
+        for p in pseudos {
+            sequential.push(crate::style::compute_pseudo_element_style(&doc, n, p, &sheet, &parent, vp, false));
+        }
+    }
+
+    let guard = pre_match::install(&doc, &sheet, vp, false, &flat);
+    let mut parallel = Vec::new();
+    for &n in &els {
+        for p in pseudos {
+            parallel.push(crate::style::compute_pseudo_element_style(&doc, n, p, &sheet, &parent, vp, false));
+        }
+    }
+    drop(guard);
+
+    assert_eq!(
+        sequential, parallel,
+        "the pseudo pre-match record changed a computed pseudo style"
+    );
+}
+
 #[test]
 fn the_table_holds_every_element_of_the_document_and_only_its_own_sheet() {
     let (doc, sheet, flat, vp) = fixture();

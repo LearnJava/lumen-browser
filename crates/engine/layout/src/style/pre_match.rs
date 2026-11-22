@@ -45,6 +45,11 @@ const MIN_ELEMENTS: usize = 64;
 struct Entry {
     rules: Arc<[MatchedRule]>,
     shareable: bool,
+    /// PERF-PSEUDO-PRE — per pseudo-element name, the node's matched pseudo
+    /// declarations ([`super::pseudo::PseudoMatch`]). Empty when the sheet
+    /// targets no pseudo-elements; a name the worker skipped simply misses the
+    /// lookup and the pseudo probe matches sequentially, as before.
+    pseudo: Vec<(Box<str>, Arc<[super::pseudo::PseudoMatch]>)>,
 }
 
 struct Table {
@@ -157,6 +162,10 @@ fn install_impl(
     // would otherwise match nothing (and shadow sheets disappear) on every node they take.
     let snap = super::StyleEnvSnapshot::capture();
     let inherited = ComputedStyle::root();
+    // PERF-PSEUDO-PRE: the pseudo names this sheet can target, matched per
+    // node in the same worker — `compute_pseudo_element_style`'s candidate
+    // scan depends only on DOM state, exactly like the element match above.
+    let pseudo_names = super::pseudo::pre_match_pseudo_names(sheet, viewport, dark_mode);
     let entries: Vec<(NodeId, Entry)> = {
         use rayon::prelude::*;
         nodes
@@ -173,7 +182,14 @@ fn install_impl(
                 });
                 // The restricted road binary-searches `prev` by (block, rule).
                 rules.sort_unstable_by_key(|m| (m.block, m.rule));
-                (node, Entry { rules: Arc::from(rules), shareable })
+                let pseudo = pseudo_names
+                    .iter()
+                    .filter_map(|name| {
+                        super::pseudo::match_pseudo_owned(doc, node, name, sheet, viewport, dark_mode)
+                            .map(|rec| (name.clone().into_boxed_str(), rec))
+                    })
+                    .collect();
+                (node, Entry { rules: Arc::from(rules), shareable, pseudo })
             })
             .collect()
     };
@@ -210,6 +226,36 @@ pub(crate) fn lookup(
             HITS.with(|c| c.set(c.get() + 1));
             (Arc::clone(&e.rules), e.shareable)
         })
+    })
+}
+
+/// PERF-PSEUDO-PRE — this node's pre-matched pseudo declarations for `pseudo`
+/// (the bare name, without `::` or a functional argument), when the table
+/// belongs to this sheet and media state. `None` falls back to matching inside
+/// `compute_pseudo_element_style`, exactly like [`lookup`]'s contract.
+pub(in crate::style) fn pseudo_lookup(
+    node: NodeId,
+    pseudo: &str,
+    sheet: &Stylesheet,
+    viewport: Size,
+    dark_mode: bool,
+) -> Option<Arc<[super::pseudo::PseudoMatch]>> {
+    TABLE.with(|t| {
+        let t = t.borrow();
+        let table = t.as_ref()?;
+        if table.revision != sheet.revision()
+            || table.dark_mode != dark_mode
+            || table.viewport != (viewport.width.to_bits(), viewport.height.to_bits())
+        {
+            return None;
+        }
+        table
+            .nodes
+            .get(&node)?
+            .pseudo
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(pseudo))
+            .map(|(_, rec)| Arc::clone(rec))
     })
 }
 

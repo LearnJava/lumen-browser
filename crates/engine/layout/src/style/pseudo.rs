@@ -28,6 +28,41 @@ use lumen_dom::{Document, DocumentMode, NodeData, NodeId};
 /// Rule-order base of `host::part()::pseudo` rules, above every part-less rule of the sheet.
 const PART_RULE_BASE: usize = usize::MAX / 2;
 
+/// PERF-PSEUDO-PRE — one declaration a pseudo-element rule contributed to a
+/// node's cascade, as an owned record. `style::pre_match` carries these across
+/// rayon workers; the sequential walk resolves them back to `&Declaration`
+/// through [`resolve_pseudo_decl`] — the same declarations the candidate scan
+/// would have produced, minus the scan itself.
+#[derive(Clone, Copy)]
+pub(in crate::style) struct PseudoMatch {
+    /// `Declaration::important` — first cascade-sort key.
+    pub important: bool,
+    /// The rule's best-matching selector specificity.
+    pub spec: Specificity,
+    /// Source-order key — the numbering the declaration sort used
+    /// (`RuleOrder::style`, `block.base + rule`, `PART_RULE_BASE + i`).
+    pub key: usize,
+    /// Index into the owning rule's `declarations`.
+    pub decl_idx: usize,
+    /// Which rule list owns the declaration — see [`PseudoRuleRef`].
+    pub rule: PseudoRuleRef,
+}
+
+/// Where a [`PseudoMatch`]'s declaration lives, in the same numbering the
+/// sequential matcher pushed it under.
+#[derive(Clone, Copy)]
+pub(in crate::style) enum PseudoRuleRef {
+    /// `sheet.rules[i]`.
+    Top(u32),
+    /// `sheet.media_rules[block].rules[i]` — `rule` is block-local.
+    Media { block: u32, rule: u32 },
+    /// `sheet.supports_rules[block].rules[i]` — `rule` is block-local.
+    Supports { block: u32, rule: u32 },
+    /// `part_scopes[scope]`'s rule list (its own sheet, or the document sheet
+    /// when the scope has none), rule `i`.
+    Part { scope: u32, rule: u32 },
+}
+
 /// Проверяет, является ли `complex` правилом для псевдоэлемента `pseudo`
 /// (например "before" для `::before`) на элементе `node`.
 /// Если да — возвращает specificity исходного (полного) селектора.
@@ -551,6 +586,234 @@ pub fn ua_quote_content(doc: &Document, node: NodeId, pseudo: &str) -> Option<Co
     }
 }
 
+/// PERF-PSEUDO-PRE — the candidate-scan half of [`compute_pseudo_element_style_inner`],
+/// extracted so `style::pre_match` workers can run it in parallel and the
+/// sequential walk can replay the record. Pushes one [`PseudoMatch`] per
+/// declaration of every matching rule; the caller sorts by
+/// `(important, spec, key, decl_idx)` — the order the cascade applies them in.
+/// `pseudo` is the full request (`scroll-button(name)` keeps its argument for
+/// the matcher), `pseudo_base` its bare name for the per-name indexes.
+#[allow(clippy::too_many_arguments)]
+fn collect_pseudo_matches(
+    doc: &Document,
+    node: NodeId,
+    pseudo: &str,
+    pseudo_base: &str,
+    sheet: &Stylesheet,
+    viewport: Size,
+    dark_mode: bool,
+    part_scopes: &[crate::style::cascade::PartScope],
+    out: &mut Vec<PseudoMatch>,
+) {
+    // BUG-1800 срез 9: one candidate buffer reused across every block below —
+    // `candidates_into` clears it, so the probe pays at most one allocation
+    // instead of one per block.
+    let mut cand = Vec::new();
+    let node_data = doc.get(node);
+    let node_tag = node_data.element_name().map_or("", |q| q.local.as_str());
+    let node_id = node_data.get_attr("id");
+    let class_attr = node_data.get_attr("class").unwrap_or("");
+    let node_attrs: &[lumen_dom::Attribute] = match &node_data.data {
+        lumen_dom::NodeData::Element { attrs, .. } => attrs,
+        _ => &[],
+    };
+    ensure_cascade_index(sheet, viewport, dark_mode);
+    with_front_cascade_index(|idx| {
+        // PERF-PSEUDO-BY-NAME: top-level candidates come from the index built
+        // for THIS pseudo name only; a name absent from the map has no
+        // top-level pseudo rules, so the loop is skipped entirely.
+        if let Some((_, top_index)) = idx
+            .pseudo_rules_by_name
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(pseudo_base))
+        {
+            for rule_idx in
+                top_index.candidates_into(node_tag, node_id, class_attr.split_whitespace(), node_attrs, &mut cand)
+            {
+                let rule = &sheet.rules[*rule_idx];
+                let mut best: Option<Specificity> = None;
+                for complex in &rule.selectors {
+                    if let Some(spec) = matches_complex_for_pseudo(complex, pseudo, doc, node) {
+                        best = Some(match best {
+                            Some(prev) if prev >= spec => prev,
+                            _ => spec,
+                        });
+                    }
+                }
+                if let Some(spec) = best {
+                    let key = idx.order.style(*rule_idx);
+                    for (decl_idx, decl) in rule.declarations.iter().enumerate() {
+                        out.push(PseudoMatch {
+                            important: decl.important,
+                            spec,
+                            key,
+                            decl_idx,
+                            rule: PseudoRuleRef::Top(*rule_idx as u32),
+                        });
+                    }
+                }
+            }
+        }
+
+        // `@media`/`@supports` blocks: "active" is precomputed once per
+        // (sheet, viewport, dark_mode) in the shared index; per-name indexes
+        // inside the block skip pseudos the block does not target.
+        let blocks = idx
+            .pseudo_media
+            .iter()
+            .filter(|b| idx.active_media[b.block])
+            .map(|b| (b, &sheet.media_rules[b.block].rules, false))
+            .chain(
+                idx.pseudo_supports
+                    .iter()
+                    .filter(|b| idx.active_supports[b.block])
+                    .map(|b| (b, &sheet.supports_rules[b.block].rules, true)),
+            );
+        for (block, rules, is_supports) in blocks {
+            let Some((_, block_index)) = block
+                .by_name
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(pseudo_base))
+            else {
+                continue;
+            };
+            for rule_idx in
+                block_index.candidates_into(node_tag, node_id, class_attr.split_whitespace(), node_attrs, &mut cand)
+            {
+                let rule = &rules[*rule_idx];
+                let mut best: Option<Specificity> = None;
+                for complex in &rule.selectors {
+                    if let Some(spec) = matches_complex_for_pseudo(complex, pseudo, doc, node) {
+                        best = Some(match best {
+                            Some(prev) if prev >= spec => prev,
+                            _ => spec,
+                        });
+                    }
+                }
+                if let Some(spec) = best {
+                    let global_rule_idx = block.base + *rule_idx;
+                    let rule_ref = if is_supports {
+                        PseudoRuleRef::Supports { block: block.block as u32, rule: *rule_idx as u32 }
+                    } else {
+                        PseudoRuleRef::Media { block: block.block as u32, rule: *rule_idx as u32 }
+                    };
+                    for (decl_idx, decl) in rule.declarations.iter().enumerate() {
+                        out.push(PseudoMatch {
+                            important: decl.important,
+                            spec,
+                            key: global_rule_idx,
+                            decl_idx,
+                            rule: rule_ref,
+                        });
+                    }
+                }
+            }
+        }
+    });
+
+    // Part scopes: the outer tree's `host::part(names)::pseudo` rules match the
+    // part element. They sort after the part-less rules of their sheet (rule
+    // index offset), never ahead by specificity.
+    let part_pseudo_ok = |k: &PseudoElementKind| pseudo_element_matches(k, pseudo);
+    for (scope_idx, scope) in part_scopes.iter().enumerate() {
+        let names: Vec<&str> = scope.names.iter().map(String::as_str).collect();
+        set_part_scope_host(doc, scope);
+        let rules: &[lumen_css_parser::Rule] = match &scope.sheet {
+            Some(shadow) => &shadow.rules,
+            None => &sheet.rules,
+        };
+        for (i, rule) in rules.iter().enumerate() {
+            let mut best: Option<Specificity> = None;
+            for complex in &rule.selectors {
+                if let Some(spec) = matches_part_complex(complex, doc, node, scope.host, &names, Some(&part_pseudo_ok)) {
+                    best = Some(match best {
+                        Some(prev) if prev >= spec => prev,
+                        _ => spec,
+                    });
+                }
+            }
+            if let Some(spec) = best {
+                for (decl_idx, decl) in rule.declarations.iter().enumerate() {
+                    out.push(PseudoMatch {
+                        important: decl.important,
+                        spec,
+                        key: PART_RULE_BASE + i,
+                        decl_idx,
+                        rule: PseudoRuleRef::Part { scope: scope_idx as u32, rule: i as u32 },
+                    });
+                }
+            }
+        }
+        SHADOW_HOST_SCOPE.with(|c| c.set(u32::MAX));
+    }
+}
+
+/// The `&Declaration` a [`PseudoMatch`] points at. `part_scopes` must be the
+/// same `part_scopes_of(doc, node)` result the match was collected under —
+/// both roads compute it deterministically from the DOM.
+fn resolve_pseudo_decl<'a>(
+    sheet: &'a Stylesheet,
+    part_scopes: &'a [crate::style::cascade::PartScope],
+    m: &PseudoMatch,
+) -> Option<&'a Declaration> {
+    let rule = match m.rule {
+        PseudoRuleRef::Top(r) => sheet.rules.get(r as usize)?,
+        PseudoRuleRef::Media { block, rule } => {
+            sheet.media_rules.get(block as usize)?.rules.get(rule as usize)?
+        }
+        PseudoRuleRef::Supports { block, rule } => {
+            sheet.supports_rules.get(block as usize)?.rules.get(rule as usize)?
+        }
+        PseudoRuleRef::Part { scope, rule } => {
+            let sc = part_scopes.get(scope as usize)?;
+            let rules: &[lumen_css_parser::Rule] = match &sc.sheet {
+                Some(shadow) => &shadow.rules,
+                None => &sheet.rules,
+            };
+            return rules.get(rule as usize)?.declarations.get(m.decl_idx);
+        }
+    };
+    rule.declarations.get(m.decl_idx)
+}
+
+/// PERF-PSEUDO-PRE — pseudo names `sheet` can target (the lowercased
+/// [`crate::style::cascade_index::CascadeIndex::pseudo_subjects`] entries), for
+/// `style::pre_match` workers to fan out. A name absent here can never reach
+/// the matcher: the sequential road's `sheet_targets_pseudo` gate returns
+/// `None` before consulting the table.
+pub(in crate::style) fn pre_match_pseudo_names(
+    sheet: &Stylesheet,
+    viewport: Size,
+    dark_mode: bool,
+) -> Vec<String> {
+    ensure_cascade_index(sheet, viewport, dark_mode);
+    with_front_cascade_index(|idx| idx.pseudo_subjects.iter().map(|s| s.to_string()).collect())
+}
+
+/// PERF-PSEUDO-PRE — `node`'s matched pseudo declarations for `pseudo`, as an
+/// owned, cascade-sorted record for `style::pre_match`. `None` when the sheet
+/// cannot target the name at all (the same `sheet_targets_pseudo` gate the
+/// sequential road applies before matching).
+#[allow(clippy::too_many_arguments)]
+pub(in crate::style) fn match_pseudo_owned(
+    doc: &Document,
+    node: NodeId,
+    pseudo: &str,
+    sheet: &Stylesheet,
+    viewport: Size,
+    dark_mode: bool,
+) -> Option<std::sync::Arc<[PseudoMatch]>> {
+    let pseudo_base = split_pseudo_request(pseudo).0;
+    if !sheet_targets_pseudo(sheet, viewport, dark_mode, pseudo_base) {
+        return None;
+    }
+    let part_scopes = part_scopes_of(doc, node);
+    let mut out = Vec::new();
+    collect_pseudo_matches(doc, node, pseudo, pseudo_base, sheet, viewport, dark_mode, &part_scopes, &mut out);
+    out.sort_by_key(|m| (m.important, m.spec, m.key, m.decl_idx));
+    Some(std::sync::Arc::from(out))
+}
+
 /// The body of [`compute_pseudo_element_style`] — split out so the census hook
 /// above covers every exit path.
 #[allow(clippy::too_many_arguments)]
@@ -602,142 +865,28 @@ fn compute_pseudo_element_style_inner(
     // BUG-341 S10: matching runs *before* `pseudo_inherited_style` — see that
     // function's doc comment. Nothing here reads the pseudo-element's own style.
     let prof_match = lumen_core::profile::scope_detail("ps_match");
-    let mut matched: Vec<(bool, Specificity, usize, usize, &Declaration)> = Vec::new();
-    // BUG-1800 срез 9: one candidate buffer reused across every block below —
-    // `candidates_into` clears it, so the probe pays at most one allocation
-    // instead of one per block (the probe runs on every element, twice per
-    // element on a sheet that arms `pseudo_probe`).
-    let mut cand = Vec::new();
-    let node_data = doc.get(node);
-    let node_tag = node_data.element_name().map_or("", |q| q.local.as_str());
-    let node_id = node_data.get_attr("id");
-    let class_attr = node_data.get_attr("class").unwrap_or("");
-    let node_attrs: &[lumen_dom::Attribute] = match &node_data.data {
-        lumen_dom::NodeData::Element { attrs, .. } => attrs,
-        _ => &[],
-    };
-    ensure_cascade_index(sheet, viewport, dark_mode);
-    // BUG-935 срез 90: candidates come from the pseudo-subject indices — rules without a
-    // pseudo-element in a subject cannot match here (`matches_complex_for_pseudo` returns
-    // `None` for them before it looks at the node), and a `@media`/`@supports` block with no
-    // such rule is not visited at all. Indices are the general index's own (same numbering).
-    // BUG-1800 срез 8: style-ключ берётся лениво, на сматченном правиле, — сбор `keys`
-    // для всех кандидатов был аллокацией на каждую пробу (~16k на флаш pikabu), читался
-    // же лишь сматчившими (~200).
-    // PERF-PSEUDO-BY-NAME: top-level candidates come from the index built for
-    // THIS pseudo name only — `::before` probes no longer wade through
-    // `::after`/`::marker` rules that `matches_complex_for_pseudo` would
-    // reject one selector at a time. A name absent from the map has no
-    // top-level pseudo rules, so the loop is skipped entirely.
+    // PERF-PSEUDO-PRE: a cascade pass may already have matched this node's
+    // pseudo rules in parallel (`style::pre_match::pseudo_lookup`) — the record
+    // is the same `PseudoMatch` list the sequential road below builds, only the
+    // candidate scan is gone. Callers that pass `ua_decls` (the view-transition
+    // tree) always take the sequential road: their declarations are per-call.
     let pseudo_base = split_pseudo_request(pseudo).0;
-    with_front_cascade_index(|idx| {
-        let Some((_, top_index)) = idx
-            .pseudo_rules_by_name
-            .iter()
-            .find(|(n, _)| n.eq_ignore_ascii_case(pseudo_base))
-        else {
-            return;
-        };
-        for rule_idx in
-            top_index.candidates_into(node_tag, node_id, class_attr.split_whitespace(), node_attrs, &mut cand)
-        {
-            let rule = &sheet.rules[*rule_idx];
-            let mut best: Option<Specificity> = None;
-            for complex in &rule.selectors {
-                if let Some(spec) = matches_complex_for_pseudo(complex, pseudo, doc, node) {
-                    best = Some(match best {
-                        Some(prev) if prev >= spec => prev,
-                        _ => spec,
-                    });
-                }
-            }
-            if let Some(spec) = best {
-                let key = idx.order.style(*rule_idx);
-                for (decl_idx, decl) in rule.declarations.iter().enumerate() {
-                    matched.push((decl.important, spec, key, decl_idx, decl));
-                }
-            }
-        }
-    });
-
-    // Perf: see the analogous @media/@supports comments in `compute_style` —
-    // "active" precomputed once per (sheet, viewport, dark_mode) rather than
-    // re-evaluated on every element (this function runs twice per element,
-    // for `::before` and `::after`).
-    // CSS Conditional Rules L3 §2 — @supports in pseudo-element context.
-    with_front_cascade_index(|idx| {
-        let blocks = idx
-            .pseudo_media
-            .iter()
-            .filter(|b| idx.active_media[b.block])
-            .map(|b| (b, &sheet.media_rules[b.block].rules))
-            .chain(
-                idx.pseudo_supports
-                    .iter()
-                    .filter(|b| idx.active_supports[b.block])
-                    .map(|b| (b, &sheet.supports_rules[b.block].rules)),
-            );
-        for (block, rules) in blocks {
-            // PERF-PSEUDO-BY-NAME: only this pseudo's index inside the block —
-            // blocks without rules for it are skipped entirely.
-            let Some((_, block_index)) = block
-                .by_name
-                .iter()
-                .find(|(n, _)| n.eq_ignore_ascii_case(pseudo_base))
-            else {
-                continue;
-            };
-            for rule_idx in
-                block_index.candidates_into(node_tag, node_id, class_attr.split_whitespace(), node_attrs, &mut cand)
-            {
-                let rule = &rules[*rule_idx];
-                let mut best: Option<Specificity> = None;
-                for complex in &rule.selectors {
-                    if let Some(spec) = matches_complex_for_pseudo(complex, pseudo, doc, node) {
-                        best = Some(match best {
-                            Some(prev) if prev >= spec => prev,
-                            _ => spec,
-                        });
-                    }
-                }
-                if let Some(spec) = best {
-                    let global_rule_idx = block.base + *rule_idx;
-                    for (decl_idx, decl) in rule.declarations.iter().enumerate() {
-                        matched.push((decl.important, spec, global_rule_idx, decl_idx, decl));
-                    }
-                }
-            }
-        }
-    });
-
-    // Part scopes: the outer tree's `host::part(names)::pseudo` rules match the part element. They sort
-    // after the part-less rules of their sheet (rule index offset), never ahead by specificity.
-    let part_pseudo_ok = |k: &PseudoElementKind| pseudo_element_matches(k, pseudo);
-    for scope in &part_scopes {
-        let names: Vec<&str> = scope.names.iter().map(String::as_str).collect();
-        set_part_scope_host(doc, scope);
-        let rules: &[lumen_css_parser::Rule] = match &scope.sheet {
-            Some(shadow) => &shadow.rules,
-            None => &sheet.rules,
-        };
-        for (i, rule) in rules.iter().enumerate() {
-            let mut best: Option<Specificity> = None;
-            for complex in &rule.selectors {
-                if let Some(spec) = matches_part_complex(complex, doc, node, scope.host, &names, Some(&part_pseudo_ok)) {
-                    best = Some(match best {
-                        Some(prev) if prev >= spec => prev,
-                        _ => spec,
-                    });
-                }
-            }
-            if let Some(spec) = best {
-                for (decl_idx, decl) in rule.declarations.iter().enumerate() {
-                    matched.push((decl.important, spec, PART_RULE_BASE + i, decl_idx, decl));
-                }
-            }
-        }
-        SHADOW_HOST_SCOPE.with(|c| c.set(u32::MAX));
-    }
+    // Functional requests (`::view-transition-old(name)`, `::scroll-button(dir)`,
+    // `::highlight(name)`) match on their argument, which the bare-name record
+    // does not carry — they always take the sequential road.
+    let pre = (ua_decls.is_empty() && split_pseudo_request(pseudo).1.is_none())
+        .then(|| super::pre_match::pseudo_lookup(node, pseudo_base, sheet, viewport, dark_mode))
+        .flatten();
+    let mut matched_vec: Vec<PseudoMatch> = Vec::new();
+    let matched: &[PseudoMatch] = if let Some(rec) = &pre {
+        rec
+    } else {
+        collect_pseudo_matches(
+            doc, node, pseudo, pseudo_base, sheet, viewport, dark_mode, &part_scopes, &mut matched_vec,
+        );
+        matched_vec.sort_by_key(|m| (m.important, m.spec, m.key, m.decl_idx));
+        &matched_vec
+    };
 
     if matched.is_empty() && ua_decls.is_empty() {
         // CSS Lists L3 §2.1: ::marker always generates a marker box from list-style-type
@@ -777,14 +926,17 @@ fn compute_pseudo_element_style_inner(
     };
     let _prof_apply = lumen_core::profile::scope_detail("ps_apply");
 
-    matched.sort_by_key(|&(imp, spec, rule_idx, decl_idx, _)| (imp, spec, rule_idx, decl_idx));
+    // `matched` arrives sorted — `collect_pseudo_matches` callers sort by the
+    // same (important, spec, key, decl_idx) key the old in-place sort used.
 
     let parent_fs = parent.font_size;
     let is_quirks = doc.mode() == DocumentMode::Quirks;
-    for (_, _, _, _, decl) in &matched {
+    for m in matched {
         // Pseudo-element style: the basis is irrelevant here — `zoom` is folded
         // into the originating element's style, which this one inherits from.
-        let _ = apply_font_size(&mut style, decl, parent_fs, parent_fs, viewport, is_quirks);
+        if let Some(decl) = resolve_pseudo_decl(sheet, &part_scopes, m) {
+            let _ = apply_font_size(&mut style, decl, parent_fs, parent_fs, viewport, is_quirks);
+        }
     }
     let em_basis = style.font_size;
     let parent_weight = parent.font_weight;
@@ -798,7 +950,9 @@ fn compute_pseudo_element_style_inner(
     let is_first_line = pseudo.eq_ignore_ascii_case("first-line");
     // `ua_decls` are the UA-origin declarations (the `::view-transition-*` tree's UA sheet): they
     // come first, so every author declaration overrides them whatever its specificity.
-    for decl in ua_decls.iter().chain(matched.iter().map(|&(_, _, _, _, d)| d)) {
+    let mut pseudo_decls: Vec<&Declaration> = ua_decls.iter().collect();
+    pseudo_decls.extend(matched.iter().filter_map(|m| resolve_pseudo_decl(sheet, &part_scopes, m)));
+    for decl in pseudo_decls {
         if (is_marker && !marker_property_applies(&decl.property))
             || (is_first_line && !first_line_property_applies(&decl.property))
         {

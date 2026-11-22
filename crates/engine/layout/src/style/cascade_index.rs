@@ -110,7 +110,7 @@ pub(in crate::style) struct CascadeIndex {
     /// A `Vec` rather than a `HashSet`: real sheets use a handful of distinct
     /// pseudo-elements, and a linear `eq_ignore_ascii_case` scan over ≤10 short
     /// names beats hashing a `&str` (and needs no allocation at the call site).
-    pseudo_subjects: Vec<Box<str>>,
+    pub(in crate::style) pseudo_subjects: Vec<Box<str>>,
     /// BUG-935 срез 90 — [`RuleIndex`] over only the top-level rules that have a
     /// pseudo-element in a selector's subject, reporting the same indices into
     /// `sheet.rules` as [`Self::rules`].
