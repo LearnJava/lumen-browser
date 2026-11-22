@@ -316,6 +316,7 @@ fn canvas_font_data(font_str: &str) -> Arc<[u8]> {
 ///
 /// `pub(crate)`: shared with [`crate::offscreen_canvas`] — see
 /// [`parse_canvas_font_size`].
+#[cfg_attr(not(test), allow(dead_code))] // production callers use `measure_text_width_for`
 pub(crate) fn measure_text_width(text: &str, pixel_size: f32) -> f64 {
     measure_text_width_for("", text, pixel_size)
 }

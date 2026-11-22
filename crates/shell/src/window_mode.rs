@@ -506,6 +506,7 @@ fn run_window_mode_inner(
         status_bubble: crate::status_bubble::StatusBubble::default(),
         status_hover_source: None,
         focus_from_keyboard: false,
+        injected_modifiers: 0,
         window_focused: true,
         cursor_position: None,
         pending_pointer_moves: Vec::new(),

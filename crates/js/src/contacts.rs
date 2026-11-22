@@ -13,6 +13,7 @@
 /// Defines `navigator.contacts` with `select()` and `getProperties()` methods.
 /// Must be called **after** DOM install so that `navigator` is already present.
 #[cfg(feature = "v8-backend")]
+#[cfg_attr(not(test), allow(dead_code))]  // installed only by this module's own tests since BUG-1835 parity trim
 pub(crate) fn install_contacts_manager_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
 ) -> lumen_core::JsResult<()> {
@@ -23,6 +24,7 @@ pub(crate) fn install_contacts_manager_v8(
 
 /// JavaScript shim implementing the W3C Contact Picker API (Phase 0).
 #[cfg(feature = "v8-backend")]
+#[cfg_attr(not(test), allow(dead_code))]  // installed only by this module's own tests since BUG-1835 parity trim
 const CONTACTS_SHIM: &str = r#"(function() {
   if (typeof navigator === 'undefined') return;
 

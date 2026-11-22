@@ -249,6 +249,46 @@ impl Lumen {
                 }
                 // BUG-1194: a bare key press/release (Escape, Tab, Shift, …).
                 AutomationCommand::Key { key, code, down } => {
+                    // BiDi sends each key of a chord as its own Key command —
+                    // reconstruct the modifier mask so Shift+Tab etc. replay
+                    // with the right direction (bits match `page_keys`' mask).
+                    let mod_bit = match key.as_str() {
+                        "Shift" => 0b0010,
+                        "Control" => 0b0001,
+                        "Alt" => 0b0100,
+                        "Meta" => 0b1000,
+                        _ => 0,
+                    };
+                    if mod_bit != 0 {
+                        if down {
+                            self.injected_modifiers |= mod_bit;
+                        } else {
+                            self.injected_modifiers &= !mod_bit;
+                        }
+                    }
+                    if down {
+                        // Any key press is keyboard modality for
+                        // `:focus-visible` — the same rule a real keydown
+                        // applies in `handle_key`.
+                        self.focus_from_keyboard = true;
+                    }
+                    // Tab moves page focus exactly like a real Tab press
+                    // (`keyboard.rs`): the frame's own order first, then the
+                    // page order; `focus_page_node` sets the keyboard
+                    // modality that `:focus-visible` reads.
+                    if down && key == "Tab" && code == "Tab" {
+                        let forward = self.injected_modifiers & 0b0010 == 0;
+                        let moved = match self.focused_frame {
+                            Some((idx, _)) => {
+                                self.advance_frame_focus(idx, forward)
+                                    || self.advance_page_focus(forward)
+                            }
+                            None => self.advance_page_focus(forward),
+                        };
+                        if moved {
+                            self.request_redraw();
+                        }
+                    }
                     let event = if down { "keydown" } else { "keyup" };
                     self.inject_key_events(&key, &code, &[event]);
                     let _ = reply_tx.send(AutomationReply::Ack);

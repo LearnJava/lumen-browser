@@ -15,6 +15,7 @@
 /// rquickjs side removed in S12b-B5): identical JS shim, evaluated via
 /// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
+#[cfg_attr(not(test), allow(dead_code))]  // installed only by this module's own tests since BUG-1835 parity trim
 pub(crate) fn install_window_management_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
     rt.eval(WINDOW_MANAGEMENT_SHIM)?;
@@ -23,6 +24,7 @@ pub(crate) fn install_window_management_api_v8(rt: &crate::v8_runtime::V8JsRunti
 
 /// JavaScript shim implementing the W3C Multi-Screen Window Placement Level 1 API.
 #[cfg(feature = "v8-backend")]
+#[cfg_attr(not(test), allow(dead_code))]  // installed only by this module's own tests since BUG-1835 parity trim
 const WINDOW_MANAGEMENT_SHIM: &str = r#"(function() {
   'use strict';
   if (typeof screen === 'undefined' || typeof navigator === 'undefined') return;

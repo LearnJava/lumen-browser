@@ -119,6 +119,8 @@ fn build_endpoint(profile: TlsProfile, h1_only: bool) -> Result<Endpoint, Error>
         let _ = b.add_certificate_compression_algorithm(BrotliCertDecompress);
         // trust_anchors (51764): an empty requested-anchors list still makes
         // BoringSSL emit the extension, like Chrome's populated one does.
+        // SAFETY: `b` is a live SSL_CTX; null/0 is BoringSSL's documented
+        // "empty requested-anchors list" input.
         unsafe {
             ffi::SSL_CTX_set1_requested_trust_anchors(b.as_ptr(), std::ptr::null(), 0);
         }
@@ -186,6 +188,8 @@ pub(crate) fn connect(
         ssl.set_enable_ech_grease(true);
         // server_padding (4832): Chrome sends the extension with a zero
         // requested size — BoringSSL only emits it when configured.
+        // SAFETY: `ssl` is a live SSL; 0 is the documented "no padding
+        // requested" value.
         unsafe {
             ffi::SSL_set_server_padding_request(ssl.as_ptr(), 0);
         }
@@ -203,6 +207,8 @@ pub(crate) fn connect(
                 0x00, 0x04, 0x00, 0x60, 0x00, 0x00, // INITIAL_WINDOW_SIZE = 6291456
                 0x00, 0x06, 0x00, 0x04, 0x00, 0x00, // MAX_HEADER_LIST_SIZE = 262144
             ];
+            // SAFETY: `ssl` is a live SSL; `b"h2"` is NUL-free and `len`
+            // matches its 2 bytes; the settings buffer outlives the call.
             unsafe {
                 ffi::SSL_add_application_settings(
                     ssl.as_ptr(),

@@ -1558,7 +1558,11 @@ impl Lumen {
                     let new_nid = last_req.map(|n| lumen_dom::NodeId::from_index(n as usize));
                     if new_nid != self.focused_node {
                         self.focused_node = new_nid;
-                        self.focus_from_keyboard = false;
+                        // `focus_from_keyboard` is deliberately NOT reset:
+                        // it records the last *input* modality (CSS UI L4
+                        // §3.3 `:focus-visible`), and a programmatic
+                        // `element.focus()` must not overwrite it — keyboard
+                        // focus followed by script focus still matches.
                         // ADR-016 M2.2b-7: `focused_node` is set synchronously above,
                         // so `:focus`/`:focus-within` re-evaluates correctly on any
                         // later relayout (it feeds `set_interactive_state` at the top

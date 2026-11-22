@@ -560,10 +560,17 @@ pub(crate) struct Lumen {
     /// change when the pointer moves from a link to plain text beside it.
     /// Updated on every `CursorMoved`; `None` over the chrome and a frame.
     pub(crate) status_hover_source: Option<NodeId>,
-    /// UX-STATUS-BUBBLE: the page focus was put on its node by the keyboard
-    /// (Tab, `accesskey`), not by a click — only then does a focused link
-    /// show its address.
+    /// UX-STATUS-BUBBLE / `:focus-visible`: the last page interaction was a
+    /// keyboard one (Tab, `accesskey`, any keydown — real or injected via
+    /// WebDriver/BiDi), not a pointer press. Pointer clicks clear it
+    /// (`click.rs`); programmatic `element.focus()` preserves it — the CSS
+    /// UI L4 §3.3 modality is about the last *input*, not who moved focus.
     pub(crate) focus_from_keyboard: bool,
+    /// Modifier mask of keys currently held via injected (WebDriver/BiDi)
+    /// `AutomationCommand::Key` presses — real `self.modifiers` only tracks
+    /// OS-level winit events, which injected input never produces. Bits:
+    /// ctrl 1, shift 2, alt 4, meta 8 (same layout as `page_keys`' mask).
+    pub(crate) injected_modifiers: u8,
     /// UX-CARET: the OS window is the active one (`WindowEvent::Focused`); a
     /// background window draws no caret. Starts `true`: headless runs never
     /// receive the event.
