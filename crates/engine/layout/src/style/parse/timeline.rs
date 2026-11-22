@@ -7,6 +7,10 @@
 //! видимость тех items, которые продолжают звать `style.rs`, его тест-модули
 //! и соседние модули `style::parse`.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use crate::scroll_timeline::ScrollAxis;
 use crate::style::{
     AnimationDirection, AnimationFillMode, AnimationPlayState, AnimationTimeline, ComputedStyle,
@@ -325,32 +329,69 @@ fn parse_single_animation(s: &str) -> SingleAnimation {
 /// — consumer (transition scheduler) skip-нет такие layers. Это отличается
 /// от longhand-парсинга `transition-property: none` (там → пустой Vec),
 /// что даёт parallel-length-инвариант после shorthand-развёртки.
-pub(in crate::style) fn apply_transition_shorthand(style: &mut ComputedStyle, val: &str) {
-    let mut props: Vec<String> = Vec::new();
-    let mut durations: Vec<f32> = Vec::new();
-    let mut timings: Vec<TimingFunction> = Vec::new();
-    let mut delays: Vec<f32> = Vec::new();
-    let mut behaviors: Vec<TransitionBehavior> = Vec::new();
+// PERF-TRANSITION-CACHE — `LUMEN_APPLY_CENSUS` on habr showed `transition`
+// as the single most expensive declaration (~940 ms per session, ~13 µs per
+// application): the same value string is re-tokenized and re-parsed for
+// every element the rule matches. The parse is a pure function of `val`
+// (times resolve to absolute seconds, property names/easing carry no
+// node/viewport/inherited state), so the five parallel lists are computed
+// once per distinct string and cloned into each ComputedStyle. Bounded and
+// clear-on-overflow like `INLINE_DECL_CACHE` in cascade.rs.
+struct TransitionLists {
+    properties: Vec<String>,
+    durations: Vec<f32>,
+    timings: Vec<TimingFunction>,
+    delays: Vec<f32>,
+    behaviors: Vec<TransitionBehavior>,
+}
 
-    for layer in split_top_level_commas(val) {
-        let layer = layer.trim();
-        if layer.is_empty() {
-            continue;
+thread_local! {
+    static TRANSITION_CACHE: RefCell<HashMap<String, Rc<TransitionLists>>> =
+        RefCell::new(HashMap::new());
+}
+
+fn transition_lists(val: &str) -> Rc<TransitionLists> {
+    TRANSITION_CACHE.with(|cell| {
+        let mut map = cell.borrow_mut();
+        if let Some(rc) = map.get(val) {
+            return rc.clone();
         }
-        let parsed = parse_single_transition(layer);
-        props.push(parsed.property);
-        durations.push(parsed.duration);
-        timings.push(parsed.timing);
-        delays.push(parsed.delay);
-        behaviors.push(parsed.behavior);
-    }
+        if map.len() >= 8192 {
+            map.clear();
+        }
+        let mut lists = TransitionLists {
+            properties: Vec::new(),
+            durations: Vec::new(),
+            timings: Vec::new(),
+            delays: Vec::new(),
+            behaviors: Vec::new(),
+        };
+        for layer in split_top_level_commas(val) {
+            let layer = layer.trim();
+            if layer.is_empty() {
+                continue;
+            }
+            let parsed = parse_single_transition(layer);
+            lists.properties.push(parsed.property);
+            lists.durations.push(parsed.duration);
+            lists.timings.push(parsed.timing);
+            lists.delays.push(parsed.delay);
+            lists.behaviors.push(parsed.behavior);
+        }
+        let rc = Rc::new(lists);
+        map.insert(val.to_string(), rc.clone());
+        rc
+    })
+}
 
-    style.transition_properties = props;
+pub(in crate::style) fn apply_transition_shorthand(style: &mut ComputedStyle, val: &str) {
+    let lists = transition_lists(val);
+    style.transition_properties = lists.properties.clone();
     style.transition_property_none = false;
-    style.transition_durations = durations;
-    style.transition_timing_functions = timings;
-    style.transition_delays = delays;
-    style.transition_behaviors = behaviors;
+    style.transition_durations = lists.durations.clone();
+    style.transition_timing_functions = lists.timings.clone();
+    style.transition_delays = lists.delays.clone();
+    style.transition_behaviors = lists.behaviors.clone();
 }
 
 /// Результат парсинга одного `<single-transition>` слоя. Все 4 поля

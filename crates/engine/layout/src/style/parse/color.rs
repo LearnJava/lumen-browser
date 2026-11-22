@@ -8,6 +8,10 @@
 //! его тест-модули. Таблица `NAMED_COLORS` уехала отдельным табличным файлом —
 //! [`crate::style::values::named_colors`].
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use lumen_core::ColorSpace;
 
 use crate::style::parse::timeline::tokenize_with_parens;
@@ -191,6 +195,26 @@ pub(super) fn strip_comments(s: &str) -> std::borrow::Cow<'_, str> {
 /// `Some(CssColor::CurrentColor)` для этого случая;
 /// `Some(CssColor::Rgba(...))` для обычных цветов; `None` для невалидных.
 pub(in crate::style) fn parse_css_color_legacy(s: &str, is_quirks: bool) -> Option<CssColor> {
+    // PERF-COLOR-CACHE — pure function of (s, is_quirks); every color-ish
+    // declaration (`color`, `*-color`, `background`, `border`, …) re-parses
+    // the same handful of value strings per element. `LUMEN_APPLY_CENSUS`
+    // put `color` alone at ~115 ms/session on habr. Bounded, clear-on-overflow.
+    COLOR_LEGACY_CACHE.with(|cell| {
+        let mut map = cell.borrow_mut();
+        let key = (s.to_string(), is_quirks, profile_gen());
+        if let Some(&v) = map.get(&key) {
+            return v;
+        }
+        if map.len() >= 8192 {
+            map.clear();
+        }
+        let v = parse_css_color_legacy_uncached(s, is_quirks);
+        map.insert(key, v);
+        v
+    })
+}
+
+fn parse_css_color_legacy_uncached(s: &str, is_quirks: bool) -> Option<CssColor> {
     let s = strip_comments(s);
     let s = s.trim();
     if s.eq_ignore_ascii_case("currentcolor") {
@@ -207,6 +231,44 @@ pub(in crate::style) fn parse_css_color_legacy(s: &str, is_quirks: bool) -> Opti
         return Some(CssColor::Wide(wide));
     }
     parse_color_legacy(s, is_quirks).map(CssColor::Rgba)
+}
+
+// PERF-COLOR-CACHE — `LUMEN_APPLY_CENSUS` ranked `color` ~115 ms/session
+// (~5 µs per application): `computed_color_css` + up to two
+// `parse_css_color_legacy` runs per element for the same handful of value
+// strings. Both are pure functions of `(val, is_quirks)` — the parsed
+// `CssColor` and the computed-css string are cached per distinct pair and
+// cloned into each ComputedStyle. Bounded, clear-on-overflow.
+pub(in crate::style) struct ColorDecl {
+    pub css: Option<String>,
+    pub parsed: Option<CssColor>,
+}
+
+thread_local! {
+    static COLOR_DECL_CACHE: RefCell<HashMap<(String, bool, u64), Rc<ColorDecl>>> =
+        RefCell::new(HashMap::new());
+    static COLOR_LEGACY_CACHE: RefCell<HashMap<(String, bool, u64), Option<CssColor>>> =
+        RefCell::new(HashMap::new());
+}
+
+pub(in crate::style) fn color_decl(val: &str, is_quirks: bool) -> Rc<ColorDecl> {
+    COLOR_DECL_CACHE.with(|cell| {
+        let mut map = cell.borrow_mut();
+        let key = (val.to_string(), is_quirks, profile_gen());
+        if let Some(rc) = map.get(&key) {
+            return rc.clone();
+        }
+        if map.len() >= 8192 {
+            map.clear();
+        }
+        let css = super::color_serialize::computed_color_css(val);
+        let parsed = parse_css_color_legacy(val, is_quirks).or_else(|| {
+            parse_css_color_legacy(&super::color_serialize::none_to_zero(css.as_deref()?), is_quirks)
+        });
+        let rc = Rc::new(ColorDecl { css, parsed });
+        map.insert(key, rc.clone());
+        rc
+    })
 }
 
 /// `<color>` для значений, чей computed value обязан сохранять `color(srgb …)`-форму
@@ -363,6 +425,18 @@ thread_local! {
     /// получают его сами, без `StyleEnvSnapshot`.
     static COLOR_PROFILES: std::cell::RefCell<ColorProfileCtx> =
         const { std::cell::RefCell::new(ColorProfileCtx { revision: None, map: None }) };
+    /// Bumped whenever the profile context actually changes; the declaration
+    /// parse caches key on it so a `color(--name …)` value can never be
+    /// served from a different sheet's profile map.
+    static COLOR_PROFILES_GEN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+fn profile_gen() -> u64 {
+    COLOR_PROFILES_GEN.with(std::cell::Cell::get)
+}
+
+fn bump_profile_gen() {
+    COLOR_PROFILES_GEN.with(|c| c.set(c.get().wrapping_add(1)));
 }
 
 /// Привязывает профили `@color-profile` листа к текущему потоку (вызывается
@@ -373,8 +447,11 @@ pub(in crate::style) fn sync_color_profiles(sheet: &lumen_css_parser::Stylesheet
     COLOR_PROFILES.with(|cell| {
         let mut ctx = cell.borrow_mut();
         if sheet.color_profiles.is_empty() {
-            ctx.map = None;
-            ctx.revision = None;
+            if ctx.map.is_some() || ctx.revision.is_some() {
+                ctx.map = None;
+                ctx.revision = None;
+                bump_profile_gen();
+            }
             return;
         }
         if ctx.revision == Some(sheet.revision()) && ctx.map.is_some() {
@@ -388,6 +465,7 @@ pub(in crate::style) fn sync_color_profiles(sheet: &lumen_css_parser::Stylesheet
         }
         ctx.map = Some(map);
         ctx.revision = Some(sheet.revision());
+        bump_profile_gen();
     });
 }
 

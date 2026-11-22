@@ -7,6 +7,9 @@
 //! видимость тех items, которые продолжают звать `style.rs`, его тест-модули
 //! и соседние модули `style::parse`.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use crate::style::Quotes;
 
 /// Парсер CSS Lists L3 §3 `counter-reset` / `counter-increment` value.
@@ -62,6 +65,28 @@ pub(in crate::style) fn is_css_ident(s: &str) -> bool {
 /// number of CSS strings forms `(open, close)` pairs (outermost first).
 /// Returns `None` if the value is malformed (odd string count or none found).
 pub(in crate::style) fn parse_quotes(value: &str) -> Option<Quotes> {
+    // PERF-QUOTES-CACHE — pure function of `value`; `LUMEN_APPLY_CENSUS`
+    // ranked `quotes` ~112 ms/session on habr (53k applications of a
+    // handful of strings). Bounded, clear-on-overflow.
+    QUOTES_CACHE.with(|cell| {
+        let mut map = cell.borrow_mut();
+        if let Some(v) = map.get(value) {
+            return v.clone();
+        }
+        if map.len() >= 8192 {
+            map.clear();
+        }
+        let v = parse_quotes_uncached(value);
+        map.insert(value.to_string(), v.clone());
+        v
+    })
+}
+
+thread_local! {
+    static QUOTES_CACHE: RefCell<HashMap<String, Option<Quotes>>> = RefCell::new(HashMap::new());
+}
+
+fn parse_quotes_uncached(value: &str) -> Option<Quotes> {
     let v = value.trim();
     if v.eq_ignore_ascii_case("auto") {
         return Some(Quotes::Auto);

@@ -10,6 +10,10 @@
 //! группу не входит по алфавиту, а по смыслу — порядок веток внутри `match`
 //! семантики не несёт, потому что все метки уникальны.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use crate::style::values::border_image;
 use crate::style::{
     Appearance,
@@ -79,7 +83,7 @@ use crate::style::parse::box_sides::{
     split_radius_pair,
 };
 use crate::style::parse::color::{parse_color_legacy, parse_css_color_legacy};
-use crate::style::parse::color_serialize::{computed_color_css, none_to_zero};
+
 use crate::style::parse::counters::is_css_ident;
 use crate::style::parse::image_computed::computed_image_css;
 use crate::style::parse::image::{
@@ -105,6 +109,58 @@ fn background_spec(style: &mut ComputedStyle) -> &mut BackgroundSpecified {
     style.background_specified.get_or_insert_with(Default::default)
 }
 
+// PERF-BG-CACHE — разбор `background`-шортханда зависит только от
+// (val, em_basis, viewport, is_quirks). `LUMEN_APPLY_CENSUS`: ~18 µs на
+// применение, ~5 тыс. применений на сессию habr. Слои клонируются в каждый
+// ComputedStyle; кэш ограничен, при переполнении чистится.
+// `None` — невалидное объявление (ветка отвечает `true`, стиль не трогаем),
+// как и раньше.
+type BgLayerLists = Vec<(BackgroundLayer, Option<CssColor>)>;
+type BgCacheKey = (String, u32, u32, u32, bool);
+type BgCacheMap = HashMap<BgCacheKey, Option<Rc<BgLayerLists>>>;
+
+thread_local! {
+    static BG_LISTS_CACHE: RefCell<BgCacheMap> = RefCell::new(HashMap::new());
+}
+
+fn bg_lists(
+    val: &str,
+    em_basis: f32,
+    viewport: Size,
+    is_quirks: bool,
+) -> Option<Rc<BgLayerLists>> {
+    BG_LISTS_CACHE.with(|cell| {
+        let mut map = cell.borrow_mut();
+        let key = (
+            val.to_string(),
+            em_basis.to_bits(),
+            viewport.width.to_bits(),
+            viewport.height.to_bits(),
+            is_quirks,
+        );
+        if let Some(rc) = map.get(&key) {
+            return rc.clone();
+        }
+        if map.len() >= 4096 {
+            map.clear();
+        }
+        let out = (|| {
+            let layer_strs = split_top_level_commas(val.trim());
+            if layer_strs.is_empty() {
+                return Some(Vec::new());
+            }
+            // Невалидный слой отбрасывает объявление целиком (CSS Syntax).
+            layer_strs
+                .iter()
+                .map(|ls| parse_single_bg_layer(ls.trim(), em_basis, viewport, is_quirks))
+                .collect::<Option<Vec<_>>>()
+        })();
+        let rc = out.map(Rc::new);
+        map.insert(key, rc.clone());
+        rc
+    })
+}
+
 /// Применить одну декларацию из группы «отрисовка».
 ///
 /// Возвращает `true`, если свойство принадлежит этой группе и было обработано;
@@ -126,10 +182,11 @@ pub(in crate::style) fn apply_decl_paint(
             // BUG-1425: lab()/oklch()/color()/color-mix()/относительные цвета хранят запись computed
             // `color` отдельно — `color: Color` теряет пространство. Формы с calc()/`none`, которые
             // sRGB-разбор не берёт, получают байты из канонической записи.
-            let css = computed_color_css(val);
-            let parsed = parse_css_color_legacy(val, is_quirks).or_else(|| {
-                parse_css_color_legacy(&none_to_zero(css.as_deref()?), is_quirks)
-            });
+            // PERF-COLOR-CACHE: (computed css, parsed CssColor) is a pure
+            // function of (val, is_quirks) — see parse::color::color_decl.
+            let decl = crate::style::parse::color::color_decl(val, is_quirks);
+            let css = decl.css.clone();
+            let parsed = decl.parsed;
             let prev_css = std::mem::replace(&mut style.color_css, css.map(Into::into));
             match parsed {
                 Some(CssColor::Rgba(c)) => {
@@ -165,33 +222,30 @@ pub(in crate::style) fn apply_decl_paint(
             // CSS Backgrounds L3 §3 shorthand: comma-separated list of layers.
             // Each layer: [<image>] [<position>[/<size>]]? [<repeat>]
             //             [<attachment>] [<box> [<box>]?] + optional <color> in last.
-            let trimmed = val.trim();
-            let layer_strs = split_top_level_commas(trimmed);
-            if layer_strs.is_empty() { return true; }
-
-            // Невалидный слой отбрасывает объявление целиком (CSS Syntax): прежние
-            // слои и цвет (цепочка запасных `background:` старых сайтов) остаются.
-            let Some(parsed) = layer_strs
-                .iter()
-                .map(|ls| parse_single_bg_layer(ls.trim(), em_basis, viewport, is_quirks))
-                .collect::<Option<Vec<_>>>()
-            else {
+            //
+            // PERF-BG-CACHE — `LUMEN_APPLY_CENSUS` ranked `background` ~93 ms
+            // per habr session (~18 µs per application). The parse depends on
+            // (val, em_basis, viewport, is_quirks) only, so the layer list is
+            // computed once per distinct key and cloned into each style.
+            // Bounded, clear-on-overflow.
+            let Some(lists) = bg_lists(val, em_basis, viewport, is_quirks) else {
                 return true;
             };
-
-            // Сбрасываем текущие слои — shorthand всегда переписывает полностью.
+            if lists.is_empty() {
+                return true;
+            }
             style.background_layers.clear();
             style.background_specified = None;
             style.background_color = None;
-
-            let last = parsed.len() - 1;
-            for (i, (layer, maybe_color)) in parsed.into_iter().enumerate() {
-                style.background_layers.push(layer);
+            let last = lists.len() - 1;
+            for (i, (layer, maybe_color)) in lists.iter().enumerate() {
+                style.background_layers.push(layer.clone());
                 // Цвет допустим только в последнем слое.
                 if i == last && let Some(c) = maybe_color {
-                    style.background_color = Some(c);
+                    style.background_color = Some(*c);
                 }
             }
+            return true;
         }
         "accent-color" => {
             // CSS UI L4 §6.1: <color> | auto.

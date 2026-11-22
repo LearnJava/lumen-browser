@@ -7,6 +7,9 @@
 //! `run-in …`, `ruby-text`), едет в `ComputedStyle::display_form` как каноническая строка —
 //! по ней `getComputedStyle` отдаёт значение, а раскладка берёт ближайший `Display`.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use crate::style::values::typography::Display;
 
 /// Результат разбора `display`.
@@ -99,7 +102,29 @@ fn single_keyword(w: &str) -> Option<ParsedDisplay> {
 }
 
 /// Разобрать значение `display`; `None` — значение недопустимо (декларация отбрасывается).
+///
+/// PERF-DISPLAY-CACHE — чистая функция от `val`; `LUMEN_APPLY_CENSUS` показал
+/// ~34k применений на сессию habr. Кэш ограничен, при переполнении чистится.
 pub(in crate::style) fn parse_display(val: &str) -> Option<ParsedDisplay> {
+    DISPLAY_CACHE.with(|cell| {
+        let mut map = cell.borrow_mut();
+        if let Some(&v) = map.get(val) {
+            return v;
+        }
+        if map.len() >= 8192 {
+            map.clear();
+        }
+        let v = parse_display_uncached(val);
+        map.insert(val.to_string(), v);
+        v
+    })
+}
+
+thread_local! {
+    static DISPLAY_CACHE: RefCell<HashMap<String, Option<ParsedDisplay>>> = RefCell::new(HashMap::new());
+}
+
+fn parse_display_uncached(val: &str) -> Option<ParsedDisplay> {
     let lower = val.trim().to_ascii_lowercase();
     let words: Vec<&str> = lower.split_ascii_whitespace().collect();
     if words.is_empty() || words.len() > 3 {

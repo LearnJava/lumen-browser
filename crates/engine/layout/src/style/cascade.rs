@@ -313,6 +313,11 @@ thread_local! {
     static INLINE_DECL_CACHE: RefCell<HashMap<String, Rc<Vec<Declaration>>>> =
         RefCell::new(HashMap::new());
     static EMPTY_INLINE_DECLS: Rc<Vec<Declaration>> = Rc::new(Vec::new());
+    // PERF-CAND-REUSE — scratch buffer for `RuleIndex::candidates_into` in the
+    // main rule-match loop: one allocation per worker instead of one
+    // `collect::<Vec<_>>` per element. Contents are consumed immediately and
+    // never escape the borrow.
+    static MATCH_CAND_BUF: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
 }
 
 fn empty_inline_decls() -> Rc<Vec<Declaration>> {
@@ -775,22 +780,31 @@ pub(crate) fn compute_style_shareable(
             }
         }
     } else {
-        let cands = with_front_cascade_index(|idx| {
-            idx.rules
-                .candidates(node_tag, node_id, class_attr.split_whitespace(), node_attrs)
-                .into_iter()
-                .map(|i| (i, idx.order.style(i)))
-                .collect::<Vec<_>>()
+        with_front_cascade_index(|idx| {
+            MATCH_CAND_BUF.with(|cell| {
+                let mut buf = cell.borrow_mut();
+                idx.rules.candidates_into(
+                    node_tag,
+                    node_id,
+                    class_attr.split_whitespace(),
+                    node_attrs,
+                    &mut buf,
+                );
+            });
         });
 
-        for &(rule_idx, rule_key) in &cands {
-            let rule = &sheet.rules[rule_idx];
-            shareable &= rule.selectors.iter().all(selector_is_share_safe);
-            if let Some((spec, selector)) = best_match(rule, doc, node) {
-                push_declarations(rule, spec, rule_key, layer_n, 0, None, &mut matched);
-                matched_rules.push(MatchedRule { block: RuleBlock::Top, rule: rule_idx as u32, selector });
+        MATCH_CAND_BUF.with(|cell| {
+            let buf = cell.borrow();
+            for &rule_idx in buf.iter() {
+                let rule_key = with_front_cascade_index(|idx| idx.order.style(rule_idx));
+                let rule = &sheet.rules[rule_idx];
+                shareable &= rule.selectors.iter().all(selector_is_share_safe);
+                if let Some((spec, selector)) = best_match(rule, doc, node) {
+                    push_declarations(rule, spec, rule_key, layer_n, 0, None, &mut matched);
+                    matched_rules.push(MatchedRule { block: RuleBlock::Top, rule: rule_idx as u32, selector });
+                }
             }
-        }
+        });
     }
 
     // CSS Cascade L5 §6.4.5 — @layer rules: каждый LayerRule добавляет
@@ -915,17 +929,30 @@ pub(crate) fn compute_style_shareable(
         }
         // BUG-284: candidate pre-filter (see @layer above) — real-world
         // stylesheets often put the bulk of their rules inside @media blocks.
-        let media_cands = with_front_cascade_index(|idx| {
-            idx.media[media_i].candidates(node_tag, node_id, class_attr.split_whitespace(), node_attrs)
+        // PERF-CAND-REUSE: shared scratch buffer, one alloc per worker.
+        with_front_cascade_index(|idx| {
+            MATCH_CAND_BUF.with(|cell| {
+                let mut buf = cell.borrow_mut();
+                idx.media[media_i].candidates_into(
+                    node_tag,
+                    node_id,
+                    class_attr.split_whitespace(),
+                    node_attrs,
+                    &mut buf,
+                );
+            });
         });
-        for rule_idx in media_cands {
-            let rule = &media.rules[rule_idx];
-            shareable &= rule.selectors.iter().all(selector_is_share_safe);
-            if let Some((spec, selector)) = best_match(rule, doc, node) {
-                push_declarations(rule, spec, media_base + rule_idx, layer_n, 0, None, &mut matched);
-                matched_rules.push(MatchedRule { block: RuleBlock::Media(media_i as u32), rule: rule_idx as u32, selector });
+        MATCH_CAND_BUF.with(|cell| {
+            let buf = cell.borrow();
+            for &rule_idx in buf.iter() {
+                let rule = &media.rules[rule_idx];
+                shareable &= rule.selectors.iter().all(selector_is_share_safe);
+                if let Some((spec, selector)) = best_match(rule, doc, node) {
+                    push_declarations(rule, spec, media_base + rule_idx, layer_n, 0, None, &mut matched);
+                    matched_rules.push(MatchedRule { block: RuleBlock::Media(media_i as u32), rule: rule_idx as u32, selector });
+                }
             }
-        }
+        });
     }
     // CSS Conditional Rules L3 §2 — `@supports`: evaluate condition against
     // Lumen's supported-properties list; include contained rules only when
@@ -953,18 +980,30 @@ pub(crate) fn compute_style_shareable(
             );
             continue;
         }
-        let supports_cands = with_front_cascade_index(|idx| {
-            idx.supports[supports_i].candidates(node_tag, node_id, class_attr.split_whitespace(), node_attrs)
+        with_front_cascade_index(|idx| {
+            MATCH_CAND_BUF.with(|cell| {
+                let mut buf = cell.borrow_mut();
+                idx.supports[supports_i].candidates_into(
+                    node_tag,
+                    node_id,
+                    class_attr.split_whitespace(),
+                    node_attrs,
+                    &mut buf,
+                );
+            });
         });
-        for rule_idx in supports_cands {
-            let rule = &supports.rules[rule_idx];
-            shareable &= rule.selectors.iter().all(selector_is_share_safe);
-            if let Some((spec, selector)) = best_match(rule, doc, node) {
-                push_declarations(rule, spec, supports_base + rule_idx, layer_n, 0, None, &mut matched);
-                matched_rules
-                    .push(MatchedRule { block: RuleBlock::Supports(supports_i as u32), rule: rule_idx as u32, selector });
+        MATCH_CAND_BUF.with(|cell| {
+            let buf = cell.borrow();
+            for &rule_idx in buf.iter() {
+                let rule = &supports.rules[rule_idx];
+                shareable &= rule.selectors.iter().all(selector_is_share_safe);
+                if let Some((spec, selector)) = best_match(rule, doc, node) {
+                    push_declarations(rule, spec, supports_base + rule_idx, layer_n, 0, None, &mut matched);
+                    matched_rules
+                        .push(MatchedRule { block: RuleBlock::Supports(supports_i as u32), rule: rule_idx as u32, selector });
+                }
             }
-        }
+        });
     }
     // Everything numbered after this point (`@scope`, shadow sheets, inline style) follows
     // all the plain rules and blocks.

@@ -8,6 +8,9 @@
 //! изменены только пути модулей и видимость тех items, которые продолжает
 //! звать `style.rs` и его тест-модули.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use lumen_core::geom::Size;
 
 use crate::style::parse::color::{parse_color_legacy, parse_css_color_legacy};
@@ -745,49 +748,75 @@ pub(in crate::style) fn parse_break_value(s: &str) -> Option<BreakValue> {
     }
 }
 
-/// Initial `border-*` values on all four sides (`medium` / `none` / `currentcolor`).
-fn reset_border_sides(style: &mut ComputedStyle) {
-    style.border_top_width = 3.0;
-    style.border_right_width = 3.0;
-    style.border_bottom_width = 3.0;
-    style.border_left_width = 3.0;
-    style.border_top_style = BorderStyle::None;
-    style.border_right_style = BorderStyle::None;
-    style.border_bottom_style = BorderStyle::None;
-    style.border_left_style = BorderStyle::None;
-    style.border_top_color = CssColor::CurrentColor;
-    style.border_right_color = CssColor::CurrentColor;
-    style.border_bottom_color = CssColor::CurrentColor;
-    style.border_left_color = CssColor::CurrentColor;
+// PERF-BORDER-CACHE — `LUMEN_APPLY_CENSUS`: `border` ~49 ms на сессию habr
+// (~8.6 µs на применение), плюс 8 side-шортхендов с той же грамматикой.
+// Разбор чистая функция от (val, em_basis, viewport, is_quirks); кэш
+// ограничен, при переполнении чистится.
+#[derive(Clone, Copy)]
+pub(in crate::style) struct BorderParts {
+    pub width: f32,
+    pub style: BorderStyle,
+    pub color: CssColor,
+}
+
+type DimKey = (String, u32, u32, u32, bool);
+
+thread_local! {
+    static BORDER_PARTS_CACHE: RefCell<HashMap<DimKey, BorderParts>> =
+        RefCell::new(HashMap::new());
+}
+
+fn border_parts(val: &str, em_basis: f32, viewport: Size, is_quirks: bool) -> BorderParts {
+    BORDER_PARTS_CACHE.with(|cell| {
+        let mut map = cell.borrow_mut();
+        let key = (
+            val.to_string(),
+            em_basis.to_bits(),
+            viewport.width.to_bits(),
+            viewport.height.to_bits(),
+            is_quirks,
+        );
+        if let Some(&p) = map.get(&key) {
+            return p;
+        }
+        if map.len() >= 4096 {
+            map.clear();
+        }
+        // CSS Backgrounds L3 §4.4: shorthand resets every sub-property to its
+        // initial value (`medium` / `none` / `currentcolor`) before applying
+        // the listed ones.
+        let mut p = BorderParts { width: 3.0, style: BorderStyle::None, color: CssColor::CurrentColor };
+        // Top-level split: a colour like `rgba(0, 0, 255, 0.5)` is one token.
+        for tok in split_top_level_ws(val) {
+            if let Some(v) = parse_border_width(tok, em_basis, viewport, is_quirks) {
+                p.width = v;
+            } else if is_border_style_kw(tok) {
+                p.style = parse_border_style_kw(tok);
+            } else if let Some(c) = parse_css_color_legacy(tok, is_quirks) {
+                p.color = c;
+            }
+        }
+        map.insert(key, p);
+        p
+    })
 }
 
 /// Разбирает `border: <width> <style> <color>` (порядок произвольный, каждая
 /// часть опциональна). Применяет найденные значения ко всем четырём сторонам.
 pub(in crate::style) fn apply_border_shorthand(style: &mut ComputedStyle, val: &str, em_basis: f32, viewport: Size, is_quirks: bool) {
-    // Top-level split: a colour like `rgba(0, 0, 255, 0.5)` is one token.
-    let tokens = split_top_level_ws(val);
-    // CSS Backgrounds L3 §4.4: the shorthand resets every sub-property to its initial value
-    // (`medium` / `none` / `currentcolor`) before applying the listed ones (BUG-1342).
-    reset_border_sides(style);
-    for tok in &tokens {
-        if let Some(v) = parse_border_width(tok, em_basis, viewport, is_quirks) {
-            style.border_top_width = v;
-            style.border_right_width = v;
-            style.border_bottom_width = v;
-            style.border_left_width = v;
-        } else if is_border_style_kw(tok) {
-            let bs = parse_border_style_kw(tok);
-            style.border_top_style = bs;
-            style.border_right_style = bs;
-            style.border_bottom_style = bs;
-            style.border_left_style = bs;
-        } else if let Some(c) = parse_css_color_legacy(tok, is_quirks) {
-            style.border_top_color = c;
-            style.border_right_color = c;
-            style.border_bottom_color = c;
-            style.border_left_color = c;
-        }
-    }
+    let p = border_parts(val, em_basis, viewport, is_quirks);
+    style.border_top_width = p.width;
+    style.border_right_width = p.width;
+    style.border_bottom_width = p.width;
+    style.border_left_width = p.width;
+    style.border_top_style = p.style;
+    style.border_right_style = p.style;
+    style.border_bottom_style = p.style;
+    style.border_left_style = p.style;
+    style.border_top_color = p.color;
+    style.border_right_color = p.color;
+    style.border_bottom_color = p.color;
+    style.border_left_color = p.color;
     // The computed width of a `none`/`hidden` side is 0 (CSS Backgrounds L3 §4.1), but that is
     // applied once after the whole cascade (`zero_unstyled_border_widths`): zeroing it here would
     // lose the specified width a later `border-style: solid` is meant to bring back.
@@ -804,18 +833,10 @@ pub(in crate::style) fn apply_border_side_shorthand(
     is_quirks: bool,
 ) {
     // Same reset as `apply_border_shorthand`: unlisted sub-properties return to initial.
-    *width = 3.0;
-    *bstyle = BorderStyle::None;
-    *color = CssColor::CurrentColor;
-    for tok in split_top_level_ws(val) {
-        if let Some(v) = parse_border_width(tok, em_basis, viewport, is_quirks) {
-            *width = v;
-        } else if is_border_style_kw(tok) {
-            *bstyle = parse_border_style_kw(tok);
-        } else if let Some(c) = parse_css_color_legacy(tok, is_quirks) {
-            *color = c;
-        }
-    }
+    let p = border_parts(val, em_basis, viewport, is_quirks);
+    *width = p.width;
+    *bstyle = p.style;
+    *color = p.color;
 }
 
 /// Разворачивает 1–4 токена в 4-элементный массив по CSS-правилу:

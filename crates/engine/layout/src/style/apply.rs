@@ -21,6 +21,9 @@ mod motion;
 mod paint;
 mod text;
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use lumen_core::geom::Size;
 use lumen_css_parser::Declaration;
 
@@ -33,6 +36,30 @@ use crate::style::{
 };
 
 use css_wide::{apply_all_shorthand, apply_css_wide_keyword};
+
+const SLOT_LAYOUT: u8 = 0;
+const SLOT_TEXT: u8 = 1;
+const SLOT_PAINT: u8 = 2;
+const SLOT_MOTION: u8 = 3;
+const SLOT_UNKNOWN: u8 = 4;
+
+thread_local! {
+    static PROP_SLOT: RefCell<HashMap<String, u8>> = RefCell::new(HashMap::new());
+}
+
+fn prop_slot(prop: &str) -> Option<u8> {
+    PROP_SLOT.with(|c| c.borrow().get(prop).copied())
+}
+
+fn set_prop_slot(prop: &str, slot: u8) {
+    PROP_SLOT.with(|c| {
+        let mut m = c.borrow_mut();
+        if m.len() >= 8192 {
+            m.clear();
+        }
+        m.insert(prop.to_string(), slot);
+    });
+}
 
 /// Применить одну декларацию каскада к `style`.
 ///
@@ -167,36 +194,99 @@ pub(in crate::style) fn apply_declaration(
     } else {
         em_basis
     };
-    if layout::apply_decl_layout(style, prop, val, em_basis, viewport, is_quirks) {
+    // PERF-PROP-SLOT — каждый из четырёх помощников внутри — `match prop`
+    // на сотни строковых меток. Без кэша КАЖДАЯ декларация платила до четырёх
+    // промахов (~450 str-cmp на habr по `LUMEN_APPLY_CENSUS`). Множество
+    // свойств группы детерминировано строкой `prop` — ветки матчат только
+    // имя, не значение, — поэтому слот запоминается с первого применения.
+    // Неизвестные свойства тоже кэшируются (SLOT_UNKNOWN): все четыре
+    // матча промахнулись бы одинаково на каждом повторе.
+    match prop_slot(prop) {
+        Some(SLOT_LAYOUT) => {
+            census::timed(prop, || {
+                layout::apply_decl_layout(style, prop, val, em_basis, viewport, is_quirks).then_some(())
+            });
+            return;
+        }
+        Some(SLOT_TEXT) => {
+            census::timed(prop, || {
+                text::apply_decl_text(
+                    style, prop, val, em_basis, viewport, parent_font_weight, inherited, is_quirks,
+                )
+                .then_some(())
+            });
+            return;
+        }
+        Some(SLOT_PAINT) => {
+            census::timed(prop, || {
+                paint::apply_decl_paint(
+                    style, prop, val, em_basis, viewport, inherited, is_quirks, dark_mode,
+                )
+                .then_some(())
+            });
+            return;
+        }
+        Some(SLOT_MOTION) => {
+            census::timed(prop, || {
+                motion::apply_decl_motion(style, prop, val, em_basis, viewport, is_quirks)
+                    .then_some(())
+            });
+            return;
+        }
+        Some(_) => return, // SLOT_UNKNOWN
+        None => {}
+    }
+
+    if census::timed(prop, || {
+        layout::apply_decl_layout(style, prop, val, em_basis, viewport, is_quirks).then_some(())
+    })
+    .is_some()
+    {
+        set_prop_slot(prop, SLOT_LAYOUT);
         return;
     }
-    if text::apply_decl_text(
-        style,
-        prop,
-        val,
-        em_basis,
-        viewport,
-        parent_font_weight,
-        inherited,
-        is_quirks,
-    ) {
+    if census::timed(prop, || {
+        text::apply_decl_text(
+            style,
+            prop,
+            val,
+            em_basis,
+            viewport,
+            parent_font_weight,
+            inherited,
+            is_quirks,
+        )
+        .then_some(())
+    })
+    .is_some()
+    {
+        set_prop_slot(prop, SLOT_TEXT);
         return;
     }
-    if paint::apply_decl_paint(
-        style,
-        prop,
-        val,
-        em_basis,
-        viewport,
-        inherited,
-        is_quirks,
-        dark_mode,
-    ) {
+    if census::timed(prop, || {
+        paint::apply_decl_paint(
+            style,
+            prop,
+            val,
+            em_basis,
+            viewport,
+            inherited,
+            is_quirks,
+            dark_mode,
+        )
+        .then_some(())
+    })
+    .is_some()
+    {
+        set_prop_slot(prop, SLOT_PAINT);
         return;
     }
-    // Последнее звено цепочки вызывается без `if`: его `false` — это исходный
-    // `_ => {}`, то есть «свойство неизвестно, декларация игнорируется».
-    motion::apply_decl_motion(style, prop, val, em_basis, viewport, is_quirks);
+    // Последнее звено цепочки: `false` — свойство никому не известно,
+    // декларация игнорируется (исходный `_ => {}`).
+    let handled = census::timed(prop, || {
+        motion::apply_decl_motion(style, prop, val, em_basis, viewport, is_quirks).then_some(())
+    });
+    set_prop_slot(prop, if handled.is_some() { SLOT_MOTION } else { SLOT_UNKNOWN });
 }
 
 /// Properties whose lengths are resolved to px at parse time and then multiplied by
@@ -212,4 +302,72 @@ fn baked_then_zoomed(prop: &str) -> bool {
     ) || prop.starts_with("outline")
         || prop.starts_with("scroll-margin")
         || prop.starts_with("scroll-padding")
+}
+
+// ── PERF-APPLY-CENSUS ──────────────────────────────────────────────────────
+// `LUMEN_APPLY_CENSUS=1` instrumentation: per-property call count + nanoseconds
+// spent inside whichever dispatch module actually handled the declaration
+// (unhandled declarations are counted separately as `rejected`). Exists to
+// rank the top-(prop,value) pairs for the selective typed-value cache — the
+// full `CSSValue` refactor is only worth it where parse time concentrates.
+// Off by default; the gate is a `OnceLock` bool so the hot path pays one
+// atomic-load-free check per declaration.
+#[cfg(not(test))]
+mod census {
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Mutex, OnceLock};
+    use std::time::Instant;
+
+    // Global (not thread-local): precompute_counters fans declarations out
+    // across rayon workers, and a per-thread map would need N dumps merged by
+    // hand. Mutex cost is irrelevant — the whole module is env-gated off.
+    static PROPS: OnceLock<Mutex<HashMap<String, (u64, u128)>>> = OnceLock::new();
+    static CALLS: AtomicU64 = AtomicU64::new(0);
+
+    pub(super) fn on() -> bool {
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| std::env::var_os("LUMEN_APPLY_CENSUS").is_some())
+    }
+
+    /// Times `f`; on `Some(())` (handled) attributes the elapsed ns to `prop`.
+    /// `None` means the module did not handle the property — try the next one.
+    pub(super) fn timed<T>(prop: &str, f: impl FnOnce() -> Option<T>) -> Option<T> {
+        if !on() {
+            return f();
+        }
+        let t = Instant::now();
+        let out = f();
+        let ns = t.elapsed().as_nanos();
+        if out.is_some() {
+            let map = PROPS.get_or_init(|| Mutex::new(HashMap::new()));
+            if let Ok(mut m) = map.lock() {
+                let e = m.entry(prop.to_string()).or_insert((0, 0));
+                e.0 += 1;
+                e.1 += ns;
+            }
+        }
+        if CALLS.fetch_add(1, Ordering::Relaxed) % 500_000 == 499_999 {
+            dump();
+        }
+        out
+    }
+
+    fn dump() {
+        let Some(map) = PROPS.get() else { return };
+        let Ok(m) = map.lock() else { return };
+        let mut rows: Vec<(&String, &(u64, u128))> = m.iter().collect();
+        rows.sort_by_key(|(_, v)| std::cmp::Reverse(v.1));
+        eprintln!("[apply-census] calls={} top by ns:", CALLS.load(Ordering::Relaxed));
+        for (k, (calls, ns)) in rows.iter().take(40) {
+            eprintln!("  {ns:>12} ns  {calls:>8} calls  {k}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod census {
+    pub(super) fn timed<T>(_prop: &str, f: impl FnOnce() -> Option<T>) -> Option<T> {
+        f()
+    }
 }
