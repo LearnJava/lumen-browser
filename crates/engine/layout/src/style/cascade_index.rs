@@ -223,7 +223,42 @@ pub(in crate::style) struct PseudoBlockIndex {
     /// Global index of the block's first rule in the pseudo cascade's numbering ([`RuleOrder`]).
     pub(in crate::style) base: usize,
     /// Candidates carry indices into the block's own `rules`.
-    pub(in crate::style) index: RuleIndex,
+    /// PERF-PSEUDO-BY-NAME: per-pseudo-name indexes inside the block — a
+    /// `::before` probe skips `::after` rules and blocks that have none.
+    pub(in crate::style) by_name: Vec<(Box<str>, RuleIndex)>,
+}
+
+/// Pseudo names present in `rules` (lowercased, deduplicated) — the keys of
+/// a [`PseudoBlockIndex::by_name`] map.
+fn block_pseudo_names(rules: &[Rule]) -> Vec<Box<str>> {
+    let mut names: Vec<Box<str>> = Vec::new();
+    for r in rules {
+        for s in &r.selectors {
+            for n in selector_pseudo_subjects(s) {
+                let low = n.to_ascii_lowercase();
+                if !names.iter().any(|x| x.as_ref() == low) {
+                    names.push(low.into_boxed_str());
+                }
+            }
+        }
+    }
+    names
+}
+
+/// Per-name [`RuleIndex`]es for one block's rules — same shape as the
+/// top-level `pseudo_rules_by_name` build.
+fn block_pseudo_indexes(rules: &[Rule]) -> Vec<(Box<str>, RuleIndex)> {
+    block_pseudo_names(rules)
+        .into_iter()
+        .map(|name| {
+            let index = RuleIndex::build_from_indexed(rules.iter().enumerate().filter(|(_, r)| {
+                r.selectors.iter().any(|s| {
+                    selector_pseudo_subjects(s).any(|n| n.eq_ignore_ascii_case(&name))
+                })
+            }));
+            (name, index)
+        })
+        .collect()
 }
 
 impl CascadeIndex {
@@ -331,19 +366,15 @@ impl CascadeIndex {
         let mut pseudo_media = Vec::new();
         for (block, m) in sheet.media_rules.iter().enumerate() {
             if m.rules.iter().any(has_pseudo_subject) {
-                let index = RuleIndex::build_from_indexed(
-                    m.rules.iter().enumerate().filter(|(_, r)| has_pseudo_subject(r)),
-                );
-                pseudo_media.push(PseudoBlockIndex { block, base: order.media_base[block], index });
+                let by_name = block_pseudo_indexes(&m.rules);
+                pseudo_media.push(PseudoBlockIndex { block, base: order.media_base[block], by_name });
             }
         }
         let mut pseudo_supports = Vec::new();
         for (block, sp) in sheet.supports_rules.iter().enumerate() {
             if sp.rules.iter().any(has_pseudo_subject) {
-                let index = RuleIndex::build_from_indexed(
-                    sp.rules.iter().enumerate().filter(|(_, r)| has_pseudo_subject(r)),
-                );
-                pseudo_supports.push(PseudoBlockIndex { block, base: order.supports_base[block], index });
+                let by_name = block_pseudo_indexes(&sp.rules);
+                pseudo_supports.push(PseudoBlockIndex { block, base: order.supports_base[block], by_name });
             }
         }
         let predicates_ns = t.elapsed().as_nanos() as u64;

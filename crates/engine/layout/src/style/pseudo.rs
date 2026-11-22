@@ -678,8 +678,17 @@ fn compute_pseudo_element_style_inner(
                     .map(|b| (b, &sheet.supports_rules[b.block].rules)),
             );
         for (block, rules) in blocks {
+            // PERF-PSEUDO-BY-NAME: only this pseudo's index inside the block —
+            // blocks without rules for it are skipped entirely.
+            let Some((_, block_index)) = block
+                .by_name
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(pseudo_base))
+            else {
+                continue;
+            };
             for rule_idx in
-                block.index.candidates_into(node_tag, node_id, class_attr.split_whitespace(), node_attrs, &mut cand)
+                block_index.candidates_into(node_tag, node_id, class_attr.split_whitespace(), node_attrs, &mut cand)
             {
                 let rule = &rules[*rule_idx];
                 let mut best: Option<Specificity> = None;
