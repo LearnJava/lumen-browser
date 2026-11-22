@@ -51,6 +51,8 @@ pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     crate::style::set_shadow_sheets(build_shadow_sheets(doc));
     super::shape_resolve::install_shape_images(doc);
     let mut counters = precompute_counters(doc, sheet, viewport, &flat, false);
+    // PERF-PSEUDO-PRE: pseudo probes below resolve the workers' match records.
+    let _pseudo_cache_scope = crate::counters::install_pseudo_cache(counters.pseudo_cache_arc());
     let registry = build_counter_style_registry(sheet);
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, false, None);
     propagate_body_writing_mode(doc, &mut root, viewport);
@@ -154,6 +156,8 @@ pub fn layout_measured_hyp_with_counters(
         lumen_core::tracy_zone!("precompute_counters");
         precompute_counters(doc, sheet, viewport, &flat, dark_mode)
     };
+    // PERF-PSEUDO-PRE: pseudo probes below resolve the workers' match records.
+    let _pseudo_cache_scope = crate::counters::install_pseudo_cache(counters.pseudo_cache_arc());
     let registry = build_counter_style_registry(sheet);
     let mut root = {
         let _prof = lumen_core::profile::scope("build_box");
@@ -392,6 +396,8 @@ fn streaming_incremental_inner(
         Some(d) => crate::counters::incremental_precompute_counters(doc, sheet, viewport, &flat, dark_mode, d),
         None => precompute_counters(doc, sheet, viewport, &flat, dark_mode),
     };
+    // PERF-PSEUDO-PRE: pseudo probes below resolve the workers' match records.
+    let _pseudo_cache_scope = crate::counters::install_pseudo_cache(counters.pseudo_cache_arc());
     let registry = build_counter_style_registry(sheet);
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None);
     apply_font_size_adjust(&mut root, measurer);
@@ -532,6 +538,8 @@ pub fn layout_metrics_relayout(
     let mut counters =
         crate::counters::incremental_precompute_counters(doc, sheet, viewport, &flat, dark_mode, delta);
     crate::counters::set_incremental_restyle(false);
+    // PERF-PSEUDO-PRE: pseudo probes below resolve the workers' match records.
+    let _pseudo_cache_scope = crate::counters::install_pseudo_cache(counters.pseudo_cache_arc());
     let registry = build_counter_style_registry(sheet);
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None);
     apply_font_size_adjust(&mut root, measurer);
@@ -626,6 +634,8 @@ pub fn layout_mutation_incremental_restyle(
         let _prof = lumen_core::profile::scope("precompute_counters");
         crate::counters::incremental_precompute_counters(doc, sheet, viewport, &flat, dark_mode, delta)
     };
+    // PERF-PSEUDO-PRE: pseudo probes below resolve the workers' match records.
+    let _pseudo_cache_scope = crate::counters::install_pseudo_cache(counters.pseudo_cache_arc());
     if verify_incremental_cascade() {
         // BUG-935 срез 92: `LUMEN_VERIFY_INCR_CASCADE=1` — самопроверка живого прогона. Каскад с нуля
         // против того, что оставила инкрементальная дельта: расхождение = устаревший стиль на странице.

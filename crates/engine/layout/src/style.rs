@@ -58,7 +58,7 @@ mod parse;
 pub(crate) mod pre_match;
 mod presentational;
 mod property_syntax;
-mod pseudo;
+pub(crate) mod pseudo;
 mod quirks;
 mod restyle;
 mod restyle_cache;

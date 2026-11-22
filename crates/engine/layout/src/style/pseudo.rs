@@ -33,8 +33,8 @@ const PART_RULE_BASE: usize = usize::MAX / 2;
 /// rayon workers; the sequential walk resolves them back to `&Declaration`
 /// through [`resolve_pseudo_decl`] — the same declarations the candidate scan
 /// would have produced, minus the scan itself.
-#[derive(Clone, Copy)]
-pub(in crate::style) struct PseudoMatch {
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PseudoMatch {
     /// `Declaration::important` — first cascade-sort key.
     pub important: bool,
     /// The rule's best-matching selector specificity.
@@ -48,10 +48,15 @@ pub(in crate::style) struct PseudoMatch {
     pub rule: PseudoRuleRef,
 }
 
+/// PERF-PSEUDO-PRE — one node's pseudo match records as `pre_match` hands them
+/// to the pass's [`crate::counters::PseudoCache`]: `(pseudo base name,
+/// cascade-sorted matches)` pairs per element.
+pub(crate) type PseudoRecords = Vec<(NodeId, Vec<(Box<str>, std::sync::Arc<[PseudoMatch]>)>)>;
+
 /// Where a [`PseudoMatch`]'s declaration lives, in the same numbering the
 /// sequential matcher pushed it under.
-#[derive(Clone, Copy)]
-pub(in crate::style) enum PseudoRuleRef {
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum PseudoRuleRef {
     /// `sheet.rules[i]`.
     Top(u32),
     /// `sheet.media_rules[block].rules[i]` — `rule` is block-local.
@@ -875,7 +880,15 @@ fn compute_pseudo_element_style_inner(
     // `::highlight(name)`) match on their argument, which the bare-name record
     // does not carry — they always take the sequential road.
     let pre = (ua_decls.is_empty() && split_pseudo_request(pseudo).1.is_none())
-        .then(|| super::pre_match::pseudo_lookup(node, pseudo_base, sheet, viewport, dark_mode))
+        .then(|| {
+            super::pre_match::pseudo_lookup(node, pseudo_base, sheet, viewport, dark_mode).or_else(|| {
+                // Box build runs after `pre_match`'s guard dropped — the same
+                // records were bulk-loaded into the pass's `PseudoCache`, which
+                // `box_tree::entry` installs for the duration of the build.
+                let key = crate::counters::pseudo_pass_key(doc, sheet, viewport, dark_mode);
+                crate::counters::PseudoCache::current()?.lookup_match(node, pseudo_base, key)
+            })
+        })
         .flatten();
     let mut matched_vec: Vec<PseudoMatch> = Vec::new();
     let matched: &[PseudoMatch] = if let Some(rec) = &pre {
@@ -950,9 +963,10 @@ fn compute_pseudo_element_style_inner(
     let is_first_line = pseudo.eq_ignore_ascii_case("first-line");
     // `ua_decls` are the UA-origin declarations (the `::view-transition-*` tree's UA sheet): they
     // come first, so every author declaration overrides them whatever its specificity.
-    let mut pseudo_decls: Vec<&Declaration> = ua_decls.iter().collect();
-    pseudo_decls.extend(matched.iter().filter_map(|m| resolve_pseudo_decl(sheet, &part_scopes, m)));
-    for decl in pseudo_decls {
+    for decl in ua_decls
+        .iter()
+        .chain(matched.iter().filter_map(|m| resolve_pseudo_decl(sheet, &part_scopes, m)))
+    {
         if (is_marker && !marker_property_applies(&decl.property))
             || (is_first_line && !first_line_property_applies(&decl.property))
         {

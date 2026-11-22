@@ -240,6 +240,22 @@ pub struct PseudoPassKey {
     pub doc: usize,
 }
 
+/// The pass-global inputs pseudo styles/matches are computed under — shared
+/// by [`PseudoCache::lookup`]/[`PseudoCache::lookup_match`] callers.
+pub(crate) fn pseudo_pass_key(
+    doc: &Document,
+    sheet: &Stylesheet,
+    viewport: Size,
+    dark_mode: bool,
+) -> PseudoPassKey {
+    PseudoPassKey {
+        rev: sheet.revision(),
+        vp: [viewport.width.to_bits(), viewport.height.to_bits()],
+        dark: dark_mode,
+        doc: std::ptr::from_ref(doc) as usize,
+    }
+}
+
 /// One node's pseudo styles plus the pass-global inputs they were computed
 /// under. A meta mismatch resets the node's entries rather than the whole
 /// cache — sheet/viewport changes are rare and coincide with full passes.
@@ -248,6 +264,44 @@ struct PseudoNodeCache {
     key: PseudoPassKey,
     /// pseudo-name index → computed style (`None` = "no pseudo", also cached).
     styles: HashMap<u32, Option<Arc<ComputedStyle>>>,
+    /// PERF-PSEUDO-PRE — pseudo-name index (bare name) → the cascade-sorted
+    /// match record `pre_match` produced for this node. Consulted by
+    /// `compute_pseudo_element_style_inner` when the pass table is already
+    /// gone (box build runs after `pre_match`'s guard drops); invalidated by
+    /// the same `pseudo_drop_node` as `styles` — a recomputed node's pseudo
+    /// inputs may differ, an untouched node's provably cannot.
+    matches: HashMap<u32, Arc<[crate::style::pseudo::PseudoMatch]>>,
+}
+
+thread_local! {
+    /// PERF-PSEUDO-PRE — the pass's [`PseudoCache`] while box build runs.
+    /// `pre_match`'s table is dropped when the cascade returns, but the pseudo
+    /// probes it fed live in `build_box`/post-layout passes afterwards; this
+    /// slot lets `compute_pseudo_element_style_inner` reach the bulk-loaded
+    /// match records without threading `CounterMap` through every caller.
+    /// Installed by the `box_tree::entry` functions around the build, cleared
+    /// by the guard — a pass that never installs simply misses to sequential.
+    static CURRENT_PSEUDO_CACHE: std::cell::RefCell<Option<Arc<PseudoCache>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// RAII installer for [`CURRENT_PSEUDO_CACHE`]; restores the previous value
+/// (usually `None`) on drop, including unwinds.
+pub(crate) struct PseudoCacheScope {
+    prev: Option<Arc<PseudoCache>>,
+}
+
+/// Installs `cache` as the current pseudo match/style store until the
+/// returned guard drops.
+pub(crate) fn install_pseudo_cache(cache: &Arc<PseudoCache>) -> PseudoCacheScope {
+    let prev = CURRENT_PSEUDO_CACHE.with(|c| c.borrow_mut().replace(Arc::clone(cache)));
+    PseudoCacheScope { prev }
+}
+
+impl Drop for PseudoCacheScope {
+    fn drop(&mut self) {
+        CURRENT_PSEUDO_CACHE.with(|c| *c.borrow_mut() = self.prev.take());
+    }
 }
 
 impl PseudoCache {
@@ -283,12 +337,82 @@ impl PseudoCache {
         let entry = inner.by_node.entry(node.index()).or_insert_with(|| PseudoNodeCache {
             key,
             styles: HashMap::new(),
+            matches: HashMap::new(),
         });
         if entry.key != key {
             entry.key = key;
             entry.styles.clear();
+            entry.matches.clear();
         }
         entry.styles.insert(name, style.map(Arc::new));
+    }
+
+    /// PERF-PSEUDO-PRE — this node's pre-matched pseudo declarations for the
+    /// bare pseudo `name`, under the same pass inputs as [`Self::lookup`].
+    /// `None` falls back to the sequential candidate scan.
+    pub(crate) fn lookup_match(
+        &self,
+        node: NodeId,
+        name: &str,
+        key: PseudoPassKey,
+    ) -> Option<Arc<[crate::style::pseudo::PseudoMatch]>> {
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let name = *inner.names.get(name)?;
+        let entry = inner.by_node.get(&node.index())?;
+        if entry.key != key {
+            return None;
+        }
+        entry.matches.get(&name).cloned()
+    }
+
+    /// Bulk-loads `pre_match`'s per-node pseudo records after the walk — the
+    /// workers already paid the candidate scan, the sequential pseudo probes
+    /// of box build then resolve records instead of re-matching.
+    pub(crate) fn store_matches_bulk(
+        &self,
+        records: crate::style::pseudo::PseudoRecords,
+        key: PseudoPassKey,
+    ) {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        // Intern every name first — `names` and `by_node` are both fields of
+        // `inner`, so interleaving the two borrows would not compile.
+        type Interned = Vec<(usize, Vec<(u32, std::sync::Arc<[crate::style::pseudo::PseudoMatch]>)>)>;
+        let interned: Interned = records
+            .into_iter()
+            .map(|(node, pseudos)| {
+                let names: Vec<(u32, _)> = pseudos
+                    .into_iter()
+                    .map(|(name, rec)| {
+                        let next = inner.names.len() as u32;
+                        let idx = *inner.names.entry(name.to_string()).or_insert(next);
+                        (idx, rec)
+                    })
+                    .collect();
+                (node.index(), names)
+            })
+            .collect();
+        for (node_idx, pseudos) in interned {
+            if pseudos.is_empty() {
+                continue;
+            }
+            let entry = inner.by_node.entry(node_idx).or_insert_with(|| PseudoNodeCache {
+                key,
+                styles: HashMap::new(),
+                matches: HashMap::new(),
+            });
+            if entry.key != key {
+                entry.key = key;
+                entry.styles.clear();
+                entry.matches.clear();
+            }
+            entry.matches.extend(pseudos);
+        }
+    }
+
+    /// The [`PseudoCache`] installed for the current box-build pass, if any —
+    /// see [`install_current`].
+    pub(crate) fn current() -> Option<Arc<PseudoCache>> {
+        CURRENT_PSEUDO_CACHE.with(|c| c.borrow().clone())
     }
 
     /// Drops every cached pseudo style of `node` — called by `walk` whenever
@@ -342,6 +466,12 @@ impl CascadeStyles {
 
     /// PERF-PSEUDO-CACHE — the carried pseudo-element style cache.
     pub(crate) fn pseudo_cache(&self) -> &PseudoCache {
+        &self.pseudo_cache
+    }
+
+    /// The same cache as an `Arc` — for [`install_pseudo_cache`], which needs
+    /// shared ownership independent of the `CounterMap` borrow.
+    pub(crate) fn pseudo_cache_arc(&self) -> &Arc<PseudoCache> {
         &self.pseudo_cache
     }
 
@@ -886,6 +1016,11 @@ impl CounterMap {
         self.styles.pseudo_cache()
     }
 
+    /// The same cache as an `Arc` — see [`CascadeStyles::pseudo_cache_arc`].
+    pub(crate) fn pseudo_cache_arc(&self) -> &Arc<PseudoCache> {
+        self.styles.pseudo_cache_arc()
+    }
+
     /// The style of a box-less element: the one `apply_container_styles` left after
     /// applying `@container` rules when the element sits inside a query container,
     /// the plain cascade result otherwise.
@@ -1142,7 +1277,15 @@ pub fn precompute_counters(
     // Counted in `walk_ns`: it is part of the cascade stage now.
     let _pre_matched = crate::style::pre_match::install(doc, sheet, viewport, dark_mode, flat);
     walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, None, false, doc.root(), false, false, None);
+    // PERF-PSEUDO-PRE: hand the workers' pseudo match records to the pass's
+    // PseudoCache before the table drops — box build probes them afterwards.
+    let pseudo_records = _pre_matched.pseudo_records();
     drop(_pre_matched);
+    if !pseudo_records.is_empty() {
+        map.styles
+            .pseudo_cache()
+            .store_matches_bulk(pseudo_records, pseudo_pass_key(doc, sheet, viewport, dark_mode));
+    }
     note_walk_ns(t.elapsed().as_nanos() as u64);
     map.styles.note_sheet_revision(sheet.revision());
     map.record_generated_content(doc, flat);
@@ -1442,6 +1585,15 @@ pub fn incremental_precompute_counters(
         let t = std::time::Instant::now();
         walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, Some(&incr), false, doc.root(), false, false, None);
         note_walk_ns(t.elapsed().as_nanos() as u64);
+    }
+    // PERF-PSEUDO-PRE: same hand-off as the full pass — the subset table's
+    // records cover exactly the elements the scoped walk can recompute.
+    let pseudo_records = _pre_matched.pseudo_records();
+    drop(_pre_matched);
+    if !pseudo_records.is_empty() {
+        map.styles
+            .pseudo_cache()
+            .store_matches_bulk(pseudo_records, pseudo_pass_key(doc, sheet, viewport, dark_mode));
     }
     {
         let _prof = lumen_core::profile::scope("cascade_finish_pass");

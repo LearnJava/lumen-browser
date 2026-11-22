@@ -103,6 +103,34 @@ pub(crate) fn take_hits() -> u64 {
 /// Clears the table when the pass ends, including on an unwind.
 pub(crate) struct Guard;
 
+impl Guard {
+    /// PERF-PSEUDO-PRE — clones the per-node pseudo match records out of the
+    /// table before it drops, for bulk-loading into the pass's `PseudoCache`
+    /// (box build runs after this guard is gone). Arc clones only.
+    pub(crate) fn pseudo_records(&self) -> super::pseudo::PseudoRecords {
+        TABLE.with(|t| {
+            t.borrow()
+                .as_ref()
+                .map(|table| {
+                    table
+                        .nodes
+                        .iter()
+                        .map(|(node, e)| {
+                            (
+                                *node,
+                                e.pseudo
+                                    .iter()
+                                    .map(|(n, rec)| (n.clone(), Arc::clone(rec)))
+                                    .collect(),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        })
+    }
+}
+
 impl Drop for Guard {
     fn drop(&mut self) {
         TABLE.with(|t| t.borrow_mut().take());
