@@ -256,6 +256,26 @@ pub(crate) fn pseudo_pass_key(
     }
 }
 
+/// Owned, lock-free copy of the match records [`PseudoCache::match_snapshot`]
+/// extracted — `names` maps pseudo request → intern index, `entries` is
+/// `(node.index(), name intern)` → record.
+pub(crate) struct PseudoMatchSnapshot {
+    pub(crate) names: HashMap<String, u32>,
+    pub(crate) entries: HashMap<(usize, u32), std::sync::Arc<[crate::style::pseudo::PseudoMatch]>>,
+}
+
+impl PseudoMatchSnapshot {
+    /// This node's record for pseudo `name`, when the snapshot holds one.
+    pub(crate) fn get(
+        &self,
+        node: NodeId,
+        name: &str,
+    ) -> Option<std::sync::Arc<[crate::style::pseudo::PseudoMatch]>> {
+        let idx = *self.names.get(name)?;
+        self.entries.get(&(node.index(), idx)).cloned()
+    }
+}
+
 /// One node's pseudo styles plus the pass-global inputs they were computed
 /// under. A meta mismatch resets the node's entries rather than the whole
 /// cache — sheet/viewport changes are rare and coincide with full passes.
@@ -363,6 +383,24 @@ impl PseudoCache {
             return None;
         }
         entry.matches.get(&name).cloned()
+    }
+
+    /// Lock-free read view of every pseudo match record valid under `key` —
+    /// one mutex acquisition clones the intern table and all matching
+    /// `(node, name)` records, so parallel `pre_match` workers can probe
+    /// without contending on [`Self::inner`] per lookup.
+    pub(crate) fn match_snapshot(&self, key: PseudoPassKey) -> PseudoMatchSnapshot {
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut entries = HashMap::with_capacity(inner.by_node.len());
+        for (node_idx, entry) in &inner.by_node {
+            if entry.key != key {
+                continue;
+            }
+            for (name_idx, rec) in &entry.matches {
+                entries.insert((*node_idx, *name_idx), Arc::clone(rec));
+            }
+        }
+        PseudoMatchSnapshot { names: inner.names.clone(), entries }
     }
 
     /// Records one sequentially-collected match record — the fallback road's

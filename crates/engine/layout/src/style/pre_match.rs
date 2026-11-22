@@ -229,6 +229,9 @@ fn install_impl(
     };
     let pseudo_key = pseudo_cache
         .map(|_| crate::counters::pseudo_pass_key(doc, sheet, viewport, dark_mode));
+    // One locked clone beats per-lookup mutex traffic across the worker pool.
+    let pseudo_snapshot = pseudo_key
+        .and_then(|k| pseudo_cache.map(|c| c.match_snapshot(k)));
     let entries: Vec<(NodeId, Entry)> = {
         use rayon::prelude::*;
         work
@@ -253,21 +256,18 @@ fn install_impl(
                 };
                 // Reuse last pass's pseudo match records where the caller
                 // vouches they are not stale (subset passes pre-drop the
-                // recomputed set); a miss recomputes and back-fills.
+                // recomputed set); a miss recomputes — the bulk store after
+                // the walk persists it for the next pass.
                 let pseudo = pseudo_names
                     .iter()
                     .filter_map(|name| {
-                        let rec = pseudo_cache
-                            .zip(pseudo_key)
-                            .and_then(|(c, k)| c.lookup_match(node, name, k))
+                        let rec = pseudo_snapshot
+                            .as_ref()
+                            .and_then(|s| s.get(node, name))
                             .or_else(|| {
-                                let rec = super::pseudo::match_pseudo_owned(
+                                super::pseudo::match_pseudo_owned(
                                     doc, node, name, sheet, viewport, dark_mode,
-                                )?;
-                                if let (Some(c), Some(k)) = (pseudo_cache, pseudo_key) {
-                                    c.store_match(node, name, k, rec.clone());
-                                }
-                                Some(rec)
+                                )
                             })?;
                         Some((name.clone().into_boxed_str(), rec))
                     })
