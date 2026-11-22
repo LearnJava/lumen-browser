@@ -647,9 +647,17 @@ impl Lumen {
         // thread-local overrides и переиспользовал бы боксы со старыми высотами.
         // `LUMEN_NO_JOB_INCREMENTAL=1` — откат всего инкрементального блока
         // задания к историческому полному проходу (A/B-замеры, регрессии).
-        let incremental_ok = animated_heights.is_empty()
-            && std::env::var_os("LUMEN_NO_JOB_INCREMENTAL").is_none()
-            && self.layout_basis_sig.as_ref() == Some(&basis_sig);
+        let job_incr_disabled = std::env::var_os("LUMEN_NO_JOB_INCREMENTAL").is_some();
+        let sig_match = self.layout_basis_sig.as_ref() == Some(&basis_sig);
+        // PERF-FONT-RELAYOUT: изменились только метрики шрифтов (и ничего из
+        // каскадных входов + интерактив не дрогнул) — каскад доказуемо тот же,
+        // переносим его целиком и пересчитываем только геометрию.
+        let metrics_ok = !job_incr_disabled
+            && !sig_match
+            && self.layout_basis_sig.as_ref().is_some_and(|s| s.same_except_fonts(&basis_sig))
+            && self.page_prev_interactive == (hovered, focused, active)
+            && self.focus_from_keyboard == keyboard_focus;
+        let incremental_ok = !job_incr_disabled && animated_heights.is_empty() && sig_match;
         let (prev_layout, prev_cascade, prev_interactive, touched_reader) = if incremental_ok {
             (
                 self.layout_box.clone(),
@@ -657,6 +665,10 @@ impl Lumen {
                 self.page_prev_interactive,
                 self.dom_touched_ack_reader.clone(),
             )
+        } else if metrics_ok {
+            // Только каскад: геометрия пересчитывается целиком, prev-дерево
+            // не нужно и не должно graft'иться.
+            (None, self.page_prev_cascade_styles.clone(), (None, None, None), None)
         } else {
             (None, None, (None, None, None), None)
         };
@@ -688,7 +700,17 @@ impl Lumen {
             let use_restyle = touched.as_ref().is_some_and(|s| !s.unattributed)
                 && prev_layout.is_some()
                 && prev_cascade.is_some();
-            let (layout, counters) = match (use_restyle, prev_layout, prev_cascade) {
+            let (layout, counters) = if metrics_ok {
+                match prev_cascade {
+                    Some(styles) => lumen_layout::layout_metrics_relayout(
+                        &doc, &stylesheet, viewport, &measurer, &*hp, dark_mode, styles,
+                    ),
+                    None => lumen_layout::layout_measured_hyp_with_counters(
+                        &doc, &stylesheet, viewport, &measurer, &*hp, dark_mode,
+                    ),
+                }
+            } else {
+            match (use_restyle, prev_layout, prev_cascade) {
                 (true, Some(prev_lb), Some(prev_styles)) => {
                     let summary = touched.unwrap_or_default();
                     let (prev_hover, prev_focus, prev_active) = prev_interactive;
@@ -760,6 +782,7 @@ impl Lumen {
                 _ => lumen_layout::layout_measured_hyp_with_counters(
                     &doc, &stylesheet, viewport, &measurer, &*hp, dark_mode,
                 ),
+            }
             };
             drop(doc);
             let layout_box = layout;

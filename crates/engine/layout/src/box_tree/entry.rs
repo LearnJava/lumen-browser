@@ -489,6 +489,68 @@ pub fn layout_mutation_incremental_with_counters(
     (root, counters)
 }
 
+/// PERF-FONT-RELAYOUT: полный геометрический проход с каскадом, перенесённым
+/// целиком из `prev_styles` — для relayout'ов, где от прохода, породившего
+/// базис, могут отличаться **только метрики текста** (приход web-font —
+/// канонический случай). DOM, лист, viewport и media-state доказуемо те же
+/// (гейт `RelayoutBasisSig::same_except_fonts` на стороне shell), поэтому
+/// каждый `ComputedStyle` идентичен и пересчитывать нужно лишь
+/// `build_box` + `lay_out` + post-passes под новым измерителем.
+///
+/// В отличие от [`layout_streaming_incremental_delta`] геометрия **не**
+/// graft'ится: метрики меняют позицию каждого глифа, все боксы остаются
+/// dirty и lay_out проходит целиком — экономия вся в пропущенном каскаде
+/// (~60-70% стоимости прохода на больших DOM).
+#[allow(clippy::too_many_arguments)]
+pub fn layout_metrics_relayout(
+    doc: &Document,
+    sheet: &Stylesheet,
+    viewport: Size,
+    measurer: &dyn TextMeasurer,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+    prev_styles: crate::counters::CascadeStyles,
+) -> (LayoutBox, CounterMap) {
+    let _prof = lumen_core::profile::scope("layout_metrics_relayout");
+    crate::content_visibility::reset_cv_skipped();
+    let root_style = ComputedStyle::root();
+    let flat = build_flat_tree(doc);
+    crate::style::set_shadow_sheets(build_shadow_sheets(doc));
+    super::shape_resolve::install_shape_images(doc);
+    // Пустая дельта: ни один узел не recompute'ится — walk только
+    // пересобирает счётчики/цитаты (они последовательное состояние, их
+    // нельзя переносить из прошлого прохода вслепую).
+    let delta = crate::counters::RestyleDelta {
+        prev_styles,
+        dirty_roots: std::collections::HashSet::new(),
+        shallow_roots: std::collections::HashSet::new(),
+        point_roots: std::collections::HashSet::new(),
+        content_dirty: crate::counters::ContentDirty::Nothing,
+        invalidation: None,
+    };
+    crate::counters::set_incremental_restyle(true);
+    let mut counters =
+        crate::counters::incremental_precompute_counters(doc, sheet, viewport, &flat, dark_mode, delta);
+    crate::counters::set_incremental_restyle(false);
+    let registry = build_counter_style_registry(sheet);
+    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None);
+    apply_font_size_adjust(&mut root, measurer);
+    resolve_used_line_height(&mut root, measurer);
+    crate::incremental::mark_subtree_dirty(&mut root);
+    let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
+    lay_out_incremental(
+        &mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb, hp,
+    );
+    // Post-layout passes — тот же набор и порядок, что у
+    // `layout_mutation_incremental_with_counters`.
+    apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);
+    apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode, &mut counters);
+    lay_out_incremental_finish(&mut root);
+    apply_anchor_positions(&mut root, doc, &mut counters, viewport);
+    split_first_line_boxes(&mut root);
+    (root, counters)
+}
+
 /// BUG-341 S5: incremental re-layout for a pure interactive-state transition
 /// (`:hover`/`:focus`/`:active`), combining the S3 incremental cascade with
 /// [`layout_mutation_incremental`]'s existing geometry-graft reuse.

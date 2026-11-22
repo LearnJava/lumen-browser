@@ -94,6 +94,25 @@ pub(crate) struct RelayoutBasisSig {
     pub(crate) sheet: usize,
 }
 
+impl RelayoutBasisSig {
+    /// Совпадают ли все входы, влияющие на **каскад** (всё, кроме метрик
+    /// web-fonts): при `true` `ComputedStyle` доказуемо идентичен базису —
+    /// годится для `layout_metrics_relayout`, где каскад переносится целиком,
+    /// а геометрия пересчитывается под новыми шрифтами.
+    pub(crate) fn same_except_fonts(&self, other: &Self) -> bool {
+        self.viewport == other.viewport
+            && self.dpr == other.dpr
+            && self.dark_mode == other.dark_mode
+            && self.forced_colors == other.forced_colors
+            && self.cv_x == other.cv_x
+            && self.cv_y == other.cv_y
+            && self.cv_relevant == other.cv_relevant
+            && self.animated_empty == other.animated_empty
+            && self.doc == other.doc
+            && self.sheet == other.sheet
+    }
+}
+
 /// ADR-016 M2.2c-2b: персистентное состояние движкового потока `S` — «место»
 /// для мутабельного `Document` и хэндла `lumen-js` (`js_ctx`), которые M2.2c
 /// целиком переносит на движковый поток. Владеет им **только** движковый поток

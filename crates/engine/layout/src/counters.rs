@@ -1262,21 +1262,32 @@ pub fn incremental_precompute_counters(
         // subtrees under the delta's roots — pre-match exactly those elements in
         // parallel instead of letting every recompute scan candidates serially.
         // `None` (no spine licence) means the walk may visit anything: match all.
-        let pre_match_needed = spine.as_ref().map(|spine| {
-            let mut set = spine.clone();
-            let mut stack: Vec<NodeId> = dirty_roots
-                .iter()
-                .chain(shallow_roots.iter())
-                .chain(point_roots.iter())
-                .copied()
-                .collect();
-            while let Some(id) = stack.pop() {
-                if set.insert(id) {
-                    stack.extend(flat.children_of(doc, id).iter().copied());
+        // PERF-FONT-RELAYOUT: дельта без корней не пересчитывает ни одного
+        // узла (walk только пересобирает счётчики/цитаты) — параллельный
+        // pre-match всех элементов был бы чистой тратой ~1с на большом DOM.
+        // Пустой набор → `install_subset` выходит рано, таблица не ставится.
+        let pre_match_needed = if dirty_roots.is_empty()
+            && shallow_roots.is_empty()
+            && point_roots.is_empty()
+        {
+            Some(HashSet::new())
+        } else {
+            spine.as_ref().map(|spine| {
+                let mut set = spine.clone();
+                let mut stack: Vec<NodeId> = dirty_roots
+                    .iter()
+                    .chain(shallow_roots.iter())
+                    .chain(point_roots.iter())
+                    .copied()
+                    .collect();
+                while let Some(id) = stack.pop() {
+                    if set.insert(id) {
+                        stack.extend(flat.children_of(doc, id).iter().copied());
+                    }
                 }
-            }
-            set
-        });
+                set
+            })
+        };
         let map = CounterMap::continuing(prev_styles, elements);
         (ctx, map, IncrRestyle { dirty_roots, shallow_roots, point_roots, content_dirty, spine, prev_counter_scopes, invalidation, prev_sheet }, pre_match_needed)
     };
