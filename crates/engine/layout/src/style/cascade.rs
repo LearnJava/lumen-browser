@@ -423,17 +423,25 @@ pub(crate) fn compute_style_shareable(
     // last wins) `insert` корректно сохраняет последнее объявление.
     // BUG-1505: `CSS.registerProperty()` registrations live on the document and are
     // chained last, so a script registration wins over an `@property` rule of the same name.
-    let script_rules: Vec<PropertyRule> = doc
-        .registered_custom_properties()
-        .iter()
-        .map(|p| PropertyRule {
-            name: p.name.clone(),
-            syntax: p.syntax.clone(),
-            inherits: p.inherits,
-            initial_value: p.initial_value.clone(),
-            conditions: Vec::new(),
-        })
-        .collect();
+    // PERF-REGISTRY-SKIP — на типичной странице нет ни `@property`, ни
+    // `CSS.registerProperty`: тогда registry пуст по построению, а сборка
+    // `Vec<PropertyRule>` клонировала строки на КАЖДОМ узле (cs_init).
+    let script_rules: Vec<PropertyRule> = if sheet.properties.is_empty()
+        && doc.registered_custom_properties().is_empty()
+    {
+        Vec::new()
+    } else {
+        doc.registered_custom_properties()
+            .iter()
+            .map(|p| PropertyRule {
+                name: p.name.clone(),
+                syntax: p.syntax.clone(),
+                inherits: p.inherits,
+                initial_value: p.initial_value.clone(),
+                conditions: Vec::new(),
+            })
+            .collect()
+    };
     let registry: HashMap<&str, &PropertyRule> = sheet
         .properties
         .iter()
