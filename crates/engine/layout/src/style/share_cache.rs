@@ -504,10 +504,122 @@ pub(crate) fn share_key_eligible(doc: &Document, node: NodeId) -> bool {
     doc.ua_slot_role(node).is_none() && doc.ua_vtt_role(node).is_none()
 }
 
+// PERF-SHARE-PROBE — allocation-free negative filter in front of `build_key`.
+// `compute` used to build a full `ShareKey` (tag `Box<str>`, sorted
+// `Vec<(Box<str>,Box<str>)>`, fingerprint `Vec<bool>`) for EVERY node before
+// it could learn the cache had no equal entry — on habr inserts outnumber
+// hits ~5:1, so most of those builds were pure waste. `key_hashes` stores a
+// u64 hash of every inserted key; `cheap_key_hash` recomputes the same hash
+// from the node with zero allocations (attribute order-insensitive — the
+// stored key's `attrs` are sorted, so the hash sums per-pair mixes). A hash
+// absent from the set proves no equal key was ever inserted, so the node
+// skips `build_key` entirely unless `compute_style_shareable` reports the
+// result shareable and an insert actually needs the key. Hash collisions
+// only cost a full lookup — never a wrong answer.
+fn mix_bytes(mut h: u64, bytes: &[u8]) -> u64 {
+    for &b in bytes {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+fn mix_str(h: u64, s: &str) -> u64 {
+    mix_bytes(h, s.as_bytes())
+}
+
+/// Whether `local` survives the [`build_key`] attribute projection — kept
+/// in sync with the `filter` there; a drift only weakens the probe (extra
+/// attributes in the hash can split hits, missing ones cannot happen
+/// because both sides call this same predicate).
+fn attr_survives_projection(relevant: &HashSet<String>, local: &str) -> bool {
+    attr_is_relevant(relevant, local)
+        || (local.len() >= DYNAMIC_STATE_ATTR_PREFIX.len()
+            && local[..DYNAMIC_STATE_ATTR_PREFIX.len()].eq_ignore_ascii_case(DYNAMIC_STATE_ATTR_PREFIX))
+}
+
+/// Order-insensitive hash of the projected `(name, value)` attribute set:
+/// equal sets hash equal regardless of DOM attribute order (the stored
+/// `ShareKey::attrs` are sorted, so this MUST NOT depend on iteration
+/// order).
+fn hash_attr_pairs(h: u64, pairs: &[(Box<str>, Box<str>)]) -> u64 {
+    let mut acc = 0u64;
+    for (n, v) in pairs {
+        let mut p = mix_str(0x9e37_79b9_7f4a_7c15, n);
+        p = mix_str(p, "\u{1}");
+        p = mix_str(p, v);
+        acc = acc.wrapping_add(p);
+    }
+    h.wrapping_add(acc)
+}
+
+fn share_key_hash(k: &ShareKey) -> u64 {
+    let mut h = mix_str(0xcbf2_9ce4_8422_2325, &k.tag);
+    h = hash_attr_pairs(h, &k.attrs);
+    h = h.wrapping_add(k.inherited_ptr as u64);
+    h = h
+        .wrapping_add(u64::from(k.is_first_child))
+        .wrapping_add(u64::from(k.is_last_child) << 1)
+        .wrapping_add(u64::from(k.style_csp_blocked) << 2)
+        .wrapping_add(u64::from(k.focus_visible) << 3);
+    for &b in &k.dynamic_fingerprint_sig {
+        h = h.wrapping_mul(0x1000_0000_01b3).wrapping_add(u64::from(b));
+    }
+    h
+}
+
+/// Allocation-free [`ShareKey`] hash probe — `Some(h)` only when the node
+/// passes every `build_key` early-out (element, eligible, not shadow
+/// related) AND the pass tracks neither position nor fingerprint
+/// selectors, so `is_first_child`/`is_last_child`/`dynamic_fingerprint_sig`
+/// are the canonical `false`/`false`/empty. Anything else returns `None`
+/// and the caller takes the full `build_key` path.
+fn cheap_key_hash(
+    doc: &Document,
+    node: NodeId,
+    inherited: &ComputedStyle,
+    relevant_attrs: &HashSet<String>,
+) -> Option<u64> {
+    let NodeData::Element { name, attrs, .. } = &doc.get(node).data else {
+        return None;
+    };
+    if !share_key_eligible(doc, node) {
+        return None;
+    }
+    if doc.is_shadow_host(node)
+        || doc.get(node).parent.is_some_and(|p| doc.is_shadow_host(p))
+        || doc.enclosing_shadow_host(node).is_some()
+    {
+        return None;
+    }
+    let mut h = mix_str(0xcbf2_9ce4_8422_2325, name.local.as_str());
+    // Same per-pair mix `hash_attr_pairs` applies to the stored key, fed in
+    // DOM order — the wrapping_add accumulation makes order irrelevant.
+    let mut acc = 0u64;
+    for a in attrs.iter() {
+        let local = a.name.local.as_str();
+        if !attr_survives_projection(relevant_attrs, local) {
+            continue;
+        }
+        let mut p = mix_str(0x9e37_79b9_7f4a_7c15, local);
+        p = mix_str(p, "\u{1}");
+        p = mix_str(p, a.value.as_str());
+        acc = acc.wrapping_add(p);
+    }
+    h = h.wrapping_add(acc);
+    h = h.wrapping_add(inherited as *const ComputedStyle as usize as u64);
+    h = h
+        .wrapping_add(u64::from(doc.is_style_attr_csp_blocked(node)) << 2)
+        .wrapping_add(u64::from(super::matching::forms::matches_focus_visible(doc, node)) << 3);
+    Some(h)
+}
+
 /// Per-pass structural memo — see module doc.
 #[derive(Default)]
 pub(crate) struct ShareCache {
     entries: HashMap<ShareKey, (Arc<ComputedStyle>, Arc<[MatchedRule]>)>,
+    /// Hashes of every key in `entries` — the negative filter described at
+    /// [`cheap_key_hash`]. Inserted and removed together with `entries`.
+    key_hashes: HashSet<u64>,
     /// BUG-1112 срез 2 — measurement-only pass counters, see [`Self::stats_enabled`].
     hits: usize,
     inserts: usize,
@@ -596,10 +708,24 @@ impl ShareCache {
         let relevant_attrs = self
             .relevant_attrs
             .get_or_insert_with(|| sheet_relevant_attr_names(sheet));
-        let key = build_key(
-            doc, node, sheet, inherited, viewport, dark_mode, track_position, track_fingerprint,
-            relevant_attrs,
-        );
+        // PERF-SHARE-PROBE: на листах без position/fingerprint-селекторов
+        // бесаллокационный хэш решает, возможен ли вообще lookup. `None`
+        // (трекаемые листы, неподходящий узел) или хэш, присутствующий в
+        // `key_hashes`, ведут по полному пути `build_key`; отсутствующий хэш
+        // доказывает, что равного ключа нет, — `build_key` запускается,
+        // только если свежий результат оказался shareable и требует insert.
+        let probe = if track_position || track_fingerprint {
+            None
+        } else {
+            cheap_key_hash(doc, node, inherited, relevant_attrs)
+        };
+        let mut key = match probe {
+            Some(h) if !self.key_hashes.contains(&h) => None,
+            _ => build_key(
+                doc, node, sheet, inherited, viewport, dark_mode, track_position, track_fingerprint,
+                relevant_attrs,
+            ),
+        };
         if let Some(hit) = key.as_ref().and_then(|k| self.entries.get(k)) {
             if Self::stats_enabled() {
                 self.hits += 1;
@@ -626,13 +752,26 @@ impl ShareCache {
             }
             return (Arc::clone(&hit.0), Arc::clone(&hit.1));
         }
-        let key_was_some = key.is_some();
+        // `probe == Some` means the node passed every `build_key` early-out,
+        // so the key *would* have been `Some` — keeps the stats split honest
+        // on the guaranteed-miss path where `build_key` never ran.
+        let key_was_some = key.is_some() || probe.is_some();
         let mut matched_rules = Vec::new();
         let (style, shareable) =
             compute_style_shareable(doc, node, sheet, inherited, viewport, dark_mode, None, &mut matched_rules, false);
         let style = Arc::new(style);
         let matched_rules: Arc<[MatchedRule]> = Arc::from(matched_rules);
+        // GUARANTEED-MISS probe path left `key` as `None`: build it now,
+        // only when the fresh result is actually shareable — unshareable
+        // nodes (the majority on real pages) never pay `build_key` at all.
+        if shareable && key.is_none() {
+            key = build_key(
+                doc, node, sheet, inherited, viewport, dark_mode, track_position, track_fingerprint,
+                relevant_attrs,
+            );
+        }
         if shareable && let Some(k) = key {
+            self.key_hashes.insert(share_key_hash(&k));
             self.entries.insert(k, (Arc::clone(&style), Arc::clone(&matched_rules)));
             if Self::stats_enabled() {
                 self.inserts += 1;
