@@ -232,7 +232,7 @@ impl Rule {
         let splice_at = marker_positions.get(index).copied().unwrap_or(self.declarations.len());
         self.declarations.insert(
             splice_at,
-            Declaration { property: MIXIN_APPLY_MARKER.to_string(), value, important: false },
+            Declaration { flags: crate::parser::decl_content_flags(&value), property: MIXIN_APPLY_MARKER.to_string(), value, important: false },
         );
         Ok(index)
     }

@@ -816,6 +816,7 @@ use super::*;
         let result = m.result.as_ref().expect("mixin should have @result");
         assert_eq!(result.len(), 1);
         assert_eq!(result[0], MixinResultItem::Decl(Declaration {
+            flags: crate::parser::decl_content_flags("var(--n)"),
             property: "margin-left".to_string(),
             value: "var(--n)".to_string(),
             important: false,
@@ -1011,6 +1012,7 @@ use super::*;
         assert_eq!(result.len(), 2);
         assert_eq!(result[0], MixinResultItem::Contents { fallback: Vec::new() });
         assert_eq!(result[1], MixinResultItem::Decl(Declaration {
+            flags: crate::parser::decl_content_flags("green"),
             property: "color".to_string(),
             value: "green".to_string(),
             important: false,
@@ -1100,8 +1102,9 @@ use super::*;
         assert_eq!(
             body[0],
             MixinResultItem::Decl(Declaration {
-                property: "color".to_string(),
-                value: "blue".to_string(),
+                flags: crate::parser::decl_content_flags("blue"),
+            property: "color".to_string(),
+            value: "blue".to_string(),
                 important: false,
             })
         );

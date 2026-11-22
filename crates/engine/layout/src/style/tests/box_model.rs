@@ -734,6 +734,7 @@ use super::*;
 
         let mut child = ComputedStyle::root();
         let inherit = Declaration {
+            flags: lumen_css_parser::decl_content_flags("inherit"),
             property: "clip-rule".to_string(),
             value: "inherit".to_string(),
             important: false,
@@ -744,6 +745,7 @@ use super::*;
         let mut child2 = ComputedStyle::root();
         child2.svg_clip_rule = FillRule::EvenOdd;
         let initial = Declaration {
+            flags: lumen_css_parser::decl_content_flags("initial"),
             property: "clip-rule".to_string(),
             value: "initial".to_string(),
             important: false,
@@ -806,6 +808,7 @@ use super::*;
         parent.paint_order = SvgPaintOrder::parse("stroke").unwrap();
         let mut s = ComputedStyle::root();
         let decl = Declaration {
+            flags: lumen_css_parser::decl_content_flags("unset"),
             property: "paint-order".to_string(),
             value: "unset".to_string(),
             important: false,
@@ -869,12 +872,14 @@ use super::*;
         let mut s = ComputedStyle::root();
         apply_declaration(
             &mut s,
-            &Declaration { property: "text-anchor".into(), value: "unset".into(), important: false },
+            &Declaration {
+            flags: lumen_css_parser::decl_content_flags("unset"), property: "text-anchor".into(), value: "unset".into(), important: false },
             16.0, vp, FontWeight::NORMAL, &parent, &parent, false, false,
         );
         apply_declaration(
             &mut s,
-            &Declaration { property: "dominant-baseline".into(), value: "unset".into(), important: false },
+            &Declaration {
+            flags: lumen_css_parser::decl_content_flags("unset"), property: "dominant-baseline".into(), value: "unset".into(), important: false },
             16.0, vp, FontWeight::NORMAL, &parent, &parent, false, false,
         );
         assert_eq!(s.text_anchor, Some(SvgTextAnchor::End));
@@ -891,7 +896,8 @@ use super::*;
         let mut s = ComputedStyle::root();
         apply_declaration(
             &mut s,
-            &Declaration { property: "text-anchor".into(), value: "initial".into(), important: false },
+            &Declaration {
+            flags: lumen_css_parser::decl_content_flags("initial"), property: "text-anchor".into(), value: "initial".into(), important: false },
             16.0, vp, FontWeight::NORMAL, &parent, &parent, false, false,
         );
         assert_eq!(s.text_anchor, None);
@@ -942,7 +948,8 @@ use super::*;
         let mut s = ComputedStyle::root();
         apply_declaration(
             &mut s,
-            &Declaration { property: "baseline-shift".into(), value: "unset".into(), important: false },
+            &Declaration {
+            flags: lumen_css_parser::decl_content_flags("unset"), property: "baseline-shift".into(), value: "unset".into(), important: false },
             16.0, vp, FontWeight::NORMAL, &parent, &parent, false, false,
         );
         assert_eq!(s.baseline_shift, SvgBaselineShift::Baseline);
@@ -950,7 +957,8 @@ use super::*;
         let mut s2 = ComputedStyle::root();
         apply_declaration(
             &mut s2,
-            &Declaration { property: "baseline-shift".into(), value: "inherit".into(), important: false },
+            &Declaration {
+            flags: lumen_css_parser::decl_content_flags("inherit"), property: "baseline-shift".into(), value: "inherit".into(), important: false },
             16.0, vp, FontWeight::NORMAL, &parent, &parent, false, false,
         );
         assert_eq!(s2.baseline_shift, SvgBaselineShift::Super);

@@ -733,7 +733,7 @@ fn expand_mixin_result_items(
                 if let Some(v) = expand_vars(&d.value, local, depth + 1, em_basis, viewport)
                     .and_then(|v| expand_custom_functions(&v, functions, local, depth + 1, em_basis, viewport))
                 {
-                    out.push(Declaration { property: d.property.clone(), value: v, important: d.important });
+                    out.push(Declaration { flags: lumen_css_parser::decl_content_flags(&v), property: d.property.clone(), value: v, important: d.important });
                 }
             }
             MixinResultItem::Apply(nested) => {
@@ -752,7 +752,7 @@ fn expand_mixin_result_items(
                     if let Some(v) = expand_vars(&d.value, scope, depth + 1, em_basis, viewport)
                         .and_then(|v| expand_custom_functions(&v, functions, scope, depth + 1, em_basis, viewport))
                     {
-                        out.push(Declaration { property: d.property.clone(), value: v, important: d.important });
+                        out.push(Declaration { flags: lumen_css_parser::decl_content_flags(&v), property: d.property.clone(), value: v, important: d.important });
                     }
                 }
             }

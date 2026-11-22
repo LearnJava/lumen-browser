@@ -330,7 +330,7 @@ pub(super) fn parse_items(src: &str, ctx: Ctx) -> Items {
             let (name, params) = at_name(prelude_text);
             if ctx.is_body() && name == "apply" {
                 if let Some(val) = apply_value(src, &e) {
-                    items.pending.push(Declaration { property: MIXIN_APPLY_MARKER.to_string(), value: val, important: false });
+                    items.pending.push(Declaration { flags: crate::parser::decl_content_flags(&val), property: MIXIN_APPLY_MARKER.to_string(), value: val, important: false });
                 }
                 continue;
             }

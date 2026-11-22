@@ -24,6 +24,8 @@ pub use parser::{
     is_valid_selector_list,
     parse, parse_apply_call, parse_inline_style, parse_selector_list, parse_media_query, parse_supports_condition, ApplyRule, AttrOp, AttrSelector, ColorScheme, conditions_hold,
     ColorProfileRule, Combinator, CompoundSelector, ComplexSelector, ContainerRule, CounterStyleRule, Declaration,
+    decl_content_flags, DeclKeyword, DECL_F_HAS_ATTR, DECL_F_HAS_DASHDASH, DECL_F_HAS_ENV_MAYBE, DECL_F_HAS_VAR,
+    DECL_KW_MASK, DECL_KW_SHIFT,
     DirArg, FontFaceRule, FontFaceSource, FontFaceSourceKind, FontPaletteValuesRule, FunctionBodyItem, FunctionParameter, FunctionRule, ImportLayer, ImportRule, Keyframe, KeyframesRule,
     LayerCondition, LayerRule, MediaCondition, MediaContext, MediaContrast, MediaFeature, MediaHover, MediaInvertedColors, MediaOrientation, MediaPointer, MediaQuery,
     MediaReducedData, MediaReducedTransparency, MediaScripting,

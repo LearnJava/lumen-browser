@@ -407,6 +407,7 @@ use super::*;
         };
         let inherited = ComputedStyle::root();
         let decl = Declaration {
+            flags: lumen_css_parser::decl_content_flags("2s ease-in-out 0.5s 2 alternate forwards paused fade"),
             property: "animation".to_string(),
             value: "2s ease-in-out 0.5s 2 alternate forwards paused fade".to_string(),
             important: false,
@@ -541,6 +542,7 @@ use super::*;
         let mut s = ComputedStyle::root();
         let decl = |s: &mut ComputedStyle, value: &str| {
             let d = Declaration {
+            flags: lumen_css_parser::decl_content_flags(value),
                 property: "transition-behavior".to_string(),
                 value: value.to_string(),
                 important: false,
@@ -629,6 +631,7 @@ use super::*;
         };
         let inherited = ComputedStyle::root();
         let decl = Declaration {
+            flags: lumen_css_parser::decl_content_flags("transform 0.4s ease-in-out 0.1s"),
             property: "transition".to_string(),
             value: "transform 0.4s ease-in-out 0.1s".to_string(),
             important: false,

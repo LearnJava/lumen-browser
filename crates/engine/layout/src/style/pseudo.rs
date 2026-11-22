@@ -785,7 +785,7 @@ fn compute_pseudo_element_style_inner(
         let attr_buf;
         let effective_decl: &Declaration = if decl.value.contains("attr(") {
             let Some(v) = expand_attr_val(&decl.value, doc, node) else { continue };
-            attr_buf = Declaration { property: decl.property.clone(), value: v, important: decl.important };
+            attr_buf = Declaration { flags: lumen_css_parser::decl_content_flags(&v), property: decl.property.clone(), value: v, important: decl.important };
             &attr_buf
         } else {
             decl
@@ -950,6 +950,7 @@ fn view_transition_ua_decls(
     // animation lists, so the parent's computed value is written out.
     let inherited = |prop: &str| parent_map.get(prop).map_or("inherit", String::as_str).to_string();
     let decl = |property: &str, value: &str| Declaration {
+        flags: lumen_css_parser::decl_content_flags(value),
         property: property.to_string(),
         value: value.to_string(),
         important: false,

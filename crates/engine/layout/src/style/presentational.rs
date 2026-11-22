@@ -152,6 +152,7 @@ pub(in crate::style) fn apply_svg_presentational_hints(
             continue;
         }
         let decl = Declaration {
+            flags: lumen_css_parser::decl_content_flags(val),
             property: attr.to_string(),
             value: val.to_string(),
             important: false,

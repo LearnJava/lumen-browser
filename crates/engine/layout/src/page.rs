@@ -1100,11 +1100,13 @@ mod tests {
             selector: String::new(),
             declarations: vec![
                 Declaration {
+            flags: lumen_css_parser::decl_content_flags("100"),
                     property: "margin-top".to_string(),
                     value: "100".to_string(),
                     important: false,
                 },
                 Declaration {
+            flags: lumen_css_parser::decl_content_flags("50"),
                     property: "margin-left".to_string(),
                     value: "50".to_string(),
                     important: false,

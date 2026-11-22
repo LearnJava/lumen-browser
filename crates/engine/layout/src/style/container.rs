@@ -891,7 +891,7 @@ pub fn apply_matched_container_rules(
             let attr_buf;
             let effective_decl: &Declaration = if decl.value.contains("attr(") {
                 let Some(v) = expand_attr_val(&decl.value, doc, node) else { continue };
-                attr_buf = Declaration { property: decl.property.clone(), value: v, important: decl.important };
+                attr_buf = Declaration { flags: lumen_css_parser::decl_content_flags(&v), property: decl.property.clone(), value: v, important: decl.important };
                 &attr_buf
             } else {
                 decl

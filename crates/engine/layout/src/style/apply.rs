@@ -75,8 +75,11 @@ pub(in crate::style) fn apply_declaration(
     // time: свойство вычисляется как `unset` (CSS Variables L1 §3.3,
     // CSS Environment Variables L1 §3), а не наследует чужое значение.
     let expanded;
-    let has_env = contains_env_call(&decl.value);
-    let val: &str = if decl.value.contains("var(") || has_env {
+    // PERF-DECL-FLAGS: `has_env_maybe` is a conservative substring probe —
+    // `contains_env_call` still decides behind it; `has_var` is the exact
+    // `contains("var(")` predicate, computed once at parse time.
+    let has_env = decl.has_env_maybe() && contains_env_call(&decl.value);
+    let val: &str = if decl.has_var() || has_env {
         // Ошибка разбора (кривой `env()`/`var()`, bad-string, лишний `!`) —
         // декларации как будто не было.
         if !substitution_value_well_formed(&decl.value) || !env_calls_well_formed(&decl.value) {

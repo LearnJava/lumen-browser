@@ -1182,9 +1182,11 @@ use super::*;
         let mut s = ComputedStyle::root();
         let vp = Size::new(800.0, 600.0);
         let root = ComputedStyle::root();
-        let hidden = Declaration { property: "backface-visibility".to_string(), value: "hidden".to_string(), important: false };
+        let hidden = Declaration {
+            flags: lumen_css_parser::decl_content_flags("hidden"), property: "backface-visibility".to_string(), value: "hidden".to_string(), important: false };
         apply_declaration(&mut s, &hidden, 16.0, vp, FontWeight::NORMAL, &root, &root, false, false);
-        let bogus = Declaration { property: "backface-visibility".to_string(), value: "translucent".to_string(), important: false };
+        let bogus = Declaration {
+            flags: lumen_css_parser::decl_content_flags("translucent"), property: "backface-visibility".to_string(), value: "translucent".to_string(), important: false };
         apply_declaration(&mut s, &bogus, 16.0, vp, FontWeight::NORMAL, &root, &root, false, false);
         assert_eq!(s.backface_visibility, BackfaceVisibility::Hidden);
     }
@@ -1229,7 +1231,8 @@ use super::*;
         let vp = Size::new(800.0, 600.0);
         let root = ComputedStyle::root();
         for v in ["fill-box", "padding-box", "fill-box stroke-box"] {
-            let d = Declaration { property: "transform-box".to_string(), value: v.to_string(), important: false };
+            let d = Declaration {
+            flags: lumen_css_parser::decl_content_flags(v), property: "transform-box".to_string(), value: v.to_string(), important: false };
             apply_declaration(&mut s, &d, 16.0, vp, FontWeight::NORMAL, &root, &root, false, false);
         }
         assert_eq!(s.transform_box, TransformBox::FillBox);

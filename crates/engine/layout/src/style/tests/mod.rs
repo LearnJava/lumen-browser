@@ -713,7 +713,8 @@
     /// Helper: apply a single CSS property to a fresh ComputedStyle.
     fn ts_prop(prop: &str, val: &str) -> ComputedStyle {
         let mut s = ComputedStyle::root();
-        let decl = Declaration { property: prop.to_string(), value: val.to_string(), important: false };
+        let decl = Declaration {
+            flags: lumen_css_parser::decl_content_flags(val), property: prop.to_string(), value: val.to_string(), important: false };
         let vp = Size::new(800.0, 600.0);
         apply_declaration(&mut s, &decl, 16.0, vp, FontWeight::NORMAL, &ComputedStyle::root(), &ComputedStyle::root(), false, false);
         s

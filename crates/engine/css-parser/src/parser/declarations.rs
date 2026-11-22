@@ -8,6 +8,127 @@
 
 use super::*;
 
+// ── PERF-DECL-FLAGS ────────────────────────────────────────────────────────
+// Content flags precomputed once at parse time so the cascade's per-node
+// per-declaration scans (`contains("var(")`, `contains_env_call`, trim +
+// `eq_ignore_ascii_case` keyword probes — run for every matched declaration
+// of every element of every pass) become bit tests. Flags describe ONLY the
+// raw `value` text; `attr()`/`var()` expansion produces new declarations
+// through the same constructors, so expanded values get their own flags.
+//
+// Every flag is conservative in the safe direction: a clear bit proves the
+// substring/keyword is absent; a set bit may still be answered `false` by the
+// precise predicate (callers keep the precise check behind the flag).
+
+/// `value` contains the exact substring `var(` (case-sensitive — mirrors the
+/// cascade's own `contains("var(")` predicate byte for byte).
+pub const DECL_F_HAS_VAR: u32 = 1;
+/// `value` may contain an `env(` call: case-insensitive substring probe
+/// anywhere in the text (strings/comments included — over-approximation is
+/// safe, the precise `contains_env_call` still decides behind the flag).
+pub const DECL_F_HAS_ENV_MAYBE: u32 = 2;
+/// `value` contains the exact substring `attr(`.
+pub const DECL_F_HAS_ATTR: u32 = 4;
+/// `value` contains `--` (the `--fn()` custom-function gate's probe).
+pub const DECL_F_HAS_DASHDASH: u32 = 8;
+
+/// Keyword id occupies bits 8..11: the trimmed value, compared
+/// case-insensitively, is exactly one of the CSS-wide / revert keywords the
+/// cascade probes for. `0` = none.
+pub const DECL_KW_SHIFT: u32 = 8;
+pub const DECL_KW_MASK: u32 = 0x7 << DECL_KW_SHIFT;
+
+/// Keyword ids stored in [`DECL_KW_MASK`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum DeclKeyword {
+    None = 0,
+    Inherit = 1,
+    Initial = 2,
+    Unset = 3,
+    Revert = 4,
+    RevertLayer = 5,
+    RevertRule = 6,
+}
+
+impl Declaration {
+    /// CSS-wide / revert keyword of the trimmed value, if it is exactly one —
+    /// the same answer the cascade's `trim().eq_ignore_ascii_case(...)` probes
+    /// give, computed once at parse time.
+    pub fn keyword(&self) -> DeclKeyword {
+        match (self.flags & DECL_KW_MASK) >> DECL_KW_SHIFT {
+            1 => DeclKeyword::Inherit,
+            2 => DeclKeyword::Initial,
+            3 => DeclKeyword::Unset,
+            4 => DeclKeyword::Revert,
+            5 => DeclKeyword::RevertLayer,
+            6 => DeclKeyword::RevertRule,
+            _ => DeclKeyword::None,
+        }
+    }
+
+    pub fn has_var(&self) -> bool {
+        self.flags & DECL_F_HAS_VAR != 0
+    }
+    /// Conservative: `true` means "might contain `env(`" — callers still run
+    /// the precise `contains_env_call` behind it.
+    pub fn has_env_maybe(&self) -> bool {
+        self.flags & DECL_F_HAS_ENV_MAYBE != 0
+    }
+    pub fn has_attr(&self) -> bool {
+        self.flags & DECL_F_HAS_ATTR != 0
+    }
+    pub fn has_dashdash(&self) -> bool {
+        self.flags & DECL_F_HAS_DASHDASH != 0
+    }
+}
+
+/// Case-insensitive substring probe without allocation (over strings,
+/// comments and escapes alike — deliberately crude, flags are allowed to
+/// over-approximate).
+fn contains_ci(haystack: &str, needle: &[u8]) -> bool {
+    let h = haystack.as_bytes();
+    h.windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle))
+}
+
+/// Computes [`DECL_F_*`] flags for a declaration `value`. Called by the
+/// parser and by every site that builds a `Declaration` with a fresh value
+/// (attr()/var()/mixin expansion buffers).
+pub fn decl_content_flags(value: &str) -> u32 {
+    let mut flags = 0u32;
+    if value.contains("var(") {
+        flags |= DECL_F_HAS_VAR;
+    }
+    if contains_ci(value, b"env(") {
+        flags |= DECL_F_HAS_ENV_MAYBE;
+    }
+    if value.contains("attr(") {
+        flags |= DECL_F_HAS_ATTR;
+    }
+    if value.contains("--") {
+        flags |= DECL_F_HAS_DASHDASH;
+    }
+    let kw = {
+        let t = value.trim();
+        if t.eq_ignore_ascii_case("inherit") {
+            DeclKeyword::Inherit
+        } else if t.eq_ignore_ascii_case("initial") {
+            DeclKeyword::Initial
+        } else if t.eq_ignore_ascii_case("unset") {
+            DeclKeyword::Unset
+        } else if t.eq_ignore_ascii_case("revert") {
+            DeclKeyword::Revert
+        } else if t.eq_ignore_ascii_case("revert-layer") {
+            DeclKeyword::RevertLayer
+        } else if t.eq_ignore_ascii_case("revert-rule") {
+            DeclKeyword::RevertRule
+        } else {
+            DeclKeyword::None
+        }
+    };
+    flags | ((kw as u32) << DECL_KW_SHIFT)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Declaration {
     pub property: String,
@@ -15,6 +136,8 @@ pub struct Declaration {
     /// `!important` флаг (CSS Cascade L4 §8.1). При равной specificity
     /// `important = true` побеждает `important = false`.
     pub important: bool,
+    /// [`decl_content_flags`] of `value`, computed once at construction.
+    pub flags: u32,
 }
 
 impl Declaration {
@@ -93,10 +216,12 @@ impl<'a> Parser<'a> {
         // unprefixed property here, once, for the whole cascade.
         let property = crate::compat_alias::canonical_property_name(&property)
             .map_or(property, str::to_string);
+        let flags = decl_content_flags(&value);
         Some(Declaration {
             property,
             value,
             important,
+            flags,
         })
     }
 

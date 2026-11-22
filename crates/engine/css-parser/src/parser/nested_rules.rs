@@ -81,6 +81,7 @@ impl Parser<'_> {
                         if self.parse_apply_rule().is_some() {
                             let raw = self.input[raw_start..self.pos].to_string();
                             decls.push(Declaration {
+                                flags: crate::parser::decl_content_flags(&raw),
                                 property: MIXIN_APPLY_MARKER.to_string(),
                                 value: raw,
                                 important: false,

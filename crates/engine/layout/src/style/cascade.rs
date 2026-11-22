@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use lumen_core::geom::Size;
 use lumen_css_parser::{
-    parse_inline_style, Declaration, FunctionRule, MixinRule, PropertyRule, Rule, Specificity, Stylesheet,
+    parse_inline_style, Declaration, DeclKeyword, FunctionRule, MixinRule, PropertyRule, Rule, Specificity, Stylesheet,
     MIXIN_APPLY_MARKER,
 };
 use lumen_dom::{Document, DocumentMode, NodeData, NodeId};
@@ -662,7 +662,7 @@ pub(crate) fn compute_style_shareable(
         doc.get(node)
             .get_attr("style")
             .filter(|s| !s.is_empty())
-            .map(|s| cached_inline_decls(s))
+            .map(cached_inline_decls)
             .unwrap_or_else(empty_inline_decls)
     };
     // THREAD-4 срез N: `attr(<name>)` inside a `style=""` attribute names an
@@ -670,7 +670,7 @@ pub(crate) fn compute_style_shareable(
     // enumerate names from the *stylesheet*, so a node whose inline style
     // expands `attr()` is never safe to share (the same `contains("attr(")`
     // predicate the apply loop below uses decides both sides identically).
-    if inline_decls.iter().any(|d| d.value.contains("attr(")) {
+    if inline_decls.iter().any(|d| d.has_attr()) {
         shareable = false;
     }
 
@@ -1261,8 +1261,7 @@ pub(crate) fn compute_style_shareable(
         (if imp { -lp } else { lp }) * 2 + i32::from(ctx_inline & 1 == 1)
     };
     while matched.iter().any(|&(_, _, _, _, _, _, decl, _)| {
-        let v = decl.value.trim();
-        v.eq_ignore_ascii_case("revert-layer") || v.eq_ignore_ascii_case("revert-rule")
+        matches!(decl.keyword(), DeclKeyword::RevertLayer | DeclKeyword::RevertRule)
     }) {
         use std::collections::HashMap;
         // Winner per property = last occurrence in the cascade-sorted vec.
@@ -1270,9 +1269,9 @@ pub(crate) fn compute_style_shareable(
         let mut winners: HashMap<String, (i32, usize, bool, bool)> = HashMap::new();
         for &(imp, inline, lp, _, rule_idx, _, decl, _) in &matched {
             let key = decl.property.to_ascii_lowercase();
-            let v = decl.value.trim();
-            let is_revert_layer = v.eq_ignore_ascii_case("revert-layer");
-            let is_revert_rule = v.eq_ignore_ascii_case("revert-rule");
+            let kw = decl.keyword();
+            let is_revert_layer = kw == DeclKeyword::RevertLayer;
+            let is_revert_rule = kw == DeclKeyword::RevertRule;
             winners.insert(
                 key,
                 (layer_pos(imp, inline, lp), rule_idx, is_revert_layer, is_revert_rule),
@@ -1323,9 +1322,9 @@ pub(crate) fn compute_style_shareable(
     // гарантированно не сработает ни для одной декларации.
     let ua_baseline_font_size = style.font_size;
     let needs_ua_baseline = matched.iter().any(|&(_, _, _, _, _, _, decl, _)| {
-        decl.value.trim().eq_ignore_ascii_case("revert")
+        decl.keyword() == DeclKeyword::Revert
     }) || (
-        matched.iter().any(|&(_, _, _, _, _, _, decl, _)| decl.value.contains("var("))
+        matched.iter().any(|&(_, _, _, _, _, _, decl, _)| decl.has_var())
             && inherited.custom_props.values().any(|v| v.trim().eq_ignore_ascii_case("revert"))
     );
     let ua_baseline_storage: Option<ComputedStyle> = needs_ua_baseline.then(|| style.clone());
@@ -1357,7 +1356,7 @@ pub(crate) fn compute_style_shareable(
             let key = format!("--{name}");
             // BUG-1500: `var()`/`env()` с недопустимым телом (`!`/`;` в fallback-е,
             // лишний `!important`) — ошибка разбора, декларации как будто нет.
-            if (decl.value.contains("var(") || contains_env_call(&decl.value))
+            if (decl.has_var() || (decl.has_env_maybe() && contains_env_call(&decl.value)))
                 && !(substitution_value_well_formed(&decl.value) && env_calls_well_formed(&decl.value))
             {
                 continue;
@@ -1368,8 +1367,12 @@ pub(crate) fn compute_style_shareable(
             // `apply_property_initial_values`), `inherit` takes the parent's value, `unset`
             // is `inherit` for an inheriting property and `initial` for `inherits: false`.
             // `revert*` stay literal: they are resolved against the UA baseline further down.
-            let keyword = decl.value.trim();
-            let wide = ["initial", "inherit", "unset"].into_iter().find(|k| keyword.eq_ignore_ascii_case(k));
+            let wide = match decl.keyword() {
+                DeclKeyword::Initial => Some("initial"),
+                DeclKeyword::Inherit => Some("inherit"),
+                DeclKeyword::Unset => Some("unset"),
+                _ => None,
+            };
             if let Some(wide) = wide {
                 let inherits = registry.get(key.as_str()).is_none_or(|p| p.inherits);
                 let from_parent = wide == "inherit" || (wide == "unset" && inherits);
@@ -1387,7 +1390,7 @@ pub(crate) fn compute_style_shareable(
                 continue;
             }
             if let Some(prop_rule) = registry.get(key.as_str())
-                && !decl.value.contains("var(")
+                && !decl.has_var()
                 && !validate_against_syntax(&decl.value, &prop_rule.syntax)
             {
                 // Invalid at computed value time — skip declaration.
@@ -1558,8 +1561,7 @@ pub(crate) fn compute_style_shareable(
         // `revert-rule` declaration that survived the pre-pass was overridden
         // by a higher layer/rule for the same property, so it has no effect —
         // skip it instead of letting it fail property parsing.
-        let dv = decl.value.trim();
-        if dv.eq_ignore_ascii_case("revert-layer") || dv.eq_ignore_ascii_case("revert-rule") {
+        if matches!(decl.keyword(), DeclKeyword::RevertLayer | DeclKeyword::RevertRule) {
             continue;
         }
         // CSS Functions and Mixins L1: `@apply` markers (`MIXIN_APPLY_MARKER`,
@@ -1635,10 +1637,10 @@ pub(crate) fn compute_style_shareable(
         let mut custom_prop_expanded = false;
         // CSS Values L4 §7.7: expand attr() typed references before applying.
         let attr_buf;
-        let effective_decl: &Declaration = if decl.value.contains("attr(") {
+        let effective_decl: &Declaration = if decl.has_attr() {
             let Some(v) = expand_attr_val(&decl.value, doc, node) else { continue };
             custom_prop_expanded = true;
-            attr_buf = Declaration { property: decl.property.clone(), value: v, important: decl.important };
+            attr_buf = Declaration { flags: lumen_css_parser::decl_content_flags(&v), property: decl.property.clone(), value: v, important: decl.important };
             &attr_buf
         } else {
             decl
@@ -1672,9 +1674,9 @@ pub(crate) fn compute_style_shareable(
             None => &doc_fn_scope,
         };
         let effective_decl: &Declaration = if fn_scopes.iter().any(|s| !s.is_empty())
-            && effective_decl.value.contains("--")
+            && effective_decl.has_dashdash()
         {
-            let pre = if effective_decl.value.contains("var(") {
+            let pre = if effective_decl.has_var() {
                 match expand_vars(&effective_decl.value, &style.custom_props, 0, em_basis, viewport) {
                     Some(v) => v,
                     None => continue,
@@ -1686,6 +1688,7 @@ pub(crate) fn compute_style_shareable(
                 Some(v) => {
                     custom_prop_expanded = true;
                     func_buf = Declaration {
+                        flags: lumen_css_parser::decl_content_flags(&v),
                         property: effective_decl.property.clone(),
                         value: v,
                         important: effective_decl.important,

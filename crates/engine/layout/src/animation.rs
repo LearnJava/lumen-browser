@@ -2022,7 +2022,7 @@ mod tests {
     use super::*;
 
     fn decl(prop: &str, value: &str) -> Declaration {
-        Declaration { property: prop.to_string(), value: value.to_string(), important: false }
+        Declaration { flags: lumen_css_parser::decl_content_flags(value), property: prop.to_string(), value: value.to_string(), important: false }
     }
 
     // `background: <color>` shorthand in @keyframes is extracted as background_color.
