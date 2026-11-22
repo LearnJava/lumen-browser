@@ -7,7 +7,9 @@
 //! (анкер `static COMPUTE_STYLE_CALLS`) без правок тел.
 
 use crate::style::calc::{looks_like_function_call, parse_math_function_value};
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use lumen_core::geom::Size;
@@ -299,6 +301,37 @@ pub fn compute_style(
 ) -> ComputedStyle {
     let mut matched_rules = Vec::new();
     compute_style_shareable(doc, node, sheet, inherited, viewport, dark_mode, None, &mut matched_rules, false).0
+}
+
+// PERF-INLINE-CACHE — `style="…"` attribute text → parsed declarations.
+// `parse_inline_style` is a pure function of the attribute string, so the
+// parse is content-addressed: a hit can never be stale (an attribute edit
+// changes the key), and `attr()`/`var()` expansion still runs per node
+// downstream on the raw declarations. Bounded like the selector parse cache —
+// clear-on-overflow.
+thread_local! {
+    static INLINE_DECL_CACHE: RefCell<HashMap<String, Rc<Vec<Declaration>>>> =
+        RefCell::new(HashMap::new());
+    static EMPTY_INLINE_DECLS: Rc<Vec<Declaration>> = Rc::new(Vec::new());
+}
+
+fn empty_inline_decls() -> Rc<Vec<Declaration>> {
+    EMPTY_INLINE_DECLS.with(Rc::clone)
+}
+
+fn cached_inline_decls(style_attr: &str) -> Rc<Vec<Declaration>> {
+    INLINE_DECL_CACHE.with(|cell| {
+        let mut map = cell.borrow_mut();
+        if let Some(rc) = map.get(style_attr) {
+            return rc.clone();
+        }
+        if map.len() >= 8192 {
+            map.clear();
+        }
+        let rc = Rc::new(parse_inline_style(style_attr));
+        map.insert(style_attr.to_string(), rc.clone());
+        rc
+    })
 }
 
 /// THREAD-4 срез 2 — [`compute_style`] plus whether the result is safe to
@@ -623,14 +656,14 @@ pub(crate) fn compute_style_shareable(
     // already give a blocked external `<link>`/inline `<style>`. The
     // attribute's raw text is untouched (`getAttribute('style')` still
     // returns it), only its effect on the cascade is suppressed.
-    let inline_decls: Vec<Declaration> = if doc.is_style_attr_csp_blocked(node) {
-        Vec::new()
+    let inline_decls: Rc<Vec<Declaration>> = if doc.is_style_attr_csp_blocked(node) {
+        empty_inline_decls()
     } else {
         doc.get(node)
             .get_attr("style")
             .filter(|s| !s.is_empty())
-            .map(parse_inline_style)
-            .unwrap_or_default()
+            .map(|s| cached_inline_decls(s))
+            .unwrap_or_else(empty_inline_decls)
     };
     // THREAD-4 срез N: `attr(<name>)` inside a `style=""` attribute names an
     // attribute per node — the share key's relevant-attr set can only
