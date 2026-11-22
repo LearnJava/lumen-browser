@@ -747,7 +747,14 @@ impl Lumen {
         // 970 мс на UI-потоке), зато off-thread не блокирует окно и возвращает
         // стили, с которыми следующие тики идут по дешёвой ветке. Потерянный
         // `touched` не нужен: полный проход видит документ целиком.
-        let predicted_full = touched.unattributed || self.page_prev_cascade_styles.is_none();
+        // PERF-WIDE-TICK: сотни мутаций за тик (гидрация React/Vue пишет по
+        // всему документу) делают инкрементальный restyle дороже полного
+        // прохода — node_index + invalidated_rules + graft — а на UI-потоке
+        // это ещё и блокировка окна. Порог по числу изменений: ~5% от типичного
+        // styled-набора (~2-3k узлов); off-thread задание к тому же коалесцирует
+        // серию таких тиков в один проход по последнему состоянию.
+        let wide_tick = touched.changes.len() > 256;
+        let predicted_full = touched.unattributed || self.page_prev_cascade_styles.is_none() || wide_tick;
         if predicted_full
             && self.engine_thread.is_some()
             && m4_swap_mode() == M4Swap::Guarded
@@ -755,9 +762,11 @@ impl Lumen {
         {
             if lumen_paint::frame_log_enabled() {
                 eprintln!(
-                    "[engine] relayout_raf_dirty full tick -> off-thread (unattributed={}, basis={}, last_full_ms={:?})",
+                    "[engine] relayout_raf_dirty full tick -> off-thread (unattributed={}, basis={}, wide={}, changes={}, last_full_ms={:?})",
                     touched.unattributed,
                     self.page_prev_cascade_styles.is_some(),
+                    wide_tick,
+                    touched.changes.len(),
                     self.m4_full_cost_ms,
                 );
             }

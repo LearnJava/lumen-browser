@@ -697,7 +697,13 @@ impl Lumen {
                 .as_ref()
                 .zip(touched_reader.as_ref())
                 .map(|(s, r)| (std::sync::Arc::clone(&r.ack), s.epoch));
+            // PERF-WIDE-TICK: при широком наборе изменений restyle-ступень
+            // строит node_index/invalidation ради почти полного пересчёта —
+            // graft-ступень (полный каскад + переиспользование геометрии)
+            // дешевле. Тот же порог, что у UI-стороны в try_relayout.
+            let change_count = touched.as_ref().map_or(0, |s| s.changes.len());
             let use_restyle = touched.as_ref().is_some_and(|s| !s.unattributed)
+                && change_count <= 256
                 && prev_layout.is_some()
                 && prev_cascade.is_some();
             let (layout, counters) = if metrics_ok {
