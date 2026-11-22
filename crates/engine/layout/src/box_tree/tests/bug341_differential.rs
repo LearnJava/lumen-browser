@@ -1800,3 +1800,85 @@ fn box_build_driven_by_the_document_journal_matches_full_rebuild() {
     }
     assert!(total_reused > 0, "the journal must let untouched subtrees be reused, or this proves nothing");
 }
+
+/// PERF-PSEUDO-CACHE: a `::before` whose match depends on an *ancestor's*
+/// attribute must refresh on the incremental path — the pseudo cache may only
+/// be dropped for nodes the restyle actually recomputed, and the ancestor's
+/// class write has to reach the descendant through the dependency indexes.
+#[test]
+fn pseudo_cache_invalidates_when_ancestor_attr_flips_pseudo_match() {
+    use crate::box_tree::{
+        layout_measured_hyp, layout_measured_hyp_with_counters, layout_mutation_incremental_restyle,
+    };
+    use crate::counters::{set_incremental_restyle, ContentDirty, RestyleDelta};
+    use crate::style::{restyle_node_index, restyle_root_set_for_node_change, NodeChange};
+    use lumen_core::ext::NullHyphenationProvider;
+    use lumen_dom::NodeData;
+
+    let html = r#"<div id="w" class="a"><p id="t">x</p></div>"#;
+    let css = ".a p::before { content: \"A\"; display: block; color: rgb(255, 0, 0); }\n.b p::before { content: \"B\"; display: block; color: rgb(0, 0, 255); }";
+    let mut doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(css);
+    let vp = Size::new(800.0, 600.0);
+    let m = AspectMeasurer(0.8);
+    let hp = NullHyphenationProvider;
+
+    fn pseudo_colors(b: &super::super::LayoutBox, out: &mut Vec<(u32, String)>) {
+        if let super::super::BoxRole::Pseudo(_) = b.origin.role {
+            out.push((b.origin.node.map_or(0, |n| n.index() as u32), format!("{:?}", b.style.color)));
+        }
+        for c in &b.children {
+            pseudo_colors(c, out);
+        }
+    }
+
+    let (mut prev, mut counters) = layout_measured_hyp_with_counters(&doc, &sheet, vp, &m, &hp, false);
+    let w = doc.find_by_id("w").expect("#w");
+    let mut saw = Vec::new();
+    pseudo_colors(&prev, &mut saw);
+    assert!(!saw.is_empty(), "expected ::before boxes, got none");
+    assert!(saw.iter().all(|(_, c)| c.contains("r: 255")),
+        "round 0: ::before should be red, got {saw:?}");
+
+    for round in 0..2 {
+        // alternate class a <-> b on the ANCESTOR — the <p> itself is untouched.
+        let want_b = round == 0;
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(w).data {
+            for a in attrs.iter_mut().filter(|a| a.name.local == "class") {
+                a.value = if want_b { "b".to_owned() } else { "a".to_owned() };
+            }
+        }
+        let index = restyle_node_index(&doc, &sheet);
+        let roots = restyle_root_set_for_node_change(&doc, [(w, NodeChange::Attr("class"))], &index);
+        let content: std::collections::HashSet<_> = [w].into_iter().collect();
+        let delta = RestyleDelta { invalidation: None,
+            prev_styles: counters.styles().clone(),
+            dirty_roots: roots,
+            content_dirty: ContentDirty::Nodes(&content),
+            shallow_roots: Default::default(),
+            point_roots: Default::default(),
+        };
+        set_incremental_restyle(true);
+        crate::box_tree::set_incremental_box_build(true);
+        let (incr, next_counters) =
+            layout_mutation_incremental_restyle(&doc, &sheet, vp, &m, &hp, false, prev, delta);
+        crate::box_tree::set_incremental_box_build(false);
+        set_incremental_restyle(false);
+
+        let full = layout_measured_hyp(&doc, &sheet, vp, &m, &hp, false);
+        let (mut a, mut f) = (Vec::new(), Vec::new());
+        pseudo_colors(&incr, &mut a);
+        pseudo_colors(&full, &mut f);
+        assert_eq!(a, f, "round {round}: incremental pseudo style diverged from full layout");
+        assert!(!a.is_empty());
+        let is_blue = |c: &str| c.contains("b: 255") && c.contains("r: 0");
+        let is_red = |c: &str| c.contains("r: 255") && c.contains("b: 0");
+        if want_b {
+            assert!(a.iter().all(|(_, c)| is_blue(c)), "round {round}: after class->b ::before must be blue, got {a:?}");
+        } else {
+            assert!(a.iter().all(|(_, c)| is_red(c)), "round {round}: after class->a ::before must be red again, got {a:?}");
+        }
+        prev = incr;
+        counters = next_counters;
+    }
+}

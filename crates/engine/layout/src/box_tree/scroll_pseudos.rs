@@ -213,7 +213,7 @@ fn button_request(kind: PseudoKind, style: &ComputedStyle) -> String {
 
 fn build_button(cx: &ScrollPseudoCx, node: NodeId, style: &ComputedStyle, kind: PseudoKind) -> Option<LayoutBox> {
     let request = button_request(kind, style);
-    let ps = compute_pseudo_element_style(cx.doc, node, &request, cx.sheet, style, cx.viewport, cx.dark_mode)?;
+    let ps = compute_pseudo_element_style_cached(cx.doc, node, &request, cx.sheet, style, cx.viewport, cx.dark_mode, cx.counters.pseudo_cache())?;
     if !matches!(ps.content, Content::Items(_)) {
         return None;
     }
@@ -230,8 +230,8 @@ fn build_group(
     cchildren: &[LayoutBox],
     markers_styled: bool,
 ) -> Option<LayoutBox> {
-    let ps = compute_pseudo_element_style(
-        cx.doc, node, "scroll-marker-group", cx.sheet, cstyle, cx.viewport, cx.dark_mode,
+    let ps = compute_pseudo_element_style_cached(
+        cx.doc, node, "scroll-marker-group", cx.sheet, cstyle, cx.viewport, cx.dark_mode, cx.counters.pseudo_cache(),
     )?;
     let markers = if markers_styled && ps.display != Display::None {
         collect_markers(cx, node, cstyle, cchildren)
@@ -273,8 +273,8 @@ fn collect_markers(cx: &ScrollPseudoCx, node: NodeId, cstyle: &ComputedStyle, cc
             chain.truncate(depth);
             if owned_by_root(&chain, &b.style) {
                 let target = b.origin.node.unwrap_or(node);
-                if let Some(ps) = compute_pseudo_element_style(
-                    cx.doc, target, "scroll-marker", cx.sheet, &b.style, cx.viewport, cx.dark_mode,
+                if let Some(ps) = compute_pseudo_element_style_cached(
+                    cx.doc, target, "scroll-marker", cx.sheet, &b.style, cx.viewport, cx.dark_mode, cx.counters.pseudo_cache(),
                 ) && matches!(ps.content, Content::Items(_))
                     && ps.display != Display::None
                 {

@@ -1285,7 +1285,7 @@ pub(crate) fn collect_inline_segments(
             // CSS Pseudo-elements L4 §4 — ::before in inline formatting context.
             // Block pseudo-elements inside inline context are skipped (Phase 0).
             if let Some(ps) =
-                compute_pseudo_element_style(doc, id, "before", sheet, &s, viewport, dark_mode)
+                compute_pseudo_element_style_cached(doc, id, "before", sheet, &s, viewport, dark_mode, counters.pseudo_cache())
                 && matches!(
                     ps.display,
                     Display::Inline
@@ -1303,7 +1303,7 @@ pub(crate) fn collect_inline_segments(
             }
             // CSS Pseudo-elements L4 §4 — ::after in inline formatting context.
             if let Some(ps) =
-                compute_pseudo_element_style(doc, id, "after", sheet, &s, viewport, dark_mode)
+                compute_pseudo_element_style_cached(doc, id, "after", sheet, &s, viewport, dark_mode, counters.pseudo_cache())
                 && matches!(
                     ps.display,
                     Display::Inline
@@ -1870,8 +1870,8 @@ pub(crate) fn inject_marker(
     }
     // CSS Pseudo-elements L4 §14.2 — compute ::marker style.
     // Returns None only when `content: none` is set, which suppresses the marker.
-    let Some(mut ms) = compute_pseudo_element_style(
-        doc, parent_id, "marker", sheet, style, viewport, dark_mode,
+    let Some(mut ms) = compute_pseudo_element_style_cached(
+        doc, parent_id, "marker", sheet, style, viewport, dark_mode, counters.pseudo_cache(),
     ) else {
         return;
     };

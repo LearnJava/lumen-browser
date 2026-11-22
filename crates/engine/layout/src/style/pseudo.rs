@@ -503,6 +503,38 @@ pub fn compute_pseudo_element_style(
     out
 }
 
+/// PERF-PSEUDO-CACHE — [`compute_pseudo_element_style`] backed by the
+/// pass-carried [`crate::counters::PseudoCache`]. Box-tree callers pass
+/// `counters.pseudo_cache()`; `walk` drops a node's entries whenever its own
+/// cascade entry recomputes, which is exactly the set of nodes whose pseudo
+/// match could have changed (see `PseudoCache`'s doc comment for the
+/// inclusion argument). A hit still pays one `ComputedStyle` clone (~3 KB) —
+/// orders of magnitude cheaper than the candidate matching it replaces.
+#[allow(clippy::too_many_arguments)]
+pub fn compute_pseudo_element_style_cached(
+    doc: &Document,
+    node: NodeId,
+    pseudo: &str,
+    sheet: &Stylesheet,
+    parent: &ComputedStyle,
+    viewport: Size,
+    dark_mode: bool,
+    store: &crate::counters::PseudoCache,
+) -> Option<ComputedStyle> {
+    let key = crate::counters::PseudoPassKey {
+        rev: sheet.revision(),
+        vp: [viewport.width.to_bits(), viewport.height.to_bits()],
+        dark: dark_mode,
+        doc: std::ptr::from_ref(doc) as usize,
+    };
+    if let Some(hit) = store.lookup(node, pseudo, key) {
+        return hit.map(|arc| (*arc).clone());
+    }
+    let out = compute_pseudo_element_style(doc, node, pseudo, sheet, parent, viewport, dark_mode);
+    store.store(node, pseudo, key, out.clone());
+    out
+}
+
 /// UA-sheet `content` of `q::before` / `q::after` (HTML rendering §15.3.7). Author rules
 /// override it through the ordinary cascade, so it only seeds the pseudo-element's style.
 pub fn ua_quote_content(doc: &Document, node: NodeId, pseudo: &str) -> Option<ContentItem> {

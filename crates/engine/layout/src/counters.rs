@@ -34,7 +34,7 @@
 
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use lumen_dom::{Document, FlatTree, NodeData, NodeId};
 
@@ -180,6 +180,126 @@ pub struct CascadeStyles {
     /// `ComputedStyle` compares equal, because unit resolution is not stored in
     /// the style.
     cq_geom: HashMap<NodeId, (f32, f32)>,
+    /// PERF-PSEUDO-CACHE — carried `compute_pseudo_element_style` results.
+    /// See [`PseudoCache`]; invalidated per node by `walk` on every recompute.
+    pseudo_cache: Arc<PseudoCache>,
+}
+
+/// PERF-PSEUDO-CACHE — per-(node, pseudo-name) cache of
+/// `style::pseudo::compute_pseudo_element_style` results, carried across
+/// passes inside [`CascadeStyles`] exactly like `cq_boxed`/`cq_geom`.
+///
+/// The pseudo cascade is the second-largest style cost on real pages
+/// (`pseudo_style`/`ps_match` ≈ 1.6 s of a habr load): every rebuilt box asks
+/// for `::before`/`::after` on its element, and each ask re-runs candidate
+/// matching over the pseudo rule indices. The result is a pure function of
+/// inputs the incremental cascade already tracks: the node's own and its
+/// ancestors' DOM facts (selector matching), the sheet revision, viewport and
+/// `dark_mode` (media evaluation), interactive state (state pseudo-classes in
+/// the selector chain), and the element's own `ComputedStyle` (inheritance +
+/// declaration application).
+///
+/// Correctness rests on one inclusion: **every input that can flip a pseudo
+/// match also forces the element's own restyle**. The restyle machinery's
+/// dependency indexes (`build_node_index`, `InvalidationIndex`, state-change
+/// roots, sheet-delta roots) are built from *all* selectors of the sheet —
+/// pseudo-element subjects contribute their non-pseudo parts to the same key
+/// sets — so a DOM/attr/structure/state/sheet change that could alter
+/// `a::before`'s match names `a` for recompute, and `walk` drops `a`'s cache
+/// entries at that moment ([`CascadeStyles::pseudo_drop_node`]). A node whose
+/// element style is merely *reused* therefore provably sees identical pseudo
+/// inputs. Viewport/`dark_mode`/sheet-revision/document identity are pinned
+/// per node entry, so a media or sheet change misses instead of going stale.
+///
+/// Entries for detached nodes are never queried again (NodeIds are monotonic)
+/// — they cost only memory, bounded by the document's element count.
+#[derive(Debug, Default)]
+pub struct PseudoCache {
+    inner: Mutex<PseudoCacheInner>,
+}
+
+#[derive(Debug, Default)]
+struct PseudoCacheInner {
+    /// Intern table: pseudo request string → dense index used in `by_node`.
+    names: HashMap<String, u32>,
+    /// `node.index()` → per-node entries.
+    by_node: HashMap<usize, PseudoNodeCache>,
+}
+
+/// Pass-global inputs a pseudo style was computed under — pinned per node
+/// entry so a media/sheet/document change misses instead of going stale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PseudoPassKey {
+    pub rev: lumen_css_parser::StylesheetRevision,
+    /// `(width.to_bits(), height.to_bits())`.
+    pub vp: [u32; 2],
+    pub dark: bool,
+    /// `&Document` address — guards the (theoretical) case of a replaced
+    /// document reusing node indices; upstream basis gates already force a
+    /// full pass there, this is belt-and-braces.
+    pub doc: usize,
+}
+
+/// One node's pseudo styles plus the pass-global inputs they were computed
+/// under. A meta mismatch resets the node's entries rather than the whole
+/// cache — sheet/viewport changes are rare and coincide with full passes.
+#[derive(Debug)]
+struct PseudoNodeCache {
+    key: PseudoPassKey,
+    /// pseudo-name index → computed style (`None` = "no pseudo", also cached).
+    styles: HashMap<u32, Option<Arc<ComputedStyle>>>,
+}
+
+impl PseudoCache {
+    /// `Some(inner)` — cached verdict (`None` inside = "no pseudo style").
+    /// `None` — nothing cached for this exact input tuple.
+    pub fn lookup(
+        &self,
+        node: NodeId,
+        pseudo: &str,
+        key: PseudoPassKey,
+    ) -> Option<Option<Arc<ComputedStyle>>> {
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let name = *inner.names.get(pseudo)?;
+        let entry = inner.by_node.get(&node.index())?;
+        if entry.key != key {
+            return None;
+        }
+        entry.styles.get(&name).cloned()
+    }
+
+    /// Records `style` (`None` = "no pseudo") for `(node, pseudo)` under the
+    /// given pass inputs, interning `pseudo` on first sight.
+    pub fn store(
+        &self,
+        node: NodeId,
+        pseudo: &str,
+        key: PseudoPassKey,
+        style: Option<ComputedStyle>,
+    ) {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let next = inner.names.len() as u32;
+        let name = *inner.names.entry(pseudo.to_owned()).or_insert(next);
+        let entry = inner.by_node.entry(node.index()).or_insert_with(|| PseudoNodeCache {
+            key,
+            styles: HashMap::new(),
+        });
+        if entry.key != key {
+            entry.key = key;
+            entry.styles.clear();
+        }
+        entry.styles.insert(name, style.map(Arc::new));
+    }
+
+    /// Drops every cached pseudo style of `node` — called by `walk` whenever
+    /// the element's own cascade entry is recomputed (see [`PseudoCache`]).
+    pub fn drop_node(&self, node: NodeId) {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .by_node
+            .remove(&node.index());
+    }
 }
 
 impl CascadeStyles {
@@ -196,6 +316,7 @@ impl CascadeStyles {
             counter_scopes: IdSet::default(),
             cq_boxed: HashMap::new(),
             cq_geom: HashMap::new(),
+            pseudo_cache: Arc::new(PseudoCache::default()),
         }
     }
 
@@ -217,6 +338,19 @@ impl CascadeStyles {
     ) {
         self.cq_boxed = boxed;
         self.cq_geom = geom;
+    }
+
+    /// PERF-PSEUDO-CACHE — the carried pseudo-element style cache.
+    pub(crate) fn pseudo_cache(&self) -> &PseudoCache {
+        &self.pseudo_cache
+    }
+
+    /// Drops `id`'s cached pseudo styles — `walk` calls this for every node
+    /// whose own cascade entry is recomputed: a pseudo match reads the same
+    /// DOM facts the element match does, so anything that could flip it lands
+    /// here first (see [`PseudoCache`]'s doc comment).
+    pub(crate) fn pseudo_drop_node(&self, id: NodeId) {
+        self.pseudo_cache.drop_node(id);
     }
 
     /// Start writing a new pass into this carried cache.
@@ -433,6 +567,7 @@ impl CascadeStyles {
             counter_scopes: IdSet::default(),
             cq_boxed: HashMap::new(),
             cq_geom: HashMap::new(),
+            pseudo_cache: Arc::new(PseudoCache::default()),
         }
     }
 }
@@ -742,6 +877,13 @@ impl CounterMap {
     /// styles) take their copy via `Arc::make_mut`.
     pub fn style_arc(&self, id: NodeId) -> Option<Arc<ComputedStyle>> {
         self.styles.get(&id).cloned()
+    }
+
+    /// PERF-PSEUDO-CACHE — the carried pseudo-element style cache. Box-tree
+    /// callers pass it to `style::pseudo::compute_pseudo_element_style_cached`;
+    /// `walk` invalidates entries through [`CascadeStyles::pseudo_drop_node`].
+    pub fn pseudo_cache(&self) -> &PseudoCache {
+        self.styles.pseudo_cache()
     }
 
     /// The style of a box-less element: the one `apply_container_styles` left after
@@ -2005,6 +2147,14 @@ fn walk(
     };
     let must_recompute = reused.is_none();
     note_cascade(must_recompute);
+    // PERF-PSEUDO-CACHE: a recomputed element may see different pseudo-match
+    // inputs (its own or an ancestor's attrs/structure/state, or the sheet) —
+    // drop its cached pseudo styles. Reused elements keep theirs: the restyle
+    // dependency indexes cover pseudo-subject selectors too, so "not
+    // recomputed" proves the pseudo inputs are identical (see `PseudoCache`).
+    if must_recompute {
+        map.styles.pseudo_drop_node(id);
+    }
     // Whether the subtree below has to be recascaded: for everything but a shallow node,
     // exactly "this node was recomputed".
     let mut subtree_changed = must_recompute;

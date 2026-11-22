@@ -972,8 +972,8 @@ fn build_box_inner(
                                 let placeholder = node.get_attr("placeholder")
                                     .unwrap_or("")
                                     .to_owned();
-                                let placeholder_style = compute_pseudo_element_style(
-                                    doc, id, "placeholder", sheet, &style, viewport, dark_mode,
+                                let placeholder_style = compute_pseudo_element_style_cached(
+                                    doc, id, "placeholder", sheet, &style, viewport, dark_mode, counters.pseudo_cache(),
                                 ).map(Box::new);
                                 FormControlKind::Input { input_type, checked, value_text, placeholder, placeholder_style }
                             }
@@ -1340,11 +1340,11 @@ children = dom_children.par_iter().filter_map(|&child_id| {
                 style.display,
                 Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid
             ) {
-                let before_ps = compute_pseudo_element_style(
-                    doc, id, "before", sheet, &style, viewport, dark_mode,
+                let before_ps = compute_pseudo_element_style_cached(
+                    doc, id, "before", sheet, &style, viewport, dark_mode, counters.pseudo_cache(),
                 );
-                let after_ps = compute_pseudo_element_style(
-                    doc, id, "after", sheet, &style, viewport, dark_mode,
+                let after_ps = compute_pseudo_element_style_cached(
+                    doc, id, "after", sheet, &style, viewport, dark_mode, counters.pseudo_cache(),
                 );
                 inject_pseudo(id, &mut children, before_ps, true, doc, viewport, counters, registry, true);
                 inject_pseudo(id, &mut children, after_ps, false, doc, viewport, counters, registry, true);
@@ -1382,7 +1382,7 @@ children = dom_children.par_iter().filter_map(|&child_id| {
                 // `::first-line` as a selector subject — the cascade could only
                 // return `None` there, and this runs per inline-content block.
                 let first_line_style = if crate::style::sheet_targets_pseudo(sheet, viewport, dark_mode, "first-line") {
-                    crate::style::compute_pseudo_element_style(doc, id, "first-line", sheet, &style, viewport, dark_mode)
+                    crate::style::compute_pseudo_element_style_cached(doc, id, "first-line", sheet, &style, viewport, dark_mode, counters.pseudo_cache())
                         .map(Box::new)
                 } else {
                     None
@@ -1546,8 +1546,8 @@ children = dom_children.par_iter().filter_map(|&child_id| {
                 // collect_inline_segments marks the first non-whitespace text segment
                 // with PseudoKind::FirstLetter; split it here so wrap_inline_run uses
                 // the override font metrics for both the letter and the remainder.
-                let fl_pseudo = compute_pseudo_element_style(
-                    doc, id, "first-letter", sheet, &style, viewport, dark_mode,
+                let fl_pseudo = compute_pseudo_element_style_cached(
+                    doc, id, "first-letter", sheet, &style, viewport, dark_mode, counters.pseudo_cache(),
                 );
                 // CSS Inline Layout L3 §5 — `initial-letter`. Effective value:
                 // a ::first-letter pseudo `initial-letter` wins over the element's
@@ -1624,9 +1624,9 @@ children = dom_children.par_iter().filter_map(|&child_id| {
         // Only for Block / FlowRoot (not FormControl, not flex/grid item containers).
         if matches!(kind, BoxKind::Block | BoxKind::FlowRoot) {
             let before_ps =
-                compute_pseudo_element_style(doc, id, "before", sheet, &style, viewport, dark_mode);
+                compute_pseudo_element_style_cached(doc, id, "before", sheet, &style, viewport, dark_mode, counters.pseudo_cache());
             let after_ps =
-                compute_pseudo_element_style(doc, id, "after", sheet, &style, viewport, dark_mode);
+                compute_pseudo_element_style_cached(doc, id, "after", sheet, &style, viewport, dark_mode, counters.pseudo_cache());
             inject_pseudo(id, &mut children, before_ps, true, doc, viewport, counters, registry, false);
             inject_pseudo(id, &mut children, after_ps, false, doc, viewport, counters, registry, false);
             // CSS Lists L3 §2.1 — inject ::marker for list items.

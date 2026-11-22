@@ -169,7 +169,7 @@ pub fn collect_cascade_background_image_requests(
             }
             for pseudo in &pseudos {
                 let Some(ps) =
-                    compute_pseudo_element_style(doc, id, pseudo, sheet, style, viewport, dark_mode)
+                    compute_pseudo_element_style_cached(doc, id, pseudo, sheet, style, viewport, dark_mode, counters.pseudo_cache())
                 else {
                     continue;
                 };
