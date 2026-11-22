@@ -151,13 +151,16 @@ pub(crate) fn install(
     dark_mode: bool,
     flat: &FlatTree,
 ) -> Guard {
-    install_impl(doc, sheet, viewport, dark_mode, flat, None)
+    install_impl(doc, sheet, viewport, dark_mode, flat, None, None)
 }
 
 /// Incremental-cascade variant: matches only the elements in `needed` — the
 /// nodes the scoped walk can recompute — instead of the whole document. A node
 /// outside the set simply falls back to matching inside `compute_style`, so an
-/// under-approximation costs time, never correctness.
+/// under-approximation costs time, never correctness. `pseudo_cache` lets
+/// workers reuse pseudo match records the previous pass left behind — the
+/// caller must have dropped the entries of every node this pass recomputes
+/// first, or a stale record would be replayed.
 pub(crate) fn install_subset(
     doc: &Document,
     sheet: &Stylesheet,
@@ -165,8 +168,9 @@ pub(crate) fn install_subset(
     dark_mode: bool,
     flat: &FlatTree,
     needed: &HashSet<NodeId>,
+    pseudo_cache: Option<&std::sync::Arc<crate::counters::PseudoCache>>,
 ) -> Guard {
-    install_impl(doc, sheet, viewport, dark_mode, flat, Some(needed))
+    install_impl(doc, sheet, viewport, dark_mode, flat, Some(needed), pseudo_cache)
 }
 
 fn install_impl(
@@ -176,6 +180,7 @@ fn install_impl(
     dark_mode: bool,
     flat: &FlatTree,
     needed: Option<&HashSet<NodeId>>,
+    pseudo_cache: Option<&std::sync::Arc<crate::counters::PseudoCache>>,
 ) -> Guard {
     let _prof = lumen_core::profile::scope("pre_match");
     TABLE.with(|t| t.borrow_mut().take());
@@ -222,6 +227,8 @@ fn install_impl(
             .chain(pseudo_nodes.into_iter().filter(|n| !node_set.contains(n)))
             .collect()
     };
+    let pseudo_key = pseudo_cache
+        .map(|_| crate::counters::pseudo_pass_key(doc, sheet, viewport, dark_mode));
     let entries: Vec<(NodeId, Entry)> = {
         use rayon::prelude::*;
         work
@@ -244,11 +251,25 @@ fn install_impl(
                 } else {
                     (None, false)
                 };
+                // Reuse last pass's pseudo match records where the caller
+                // vouches they are not stale (subset passes pre-drop the
+                // recomputed set); a miss recomputes and back-fills.
                 let pseudo = pseudo_names
                     .iter()
                     .filter_map(|name| {
-                        super::pseudo::match_pseudo_owned(doc, node, name, sheet, viewport, dark_mode)
-                            .map(|rec| (name.clone().into_boxed_str(), rec))
+                        let rec = pseudo_cache
+                            .zip(pseudo_key)
+                            .and_then(|(c, k)| c.lookup_match(node, name, k))
+                            .or_else(|| {
+                                let rec = super::pseudo::match_pseudo_owned(
+                                    doc, node, name, sheet, viewport, dark_mode,
+                                )?;
+                                if let (Some(c), Some(k)) = (pseudo_cache, pseudo_key) {
+                                    c.store_match(node, name, k, rec.clone());
+                                }
+                                Some(rec)
+                            })?;
+                        Some((name.clone().into_boxed_str(), rec))
                     })
                     .collect();
                 (node, Entry { rules, shareable, pseudo })

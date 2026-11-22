@@ -1603,7 +1603,24 @@ pub fn incremental_precompute_counters(
         (ctx, map, IncrRestyle { dirty_roots, shallow_roots, point_roots, content_dirty, spine, prev_counter_scopes, invalidation, prev_sheet }, pre_match_needed)
     };
     let _pre_matched = match &pre_match_needed {
-        Some(needed) => crate::style::pre_match::install_subset(doc, sheet, viewport, dark_mode, flat, needed),
+        Some(needed) => {
+            // pre_match workers may reuse pseudo match records from the
+            // carried cache — drop exactly the set this walk will recompute
+            // first, the same invalidation `pseudo_drop_node` applies
+            // mid-walk, so no stale record can be replayed.
+            for &id in needed.iter() {
+                map.styles.pseudo_drop_node(id);
+            }
+            crate::style::pre_match::install_subset(
+                doc,
+                sheet,
+                viewport,
+                dark_mode,
+                flat,
+                needed,
+                Some(map.styles.pseudo_cache_arc()),
+            )
+        }
         None => crate::style::pre_match::install(doc, sheet, viewport, dark_mode, flat),
     };
     {
