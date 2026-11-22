@@ -810,7 +810,19 @@ pub(in crate::style) fn pre_match_pseudo_names(
     dark_mode: bool,
 ) -> Vec<String> {
     ensure_cascade_index(sheet, viewport, dark_mode);
-    with_front_cascade_index(|idx| idx.pseudo_subjects.iter().map(|s| s.to_string()).collect())
+    let mut names: Vec<String> =
+        with_front_cascade_index(|idx| idx.pseudo_subjects.iter().map(|s| s.to_string()).collect());
+    // Pseudos exempt from the `sheet_targets_pseudo` early-out reach the match
+    // phase even when no rule names them (`::marker` synthesizes from
+    // `list-style-type`, `q::before`/`::after` from the UA quote, scroll
+    // markers likewise). Workers must record their — usually empty — matches
+    // or every probe of them falls back to the sequential candidate scan.
+    for extra in ["marker", "scroll-marker-group", "before", "after"] {
+        if !names.iter().any(|n| n.eq_ignore_ascii_case(extra)) {
+            names.push(extra.to_string());
+        }
+    }
+    names
 }
 
 /// PERF-PSEUDO-PRE — `node`'s matched pseudo declarations for `pseudo`, as an
@@ -827,10 +839,17 @@ pub(in crate::style) fn match_pseudo_owned(
     dark_mode: bool,
 ) -> Option<std::sync::Arc<[PseudoMatch]>> {
     let pseudo_base = split_pseudo_request(pseudo).0;
-    if !sheet_targets_pseudo(sheet, viewport, dark_mode, pseudo_base) {
-        return None;
-    }
     let part_scopes = part_scopes_of(doc, node);
+    if !sheet_targets_pseudo(sheet, viewport, dark_mode, pseudo_base) {
+        // No rule of this sheet can match the pseudo — but `::part()` scopes
+        // of outer trees still can, so only a node without part scopes has a
+        // provably empty record. Returning it lets `pre_match` workers store
+        // "matched nothing" instead of leaving every exempt probe
+        // (`::marker`, `q::before`, …) to rescan the candidate index.
+        if part_scopes.is_empty() {
+            return Some(std::sync::Arc::from(Vec::new()));
+        }
+    }
     let mut out = Vec::new();
     collect_pseudo_matches(doc, node, pseudo, pseudo_base, sheet, viewport, dark_mode, &part_scopes, &mut out);
     out.sort_by_key(|m| (m.important, m.spec, m.key, m.decl_idx));
