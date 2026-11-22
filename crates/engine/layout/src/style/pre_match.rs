@@ -43,7 +43,10 @@ const MIN_ELEMENTS: usize = 64;
 /// One element's pre-matched document-sheet rules plus whether the cascade may memoise
 /// a style built from them (the same `shareable` [`compute_style_shareable`] reports).
 struct Entry {
-    rules: Arc<[MatchedRule]>,
+    /// `None` for pseudo-only entries — subset passes cover every element for
+    /// pseudo records but only `needed` for element rules; `lookup` must not
+    /// serve an empty rule record to the cascade.
+    rules: Option<Arc<[MatchedRule]>>,
     shareable: bool,
     /// PERF-PSEUDO-PRE — per pseudo-element name, the node's matched pseudo
     /// declarations ([`super::pseudo::PseudoMatch`]). Empty when the sheet
@@ -194,22 +197,48 @@ fn install_impl(
     // node in the same worker — `compute_pseudo_element_style`'s candidate
     // scan depends only on DOM state, exactly like the element match above.
     let pseudo_names = super::pseudo::pre_match_pseudo_names(sheet, viewport, dark_mode);
+    // PERF-PSEUDO-PRE-SUBSET: box build probes pseudo styles of nodes the
+    // scoped walk never recomputes (layout-dirty is not style-dirty), so a
+    // subset pass that recorded pseudo matches only for `needed` would leave
+    // those probes to rescan serially. The pseudo scan reads DOM state only —
+    // covering every element costs a fraction of the element match it rides
+    // with, and the records stay valid for the whole pass.
+    let mut pseudo_nodes: Vec<NodeId> = Vec::new();
+    if needed.is_some() && !pseudo_names.is_empty() {
+        collect_elements(doc, flat, doc.root(), None, &mut pseudo_nodes);
+    }
+    let node_set: HashSet<NodeId> = nodes.iter().copied().collect();
+    let work: Vec<NodeId> = if pseudo_nodes.is_empty() {
+        nodes.clone()
+    } else {
+        nodes
+            .iter()
+            .copied()
+            .chain(pseudo_nodes.into_iter().filter(|n| !node_set.contains(n)))
+            .collect()
+    };
     let entries: Vec<(NodeId, Entry)> = {
         use rayon::prelude::*;
-        nodes
+        work
             .par_iter()
             .map(|&node| {
                 snap.install();
-                let mut rules = Vec::new();
-                // The style itself is discarded: inheritance is what the sequential walk
-                // is for. Only the record of what matched survives.
-                let (_, shareable) = with_ancestor_frames(doc, flat, node, || {
-                    compute_style_shareable(
-                        doc, node, sheet, &inherited, viewport, dark_mode, None, &mut rules, true,
-                    )
-                });
-                // The restricted road binary-searches `prev` by (block, rule).
-                rules.sort_unstable_by_key(|m| (m.block, m.rule));
+                let in_scope = needed.is_none_or(|s| s.contains(&node));
+                let (rules, shareable) = if in_scope {
+                    let mut rules = Vec::new();
+                    // The style itself is discarded: inheritance is what the sequential walk
+                    // is for. Only the record of what matched survives.
+                    let (_, shareable) = with_ancestor_frames(doc, flat, node, || {
+                        compute_style_shareable(
+                            doc, node, sheet, &inherited, viewport, dark_mode, None, &mut rules, true,
+                        )
+                    });
+                    // The restricted road binary-searches `prev` by (block, rule).
+                    rules.sort_unstable_by_key(|m| (m.block, m.rule));
+                    (Some(Arc::from(rules)), shareable)
+                } else {
+                    (None, false)
+                };
                 let pseudo = pseudo_names
                     .iter()
                     .filter_map(|name| {
@@ -217,7 +246,7 @@ fn install_impl(
                             .map(|rec| (name.clone().into_boxed_str(), rec))
                     })
                     .collect();
-                (node, Entry { rules: Arc::from(rules), shareable, pseudo })
+                (node, Entry { rules, shareable, pseudo })
             })
             .collect()
     };
@@ -249,10 +278,12 @@ pub(crate) fn lookup(
         {
             return None;
         }
-        table.nodes.get(&node).map(|e| {
-            #[cfg(test)]
-            HITS.with(|c| c.set(c.get() + 1));
-            (Arc::clone(&e.rules), e.shareable)
+        table.nodes.get(&node).and_then(|e| {
+            e.rules.as_ref().map(|rules| {
+                #[cfg(test)]
+                HITS.with(|c| c.set(c.get() + 1));
+                (Arc::clone(rules), e.shareable)
+            })
         })
     })
 }

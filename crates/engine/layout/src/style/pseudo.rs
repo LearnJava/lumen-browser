@@ -894,10 +894,33 @@ fn compute_pseudo_element_style_inner(
     let matched: &[PseudoMatch] = if let Some(rec) = &pre {
         rec
     } else {
+        // DIAG-PRE: env-gated census of sequential pseudo matches — which road
+        // missed and for which pseudo name. Remove with the diagnosis.
+        if std::env::var_os("LUMEN_PSEUDO_PRE_DEBUG").is_some() {
+            static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if n < 40 || n.is_multiple_of(5000) {
+                eprintln!(
+                    "[pseudo-pre] seq #{n} pseudo={pseudo:?} table={} cache={} ua_decls={} tid={:?}",
+                    super::pre_match::pseudo_lookup(node, pseudo_base, sheet, viewport, dark_mode).is_some(),
+                    crate::counters::PseudoCache::current().is_some(),
+                    ua_decls.is_empty(),
+                    std::thread::current().id(),
+                );
+            }
+        }
         collect_pseudo_matches(
             doc, node, pseudo, pseudo_base, sheet, viewport, dark_mode, &part_scopes, &mut matched_vec,
         );
         matched_vec.sort_by_key(|m| (m.important, m.spec, m.key, m.decl_idx));
+        // A sequential answer is still a pure function of the pass inputs —
+        // keep it so the next probe of this (node, pseudo) skips the scan.
+        // Only possible where a pass installed its `PseudoCache` (box build);
+        // elsewhere `current()` is `None` and nothing is stored.
+        if let Some(cache) = crate::counters::PseudoCache::current() {
+            let key = crate::counters::pseudo_pass_key(doc, sheet, viewport, dark_mode);
+            cache.store_match(node, pseudo_base, key, std::sync::Arc::from(matched_vec.clone()));
+        }
         &matched_vec
     };
 

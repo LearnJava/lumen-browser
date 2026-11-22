@@ -365,6 +365,32 @@ impl PseudoCache {
         entry.matches.get(&name).cloned()
     }
 
+    /// Records one sequentially-collected match record — the fallback road's
+    /// answer, kept so a repeated probe of the same (node, pseudo) does not
+    /// rescan. Same key discipline as [`Self::store`].
+    pub(crate) fn store_match(
+        &self,
+        node: NodeId,
+        name: &str,
+        key: PseudoPassKey,
+        rec: std::sync::Arc<[crate::style::pseudo::PseudoMatch]>,
+    ) {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let next = inner.names.len() as u32;
+        let idx = *inner.names.entry(name.to_owned()).or_insert(next);
+        let entry = inner.by_node.entry(node.index()).or_insert_with(|| PseudoNodeCache {
+            key,
+            styles: HashMap::new(),
+            matches: HashMap::new(),
+        });
+        if entry.key != key {
+            entry.key = key;
+            entry.styles.clear();
+            entry.matches.clear();
+        }
+        entry.matches.insert(idx, rec);
+    }
+
     /// Bulk-loads `pre_match`'s per-node pseudo records after the walk — the
     /// workers already paid the candidate scan, the sequential pseudo probes
     /// of box build then resolve records instead of re-matching.
