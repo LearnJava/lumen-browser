@@ -401,9 +401,17 @@ impl Lumen {
             // прохода (`fetch-css`/`parse-css`/`fetch-images`) это и есть
             // «инкрементально» из брифа LOAD-4. Живого трейсера нет — та же
             // одна строка, что у позднего `<style>` (`CSS пересобран…`).
+            // PERF-LATE-CSS: синхронный `relayout()` держал UI-поток весь
+            // полный проход (~0.5-1с на habr за каждый опоздавший `<link>`);
+            // геометрия здесь никем не читается — тот же async-safe контракт,
+            // что у `relayout_chrome`: задание уходит на engine-thread,
+            // `make_relayout_job` сам вызовет `refresh_dynamic_css` и увидит
+            // `linked_dirty`.
             let _s = lumen_core::trace::span("late-css", "parse");
             let t0 = std::time::Instant::now();
-            self.relayout();
+            if !self.submit_relayout_job() {
+                self.relayout();
+            }
             eprintln!(
                 "CSS: поздний лист применён (LOAD-4, узел {}, пересборка {:.0} мс)",
                 sheet.node,
@@ -1031,10 +1039,11 @@ impl Lumen {
         if let Some(t0) = incr_t0 {
             let incr_ms = t0.elapsed().as_secs_f32() * 1000.0;
             let fmt_ms = |ms: Option<f32>| ms.map(|v| format!("{v:.2}")).unwrap_or_else(|| "n/a".to_string());
-            let (cascade_reused, cascade_recomputed) =
-                cascade_stats.map(|s| (s.reused, s.recomputed)).unwrap_or_default();
+            let (cascade_reused, cascade_recomputed, cascade_visited, cascade_walk_ms, cascade_skipped) = cascade_stats
+                .map(|s| (s.reused, s.recomputed, s.visited, s.walk_ns as f64 / 1e6, s.skipped_subtrees))
+                .unwrap_or_default();
             eprintln!(
-                "[engine] relayout {incr_ms:.2}ms (incremental, on-thread) dl={} styled={} restyle={} lock_wait_ms={} dirty_roots_ms={} apply_ms={} cascade_reused={cascade_reused} cascade_recomputed={cascade_recomputed} {roots_log}",
+                "[engine] relayout {incr_ms:.2}ms (incremental, on-thread) dl={} styled={} restyle={} lock_wait_ms={} dirty_roots_ms={} apply_ms={} cascade_reused={cascade_reused} cascade_recomputed={cascade_recomputed} visited={cascade_visited} walk_ms={cascade_walk_ms:.1} skipped={cascade_skipped} {roots_log}",
                 self.display_list.len(),
                 self.prev_styles.len(),
                 used_restyle as u8,
