@@ -250,10 +250,22 @@ struct MatchedScan {
     has_appearance: bool,
     has_disabling: bool,
     has_writing_mode: bool,
+    has_revert_rw: bool,
+    has_revert_kw: bool,
+    has_var: bool,
 }
 
 impl MatchedScan {
-    fn observe(&mut self, prop: &str) {
+    fn observe(&mut self, decl: &Declaration) {
+        let prop = decl.property.as_str();
+        match decl.keyword() {
+            DeclKeyword::RevertLayer | DeclKeyword::RevertRule => self.has_revert_rw = true,
+            DeclKeyword::Revert => self.has_revert_kw = true,
+            _ => {}
+        }
+        if decl.has_var() {
+            self.has_var = true;
+        }
         if prop.starts_with("--") {
             self.has_custom_prop = true;
         }
@@ -1312,7 +1324,7 @@ pub(crate) fn compute_style_shareable(
     // декларации, поэтому биты остаются консервативно истинными.
     let mut scan = MatchedScan::default();
     for m in &matched {
-        scan.observe(m.6.property.as_str());
+        scan.observe(m.6);
     }
     drop(prof_match);
     let prof_revert = lumen_core::profile::scope_detail("cs_revert_prepass");
@@ -1357,9 +1369,11 @@ pub(crate) fn compute_style_shareable(
     let layer_pos = |imp: bool, ctx_inline: u32, lp: i32| -> i32 {
         (if imp { -lp } else { lp }) * 2 + i32::from(ctx_inline & 1 == 1)
     };
-    while matched.iter().any(|&(_, _, _, _, _, _, decl, _)| {
-        matches!(decl.keyword(), DeclKeyword::RevertLayer | DeclKeyword::RevertRule)
-    }) {
+    while scan.has_revert_rw
+        && matched.iter().any(|&(_, _, _, _, _, _, decl, _)| {
+            matches!(decl.keyword(), DeclKeyword::RevertLayer | DeclKeyword::RevertRule)
+        })
+    {
         use std::collections::HashMap;
         // Winner per property = last occurrence in the cascade-sorted vec.
         // (pos, rule_idx, is_revert_layer, is_revert_rule)
@@ -1418,10 +1432,8 @@ pub(crate) fn compute_style_shareable(
     // параметр только внутри ветки `kw == Revert`, которая в этом случае
     // гарантированно не сработает ни для одной декларации.
     let ua_baseline_font_size = style.font_size;
-    let needs_ua_baseline = matched.iter().any(|&(_, _, _, _, _, _, decl, _)| {
-        decl.keyword() == DeclKeyword::Revert
-    }) || (
-        matched.iter().any(|&(_, _, _, _, _, _, decl, _)| decl.has_var())
+    let needs_ua_baseline = scan.has_revert_kw || (
+        scan.has_var
             && inherited.custom_props.values().any(|v| v.trim().eq_ignore_ascii_case("revert"))
     );
     let ua_baseline_storage: Option<ComputedStyle> = needs_ua_baseline.then(|| style.clone());
