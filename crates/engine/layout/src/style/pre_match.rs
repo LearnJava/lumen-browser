@@ -186,17 +186,22 @@ fn install_impl(
     }
     let mut nodes = Vec::new();
     collect_elements(doc, flat, doc.root(), needed, &mut nodes);
-    if nodes.len() < MIN_ELEMENTS {
+    // PERF-PSEUDO-PRE: the pseudo names this sheet can target, matched per
+    // node in the same worker — `compute_pseudo_element_style`'s candidate
+    // scan depends only on DOM state, exactly like the element match above.
+    let pseudo_names = super::pseudo::pre_match_pseudo_names(sheet, viewport, dark_mode);
+    // A subset pass with a tiny `needed` set used to bail here — but box
+    // build still probes pseudo styles across the rebuilt subtree, and with
+    // no table those probes all take the sequential candidate scan. The
+    // pseudo-only coverage below is cheap enough to run anyway.
+    let pseudo_fallback = needed.is_some() && !pseudo_names.is_empty();
+    if nodes.len() < MIN_ELEMENTS && !pseudo_fallback {
         return Guard;
     }
     // Workers start with default style thread-locals: `:hover`/`:focus`/`:focus-visible`
     // would otherwise match nothing (and shadow sheets disappear) on every node they take.
     let snap = super::StyleEnvSnapshot::capture();
     let inherited = ComputedStyle::root();
-    // PERF-PSEUDO-PRE: the pseudo names this sheet can target, matched per
-    // node in the same worker — `compute_pseudo_element_style`'s candidate
-    // scan depends only on DOM state, exactly like the element match above.
-    let pseudo_names = super::pseudo::pre_match_pseudo_names(sheet, viewport, dark_mode);
     // PERF-PSEUDO-PRE-SUBSET: box build probes pseudo styles of nodes the
     // scoped walk never recomputes (layout-dirty is not style-dirty), so a
     // subset pass that recorded pseudo matches only for `needed` would leave
