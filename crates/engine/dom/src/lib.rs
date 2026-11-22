@@ -1324,6 +1324,14 @@ impl Document {
     /// tree-scoping: an inner shadow tree's own stylesheet, not an outer
     /// one's, applies to its own descendants.
     pub fn enclosing_shadow_host(&self, id: NodeId) -> Option<NodeId> {
+        // PERF: no registered shadow roots ⇒ no ancestor can resolve to a
+        // host (the `shadow_roots.iter().find` below would return `None`
+        // anyway), so skip the full parent-chain walk — this runs per
+        // element per cascade pass via `share_cache::build_key` and the
+        // shadow probes in `style::cascade`.
+        if self.shadow_roots.is_empty() {
+            return None;
+        }
         let mut cur = self.nodes[id.index()].parent;
         while let Some(p) = cur {
             if matches!(self.nodes[p.index()].data, NodeData::ShadowRoot { .. }) {
