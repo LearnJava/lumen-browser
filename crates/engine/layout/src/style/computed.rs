@@ -217,7 +217,11 @@ pub struct ComputedStyle {
     /// Generic-family имена (`serif`, `sans-serif`, `monospace`, `cursive`,
     /// `fantasy`, `system-ui`) сохраняются в этом же списке как обычные строки.
     /// Пустой Vec = inherited / default.
-    pub font_family: Vec<String>,
+    /// PERF-FONT-FAMILY-ARC: `Arc` чтобы `ComputedStyle::inheriting` платил
+    /// refcount-bump вместо deep-copy `Vec<String>` на каждом узле —
+    /// подавляющее большинство узлов наследует список без изменений.
+    /// Запись только через `Arc::make_mut`/полную замену в apply-путях.
+    pub font_family: std::sync::Arc<Vec<String>>,
     /// CSS Fonts L4 §7 — `font-variation-settings`. Inherited.
     /// Initial: пустой Vec (эквивалентно `normal`). Renderer нормализует
     /// через fvar + avar при растеризации глифов.

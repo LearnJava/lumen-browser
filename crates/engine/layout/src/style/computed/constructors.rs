@@ -37,7 +37,7 @@ impl ComputedStyle {
             font_variant_numeric: FontVariantNumeric::default(),
             font_variant_position: FontVariantPosition::Normal,
             font_stretch: FontStretch::NORMAL,
-            font_family: default_font_family(),
+            font_family: std::sync::Arc::new(default_font_family()),
             font_variation_settings: Vec::new(),
             font_feature_settings: Vec::new(),
             font_palette: FontPalette::Normal,

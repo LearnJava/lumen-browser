@@ -1773,7 +1773,7 @@ use super::*;
     fn font_family_single_name() {
         let root = lay("<p>x</p>", "p { font-family: Arial; }");
         let p = first_element_child(&root);
-        assert_eq!(p.style.font_family, vec!["Arial".to_string()]);
+        assert_eq!(*p.style.font_family, vec!["Arial".to_string()]);
     }
 
     #[test]
@@ -1784,7 +1784,7 @@ use super::*;
         );
         let p = first_element_child(&root);
         assert_eq!(
-            p.style.font_family,
+            **p.style.font_family,
             vec!["Arial".to_string(), "Helvetica".to_string(), "sans-serif".to_string()]
         );
     }
@@ -1797,7 +1797,7 @@ use super::*;
         );
         let p = first_element_child(&root);
         assert_eq!(
-            p.style.font_family,
+            *p.style.font_family,
             vec!["Times New Roman".to_string(), "serif".to_string()]
         );
     }
@@ -1811,7 +1811,7 @@ use super::*;
         );
         let p = first_element_child(&root);
         assert_eq!(
-            p.style.font_family,
+            *p.style.font_family,
             vec!["Times New Roman".to_string(), "serif".to_string()]
         );
     }
@@ -1834,7 +1834,7 @@ use super::*;
         // зарезервирован за chrome UI, см. `style::DEFAULT_FONT_FAMILY`).
         let root = lay("<p>x</p>", "");
         let p = first_element_child(&root);
-        assert_eq!(p.style.font_family, vec!["serif".to_string()]);
+        assert_eq!(*p.style.font_family, vec!["serif".to_string()]);
     }
 
     #[test]
@@ -1845,7 +1845,7 @@ use super::*;
         );
         let p = first_element_child(&root);
         assert_eq!(
-            p.style.font_family,
+            *p.style.font_family,
             vec!["Open Sans".to_string(), "sans-serif".to_string()]
         );
     }

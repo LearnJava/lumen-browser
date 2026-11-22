@@ -606,7 +606,7 @@ fn quirks_table_font_family_inherits() {
     );
     let table = first_element_child(&root);
     assert_eq!(
-        table.style.font_family,
+        *table.style.font_family,
         vec!["Verdana".to_string()],
         "table в Quirks должен наследовать font-family, получено {:?}",
         table.style.font_family

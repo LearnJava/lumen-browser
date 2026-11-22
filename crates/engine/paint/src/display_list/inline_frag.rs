@@ -154,7 +154,7 @@ pub(crate) fn emit_text_shadows(
             text: frag.text.clone(),
             font_size: frag.style.font_size,
             color,
-            font_family: frag.style.font_family.clone(),
+            font_family: (*frag.style.font_family).clone(),
             font_weight: frag.style.font_weight,
             font_style: frag.style.font_style,
             // CSS Fonts L4 §7.12: for `auto`, inject opsz = font_size so the renderer

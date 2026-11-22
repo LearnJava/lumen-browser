@@ -86,7 +86,7 @@ fn emit_input_value_text(
         text,
         font_size,
         color: s.used_text_fill_color(),
-        font_family: s.font_family.clone(),
+        font_family: (*s.font_family).clone(),
         font_weight: s.font_weight,
         font_style: s.font_style,
         font_variation_axes: vec![],
@@ -230,8 +230,8 @@ fn emit_input_placeholder_text(
         None => default_color,
     };
     let (font_family, font_weight, font_style) = match placeholder_style {
-        Some(ps) => (ps.font_family.clone(), ps.font_weight, ps.font_style),
-        None => (s.font_family.clone(), s.font_weight, s.font_style),
+        Some(ps) => ((*ps.font_family).clone(), ps.font_weight, ps.font_style),
+        None => ((*s.font_family).clone(), s.font_weight, s.font_style),
     };
 
     out.push(DisplayCommand::PushClipRect {
@@ -650,7 +650,7 @@ fn emit_select_indicator(b: &LayoutBox, selected_text: &str, suppress_primitive:
             text: selected_text.to_owned(),
             font_size,
             color: fg,
-            font_family: s.font_family.clone(),
+            font_family: (*s.font_family).clone(),
             font_weight: s.font_weight,
             font_style: s.font_style,
             font_variation_axes: vec![],
@@ -687,7 +687,7 @@ fn emit_select_indicator(b: &LayoutBox, selected_text: &str, suppress_primitive:
             text: "\u{25BC}".to_owned(),
             font_size: font_size * 0.75,
             color: fg,
-            font_family: s.font_family.clone(),
+            font_family: (*s.font_family).clone(),
             font_weight: s.font_weight,
             font_style: s.font_style,
             font_variation_axes: vec![],
@@ -787,7 +787,7 @@ pub(crate) fn emit_list_marker(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                     text: text.clone(),
                     font_size: em,
                     color,
-                    font_family: s.font_family.clone(),
+                    font_family: (*s.font_family).clone(),
                     font_weight: s.font_weight,
                     font_style: s.font_style,
                     font_features: lumen_layout::style::text_font_features(s),

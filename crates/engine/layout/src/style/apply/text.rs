@@ -225,7 +225,7 @@ pub(in crate::style) fn apply_decl_text(
         "font-family" => {
             let list = parse_font_family(val);
             if !list.is_empty() {
-                style.font_family = list;
+                style.font_family = std::sync::Arc::new(list);
             }
         }
         "font" => {
@@ -262,7 +262,7 @@ pub(in crate::style) fn apply_decl_text(
                 }
                 let fam = parse_font_family(&parts.family);
                 if !fam.is_empty() {
-                    style.font_family = fam;
+                    style.font_family = std::sync::Arc::new(fam);
                 }
             }
         }

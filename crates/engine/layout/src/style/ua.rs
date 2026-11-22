@@ -1028,7 +1028,7 @@ pub(in crate::style) fn apply_ua_vtt(
                 _ => 150.0,
             };
             style.font_size = video_height * 0.05;
-            style.font_family = vec!["sans-serif".to_string()];
+            style.font_family = std::sync::Arc::new(vec!["sans-serif".to_string()]);
             style.color = Color::WHITE;
         }
         lumen_dom::UaVttRole::CueBox => {

@@ -151,7 +151,7 @@ use super::*;
         for tag in ["pre", "code", "kbd", "samp", "tt"] {
             let s = first_child_style(&format!("<{tag}>x</{tag}>"), "");
             assert_eq!(
-                s.font_family,
+                *s.font_family,
                 vec!["monospace".to_string()],
                 "<{tag}> должен получать UA font-family: monospace"
             );
@@ -162,7 +162,7 @@ use super::*;
     fn ua_monospace_does_not_leak_to_other_elements() {
         let s = first_child_style("<p>x</p>", "");
         assert_eq!(
-            s.font_family,
+            *s.font_family,
             default_font_family(),
             "<p> не должен получать UA font-family: monospace — только дефолт документа"
         );
@@ -174,9 +174,9 @@ use super::*;
     /// интерфейса вместо системного serif-а.
     #[test]
     fn document_default_font_family_is_serif() {
-        assert_eq!(ComputedStyle::root().font_family, vec!["serif".to_string()]);
+        assert_eq!(*ComputedStyle::root().font_family, vec!["serif".to_string()]);
         let s = first_child_style("<p>x</p>", "");
-        assert_eq!(s.font_family, vec!["serif".to_string()]);
+        assert_eq!(*s.font_family, vec!["serif".to_string()]);
     }
 
     /// `font-family: initial` откатывает к дефолту документа, а не к пустому
@@ -184,13 +184,13 @@ use super::*;
     #[test]
     fn font_family_initial_keyword_restores_document_default() {
         let s = first_child_style("<p>x</p>", "p { font-family: Arial; font-family: initial; }");
-        assert_eq!(s.font_family, default_font_family());
+        assert_eq!(*s.font_family, default_font_family());
     }
 
     #[test]
     fn author_font_family_overrides_ua_monospace() {
         let s = first_child_style("<code>x</code>", "code { font-family: Arial; }");
-        assert_eq!(s.font_family, vec!["Arial".to_string()]);
+        assert_eq!(*s.font_family, vec!["Arial".to_string()]);
     }
 
     // ── BUG-1011: percentage width/height attribute on replaced elements ──

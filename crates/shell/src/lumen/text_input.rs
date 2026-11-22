@@ -955,7 +955,7 @@ fn preedit_commands(text: &str, field_lb: &lumen_layout::LayoutBox, caret: lumen
             text: text.to_string(),
             font_size: fs,
             color: fg,
-            font_family: style.font_family.clone(),
+            font_family: (*style.font_family).clone(),
             font_weight: FontWeight::NORMAL,
             font_style: FontStyle::Normal,
             font_variation_axes: Vec::new(),

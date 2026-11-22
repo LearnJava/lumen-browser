@@ -578,7 +578,7 @@ pub(crate) fn compute_style_shareable(
     }
     // UA stylesheet: <pre>/<code>/<kbd>/<samp>/<tt> → font-family: monospace.
     if let Some(fam) = ua_font_family(doc, node) {
-        style.font_family = fam;
+        style.font_family = std::sync::Arc::new(fam);
     }
     // UA stylesheet: text-decoration для <del>/<s> (line-through),
     // <ins>/<u>/<a href> (underline). HTML5 §15.3.7.

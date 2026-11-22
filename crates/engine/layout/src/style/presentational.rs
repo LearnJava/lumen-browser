@@ -371,7 +371,7 @@ pub(in crate::style) fn apply_font_element_presentational_hints(
     if let Some(val) = node_ref.get_attr("face") {
         let families = parse_font_family(val);
         if !families.is_empty() {
-            style.font_family = families;
+            style.font_family = std::sync::Arc::new(families);
         }
     }
 }

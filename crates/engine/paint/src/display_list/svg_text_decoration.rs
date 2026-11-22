@@ -785,7 +785,7 @@ pub(crate) fn emit_svg_text(
             font_stretch: b.style.font_stretch,
             rect,
             text: text.to_string(),
-            font_family: b.style.font_family.clone(),
+            font_family: (*b.style.font_family).clone(),
             font_size,
             color: fc,
             font_weight: b.style.font_weight,
