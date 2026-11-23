@@ -134,6 +134,16 @@ pub(crate) struct FlushHandles {
     /// [`Self::last_flushed_focus`], so a pointer move that changed `:hover`
     /// without touching the DOM still triggers a flush.
     pub(crate) last_flushed_hover: Arc<Mutex<Option<u32>>>,
+    /// CSS UI L4 §3.3: the engine thread's keyboard-modality mirror (see
+    /// [`super::runtime::V8JsRuntime::keyboard_focus`]) — `:focus-visible`'s
+    /// second input beyond "which node is focused". Installed before laying
+    /// out via [`lumen_layout::set_keyboard_focus`], exactly as the focus
+    /// mirror is.
+    pub(crate) keyboard_focus: Arc<AtomicBool>,
+    /// The modality baked into the current snapshot — the twin of
+    /// [`Self::last_flushed_focus`], so a keyboard↔pointer flip that moved no
+    /// focus still triggers a flush.
+    pub(crate) last_flushed_keyboard_focus: Arc<AtomicBool>,
     /// CSSANIM-MODEL-2: how many real recomputes this flush has published, for
     /// `_lumen_style_epoch()`. The transitions overlay re-reads every property of every
     /// element the page has observed to find a style change (`_wa_motion_tr_sync`); without
@@ -333,6 +343,9 @@ pub(crate) struct IncrFlushBasis {
     pub(crate) focus: Option<u32>,
     /// BUG-1458: hover baked into `layout`/`cascade` — the twin of [`Self::focus`].
     pub(crate) hover: Option<u32>,
+    /// CSS UI L4 §3.3: keyboard modality baked into `layout`/`cascade` — the
+    /// `:focus-visible` input [`Self::focus`] alone cannot express.
+    pub(crate) keyboard_focus: bool,
     /// BUG-1211: [`super::dom_touched::DomTouched::epoch`] at the moment this
     /// basis was produced — the watermark [`FlushHandles::
     /// try_incremental_flush`] diffs `touch_gen` against, since `touched.
@@ -365,6 +378,21 @@ pub(crate) type CssomDeltaLog = Arc<Mutex<Vec<(u32, lumen_css_parser::CssomOp)>>
 /// may see a slightly different value from a same-tick flush than from the
 /// next full relayout.
 const FLUSH_FONT: &[u8] = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+
+/// The same lazily-built system face set the shell's layout measurer uses
+/// (`crates/shell/src/relayout.rs::system_font_faces`), shared through the
+/// process-wide font index so flush metrics match committed-layout metrics.
+fn flush_system_faces() -> Arc<lumen_paint::SystemFaceSet> {
+    static SHARED: std::sync::OnceLock<Arc<lumen_paint::SystemFaceSet>> =
+        std::sync::OnceLock::new();
+    SHARED
+        .get_or_init(|| {
+            Arc::new(lumen_paint::SystemFaceSet::from_provider(
+                lumen_font::shared_system_index().clone(),
+            ))
+        })
+        .clone()
+}
 
 /// Test-only switch (BUG-935 S55): while set, [`FlushHandles::try_incremental_flush`]
 /// ignores the document's content journal and reports `ContentDirty::Untracked`,
@@ -560,11 +588,15 @@ impl FlushHandles {
         // `flush_stale`/`never_flushed` alone.
         let current_focus = *self.focused_nid.lock().unwrap_or_else(|e| e.into_inner());
         let current_hover = *self.hovered_nid.lock().unwrap_or_else(|e| e.into_inner());
+        // CSS UI L4 §3.3: `:focus-visible`'s second input — a keyboard↔pointer
+        // flip moves no focus nid, so it needs its own change signal here.
+        let current_keyboard = self.keyboard_focus.load(Ordering::Relaxed);
         // BUG-1458: the same for the pointer — `:hover` flips on a hit-test
         // change, which touches no DOM node either.
         let focus_changed = *self.last_flushed_focus.lock().unwrap_or_else(|e| e.into_inner())
             != current_focus
-            || *self.last_flushed_hover.lock().unwrap_or_else(|e| e.into_inner()) != current_hover;
+            || *self.last_flushed_hover.lock().unwrap_or_else(|e| e.into_inner()) != current_hover
+            || self.last_flushed_keyboard_focus.load(Ordering::Relaxed) != current_keyboard;
         // BUG-935 S34: gate on `flush_stale`, a dedicated flag set at every
         // same DOM-mutating call site as the scheduler's own `dom_dirty`
         // (`V8JsRuntime::dom_dirty`, a separate `Arc<AtomicBool>` this struct
@@ -660,6 +692,13 @@ impl FlushHandles {
         let Ok(mut measurer) = lumen_paint::MultiFontMeasurer::new(&font) else {
             return;
         };
+        // BUG-128 parity with the shell's measurer (`page_pipeline.rs`):
+        // without the system faces every non-@font-face family fell back to
+        // bundled Inter metrics, so a same-tick flush laid text out on
+        // different line heights than the committed tree the shell paints —
+        // `getBoundingClientRect` and click hit-testing then disagreed by a
+        // line or more (WPT `focus-visible-018-2`).
+        measurer.set_system_faces(flush_system_faces());
         for wf in self.web_fonts.lock().unwrap_or_else(|e| e.into_inner()).iter() {
             measurer.register_web_font(wf);
         }
@@ -673,6 +712,11 @@ impl FlushHandles {
         // `:active` stays unset; `:hover` comes from the pointer mirror (BUG-1458).
         let focus_node = current_focus.map(lumen_dom::NodeId::from_raw);
         lumen_layout::set_interactive_state(current_hover.map(lumen_dom::NodeId::from_raw), focus_node, None);
+        // CSS UI L4 §3.3: `:focus-visible` reads `KEYBOARD_FOCUS` alongside
+        // `FOCUS_NID` — without this the engine-thread flush always matched
+        // "mouse focus" and the WPT `:focus-visible` ring never appeared on
+        // keyboard-driven focus.
+        lumen_layout::set_keyboard_focus(current_keyboard);
         // BUG-1211: try the incremental restyle path first — a full
         // `layout_measured_with_counters` recomputes the *entire* tree's
         // cascade+layout on every same-tick accessor read after a mutation,
@@ -707,7 +751,7 @@ impl FlushHandles {
         });
         let incr_scope_guard = lumen_core::profile::scope("flush.try_incremental");
         let incr = self.try_incremental_flush(
-            &doc_guard, &sheet, viewport, &measurer, current_focus, current_hover, &touched, content_journal.as_ref(),
+            &doc_guard, &sheet, viewport, &measurer, current_focus, current_hover, current_keyboard, &touched, content_journal.as_ref(),
         );
         // BUG-1211 (post-collectors): `incr_scope` is `Some((dirty_roots,
         // prev_node_ids))` only when the incremental cascade+layout path
@@ -1138,6 +1182,7 @@ impl FlushHandles {
             sheet: Arc::clone(&sheet),
             focus: current_focus,
             hover: current_hover,
+            keyboard_focus: current_keyboard,
             touch_epoch: touched.epoch,
             scroll_rollups: next_rollups,
         });
@@ -1152,6 +1197,7 @@ impl FlushHandles {
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = current_focus;
         *self.last_flushed_hover.lock().unwrap_or_else(|e| e.into_inner()) = current_hover;
+        self.last_flushed_keyboard_focus.store(current_keyboard, Ordering::Relaxed);
         // CSSOM-8 вариант C: `cssom_deltas` itself is never cleared — it is
         // replayed onto every future cascade rebuild too (see the field's doc
         // comment) — only the "has something changed since the last flush"
@@ -1365,6 +1411,7 @@ impl FlushHandles {
         measurer: &lumen_paint::MultiFontMeasurer,
         current_focus: Option<u32>,
         current_hover: Option<u32>,
+        current_keyboard: bool,
         touched: &super::dom_touched::DomTouched,
         content_journal: Option<&std::collections::HashSet<lumen_dom::NodeId>>,
     ) -> Option<IncrFlushResult> {
@@ -1497,18 +1544,31 @@ impl FlushHandles {
         let shallow_roots = roots.shallow;
         self.shallow_roots_used.fetch_add(shallow_roots.len() as u64, Ordering::Relaxed);
         let focus_changed = basis.focus != current_focus;
+        // CSS UI L4 §3.3: a keyboard↔pointer flip moves no focus nid, so
+        // `focus_changed` alone misses it — `:focus-visible` rules must still
+        // be invalidated and the focused node's chain restyled.
+        let keyboard_changed = basis.keyboard_focus != current_keyboard;
         let hover_changed = basis.hover != current_hover;
         // PERF-INVALIDATION-S1 — the rules these changes can flip, for the cascade's
         // restricted path. A changed sheet makes the previous pass's rule refs unusable, and
         // the index itself refuses documents/sheets it cannot model (shadow roots, `@scope`).
         let invalidation = (basis.sheet_revision == sheet.revision())
-            .then(|| node_index.invalidated_rules(doc, &changes, hover_changed, focus_changed))
+            .then(|| {
+                node_index.invalidated_rules(doc, &changes, hover_changed, focus_changed || keyboard_changed)
+            })
             .flatten();
-        if focus_changed {
+        if focus_changed || keyboard_changed {
             let state_index = lumen_layout::style::restyle_state_index(doc, sheet);
-            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
-                doc, basis.focus.map(lumen_dom::NodeId::from_raw), current_focus.map(lumen_dom::NodeId::from_raw), &state_index,
-            ));
+            if focus_changed {
+                dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                    doc, basis.focus.map(lumen_dom::NodeId::from_raw), current_focus.map(lumen_dom::NodeId::from_raw), &state_index,
+                ));
+            }
+            if keyboard_changed {
+                dirty_roots.extend(lumen_layout::style::restyle_root_set_for_modality_change(
+                    doc, current_focus.map(lumen_dom::NodeId::from_raw), &state_index,
+                ));
+            }
         }
         // BUG-1458: the same transition for the pointer. One `state_index` per pass.
         if basis.hover != current_hover {

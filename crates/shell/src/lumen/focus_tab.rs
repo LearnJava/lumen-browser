@@ -21,6 +21,17 @@
 use crate::*;
 
 impl Lumen {
+    /// CSS UI L4 §3.3: record the shell's keyboard/pointer input modality for
+    /// `:focus-visible` and mirror it to the engine thread's same-tick style
+    /// flush (`getComputedStyle`/`matches`), which never sees this field
+    /// directly — the painted relayout reads it via `set_keyboard_focus`.
+    pub(crate) fn set_focus_modality(&mut self, keyboard: bool) {
+        self.focus_from_keyboard = keyboard;
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+            js.notify_keyboard_focus(keyboard);
+        });
+    }
+
     /// Move `focused_node` to the next (`forward`) or previous focusable
     /// element in the page's Tab order, wrapping around, and apply the same
     /// side effects a click does when it changes focus. Returns `true` iff
@@ -51,7 +62,7 @@ impl Lumen {
             return false;
         }
         self.focused_node = Some(next);
-        self.focus_from_keyboard = true;
+        self.set_focus_modality(true);
         self.status_bubble_sync(false);
         let before_frame = self.focused_frame.take();
         if before_frame.is_some() {

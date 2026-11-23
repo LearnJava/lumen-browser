@@ -1495,8 +1495,23 @@ impl Lumen {
         // PushTransform that shifts content down. Headless surfaces have no
         // chrome and use the full surface. Tracks live `inner_size` because
         // `viewport_size()` reflects the last `r.resize()` on `Resized`.
-        let (vp_w, vp_h) =
+        let (mut vp_w, mut vp_h) =
             content_layout_viewport(vp_size, self.window.is_some(), self.workspace_panel.visible);
+        // The fixed CHROME_H+switcher formula only fits the default skin —
+        // the deck skin wraps the page host in its own top bar/film strip/
+        // dock (~130px shorter). `chrome_page_host_rect` is the rect the page
+        // is actually painted into and hit-tested against, so it is the
+        // source of truth for the layout viewport: anything taller lays out
+        // a strip of page that is neither visible nor clickable
+        // (WPT `focus-visible-018-2` timed out on exactly that dead zone).
+        // One frame of staleness after a resize/self-corrects on the next
+        // pass; `None` (no chrome layout yet / headless) keeps the formula.
+        if self.window.is_some()
+            && let Some(host) = self.chrome_page_host_rect
+        {
+            vp_w = host.width;
+            vp_h = host.height;
+        }
         // Guard against degenerate viewport (renderer not yet configured or minimized).
         if vp_w <= 0.0 || vp_h <= 0.0 {
             return None;

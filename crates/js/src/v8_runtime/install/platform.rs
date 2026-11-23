@@ -540,6 +540,7 @@ pub(crate) fn install_point_hit_test(
     }
     {
         let tree = Arc::clone(&hit_test_tree);
+        let flush = flush.clone();
         reg!(scope, ctx, store, "_lumen_elements_from_point", move |x: f64, y: f64| -> Vec<u32> {
             flush.maybe_flush();
             let p = lumen_core::geom::Point::new(x as f32, y as f32);
@@ -553,6 +554,37 @@ pub(crate) fn install_point_hit_test(
             };
             let mut seen = std::collections::HashSet::new();
             hits.iter().flat_map(hit_ids).filter(|idx| seen.insert(*idx)).collect()
+        });
+    }
+    // Shell-side click dispatch asks the same question the two natives above
+    // answer for JS, but needs the `HitTestResult` identity fields
+    // (`node`/`source_node`/`inline_source`) back on the UI thread: the embedder's
+    // committed layout can lag a same-tick flush by a scroll or a style write,
+    // and a synthetic click dispatched against it lands on the wrong element
+    // (WPT `focus-visible-018-2`). Returns `[node, source, inline]` as raw
+    // `NodeId`s (`-1` when the point hits nothing); the caller rebuilds a
+    // `HitTestResult` whose geometry fields it does not consume.
+    {
+        let tree = Arc::clone(&hit_test_tree);
+        reg!(scope, ctx, store, "_lumen_hit_test_at_point", move |x: f64, y: f64| -> Vec<f64> {
+            flush.maybe_flush();
+            let p = lumen_core::geom::Point::new(x as f32, y as f32);
+            let hit = if flush.hit_tree_stale.load(Ordering::Relaxed)
+                && let Some(b) = flush.incr_basis.lock().unwrap().as_ref()
+            {
+                lumen_paint::hit_test(p, &b.layout)
+            } else {
+                let Some(root) = tree.lock().unwrap().clone() else { return Vec::new(); };
+                lumen_paint::hit_test(p, &root)
+            };
+            match hit {
+                Some(h) => vec![
+                    f64::from(h.node.raw()),
+                    f64::from(h.source_node.raw()),
+                    h.inline_source.map_or(-1.0, |n| f64::from(n.raw())),
+                ],
+                None => Vec::new(),
+            }
         });
     }
     Ok(())
@@ -1547,6 +1579,20 @@ fn generated_pseudo_style(flush: &FlushHandles, nid: u32, kind: &str) -> Option<
         return None;
     }
     let parent = lumen_layout::ComputedStyle::root();
+    // This on-demand cascade runs AFTER `maybe_flush` returned, when the
+    // flush's `set_interactive_state`/`clear_interactive_state` pair has
+    // already reset the thread-locals — without re-installing them a rule
+    // like `input:focus-visible::before` would cascade as if nothing were
+    // focused (WPT `focus-visible-originating-element`). Mirrors read the
+    // same `FlushHandles` the flush itself consumed.
+    let interactive = {
+        let focus = flush.focused_nid.lock().unwrap_or_else(|e| e.into_inner()).map(lumen_dom::NodeId::from_raw);
+        let hover = flush.hovered_nid.lock().unwrap_or_else(|e| e.into_inner()).map(lumen_dom::NodeId::from_raw);
+        let keyboard = flush.keyboard_focus.load(Ordering::Relaxed);
+        (hover, focus, keyboard)
+    };
+    lumen_layout::set_interactive_state(interactive.0, interactive.1, None);
+    lumen_layout::set_keyboard_focus(interactive.2);
     let style = lumen_layout::style::compute_pseudo_element_style(
         &doc,
         node,
@@ -1555,7 +1601,9 @@ fn generated_pseudo_style(flush: &FlushHandles, nid: u32, kind: &str) -> Option<
         &parent,
         lumen_core::geom::Size::new(w, h),
         false,
-    )?;
+    );
+    lumen_layout::clear_interactive_state();
+    let style = style?;
     Some(lumen_layout::computed_style_to_map(&style))
 }
 

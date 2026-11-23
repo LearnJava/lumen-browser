@@ -1080,7 +1080,7 @@ impl Lumen {
         for cmd in injected {
             match cmd {
                 input::InputCommand::Click { x, y } => {
-                    self.handle_click_at(x, y);
+                    self.handle_click_at_automation(x, y);
                 }
                 input::InputCommand::TypeText { text } => {
                     let chars: Vec<char> = text.chars().collect();

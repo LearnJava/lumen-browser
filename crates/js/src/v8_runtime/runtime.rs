@@ -347,6 +347,16 @@ pub struct V8JsRuntime {
     /// same-tick style flush, so `getComputedStyle()` sees `:hover` rules.
     /// Without it the engine thread matched `:hover` never.
     pub(super) hovered_nid: Arc<Mutex<Option<u32>>>,
+    /// CSS UI L4 §3.3: whether the current focus arrived via the keyboard —
+    /// `:focus-visible`'s second input. The `:hover`/`:focus` twin of
+    /// [`Self::focused_nid`]: written by `V8JsRuntime::set_keyboard_focus`
+    /// when the shell's input modality changes (Tab/arrows vs pointer), read
+    /// by the same-tick style flush so `getComputedStyle()` sees the same
+    /// `:focus-visible` state the painted relayout does.
+    pub(super) keyboard_focus: Arc<AtomicBool>,
+    /// The modality baked into the current same-tick style flush snapshot —
+    /// see [`crate::v8_runtime::style_flush::FlushHandles::last_flushed_keyboard_focus`].
+    pub(super) last_flushed_keyboard_focus: Arc<AtomicBool>,
     /// BUG-1458: the hover target baked into the current same-tick style flush
     /// snapshot — see [`crate::v8_runtime::style_flush::FlushHandles::last_flushed_hover`].
     pub(super) last_flushed_hover: Arc<Mutex<Option<u32>>>,
@@ -604,6 +614,11 @@ impl V8JsRuntime {
             last_flushed_focus: Arc::new(Mutex::new(None)),
             hovered_nid: Arc::new(Mutex::new(None)),
             last_flushed_hover: Arc::new(Mutex::new(None)),
+            // CSS UI L4 §3.3: mirrors the shell's `focus_from_keyboard`
+            // default — `true` until the first pointer press on a
+            // click-focusable element (`Lumen::set_focus_modality`).
+            keyboard_focus: Arc::new(AtomicBool::new(true)),
+            last_flushed_keyboard_focus: Arc::new(AtomicBool::new(true)),
             pointer_capture_nid: Arc::new(Mutex::new(None)),
             deterministic: AtomicBool::new(false),
             deterministic_rng_seed: Mutex::new(None),
@@ -1719,6 +1734,15 @@ impl V8JsRuntime {
     /// the shell's hit test changes the hovered node.
     pub fn set_hovered_nid(&self, nid: Option<u32>) {
         *self.hovered_nid.lock().unwrap_or_else(|e| e.into_inner()) = nid;
+    }
+
+    /// CSS UI L4 §3.3: record whether the shell's current focus came from the
+    /// keyboard on the engine thread's own mirror ([`Self::keyboard_focus`]) —
+    /// the `:focus-visible` counterpart of [`Self::set_focused_nid`]. Called
+    /// from `notify_keyboard_focus` each time the shell's input modality
+    /// changes (Tab/arrows/typing vs pointer press).
+    pub fn set_keyboard_focus(&self, keyboard: bool) {
+        self.keyboard_focus.store(keyboard, Ordering::Relaxed);
     }
 
     /// Returns the DOM node nid that currently holds pointer capture (pointer_id=1).

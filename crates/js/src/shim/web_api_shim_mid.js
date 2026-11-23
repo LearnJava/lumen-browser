@@ -1719,6 +1719,25 @@ function _lumen_set_field_value(nid, value) {
     _input_values[nid] = String(value);
 }
 
+// UI Events §5.2.2: a `keydown` that was not cancelled and produces a
+// character value is followed by the deprecated-but-still-observed
+// `keypress` — Chrome/WebKit keep firing it and WPT listens for it.
+// Returns the `keypress` charCode, or 0 when no keypress should fire.
+// Single printable characters qualify, plus Enter (keyCode 13 in Chrome).
+// Modifier chords do not: Ctrl/Meta always suppress it, Ctrl without Alt
+// too — Ctrl+Alt together is how Windows reports AltGr, which DOES produce
+// a character and therefore a keypress.
+function _lumen_keypress_charcode(key, mod) {
+    var hasCtrl = !!(mod & 1), hasAlt = !!(mod & 4), hasMeta = !!(mod & 8);
+    if (hasMeta || (hasCtrl && !hasAlt)) return 0;
+    if (key === 'Enter') return 13;
+    if (key.length === 1) {
+        var c = key.charCodeAt(0);
+        return c >= 32 ? c : 0;
+    }
+    return 0;
+}
+
 function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location, mod, repeat, isComposing) {
     _lumen_note_activation_input(type, key);
     var ev = new KeyboardEvent(type, {
@@ -1730,7 +1749,60 @@ function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location
         altKey:   !!(mod & 4), metaKey:  !!(mod & 8),
         modifierCapsLock: !!(mod & 16)
     });
-    return _lumen_dispatch_rich(start_nid, ev);
+    var notCancelled = _lumen_dispatch_rich(start_nid, ev);
+    if (type === 'keydown' && !ev.defaultPrevented && !isComposing) {
+        var pkc = _lumen_keypress_charcode(key, mod);
+        if (pkc !== 0) {
+            var pev = new KeyboardEvent('keypress', {
+                bubbles: true, cancelable: true, composed: true, isTrusted: true,
+                key: key, code: code, keyCode: pkc, charCode: pkc,
+                which: pkc, location: location,
+                repeat: !!repeat, isComposing: false,
+                ctrlKey:  !!(mod & 1), shiftKey: !!(mod & 2),
+                altKey:   !!(mod & 4), metaKey:  !!(mod & 8),
+                modifierCapsLock: !!(mod & 16)
+            });
+            // A cancelled keypress also vetoes the default action — that is
+            // what stops `inject_char` from inserting the character.
+            notCancelled = _lumen_dispatch_rich(start_nid, pev) && notCancelled;
+        }
+    }
+    // Keyboard activation behavior (HTML LS «activation behavior» reached
+    // through key events): Enter on `keydown`, Space on `keyup` run the same
+    // sequence `el.click()` does — pre-click flip, `click` dispatch,
+    // activation behavior. Skipped when the page cancelled the key event,
+    // on auto-repeat, and while an IME composition is open. This is what
+    // makes Enter on a focused <button>/<a> actually activate it for both
+    // real keys (`page_keys.rs`) and injected WebDriver keys.
+    if (!repeat && !isComposing && !ev.defaultPrevented) {
+        var isEnter = (type === 'keydown' && key === 'Enter');
+        var isSpace = (type === 'keyup' && key === ' ');
+        if (isEnter || isSpace) {
+            _lumen_key_activate(start_nid, isSpace);
+        }
+    }
+    return notCancelled;
+}
+
+// Resolve the element a keyboard activation would click, or -1. Text-editing
+// controls are excluded: Enter there is implicit form submission (a separate
+// path), Space inserts a space — neither is a click. Checkable/button
+// <input> types DO activate (Space toggles them per UI Events).
+function _lumen_key_activate(nid, isSpace) {
+    var at = _lumen_activation_target(nid);
+    if (at === -1) return;
+    var tag = (_lumen_get_tag_name(at) || '').toUpperCase();
+    if (tag === 'INPUT') {
+        var t = _lumen_u2n(_lumen_get_attr(at, 'type'));
+        t = (t === null) ? 'text' : String(t).toLowerCase();
+        if (isSpace) {
+            if (t !== 'checkbox' && t !== 'radio' && t !== 'button'
+                && t !== 'submit' && t !== 'reset' && t !== 'image' && t !== 'file') return;
+        } else if (t !== 'button' && t !== 'submit' && t !== 'reset' && t !== 'image') {
+            return;
+        }
+    }
+    _lumen_perform_click(at);
 }
 
 // BUG-1622: synthetic keyboard input (WebDriver key actions, `type_text`, the

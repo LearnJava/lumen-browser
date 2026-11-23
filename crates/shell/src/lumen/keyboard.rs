@@ -326,7 +326,30 @@ impl Lumen {
         // that reaches the page marks the last interaction as keyboard.
         // Pointer presses clear it (`click.rs`), programmatic `focus()`
         // preserves it (the `about_to_wait` focus-request branch).
-        self.focus_from_keyboard = true;
+        // `set_focus_modality` queues the engine-thread mirror update BEFORE
+        // the key events below dispatch, so a same-tick `getComputedStyle`
+        // inside a `keydown` handler already sees keyboard modality.
+        // Modifier-only presses are `RawKeyDown` in Chromium's event model and
+        // do NOT flip `:focus-visible` modality — a bare Ctrl/Shift/Alt press
+        // keeps the pointer modality (WPT `focus-visible-012`).
+        let modifier_only = matches!(
+            key_event.logical_key,
+            winit::keyboard::Key::Named(
+                winit::keyboard::NamedKey::Shift
+                    | winit::keyboard::NamedKey::Control
+                    | winit::keyboard::NamedKey::Alt
+                    | winit::keyboard::NamedKey::Meta
+                    | winit::keyboard::NamedKey::AltGraph
+                    | winit::keyboard::NamedKey::CapsLock
+                    | winit::keyboard::NamedKey::Fn
+                    | winit::keyboard::NamedKey::FnLock
+                    | winit::keyboard::NamedKey::NumLock
+                    | winit::keyboard::NamedKey::ScrollLock
+            )
+        );
+        if !modifier_only {
+            self.set_focus_modality(true);
+        }
         if self.page_keydown_cancelled(physical, key_event) {
             return;
         }

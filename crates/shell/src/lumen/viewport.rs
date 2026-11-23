@@ -68,6 +68,14 @@ impl Lumen {
     /// Текущая логическая (CSS px) высота viewport-а. Если окно ещё не создано —
     /// fallback на layout-viewport 720 px, который у нас hardcoded в pipeline.
     pub(crate) fn viewport_height_css(&self) -> f32 {
+        // The live `#contentArea` rect is the truth when chrome is up — the
+        // CHROME_H formula cannot know the deck skin's own chrome height
+        // (see `relayout_viewport`, same source).
+        if self.window.is_some()
+            && let Some(host) = self.chrome_page_host_rect
+        {
+            return host.height.max(0.0);
+        }
         let total = match (self.window.as_ref(), self.renderer.as_ref()) {
             (Some(w), Some(r)) => {
                 let phys = w.inner_size().height as f32;

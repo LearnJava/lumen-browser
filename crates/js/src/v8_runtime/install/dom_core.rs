@@ -405,6 +405,9 @@ fn parse_scripted_font_weight(s: &str) -> u16 {
 struct InteractiveMirror {
     focused: Arc<Mutex<Option<u32>>>,
     hovered: Arc<Mutex<Option<u32>>>,
+    /// CSS UI L4 §3.3: `:focus-visible`'s second input — without it
+    /// `el.matches(':focus-visible')` always saw "mouse focus".
+    keyboard: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// BUG-560: `query_all`/`matches_selector` (and their scoped siblings) match
@@ -432,6 +435,9 @@ fn with_focus_state<R>(mirror: &InteractiveMirror, f: impl FnOnce() -> R) -> R {
         .unwrap_or_else(|e| e.into_inner())
         .map(NodeId::from_raw);
     lumen_layout::set_interactive_state(hover, nid, None);
+    lumen_layout::set_keyboard_focus(
+        mirror.keyboard.load(std::sync::atomic::Ordering::Relaxed),
+    );
     let result = f();
     lumen_layout::clear_interactive_state();
     result
@@ -446,8 +452,9 @@ pub(crate) fn install_node_lookup(
     doc: Arc<Mutex<lumen_dom::Document>>,
     focused_nid: Arc<Mutex<Option<u32>>>,
     hovered_nid: Arc<Mutex<Option<u32>>>,
+    keyboard_focus: Arc<std::sync::atomic::AtomicBool>,
 ) -> JsResult<()> {
-    let mirror = InteractiveMirror { focused: focused_nid, hovered: hovered_nid };
+    let mirror = InteractiveMirror { focused: focused_nid, hovered: hovered_nid, keyboard: keyboard_focus };
     // ── node lookup ──────────────────────────────────────────────────────────
     {
         let d = Arc::clone(&doc);

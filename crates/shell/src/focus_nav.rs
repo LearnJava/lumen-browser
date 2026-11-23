@@ -22,17 +22,23 @@ use lumen_dom::{Document, FlatTree, InputType, NodeData, NodeId};
 /// the Tab order per HTML Standard §6.6.6 step 1; this returns `None` for it
 /// same as for a node that is not focusable at all.
 fn sequential_tab_index(node: &lumen_dom::Node) -> Option<i32> {
-    let NodeData::Element { name, .. } = &node.data else {
-        return None;
-    };
     if let Some(raw) = node.get_attr("tabindex") {
         return match raw.trim().parse::<i32>() {
             Ok(v) if v >= 0 => Some(v),
             _ => None,
         };
     }
+    implicitly_focusable(node).then_some(0)
+}
+
+/// The element set focusable without an explicit `tabindex` — shared by the
+/// Tab order ([`sequential_tab_index`]) and click-focusability below.
+fn implicitly_focusable(node: &lumen_dom::Node) -> bool {
+    let NodeData::Element { name, .. } = &node.data else {
+        return false;
+    };
     let disabled = node.get_attr("disabled").is_some();
-    let default_focusable = match name.local.as_ref() {
+    match name.local.as_ref() {
         "a" | "area" => node.get_attr("href").is_some(),
         "button" | "select" | "selectlist" | "textarea" => !disabled,
         "input" => !disabled && node.input_type() != Some(InputType::Hidden),
@@ -40,8 +46,21 @@ fn sequential_tab_index(node: &lumen_dom::Node) -> Option<i32> {
         _ => node
             .get_attr("contenteditable")
             .is_some_and(|v| v != "false"),
-    };
-    default_focusable.then_some(0)
+    }
+}
+
+/// Whether a pointer press landing on `node` counts as "mouse focus" for
+/// `:focus-visible` modality (CSS UI L4 §3.3). Click-focusable elements —
+/// the sequential-focus set plus any valid `tabindex` (negatives included,
+/// which are click/script-focusable but not tabbable) — reset the keyboard
+/// modality on click; presses on non-focusable content leave it alone
+/// (WPT `focus-visible-007`, `focus-visible-script-focus-*`).
+pub(crate) fn click_focusable(doc: &Document, node: NodeId) -> bool {
+    let n = doc.get(node);
+    match n.get_attr("tabindex") {
+        Some(raw) => raw.trim().parse::<i32>().is_ok(),
+        None => implicitly_focusable(n),
+    }
 }
 
 /// DOM order of every sequentially-focusable node under `root`, sorted per

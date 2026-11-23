@@ -573,7 +573,14 @@ class LumenTestharnessExecutor(TestharnessExecutor):
             session, target_context, params.get("selectors") or [])
         if point is None:
             raise ActionError(f"element not found for selectors {params.get('selectors')!r}")
-        x, y = point
+        x, y, needs_settle = point
+        if needs_settle:
+            # The element was below/outside the viewport: `scrollIntoView`
+            # queued a page scroll the shell applies on its next tick — give
+            # it a beat so `page_point`'s committed scroll matches the rect
+            # coordinates `_resolve_element_center` just read (which already
+            # reflect the pending scroll).
+            await asyncio.sleep(0.25)
         actions = Actions()
         pointer = actions.add_pointer()
         pointer.pointer_move(round(x), round(y), origin="viewport")
@@ -634,7 +641,7 @@ class LumenTestharnessExecutor(TestharnessExecutor):
                     if point is None:
                         raise ActionError(
                             f"element not found for selectors {origin['selectors']!r}")
-                    ex, ey = point
+                    ex, ey = point[0], point[1]
                     step["x"] = round(ex + (step.get("x") or 0))
                     step["y"] = round(ey + (step.get("y") or 0))
                     step["origin"] = "viewport"
@@ -642,27 +649,66 @@ class LumenTestharnessExecutor(TestharnessExecutor):
         return None
 
     async def _action_send_keys(self, session, context, params):
-        """`test_driver_internal.send_keys(element, keys)` — click the target
-        element to focus it (same point resolution `_action_click` uses),
-        then type `params["keys"]` via a `key` input source in the same
-        `perform_actions` call. `replay_input_actions` types a `key` source's
-        concatenated value at `last_point`, which the preceding pointer
-        source's click already set — same ordering `_action_click` relies on,
-        just with a `KeyInputSource` tacked onto the same `Actions()`."""
+        """`test_driver_internal.send_keys(element, keys)` — focus the target
+        element via script (`kFocusScript`, the same mechanism chromedriver's
+        `FocusToElement` uses for WebDriver "element send keys") and then type
+        `params["keys"]` via a `key` input source.
+
+        This deliberately does NOT click the element first: a pointer press
+        flips `:focus-visible` modality to mouse and fires `focus` with
+        mouse-modality styling before the keys arrive — WPT
+        `css/selectors/focus-visible-*` and `focus-visible-script-focus-*`
+        encode script-focus semantics instead."""
         target_context = params.get("context") or context
-        point = await self._resolve_element_center(
-            session, target_context, params.get("selectors") or [])
-        if point is None:
-            raise ActionError(f"element not found for selectors {params.get('selectors')!r}")
-        x, y = point
+        selectors = params.get("selectors") or []
+        await self._focus_element_via_script(session, target_context, selectors)
         actions = Actions()
-        pointer = actions.add_pointer()
-        pointer.pointer_move(round(x), round(y), origin="viewport")
-        pointer.pointer_down(0)
-        pointer.pointer_up(0)
         actions.add_key().send_keys(params.get("keys") or "")
         await session.input.perform_actions(actions=actions, context=target_context)
         return None
+
+    async def _focus_element_via_script(self, session, context, selectors):
+        """Resolve `selectors` (shadow-piercing, same walk as
+        `_resolve_element_center`) and call `el.focus()` on the result, then
+        wait until `document.activeElement` reflects it — the shell applies
+        `_lumen_request_focus` on its next pump, which can land after this
+        `script.evaluate` returns but before the following `perform_actions`."""
+        expression = f"""(() => {{
+  const selectors = {json.dumps(selectors)};
+  let root = document, el = null;
+  for (let i = 0; i < selectors.length; i++) {{
+    el = root.querySelector(selectors[i]);
+    if (!el) return 'null';
+    root = el.shadowRoot;
+    if (!root && i < selectors.length - 1) return 'null';
+  }}
+  try {{ el.focus(); }} catch (e) {{}}
+  return 'ok';
+}})()"""
+        value = await session.script.evaluate(
+            expression=expression, target=ContextTarget(context), await_promise=False)
+        if value.get("type") != "string" or value.get("value") != "ok":
+            raise ActionError(f"element not found for selectors {selectors!r}")
+        # Poll briefly for the shell-side focus application; a non-focusable
+        # element never becomes activeElement — bounded wait, then proceed
+        # anyway (keys then land on whatever is focused, as in chromedriver).
+        probe = """(() => {
+  const selectors = %s;
+  let root = document, el = null;
+  for (let i = 0; i < selectors.length; i++) {
+    el = root.querySelector(selectors[i]);
+    if (!el) return 'gone';
+    root = el.shadowRoot;
+    if (!root && i < selectors.length - 1) return 'gone';
+  }
+  return document.activeElement === el ? 'yes' : 'no';
+})()""" % json.dumps(selectors)
+        for _ in range(20):
+            value = await session.script.evaluate(
+                expression=probe, target=ContextTarget(context), await_promise=False)
+            if value.get("type") == "string" and value.get("value") == "yes":
+                return
+            await asyncio.sleep(0.025)
 
     async def _action_delete_all_cookies(self, session, context, params):
         """`test_driver_internal.delete_all_cookies()` — `storage.deleteCookies`
@@ -709,6 +755,13 @@ class LumenTestharnessExecutor(TestharnessExecutor):
         return value["role" if action == "get_computed_role" else "name"]
 
     async def _resolve_element_center(self, session, context, selectors):
+        # WebDriver element interaction scrolls the target into view first —
+        # without it a below-the-fold `getBoundingClientRect` point lands on
+        # engine chrome (or nowhere) when replayed as a viewport click
+        # (WPT `focus-visible-018-2`: every element past the fold "clicked"
+        # chrome and reported Dead). `block/inline: 'nearest'` scrolls only
+        # when needed; `window.scrollX/Y` already reflect the queued request,
+        # so `scrolled` tells the caller whether to let the shell apply it.
         expression = f"""(() => {{
   const selectors = {json.dumps(selectors)};
   let root = document, el = null;
@@ -718,15 +771,19 @@ class LumenTestharnessExecutor(TestharnessExecutor):
     root = el.shadowRoot;
     if (!root && i < selectors.length - 1) return null;
   }}
+  const sx = window.scrollX, sy = window.scrollY;
+  el.scrollIntoView({{block: 'nearest', inline: 'nearest'}});
   const r = el.getBoundingClientRect();
-  return JSON.stringify({{x: r.left + r.width / 2, y: r.top + r.height / 2}});
+  const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+  return JSON.stringify({{x: cx, y: cy,
+    scrolled: window.scrollX !== sx || window.scrollY !== sy}});
 }})()"""
         value = await session.script.evaluate(
             expression=expression, target=ContextTarget(context), await_promise=False)
         if value.get("type") != "string":
             return None
         point = json.loads(value["value"])
-        return point["x"], point["y"]
+        return point["x"], point["y"], point.get("scrolled", False)
 
 
 # ── reftest support (TEST-4, docs/tasks/p2-test-track.md) ──────────────────

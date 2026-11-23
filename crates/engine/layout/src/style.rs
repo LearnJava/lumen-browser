@@ -361,7 +361,7 @@ pub(crate) use env::{animated_height_for, animated_heights_active, note_cq_unit}
 pub use rule_roots::restyle_roots_for_rule_changes;
 pub use restyle_cache::RestyleIndexCache;
 pub use restyle::{
-    restyle_node_index, restyle_node_index_shared, restyle_state_index_owned, restyle_root_set_for_node_change, restyle_root_set_for_state_change,
+    restyle_node_index, restyle_node_index_shared, restyle_state_index_owned, restyle_root_set_for_modality_change, restyle_root_set_for_node_change, restyle_root_set_for_state_change,
     restyle_roots_for_node_changes, restyle_roots_for_node_changes_with_basis, restyle_state_index, NodeChange, NodeRestyleIndex, OwnedNodeChange, RestyleRoots, StateRestyleIndex,
 };
 pub use invalidation::{

@@ -42,13 +42,58 @@ impl Lumen {
     /// проверка в одном из них молча не покрывала бы второй. Страница платит
     /// за смену `:focus` тем же самым (`relayout_chrome` в теле ниже).
     pub(crate) fn handle_click_at(&mut self, x_css: f32, y_css: f32) {
+        self.handle_click_at_mode(x_css, y_css, false);
+    }
+
+    /// Automation/synthetic click (`AutomationCommand::Click`, injected
+    /// `InputCommand::Click`): unlike the real release path — which already
+    /// fired `pointerdown`/`mousedown` on press — this entry must replay the
+    /// full press+release sequence itself, or page listeners for
+    /// `mousedown`/`mouseup`/`pointerdown`/`pointerup` never run (WPT
+    /// `focus-visible-007` relies on `mousedown` to flip input modality).
+    ///
+    /// Hit-тест здесь идёт по СВЕЖЕМУ flush-layout, а не по закоммиченному
+    /// `layout_box`: automation-клики приходят сразу после
+    /// `getBoundingClientRect`/`scrollIntoView`, которые синхронно флашат
+    /// стиль+layout на движковом потоке, а `layout_box` UI-потока обновляется
+    /// только следующим relayout-тиком. Расхождение отправляло клик мимо
+    /// цели (WPT `focus-visible-018-2`). Реальный mouse-путь
+    /// (`handle_click_at`) оверрайд не ставит и работает по-прежнему.
+    pub(crate) fn handle_click_at_automation(&mut self, x_css: f32, y_css: f32) {
+        let (page_x, page_y) = self.page_point(x_css, y_css);
+        let script = format!("_lumen_hit_test_at_point({page_x}, {page_y})");
+        let qr = route_query_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            move |j| j.eval_js_value(&script),
+        );
+        if let Some(Ok(json)) = qr
+        && let Ok(ids) = serde_json::from_str::<Vec<f64>>(&json)
+        {
+            self.automation_hit_override = Some(match ids.as_slice() {
+                [n, s, i] => Some(lumen_paint::HitTestResult {
+                    node: NodeId::from_raw(*n as u32),
+                    source_node: NodeId::from_raw(*s as u32),
+                    inline_source: (*i >= 0.0).then(|| NodeId::from_raw(*i as u32)),
+                    local_point: Point::new(0.0, 0.0),
+                    path: vec![NodeId::from_raw(*n as u32)],
+                    cursor: lumen_layout::Cursor::Auto,
+                    user_select: lumen_layout::UserSelect::Auto,
+                }),
+                _ => None,
+            });
+        }
+        self.handle_click_at_mode(x_css, y_css, true);
+    }
+
+    fn handle_click_at_mode(&mut self, x_css: f32, y_css: f32, press_events: bool) {
         // BUG-1624: a click on the page takes focus away from the address bar
         // (as in every browser: the omnibox blurs and reverts). Left open it
         // kept swallowing keys first (`handle_key`) while the page field the
         // click focused painted its own caret — two carets, typing in the URL.
         self.address_bar.close();
         let before = self.focused_frame;
-        self.handle_click_at_inner(x_css, y_css);
+        self.handle_click_at_inner(x_css, y_css, press_events);
         if self.focused_frame != before {
             self.notify_frame_focus(before, self.focused_frame);
             self.refresh_frames(None);
@@ -149,7 +194,11 @@ impl Lumen {
     }
 
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
-    fn handle_click_at_inner(&mut self, x_css: f32, y_css: f32) {
+    fn handle_click_at_inner(&mut self, x_css: f32, y_css: f32, press_events: bool) {
+        // Снимаем оверрайд hit-теста в самом начале: ранние ветки (пикеры,
+        // инспектор) возвращаются до точки его применения, а оставленный
+        // `Some` достался бы следующему — возможно, настоящему — клику.
+        let hit_override = self.automation_hit_override.take();
         // Dismiss validation tooltip on any non-scrollbar click.
         self.validation_tooltip = None;
         let scroll_y = self.scroll_y;
@@ -444,7 +493,12 @@ impl Lumen {
         let (page_x, page_y) = self.page_point(x_css, y_css);
         let target = self.pointer_target(x_css, y_css);
         let frame_target = target.frame;
-        let hit_result = target.page;
+        // Оверрайд от `handle_click_at_automation`: hit по свежему flush-layout
+        // движка. `Some(None)` — точка промаха и у свежего дерева тоже.
+        let hit_result = match hit_override {
+            Some(o) => o,
+            None => target.page,
+        };
 
         // Debug click log — активируется флагом --click-log или LUMEN_CLICK_LOG=1.
         // For click log: report both the hit box node (<p>) and the inline source_node
@@ -492,11 +546,78 @@ impl Lumen {
                 None
             };
 
+        // Synthetic press (automation): replay `pointerdown` + `mousedown`
+        // before the focus move below — UI Events §5.2 / Pointer Events §10
+        // order (`pointerdown`, `mousedown`, then the press's default action
+        // moves focus). The real path fired the same pair on `MouseInput`'s
+        // press branch; `press_events` is set only for callers that never saw
+        // a press. Frame clicks keep their own child-document events.
+        let press_nid = if press_events && frame_target.is_none() {
+            hit_result.as_ref().and_then(|r| {
+                self.layout_source.as_ref().map(|src| {
+                    let doc = src.document.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut n = r.source_node;
+                    while !matches!(doc.get(n).data, NodeData::Element { .. })
+                        && let Some(p) = doc.get(n).parent
+                    {
+                        n = p;
+                    }
+                    n.index() as u32
+                })
+            })
+        } else {
+            None
+        };
+        #[cfg(feature = "v8")]
+        if let Some(nid) = press_nid {
+            self.js_pointer_event(nid, "pointerdown", x_css, y_css, 0, 1);
+            self.js_click_event(nid, "mousedown", (x_css, y_css), (0, 1), self.click_streak.count());
+        }
+
         // Track focused node for TypeText injection and CSS :focus matching.
-        let new_focused = hit_result.as_ref().map(|r| r.node);
+        // Focus goes to the nearest *click-focusable* element at-or-above the
+        // hit's inline source — the same element the click event below targets
+        // (DOM LS: a click on inline text focuses the text's parent element,
+        // and from there the nearest focusable ancestor, e.g. the <span
+        // tabindex> inside the block box the hit test returned). Using the raw
+        // hit box node focused the wrapping <div> instead — a non-focusable
+        // element that swallows the `focus` event the page listens for on the
+        // real target (WPT `focus-visible-003` et al.).
+        let new_focused = hit_result.as_ref().and_then(|r| {
+            self.layout_source.as_ref().and_then(|src| {
+                let doc = src.document.lock().unwrap_or_else(|e| e.into_inner());
+                let mut n = r.source_node;
+                while !matches!(doc.get(n).data, NodeData::Element { .. })
+                    && let Some(p) = doc.get(n).parent
+                {
+                    n = p;
+                }
+                loop {
+                    if focus_nav::click_focusable(&doc, n) {
+                        return Some(n);
+                    }
+                    match doc.get(n).parent {
+                        Some(p) => n = p,
+                        None => return None,
+                    }
+                }
+            })
+        });
         let focus_changed = new_focused != self.focused_node;
         self.focused_node = new_focused;
-        self.focus_from_keyboard = false;
+        // CSS UI L4 §3.3: a pointer press resets keyboard modality only when
+        // it lands on a click-focusable element — presses on non-focusable
+        // content preserve it, so a script `focus()` right after still
+        // matches `:focus-visible` (WPT `focus-visible-007`,
+        // `focus-visible-script-focus-*`).
+        if let Some(nid) = new_focused
+            && self.layout_source.as_ref().is_some_and(|src| {
+                let doc = src.document.lock().unwrap_or_else(|e| e.into_inner());
+                focus_nav::click_focusable(&doc, nid)
+            })
+        {
+            self.set_focus_modality(false);
+        }
         // Trigger relayout if :focus state changed so :focus / :focus-within rules update.
         if focus_changed {
             // ADR-016 M2.2b-7: `focused_node` is set synchronously above, so
@@ -598,6 +719,16 @@ impl Lumen {
         // был, больше не адресат клавиатуры (страница ведёт себя так же:
         // `focused_node` выше переустановлен на КАЖДЫЙ клик).
         self.focused_frame = None;
+
+        // Synthetic release pair for automation clicks: `pointerup` +
+        // `mouseup` precede `click` (UI Events §5.2), the same triple the real
+        // release path emits via `js_pointer_release` before `handle_click_at`.
+        #[cfg(feature = "v8")]
+        if press_events && frame_target.is_none()
+            && let Some(nid) = press_nid
+        {
+            self.js_pointer_release(nid, x_css, y_css);
+        }
 
         // Dispatch JS click event (bubbles from hit node to document).
         // Passes viewport coordinates and modifier key state so

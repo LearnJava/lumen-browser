@@ -505,7 +505,11 @@ fn run_window_mode_inner(
         caret_blink: crate::caret_blink::CaretBlink::new(std::time::Instant::now()),
         status_bubble: crate::status_bubble::StatusBubble::default(),
         status_hover_source: None,
-        focus_from_keyboard: false,
+        // CSS UI L4 §3.3: until the first pointer press on a click-focusable
+        // element the modality reads as keyboard — script `focus()` on a
+        // fresh page matches `:focus-visible` (WPT
+        // `focus-visible-script-focus-001`, `focus-visible-010`).
+        focus_from_keyboard: true,
         injected_modifiers: 0,
         window_focused: true,
         cursor_position: None,
@@ -534,6 +538,7 @@ fn run_window_mode_inner(
         js_nav_inbox: Arc::new(std::sync::Mutex::new(None)),
         click_proceed_inbox: Arc::new(std::sync::Mutex::new(Vec::new())),
         pending_clicks: Vec::new(),
+        automation_hit_override: None,
         next_click_proceed_id: 0,
         pending_submits: Vec::new(),
         js_url_inbox: Arc::new(std::sync::Mutex::new(Vec::new())),
