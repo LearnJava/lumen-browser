@@ -76,7 +76,7 @@ use crate::style::parse::box_sides::{
     set_inset_side,
     set_margin_side,
     set_padding_side,
-    split_box_tokens,
+    split_box_tokens, split_box_tokens_arr,
 };
 use crate::style::parse::color::parse_css_color_keep_srgb_form;
 use crate::style::parse::display::parse_display;
@@ -904,12 +904,13 @@ pub(in crate::style) fn apply_decl_layout(
         "left" => set_inset_side(&mut style.left, &mut style.anchor_left, val, is_quirks),
         "inset" => {
             // CSS Logical Properties L1 §8.2.1 — inset shorthand (1-4 values).
-            let tokens = split_box_tokens(val);
-            let (t, r, b, l) = match tokens.as_slice() {
-                [a] => (a, a, a, a),
-                [a, b] => (a, b, b, a),
-                [a, b, c] => (a, b, c, b),
-                [a, b, c, d] => (a, b, c, d),
+            let mut buf = [""; 4];
+            let n = split_box_tokens_arr(val, &mut buf);
+            let (t, r, b, l) = match n {
+                1 => (buf[0], buf[0], buf[0], buf[0]),
+                2 => (buf[0], buf[1], buf[1], buf[0]),
+                3 => (buf[0], buf[1], buf[2], buf[1]),
+                4 => (buf[0], buf[1], buf[2], buf[3]),
                 _ => return true,
             };
             set_inset_side(&mut style.top, &mut style.anchor_top, t, is_quirks);
@@ -924,14 +925,24 @@ pub(in crate::style) fn apply_decl_layout(
         "inset-block-start"  => set_margin_side(&mut style.inset_block_start, val, is_quirks),
         "inset-block-end"    => set_margin_side(&mut style.inset_block_end, val, is_quirks),
         "inset-inline" => {
-            let toks = split_box_tokens(val);
-            let (s, e) = match toks.as_slice() { [a] => (a, a), [a, b] => (a, b), _ => return true };
+            let mut buf = [""; 2];
+            let n = split_box_tokens_arr(val, &mut buf);
+            let (s, e) = match n {
+                1 => (buf[0], buf[0]),
+                2 => (buf[0], buf[1]),
+                _ => return true,
+            };
             set_margin_side(&mut style.inset_inline_start, s, is_quirks);
             set_margin_side(&mut style.inset_inline_end, e, is_quirks);
         }
         "inset-block" => {
-            let toks = split_box_tokens(val);
-            let (s, e) = match toks.as_slice() { [a] => (a, a), [a, b] => (a, b), _ => return true };
+            let mut buf = [""; 2];
+            let n = split_box_tokens_arr(val, &mut buf);
+            let (s, e) = match n {
+                1 => (buf[0], buf[0]),
+                2 => (buf[0], buf[1]),
+                _ => return true,
+            };
             set_margin_side(&mut style.inset_block_start, s, is_quirks);
             set_margin_side(&mut style.inset_block_end, e, is_quirks);
         }
@@ -1095,14 +1106,24 @@ pub(in crate::style) fn apply_decl_layout(
         "margin-block-start"  => set_margin_side(&mut style.margin_block_start, val, is_quirks),
         "margin-block-end"    => set_margin_side(&mut style.margin_block_end, val, is_quirks),
         "margin-inline" => {
-            let toks = split_box_tokens(val);
-            let (s, e) = match toks.as_slice() { [a] => (a, a), [a, b] => (a, b), _ => return true };
+            let mut buf = [""; 2];
+            let n = split_box_tokens_arr(val, &mut buf);
+            let (s, e) = match n {
+                1 => (buf[0], buf[0]),
+                2 => (buf[0], buf[1]),
+                _ => return true,
+            };
             set_margin_side(&mut style.margin_inline_start, s, is_quirks);
             set_margin_side(&mut style.margin_inline_end, e, is_quirks);
         }
         "margin-block" => {
-            let toks = split_box_tokens(val);
-            let (s, e) = match toks.as_slice() { [a] => (a, a), [a, b] => (a, b), _ => return true };
+            let mut buf = [""; 2];
+            let n = split_box_tokens_arr(val, &mut buf);
+            let (s, e) = match n {
+                1 => (buf[0], buf[0]),
+                2 => (buf[0], buf[1]),
+                _ => return true,
+            };
             set_margin_side(&mut style.margin_block_start, s, is_quirks);
             set_margin_side(&mut style.margin_block_end, e, is_quirks);
         }
@@ -1125,14 +1146,24 @@ pub(in crate::style) fn apply_decl_layout(
         "padding-block-start"  => set_padding_side(&mut style.padding_block_start, val, is_quirks),
         "padding-block-end"    => set_padding_side(&mut style.padding_block_end, val, is_quirks),
         "padding-inline" => {
-            let toks = split_box_tokens(val);
-            let (s, e) = match toks.as_slice() { [a] => (a, a), [a, b] => (a, b), _ => return true };
+            let mut buf = [""; 2];
+            let n = split_box_tokens_arr(val, &mut buf);
+            let (s, e) = match n {
+                1 => (buf[0], buf[0]),
+                2 => (buf[0], buf[1]),
+                _ => return true,
+            };
             set_padding_side(&mut style.padding_inline_start, s, is_quirks);
             set_padding_side(&mut style.padding_inline_end, e, is_quirks);
         }
         "padding-block" => {
-            let toks = split_box_tokens(val);
-            let (s, e) = match toks.as_slice() { [a] => (a, a), [a, b] => (a, b), _ => return true };
+            let mut buf = [""; 2];
+            let n = split_box_tokens_arr(val, &mut buf);
+            let (s, e) = match n {
+                1 => (buf[0], buf[0]),
+                2 => (buf[0], buf[1]),
+                _ => return true,
+            };
             set_padding_side(&mut style.padding_block_start, s, is_quirks);
             set_padding_side(&mut style.padding_block_end, e, is_quirks);
         }
