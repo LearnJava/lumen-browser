@@ -735,6 +735,13 @@ impl Lumen {
                     dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
                         &doc, prev_active, active, &state_index,
                     ));
+                    // UA `:focus-visible` ring is invisible to `state_index`
+                    // (see the `relayout.rs` twin of this block) — restyle
+                    // both focus endpoints on a move.
+                    if prev_focus != focused {
+                        dirty_roots.extend(prev_focus);
+                        dirty_roots.extend(focused);
+                    }
                     let mut node_index = lumen_layout::style::restyle_node_index(&doc, &stylesheet);
                     node_index.set_attr_narrowing(crate::persistent_js::attr_narrowing_enabled());
                     let roots = lumen_layout::style::restyle_roots_for_node_changes_with_basis(
