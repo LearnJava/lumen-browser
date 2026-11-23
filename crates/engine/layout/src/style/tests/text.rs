@@ -778,10 +778,10 @@ use super::*;
         let s = ts_prop("quotes", "\"«\" \"»\" \"‹\" \"›\"");
         assert_eq!(
             s.quotes,
-            Quotes::Pairs(vec![
+            Quotes::Pairs(std::sync::Arc::new(vec![
                 ("«".to_string(), "»".to_string()),
                 ("‹".to_string(), "›".to_string()),
-            ])
+            ]))
         );
     }
 
@@ -798,16 +798,16 @@ use super::*;
         let s = ts_prop("quotes", "\"\\201C\" \"\\201D\"");
         assert_eq!(
             s.quotes,
-            Quotes::Pairs(vec![("\u{201C}".to_string(), "\u{201D}".to_string())])
+            Quotes::Pairs(std::sync::Arc::new(vec![("\u{201C}".to_string(), "\u{201D}".to_string())]))
         );
     }
 
     #[test]
     fn quotes_pair_for_depth_clamps() {
-        let q = Quotes::Pairs(vec![
+        let q = Quotes::Pairs(std::sync::Arc::new(vec![
             ("«".to_string(), "»".to_string()),
             ("‹".to_string(), "›".to_string()),
-        ]);
+        ]));
         assert_eq!(q.pair_for_depth(0), Some(("«", "»")));
         assert_eq!(q.pair_for_depth(1), Some(("‹", "›")));
         // Beyond the last pair → clamp to last.

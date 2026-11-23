@@ -7,6 +7,8 @@
 //! Перенесено батчем SPLIT-ST17 из `crates/engine/layout/src/style.rs`
 //! (анкер `enum Content` до конца `impl Resize`) без правок тел.
 
+use std::sync::Arc;
+
 use crate::style::values::length::{parse_length_q, split_top_level_ws, Length};
 use crate::style::values::scroll::WritingMode;
 
@@ -68,8 +70,10 @@ pub enum Quotes {
     /// advances).
     None,
     /// Explicit `[<string> <string>]+` pairs — outermost (depth 0) first.
-    /// Each tuple is `(open, close)`.
-    Pairs(Vec<(String, String)>),
+    /// Each tuple is `(open, close)`. `Rc` — `quotes` is inherited, so the
+    /// same pair list is cloned into every descendant's computed style;
+    /// sharing the allocation keeps that cascade step refcount-cheap.
+    Pairs(Arc<Vec<(String, String)>>),
 }
 
 impl Quotes {

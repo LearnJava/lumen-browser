@@ -102,7 +102,7 @@ fn parse_quotes_uncached(value: &str) -> Option<Quotes> {
         .chunks_exact(2)
         .map(|c| (c[0].clone(), c[1].clone()))
         .collect();
-    Some(Quotes::Pairs(pairs))
+    Some(Quotes::Pairs(std::sync::Arc::new(pairs)))
 }
 
 /// Extracts consecutive CSS string literals from `s` (single- or double-quoted),
