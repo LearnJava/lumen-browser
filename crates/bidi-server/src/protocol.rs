@@ -2535,8 +2535,17 @@ fn replay_input_actions(live: &mut LiveWindowSession, sources: &[JsonValue]) {
                             let _ = live.pointer_move(x, y);
                         }
                         Some("pointerDown") => {
-                            let point = last_point.clone().unwrap_or(Target::Point { x: 0.0, y: 0.0 });
-                            let _ = live.click(&point);
+                            // Real press, not a whole click: it arms the
+                            // text-selection drag that `pointerMove`s between
+                            // down and up extend (WPT selection-pointer).
+                            let (x, y) = last_point.as_ref().map(|t| match t {
+                                Target::Point { x, y } => (*x, *y),
+                                _ => (0.0, 0.0),
+                            }).unwrap_or((0.0, 0.0));
+                            let _ = live.pointer_down(x, y);
+                        }
+                        Some("pointerUp") => {
+                            let _ = live.pointer_up();
                         }
                         _ => {}
                     }

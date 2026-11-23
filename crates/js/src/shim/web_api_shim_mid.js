@@ -1748,6 +1748,161 @@ function _lumen_float_repr(n) {
     // grammar accepts that shape already, so pass it through.
     return s;
 }
+
+// ── HTML LS §4.10.5.3.10 «value sanitization algorithm» ─────────────────────
+// Runs when `.value` is set by script, when the `value` content attribute is
+// read back through `.value` (the default value is sanitized the same way),
+// and on every `type` change — the new state's algorithm re-runs over the
+// current value. `number` keeps its own strict/user split above; every other
+// state sanitizes identically for script and user input.
+var _LUMEN_INPUT_TYPE_KEYS = {
+    button: 1, checkbox: 1, color: 1, date: 1, 'datetime-local': 1, email: 1,
+    file: 1, hidden: 1, image: 1, month: 1, number: 1, password: 1, radio: 1,
+    range: 1, reset: 1, search: 1, submit: 1, tel: 1, text: 1, time: 1,
+    url: 1, week: 1
+};
+function _lumen_input_canonical_type(nid) {
+    var t = _lumen_u2n(_lumen_get_attr(nid, 'type'));
+    if (t === null) return 'text';
+    t = String(t).toLowerCase();
+    return _LUMEN_INPUT_TYPE_KEYS[t] ? t : 'text';
+}
+function _lumen_days_in_month(y, m) {
+    if (m === 2) {
+        var leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+        return leap ? 29 : 28;
+    }
+    return (m === 4 || m === 6 || m === 9 || m === 11) ? 30 : 31;
+}
+function _lumen_parse_valid_date(s) {
+    var m = /^(\d{4,})-(\d{2})-(\d{2})$/.exec(s);
+    if (!m) return null;
+    var y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+    if (y < 1 || mo < 1 || mo > 12 || d < 1 || d > _lumen_days_in_month(y, mo)) return null;
+    return { y: y, m: mo, d: d };
+}
+function _lumen_parse_valid_month(s) {
+    var m = /^(\d{4,})-(\d{2})$/.exec(s);
+    if (!m) return null;
+    var y = Number(m[1]), mo = Number(m[2]);
+    if (y < 1 || mo < 1 || mo > 12) return null;
+    return { y: y, m: mo };
+}
+function _lumen_iso_weeks_in_year(y) {
+    // Proleptic Gregorian: 0001-01-01 was a Monday; a year has 53 ISO weeks
+    // iff it starts on Thursday, or is a leap year starting on Wednesday.
+    var days = 365 * (y - 1) + Math.floor((y - 1) / 4) - Math.floor((y - 1) / 100)
+        + Math.floor((y - 1) / 400);
+    var jan1 = days % 7; // 0 = Monday
+    var leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+    return (jan1 === 3 || (leap && jan1 === 2)) ? 53 : 52;
+}
+function _lumen_parse_valid_week(s) {
+    var m = /^(\d{4,})-W(\d{2})$/.exec(s);
+    if (!m) return null;
+    var y = Number(m[1]), w = Number(m[2]);
+    if (y < 1 || w < 1 || w > _lumen_iso_weeks_in_year(y)) return null;
+    return { y: y, w: w };
+}
+function _lumen_parse_valid_time(s) {
+    var m = /^(\d{2}):(\d{2})(?::(\d{2})(\.\d{1,3})?)?$/.exec(s);
+    if (!m) return null;
+    var h = Number(m[1]), mi = Number(m[2]), sec = m[3] === undefined ? 0 : Number(m[3]);
+    if (h > 23 || mi > 59 || sec > 59) return null;
+    return true;
+}
+// «Valid normalized» time: `hh:mm`, seconds only when nonzero, fraction only
+// with seconds and trailing zeros trimmed (HTML LS «valid normalized …
+// string» rules shared by `time` and `datetime-local`).
+function _lumen_normalize_hms(s) {
+    var m = /^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/.exec(s);
+    if (!m) return null;
+    var h = Number(m[1]), mi = Number(m[2]);
+    if (h > 23 || mi > 59) return null;
+    var sec = m[3] === undefined ? 0 : Number(m[3]);
+    if (sec > 59) return null;
+    var frac = m[4] || '';
+    if (frac) frac = frac.replace(/0+$/, '');
+    var base = m[1] + ':' + m[2];
+    if (sec === 0 && frac === '') return base;
+    return base + ':' + (m[3] || '00') + (frac ? '.' + frac : '');
+}
+function _lumen_parse_valid_local_dt(s) {
+    // «valid local date and time string»: date, 'T' or space, time —
+    // normalized to the 'T' form with a normalized time component.
+    var sep = s.indexOf('T') >= 0 ? 'T' : (s.indexOf(' ') >= 0 ? ' ' : null);
+    if (sep === null) return null;
+    var i = s.indexOf(sep);
+    var d = _lumen_parse_valid_date(s.slice(0, i));
+    var t = _lumen_normalize_hms(s.slice(i + 1));
+    if (d === null || t === null) return null;
+    return s.slice(0, i) + 'T' + t;
+}
+function _lumen_input_sanitize_value(nid, v) {
+    var s = String(v);
+    var t = _lumen_input_canonical_type(nid);
+    switch (t) {
+        // `hidden` has no value sanitization algorithm — newlines survive.
+        case 'text': case 'search': case 'tel': case 'password':
+            return s.replace(/[\r\n]/g, '');
+        case 'url': case 'email':
+            return s.replace(/[\r\n]/g, '').replace(/^[ \t\f\r ]+|[ \t\f\r ]+$/g, '');
+        case 'number':
+            return _lumen_number_sanitize_strict(s);
+        case 'range': {
+            // HTML LS §4.10.5.3.10: non-numeric → default value (midpoint of
+            // min/max, defaults 0/100); numeric → clamped into [min, max].
+            var minA = _lumen_u2n(_lumen_get_attr(nid, 'min'));
+            var maxA = _lumen_u2n(_lumen_get_attr(nid, 'max'));
+            var minN = (minA !== null && _lumen_is_valid_float(minA)) ? Number(minA) : 0;
+            var maxN = (maxA !== null && _lumen_is_valid_float(maxA)) ? Number(maxA) : 100;
+            if (minN > maxN) { var tmp = minN; minN = maxN; maxN = tmp; }
+            var n = _lumen_is_valid_float(s) ? Number(s) : NaN;
+            if (!isFinite(n)) n = minN + (maxN - minN) / 2;
+            if (n < minN) n = minN;
+            if (n > maxN) n = maxN;
+            return _lumen_float_repr(n);
+        }
+        case 'color': {
+            // «Valid simple color»: any <color> the engine parses (hex,
+            // keywords, rgb()/hsl()/color(), …) serializes to lowercase
+            // #rrggbb; anything else is #000000 (HTML LS §4.10.5.3.11).
+            var c = s.replace(/^[ \t\n\f\r]+|[ \t\n\f\r]+$/g, '');
+            var rgba = (typeof _wa_color_rgba === 'function') ? _wa_color_rgba(c) : null;
+            if (!rgba) return '#000000';
+            var hx = function(n) { var h = Math.max(0, Math.min(255, n | 0)).toString(16); return h.length < 2 ? '0' + h : h; };
+            return '#' + hx(rgba[0]) + hx(rgba[1]) + hx(rgba[2]);
+        }
+        case 'date':
+            return _lumen_parse_valid_date(s) !== null ? s : '';
+        case 'month':
+            return _lumen_parse_valid_month(s) !== null ? s : '';
+        case 'week':
+            return _lumen_parse_valid_week(s) !== null ? s : '';
+        case 'time':
+            // HTML LS: the sanitization algorithm only checks «valid time
+            // string» — it does not normalize (`12:00:00.000` survives).
+            return _lumen_parse_valid_time(s) ? s : '';
+        case 'datetime-local': {
+            var norm = _lumen_parse_valid_local_dt(s);
+            return norm !== null ? norm : '';
+        }
+        case 'file':
+            // The value of a file input is always the empty string from the
+            // page's side (script assignment throws before this is reached).
+            return '';
+        default:
+            // checkbox/radio/submit/image/reset/button: no sanitization.
+            return s;
+    }
+}
+// HTML LS §4.10.5.4: checkbox/radio `.value` defaults to "on" when the
+// `value` content attribute is absent.
+function _lumen_input_default_on(nid) {
+    var t = _lumen_input_canonical_type(nid);
+    return (t === 'checkbox' || t === 'radio')
+        && _lumen_u2n(_lumen_get_attr(nid, 'value')) === null;
+}
 function _lumen_set_field_value(nid, value) {
     var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
     if (tag === 'INPUT' || tag === 'TEXTAREA') {
@@ -10905,21 +11060,25 @@ var _LUMEN_WRAPPER_MEMBERS = {
                         if (String(dit).toLowerCase() === 'number') {
                             return _lumen_number_sanitize_user(String(dv)).text;
                         }
+                        var dvres = String(dv);
+                        // §4.10.5.4: an empty checkbox/radio value reports "on".
+                        if (dvres === '' && _lumen_input_default_on(nid)) return 'on';
+                        return dvres;
                     }
                     return String(dv);
                 }
                 if (tag0 === 'TEXTAREA') return _lumen_get_text_content(nid);
                 var dav = _lumen_u2n(_lumen_get_attr(nid, 'value'));
-                if (dav === null) return '';
-                // The `value` content attribute goes through the same strict
-                // number sanitization as a script-set value.
-                if (tag0 === 'INPUT') {
-                    var itype = (_lumen_u2n(_lumen_get_attr(nid, 'type')) || 'text');
-                    if (String(itype).toLowerCase() === 'number') {
-                        return _lumen_number_sanitize_strict(String(dav));
-                    }
+                if (dav === null) {
+                    // §4.10.5.4: checkbox/radio default their value to "on".
+                    if (_lumen_input_default_on(nid)) return 'on';
+                    // Types with a non-empty default sanitize '' into it:
+                    // `color` → #000000, `range` → the min/max midpoint.
+                    return _lumen_input_sanitize_value(nid, '');
                 }
-                return String(dav);
+                // The `value` content attribute goes through the same value
+                // sanitization algorithm as a script-set value.
+                return _lumen_input_sanitize_value(nid, String(dav));
             }
             if (_input_values[nid] !== undefined) return _input_values[nid];
             var tag = tag0;
@@ -10949,17 +11108,33 @@ var _LUMEN_WRAPPER_MEMBERS = {
             // `value` content attribute is left alone on purpose — it is the
             // default value `defaultValue`/`form.reset()` restore.
             if (tag === 'INPUT' || tag === 'TEXTAREA') {
-                var sv = String(v);
+                // `[LegacyNullToEmptyString]` on the value IDL: `null`
+                // assigns the empty string, not "null" (valueMode.html).
+                var sv = (v === null) ? '' : String(v);
                 if (tag === 'INPUT') {
-                    var itype = (_lumen_u2n(_lumen_get_attr(nid, 'type')) || 'text');
-                    if (String(itype).toLowerCase() === 'number') {
-                        // Script-set sanitization is the strict one — never
-                        // badInput (that flag belongs to user edits only).
-                        sv = _lumen_number_sanitize_strict(sv);
-                        delete _bad_input_values[nid];
+                    var itype = _lumen_input_canonical_type(nid);
+                    if (itype === 'file' && sv !== '') {
+                        // HTML LS §4.10.5.3.10: only the UA may set a file
+                        // input's value; the empty string clears it.
+                        throw new DOMException(
+                            'This input element accepts a filename, which may only be programmatically set.',
+                            'InvalidStateError');
                     }
+                    // Script-set sanitization is the strict one — never
+                    // badInput (that flag belongs to user edits only).
+                    sv = _lumen_input_sanitize_value(nid, sv);
+                    if (itype === 'number') delete _bad_input_values[nid];
                 }
                 _lumen_set_dirty_value(nid, sv);
+                // HTML LS §4.10.5.4: replacing the value moves the text entry
+                // cursor to the end of the new value — silently, no `select`
+                // event (Blink/WebKit behaviour; required so a later
+                // `select()` sees a real selection change).
+                if (typeof _lumen_selection_applies === 'function'
+                    && _lumen_selection_applies(nid)
+                    && typeof _lumen_set_text_selection_native === 'function') {
+                    _lumen_set_text_selection_native(nid, sv.length, sv.length, 0);
+                }
                 return;
             }
             _input_values[nid] = String(v);

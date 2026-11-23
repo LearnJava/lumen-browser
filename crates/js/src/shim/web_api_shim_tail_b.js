@@ -1673,6 +1673,55 @@ _lumen_install_reflection(HTMLInputElement.prototype, [
     ['formNoValidate', 'formnovalidate', 'bool'],
 ]);
 
+// HTMLInputElement `type` is not plain enum reflection: changing it re-runs
+// the NEW state's value sanitization algorithm over the current value
+// (HTML LS §4.10.5.3.10), re-anchors the selection when selectability flips,
+// and clears badInput when leaving `number`. Defined after the reflection
+// table so it wins over the generic enum accessor.
+(function() {
+    var KEYS = ['button', 'checkbox', 'color', 'date', 'datetime-local', 'email',
+        'file', 'hidden', 'image', 'month', 'number', 'password', 'radio', 'range',
+        'reset', 'search', 'submit', 'tel', 'text', 'time', 'url', 'week'];
+    function canonical(n) {
+        var v = _lumen_u2n(_lumen_get_attr(n, 'type'));
+        if (v === null) return 'text';
+        v = String(v).toLowerCase();
+        for (var i = 0; i < KEYS.length; i++) if (KEYS[i] === v) return v;
+        return 'text';
+    }
+    Object.defineProperty(HTMLInputElement.prototype, 'type', {
+        get: function() {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return 'text';
+            return canonical(n);
+        },
+        set: function(v) {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return;
+            var wasSelectable = _lumen_selection_applies(n);
+            _lumen_set_attr(n, 'type', String(v));
+            var nowSelectable = _lumen_selection_applies(n);
+            // §4.10.5.3.10: the new state's value sanitization algorithm
+            // re-runs over the current (dirty) value.
+            var dv = _lumen_u2n(_lumen_get_dirty_value(n));
+            if (dv !== null) {
+                var sv = _lumen_input_sanitize_value(n, String(dv));
+                _lumen_set_dirty_value(n, sv);
+            }
+            if (canonical(n) !== 'number') delete _bad_input_values[n];
+            // Non-selectable → selectable: the selection API reports 0,0
+            // with the platform default direction (HTML LS §4.10.5.4).
+            if (!wasSelectable && nowSelectable) {
+                // Native write only — a `type` change is not a user selection
+                // gesture, so no `select` event is queued (§4.10.5.4 step 4
+                // applies to the selection APIs, not state transitions).
+                _lumen_set_text_selection_native(n, 0, 0, 0);
+            }
+        },
+        enumerable: true, configurable: true
+    });
+})();
+
 _lumen_install_reflection(HTMLTextAreaElement.prototype, [
     ['name',           'name',           'string'],
     ['disabled',       'disabled',       'bool'],
@@ -3512,9 +3561,8 @@ function _lumen_selection_applies(nid) {
     var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
     if (tag === 'TEXTAREA') return true;
     if (tag !== 'INPUT') return false;
-    var t = _lumen_u2n(_lumen_get_attr(nid, 'type'));
-    t = (t === null) ? 'text' : String(t).toLowerCase();
-    return _LUMEN_SELECTABLE_INPUT_TYPES[t] === 1;
+    // Invalid/missing `type` falls back to the text state, which IS selectable.
+    return _LUMEN_SELECTABLE_INPUT_TYPES[_lumen_input_canonical_type(nid)] === 1;
 }
 // The selection lives in the document (`_lumen_get_text_selection`), shared
 // with the shell's caret: Home/Shift+arrows/typing there show up here, and
@@ -3523,7 +3571,9 @@ var _LUMEN_SELECTION_DIRS = ['none', 'forward', 'backward'];
 function _lumen_selection_of(nid) {
     var raw = _lumen_u2n(_lumen_get_text_selection(nid));
     var len = String(_lumen_make_element(nid).value || '').length;
-    if (raw === null) return { start: len, end: len, direction: 'none' };
+    // No stored selection → collapsed caret at offset 0 (a fresh or cloned
+    // control has not been focused/selected yet).
+    if (raw === null) return { start: 0, end: 0, direction: 'none' };
     var p = String(raw).split(',');
     var start = Math.min(Number(p[0]), len), end = Math.min(Number(p[1]), len);
     return { start: Math.min(start, end), end: end, direction: _LUMEN_SELECTION_DIRS[Number(p[2])] || 'none' };
@@ -3531,6 +3581,21 @@ function _lumen_selection_of(nid) {
 // Named `_lumen_set_text_selection`, not `…_set_selection`: the latter is the
 // native that drives the *document* selection (`window.getSelection()`), and a
 // same-named shim function would shadow it for the whole page.
+//
+// `select` event (HTML LS §4.10.5.4 step 4 / UI Events): queued as a task,
+// coalesced per element — several selection writes in one task produce a
+// single event, and it never fires synchronously from the setter.
+var _lumen_select_event_pending = {};
+function _lumen_queue_select_event(nid) {
+    if (_lumen_select_event_pending[nid]) return;
+    _lumen_select_event_pending[nid] = true;
+    Promise.resolve().then(function() {
+        delete _lumen_select_event_pending[nid];
+        _lumen_dispatch_rich(nid, new Event('select', {
+            bubbles: true, cancelable: false, isTrusted: true
+        }));
+    });
+}
 function _lumen_set_text_selection(nid, start, end, direction) {
     var len = String(_lumen_make_element(nid).value || '').length;
     start = Math.trunc(Number(start)); if (!isFinite(start) || start < 0) start = 0;
@@ -3539,9 +3604,12 @@ function _lumen_set_text_selection(nid, start, end, direction) {
     if (end > len) end = len;
     if (end < start) start = end;
     var dir = (direction === 'forward') ? 1 : (direction === 'backward') ? 2 : 0;
+    var prev = _lumen_selection_of(nid);
+    var prevDir = (prev.direction === 'forward') ? 1 : (prev.direction === 'backward') ? 2 : 0;
+    var changed = prev.start !== start || prev.end !== end || prevDir !== dir;
     _lumen_set_text_selection_native(nid, start, end, dir);
     // §4.10.5.4 step 4: queue a `select` event when the selection actually moves.
-    _lumen_dispatch_rich(nid, new Event('select', { bubbles: true, cancelable: false }));
+    if (changed) _lumen_queue_select_event(nid);
 }
 [HTMLInputElement.prototype, HTMLTextAreaElement.prototype].forEach(function(_p) {
     ['selectionStart', 'selectionEnd'].forEach(function(_prop) {
@@ -3554,7 +3622,12 @@ function _lumen_set_text_selection(nid, start, end, direction) {
             },
             set: function(v) {
                 var n = _lumen_reflect_nid(this);
-                if (n === -1 || !_lumen_selection_applies(n)) return;
+                if (n === -1) return;
+                if (!_lumen_selection_applies(n)) {
+                    throw new DOMException(
+                        'The input element\'s type (' + this.type + ') does not support selection',
+                        'InvalidStateError');
+                }
                 var s = _lumen_selection_of(n);
                 if (key === 'start') _lumen_set_text_selection(n, v, Math.max(Number(v) || 0, s.end), s.direction);
                 else _lumen_set_text_selection(n, s.start, v, s.direction);
@@ -3570,7 +3643,12 @@ function _lumen_set_text_selection(nid, start, end, direction) {
         },
         set: function(v) {
             var n = _lumen_reflect_nid(this);
-            if (n === -1 || !_lumen_selection_applies(n)) return;
+            if (n === -1) return;
+            if (!_lumen_selection_applies(n)) {
+                throw new DOMException(
+                    'The input element\'s type (' + this.type + ') does not support selection',
+                    'InvalidStateError');
+            }
             var s = _lumen_selection_of(n);
             _lumen_set_text_selection(n, s.start, s.end, String(v));
         },
@@ -3587,24 +3665,73 @@ function _lumen_set_text_selection(nid, start, end, direction) {
     };
     _p.select = function() {
         var n = _lumen_reflect_nid(this);
-        if (n === -1) return;
+        if (n === -1 || !_lumen_selection_applies(n)) return;
         var len = String(this.value || '').length;
         _lumen_set_text_selection(n, 0, len, 'none');
     };
     _p.setRangeText = function(replacement, start, end, mode) {
         var n = _lumen_reflect_nid(this);
-        if (n === -1 || !_lumen_selection_applies(n)) return;
+        if (n === -1) return;
+        if (arguments.length === 0) {
+            throw new TypeError('Failed to execute \'setRangeText\' on \'HTMLInputElement\': 1 argument required, but only 0 present.');
+        }
+        if (!_lumen_selection_applies(n)) {
+            throw new DOMException(
+                'setRangeText does not apply to this input type', 'InvalidStateError');
+        }
         var s = _lumen_selection_of(n);
         var from = (start === undefined) ? s.start : Math.trunc(Number(start));
         var to   = (end   === undefined) ? s.end   : Math.trunc(Number(end));
+        if (!isFinite(from)) from = 0;
+        if (!isFinite(to)) to = 0;
+        if (from < 0) from = 0;
+        if (to < 0) to = 0;
+        if (from > to) {
+            throw new DOMException(
+                'The index is not in the allowed range.', 'IndexSizeError');
+        }
+        var selMode = (mode === undefined) ? 'preserve' : String(mode);
+        if (selMode !== 'select' && selMode !== 'start' && selMode !== 'end' && selMode !== 'preserve') {
+            throw new TypeError('Failed to execute \'setRangeText\': The provided value \' ' + selMode + '\' is not a valid enum value of type SelectionMode.');
+        }
         var val = String(this.value || '');
-        if (from > to) { var t = from; from = to; to = t; }
+        var vlen = val.length;
+        if (from > vlen) from = vlen;
+        if (to > vlen) to = vlen;
         var repl = String(replacement);
-        this.value = val.slice(0, from) + repl + val.slice(to);
+        // Write the dirty value directly — NOT through the `.value` setter,
+        // whose selection-to-end reset would fabricate a selection change
+        // (and a spurious `select` event on a repeated identical call).
+        var newRaw = val.slice(0, from) + repl + val.slice(to);
+        // <textarea> has no value sanitization; <input> applies its type's.
+        var newVal = ((_lumen_get_tag_name(n) || '').toUpperCase() === 'INPUT')
+            ? _lumen_input_sanitize_value(n, newRaw) : newRaw;
+        _lumen_set_dirty_value(n, newVal);
         var newEnd = from + repl.length;
-        if (mode === 'start') _lumen_set_text_selection(n, from, from, 'none');
-        else if (mode === 'end') _lumen_set_text_selection(n, newEnd, newEnd, 'none');
-        else _lumen_set_text_selection(n, from, newEnd, 'none');
+        var mapPos = function(pos, isEnd) {
+            // «preserve»: positions before the replaced range keep their
+            // offset, positions after it shift by the length delta, positions
+            // inside it collapse to the end of the inserted text. The end
+            // offset is exclusive, so `pos === to` still counts as inside.
+            if (pos <= from) return pos;
+            if (isEnd ? pos > to : pos >= to) {
+                return pos - (to - from) + repl.length;
+            }
+            return newEnd;
+        };
+        var tStart, tEnd, tDir;
+        if (selMode === 'start') { tStart = from; tEnd = from; tDir = 'none'; }
+        else if (selMode === 'end') { tStart = newEnd; tEnd = newEnd; tDir = 'none'; }
+        else if (selMode === 'preserve') {
+            tStart = mapPos(s.start, false); tEnd = mapPos(s.end, true); tDir = s.direction;
+        } else { tStart = from; tEnd = newEnd; tDir = 'none'; }
+        var dirCode = (tDir === 'forward') ? 1 : (tDir === 'backward') ? 2 : 0;
+        var prevDir = (s.direction === 'forward') ? 1 : (s.direction === 'backward') ? 2 : 0;
+        _lumen_set_text_selection_native(n, tStart, tEnd, dirCode);
+        // §4.10.5.4 step 4: `select` event only when the selection moved.
+        if (tStart !== s.start || tEnd !== s.end || dirCode !== prevDir) {
+            _lumen_queue_select_event(n);
+        }
     };
 });
 
@@ -3664,26 +3791,263 @@ Object.defineProperty(HTMLTextAreaElement.prototype, 'textLength', {
     get: function() { return String(this.value || '').length; },
     enumerable: true, configurable: true,
 });
+// ── HTML LS §4.10.5.4 — value↔number conversions ────────────────────────────
+// «value as number»/«value as date»/stepUp/stepDown share one set of
+// conversions: date/month/week/time/datetime-local count milliseconds (month
+// counts months since 1970-01), number/range plain floats.
+var _LUMEN_STEP_TYPES = { date: 1, 'datetime-local': 1, month: 1, number: 1, range: 1, time: 1, week: 1 };
+var _LUMEN_STEP_SCALE = { date: 86400000, 'datetime-local': 1000, month: 1, number: 1, range: 1, time: 1000, week: 604800000 };
+var _LUMEN_STEP_DEFAULT = { date: 1, 'datetime-local': 60, month: 1, number: 1, range: 1, time: 60, week: 1 };
+var _LUMEN_DATE_TYPES = { date: 1, 'datetime-local': 1, month: 1, time: 1, week: 1 };
+// «default step base» — the grid stepUp/stepDown align to when no `min`
+// applies. Week's is the Monday of 1970-W01, not the epoch Thursday.
+var _LUMEN_STEP_BASE_DEFAULT = { week: -259200000 };
+
+// Days-from-civil / civil-from-days (proleptic Gregorian, Howard Hinnant).
+function _lumen_days_from_civil(y, m, d) {
+    y -= m <= 2 ? 1 : 0;
+    var era = Math.floor((y >= 0 ? y : y - 399) / 400);
+    var yoe = y - era * 400;
+    var doy = Math.floor((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1;
+    var doe = yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy;
+    return era * 146097 + doe - 719468;
+}
+function _lumen_civil_from_days(z) {
+    z += 719468;
+    var era = Math.floor((z >= 0 ? z : z - 146096) / 146097);
+    var doe = z - era * 146097;
+    var yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365);
+    var y = yoe + era * 400;
+    var doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100));
+    var mp = Math.floor((5 * doy + 2) / 153);
+    var d = doy - Math.floor((153 * mp + 2) / 5) + 1;
+    var m = mp + (mp < 10 ? 3 : -9);
+    return { y: y + (m <= 2 ? 1 : 0), m: m, d: d };
+}
+function _lumen_pad2(n) { return (n < 10 ? '0' : '') + n; }
+function _lumen_pad4(y) {
+    var s = String(Math.abs(y));
+    while (s.length < 4) s = '0' + s;
+    return (y < 0 ? '-' : '') + s;
+}
+// ISO-8601 week helpers: week 1 is the week containing Jan 4.
+function _lumen_isoday_of_days(days) {
+    // 1970-01-01 was a Thursday (ISO day 4); Monday=1 … Sunday=7.
+    return (((days + 3) % 7) + 7) % 7 + 1;
+}
+function _lumen_week1_monday_ms(y) {
+    var jan4 = _lumen_days_from_civil(y, 1, 4) * 86400000;
+    return jan4 - (_lumen_isoday_of_days(Math.floor(jan4 / 86400000)) - 1) * 86400000;
+}
+// String → «value as number» for one input type; NaN when not convertible.
+function _lumen_input_str_to_number(t, s) {
+    switch (t) {
+        case 'number': case 'range':
+            return _lumen_is_valid_float(s) ? Number(s) : NaN;
+        case 'date': {
+            var d = _lumen_parse_valid_date(s);
+            return d === null ? NaN : _lumen_days_from_civil(d.y, d.m, d.d) * 86400000;
+        }
+        case 'month': {
+            var mo = _lumen_parse_valid_month(s);
+            return mo === null ? NaN : (mo.y - 1970) * 12 + (mo.m - 1);
+        }
+        case 'week': {
+            var w = _lumen_parse_valid_week(s);
+            if (w === null) return NaN;
+            return _lumen_week1_monday_ms(w.y) + (w.w - 1) * 604800000;
+        }
+        case 'time': {
+            var m = /^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/.exec(s);
+            if (!m) return NaN;
+            var h = Number(m[1]), mi = Number(m[2]);
+            if (h > 23 || mi > 59) return NaN;
+            var sec = m[3] === undefined ? 0 : Number(m[3]);
+            if (sec > 59) return NaN;
+            var frac = m[4] ? Number(m[4].padEnd(3, '0')) : 0;
+            return ((h * 60 + mi) * 60 + sec) * 1000 + frac;
+        }
+        case 'datetime-local': {
+            var sep = s.indexOf('T') >= 0 ? 'T' : (s.indexOf(' ') >= 0 ? ' ' : null);
+            if (sep === null) return NaN;
+            var i = s.indexOf(sep);
+            var dd = _lumen_parse_valid_date(s.slice(0, i));
+            var tt = _lumen_input_str_to_number('time', s.slice(i + 1));
+            if (dd === null || !isFinite(tt)) return NaN;
+            return _lumen_days_from_civil(dd.y, dd.m, dd.d) * 86400000 + tt;
+        }
+        default:
+            return NaN;
+    }
+}
+// «value as number» → string for one input type; '' when unrepresentable.
+function _lumen_number_to_input_str(t, num) {
+    if (!isFinite(num)) return '';
+    switch (t) {
+        case 'number': case 'range':
+            return _lumen_float_repr(num);
+        case 'date': {
+            var days = Math.floor(num / 86400000);
+            var c = _lumen_civil_from_days(days);
+            return (c.y >= 1 && c.y <= 275760)
+                ? _lumen_pad4(c.y) + '-' + _lumen_pad2(c.m) + '-' + _lumen_pad2(c.d) : '';
+        }
+        case 'month': {
+            var n = Math.floor(num);
+            var y = 1970 + Math.floor(n / 12);
+            var mo = n - Math.floor(n / 12) * 12 + 1;
+            return (y >= 1 && y <= 275760) ? _lumen_pad4(y) + '-' + _lumen_pad2(mo) : '';
+        }
+        case 'week': {
+            var dayMs = Math.floor(num / 86400000) * 86400000;
+            var isodow = _lumen_isoday_of_days(Math.floor(dayMs / 86400000));
+            var thursday = dayMs + (4 - isodow) * 86400000;
+            var iy = _lumen_civil_from_days(Math.floor(thursday / 86400000)).y;
+            if (iy < 1 || iy > 275760) return '';
+            var wk = Math.round((thursday - _lumen_week1_monday_ms(iy)) / 604800000) + 1;
+            return _lumen_pad4(iy) + '-W' + _lumen_pad2(wk);
+        }
+        case 'time': {
+            var tms = ((num % 86400000) + 86400000) % 86400000;
+            var h = Math.floor(tms / 3600000);
+            var mi = Math.floor(tms / 60000) % 60;
+            var sec = Math.floor(tms / 1000) % 60;
+            var msec = Math.floor(tms % 1000);
+            var frac = msec ? '.' + String(msec + 1000).slice(1).replace(/0+$/, '') : '';
+            var base = _lumen_pad2(h) + ':' + _lumen_pad2(mi);
+            return (sec === 0 && frac === '') ? base : base + ':' + _lumen_pad2(sec) + frac;
+        }
+        case 'datetime-local': {
+            var days = Math.floor(num / 86400000);
+            var rem = num - days * 86400000;
+            var dc = _lumen_civil_from_days(days);
+            if (dc.y < 1 || dc.y > 275760) return '';
+            var dateStr = _lumen_pad4(dc.y) + '-' + _lumen_pad2(dc.m) + '-' + _lumen_pad2(dc.d);
+            var timeNum = _lumen_number_to_input_str('time', rem);
+            return timeNum === '' ? '' : dateStr + 'T' + timeNum;
+        }
+        default:
+            return '';
+    }
+}
+function _lumen_input_value_number(nid) {
+    var t = _lumen_input_canonical_type(nid);
+    if (!_LUMEN_STEP_TYPES[t]) return NaN;
+    var el = _lumen_make_element(nid);
+    return _lumen_input_str_to_number(t, String(el.value || ''));
+}
+function _lumen_input_attr_number(nid, attr) {
+    var t = _lumen_input_canonical_type(nid);
+    var raw = _lumen_u2n(_lumen_get_attr(nid, attr));
+    if (raw === null) return NaN;
+    return _lumen_input_str_to_number(t, String(raw));
+}
+function _lumen_input_step_base(nid, minN) {
+    if (isFinite(minN)) return minN;
+    var t = _lumen_input_canonical_type(nid);
+    return _LUMEN_STEP_BASE_DEFAULT[t] || 0;
+}
 // HTML LS §4.10.5.4 — stepUp/stepDown for the numeric input types.
 [['stepUp', 1], ['stepDown', -1]].forEach(function(_e) {
     HTMLInputElement.prototype[_e[0]] = function(n) {
         var nid = _lumen_reflect_nid(this);
         if (nid === -1) return;
+        var t = _lumen_input_canonical_type(nid);
+        if (!_LUMEN_STEP_TYPES[t]) {
+            throw new DOMException(
+                'stepUp()/stepDown() do not apply to this input type', 'InvalidStateError');
+        }
         var stepAttr = _lumen_u2n(_lumen_get_attr(nid, 'step'));
-        var step = (stepAttr === null || String(stepAttr) === 'any') ? 1 : Number(stepAttr);
-        if (!isFinite(step) || step <= 0) step = 1;
+        if (stepAttr !== null && String(stepAttr).toLowerCase() === 'any') {
+            throw new DOMException(
+                'The step attribute value "any" does not allow stepping', 'InvalidStateError');
+        }
+        var stepVal = _LUMEN_STEP_DEFAULT[t];
+        if (stepAttr !== null) {
+            var p = Number(stepAttr);
+            if (isFinite(p) && p > 0) stepVal = p;
+        }
+        var allowed = stepVal * _LUMEN_STEP_SCALE[t];
+        var minN = _lumen_input_attr_number(nid, 'min');
+        var maxN = _lumen_input_attr_number(nid, 'max');
+        if (isFinite(minN) && isFinite(maxN) && minN > maxN) return;
         var count = (n === undefined) ? 1 : Number(n);
         if (!isFinite(count)) count = 1;
-        var cur = Number(this.value);
-        if (!isFinite(cur)) cur = 0;
-        var next = cur + _e[1] * step * count;
-        var minA = _lumen_u2n(_lumen_get_attr(nid, 'min'));
-        var maxA = _lumen_u2n(_lumen_get_attr(nid, 'max'));
-        if (minA !== null && isFinite(Number(minA)) && next < Number(minA)) next = Number(minA);
-        if (maxA !== null && isFinite(Number(maxA)) && next > Number(maxA)) next = Number(maxA);
-        // Trim binary-float noise (0.1 + 0.2) without pulling in a formatter.
-        this.value = String(Math.round(next * 1e9) / 1e9);
+        var base = _lumen_input_step_base(nid, minN);
+        var cur = _lumen_input_value_number(nid);
+        if (!isFinite(cur)) cur = base;
+        // Align to the step grid in the direction of the step: a value that
+        // is not an integral multiple of `allowed` from `base` moves to the
+        // nearest grid point on that side.
+        var q = (cur - base) / allowed;
+        var frac = q - Math.floor(q);
+        var EPS = 1e-9;
+        var aligned;
+        if (frac < EPS || frac > 1 - EPS) aligned = cur;
+        else aligned = base + (_e[1] > 0 ? Math.ceil(q) : Math.floor(q)) * allowed;
+        var next = aligned + count * _e[1] * allowed;
+        // Clamp onto the grid inside [min, max] — the bound itself may not be
+        // a legal step value (step=3, max=7 → largest legal is 6).
+        if (isFinite(minN) && next < minN) {
+            next = base + Math.ceil((minN - base) / allowed - EPS) * allowed;
+        }
+        if (isFinite(maxN) && next > maxN) {
+            next = base + Math.floor((maxN - base) / allowed + EPS) * allowed;
+        }
+        this.value = _lumen_number_to_input_str(t, next);
+        _lumen_fire_input_and_change(nid);
     };
+});
+// HTML LS §4.10.5.4 — valueAsNumber/valueAsDate.
+Object.defineProperty(HTMLInputElement.prototype, 'valueAsNumber', {
+    get: function() {
+        var nid = _lumen_reflect_nid(this);
+        if (nid === -1) return NaN;
+        return _lumen_input_value_number(nid);
+    },
+    set: function(v) {
+        var nid = _lumen_reflect_nid(this);
+        if (nid === -1) return;
+        var t = _lumen_input_canonical_type(nid);
+        if (!_LUMEN_STEP_TYPES[t]) return;
+        var num = Number(v);
+        this.value = isFinite(num) ? _lumen_number_to_input_str(t, num) : '';
+    },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(HTMLInputElement.prototype, 'valueAsDate', {
+    get: function() {
+        var nid = _lumen_reflect_nid(this);
+        if (nid === -1) return null;
+        var t = _lumen_input_canonical_type(nid);
+        if (!_LUMEN_DATE_TYPES[t]) return null;
+        // «value as date» for month is the first day of that month at UTC
+        // midnight — month counts are not milliseconds, so convert first.
+        var num = _lumen_input_value_number(nid);
+        if (!isFinite(num)) return null;
+        if (t === 'month') {
+            var y = 1970 + Math.floor(num / 12);
+            var mo = num - Math.floor(num / 12) * 12 + 1;
+            num = _lumen_days_from_civil(y, mo, 1) * 86400000;
+        }
+        return new Date(num);
+    },
+    set: function(v) {
+        var nid = _lumen_reflect_nid(this);
+        if (nid === -1) return;
+        var t = _lumen_input_canonical_type(nid);
+        if (!_LUMEN_DATE_TYPES[t]) return;
+        if (v === null || v === undefined) { this.value = ''; return; }
+        var ms = (v instanceof Date) ? v.getTime() : NaN;
+        if (!isFinite(ms)) { this.value = ''; return; }
+        // month counts months, not milliseconds — convert the UTC date back.
+        if (t === 'month') {
+            var dc = _lumen_civil_from_days(Math.floor(ms / 86400000));
+            ms = (dc.y - 1970) * 12 + (dc.m - 1);
+        }
+        this.value = _lumen_number_to_input_str(t, ms);
+    },
+    enumerable: true, configurable: true,
 });
 
 // ── Activation: HTMLElement.click() (HTML LS §4.10.19 / DOM §3.4) ────────────
@@ -5194,6 +5558,30 @@ function _wa_parse_color(str) {
     return null;
 }
 
+// CSS Color 4 deprecated system colors → sRGB. UA-defined in principle;
+// these are the long-standing Windows-classic values every engine ships.
+var _LUMEN_SYSTEM_COLORS = {
+    'activeborder': [180,180,180], 'activecaption': [153,180,209],
+    'appworkspace': [171,171,171], 'background': [192,192,192],
+    'buttonface': [240,240,240], 'buttonhighlight': [255,255,255],
+    'buttonshadow': [160,160,160], 'buttontext': [0,0,0],
+    'captiontext': [0,0,0], 'graytext': [109,109,109],
+    'highlight': [51,153,255], 'highlighttext': [255,255,255],
+    'inactiveborder': [244,247,252], 'inactivecaption': [191,205,219],
+    'inactivecaptiontext': [67,110,138], 'infobackground': [255,255,225],
+    'infotext': [0,0,0], 'menu': [240,240,240], 'menutext': [0,0,0],
+    'scrollbar': [200,200,200], 'threeddarkshadow': [128,128,128],
+    'threedface': [240,240,240], 'threedhighlight': [255,255,255],
+    'threedlightshadow': [227,227,227], 'threedshadow': [160,160,160],
+    'window': [255,255,255], 'windowframe': [100,100,100],
+    'windowtext': [0,0,0],
+    // CSS Color 4 §system-colors (non-deprecated): canvas-like defaults.
+    'canvas': [255,255,255], 'canvastext': [0,0,0],
+    'linktext': [0,0,238], 'visitedtext': [85,26,139],
+    'activetext': [255,0,0], 'buttonborder': [128,128,128],
+    'field': [255,255,255], 'fieldtext': [0,0,0],
+};
+
 // `_wa_parse_color` plus the colour forms only the engine's own parser knows
 // (named colours, `hsl()`, ...): the engine answers them as `rgb()`/`rgba()` text.
 function _wa_color_rgba(s) {
@@ -5205,7 +5593,8 @@ function _wa_color_rgba(s) {
             if (k) return _wa_parse_color(k);
         } catch (e) {}
     }
-    return null;
+    var sys = _LUMEN_SYSTEM_COLORS[String(s).trim().toLowerCase()];
+    return sys ? [sys[0], sys[1], sys[2], 255] : null;
 }
 
 // Lerp a CSS color.

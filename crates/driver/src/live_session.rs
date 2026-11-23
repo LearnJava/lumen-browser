@@ -72,6 +72,20 @@ impl LiveWindowSession {
         Ok(())
     }
 
+    /// Press the left button at viewport CSS-pixel `(x, y)` — arms the
+    /// text-selection drag a following `pointer_move` extends (WPT
+    /// `selection-pointer.html`).
+    pub fn pointer_down(&self, x: f32, y: f32) -> Result<()> {
+        self.execute(AutomationCommand::PointerDown { x, y })?;
+        Ok(())
+    }
+
+    /// Release the left button — ends the armed selection drag.
+    pub fn pointer_up(&self) -> Result<()> {
+        self.execute(AutomationCommand::PointerUp)?;
+        Ok(())
+    }
+
     /// Dispatch one `keydown` (`down`) or `keyup` for a non-text key at the
     /// focused element, without clicking (BUG-1194).
     pub fn press_key(&self, key: &str, code: &str, down: bool) -> Result<()> {
