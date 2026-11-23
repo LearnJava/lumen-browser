@@ -61,6 +61,13 @@ impl Lumen {
         if Some(next) == self.focused_node && self.focused_frame.is_none() {
             return false;
         }
+        // WPT `active-onblur`: a keyboard-held `:active` belongs to the element
+        // that had focus — moving focus releases it even while the key is down.
+        if self.active_from_keyboard {
+            self.active_from_keyboard = false;
+            self.active_nid = None;
+            self.sync_active_mirror();
+        }
         self.focused_node = Some(next);
         self.set_focus_modality(true);
         self.status_bubble_sync(false);

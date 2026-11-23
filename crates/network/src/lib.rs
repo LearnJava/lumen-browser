@@ -10816,7 +10816,11 @@ world\r\n\
         assert!(!req.contains("evil.example"), "{req}");
         assert!(!req.contains("sid=stolen"), "{req}");
         assert!(!req.contains("X-Smuggled"), "{req}");
-        assert!(req.contains("Host: 127.0.0.1\r\n"), "движковый Host обязан уцелеть: {req}");
+        // Не-дефолтный порт входит в `Host`, как в Chrome (BUG-1835).
+        assert!(
+            req.contains(&format!("Host: 127.0.0.1:{port}\r\n")),
+            "движковый Host обязан уцелеть: {req}"
+        );
     }
 
     /// GAP-REFERRER срез 1 (гейт для BUG-859): без `with_document_context`
@@ -10947,7 +10951,8 @@ world\r\n\
         server.join().unwrap();
 
         let req = captured.lock().unwrap()[0].clone();
-        assert!(req.contains("Referer: http://127.0.0.1:1\r\n"), "{req}");
+        // Origin-only `Referer` сериализуется со слэшем — `http://127.0.0.1:1/`, как в Chrome.
+        assert!(req.contains("Referer: http://127.0.0.1:1/\r\n"), "{req}");
     }
 
     /// BUG-1817: a same-document rewrite (`history.replaceState`/`pushState`)

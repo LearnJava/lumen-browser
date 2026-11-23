@@ -199,7 +199,21 @@ impl Lumen {
         }
         let nid = self.focused_node.map_or(0, |n| n.index());
         let script = dispatch_script(nid, "keydown", key_event, self.modifiers);
-        !self.eval_key_script(script)
+        let cancelled = !self.eval_key_script(script);
+        // CSS `:active` while Space/Enter is held on an activatable element —
+        // the press reached the page uncancelled, so the browser's default
+        // action may mark it active until the matching `keyup`.
+        if !cancelled
+            && !key_event.repeat
+            && (self.modifiers.is_empty() || self.modifiers == ModifiersState::SHIFT)
+        {
+            match code {
+                KeyCode::Space => self.sync_key_active(true, true),
+                KeyCode::Enter | KeyCode::NumpadEnter => self.sync_key_active(false, true),
+                _ => {}
+            }
+        }
+        cancelled
     }
 
     /// The release of a key whose `keydown` reached the page: send `keyup`.
@@ -208,6 +222,13 @@ impl Lumen {
             return;
         };
         self.page_keys_down.swap_remove(at);
+        // The held Space/Enter is over — release the keyboard-set `:active`
+        // (the `keyup` dispatch below still runs the click activation).
+        match code {
+            KeyCode::Space => self.sync_key_active(true, false),
+            KeyCode::Enter | KeyCode::NumpadEnter => self.sync_key_active(false, false),
+            _ => {}
+        }
         if !self.js_present || self.focused_frame.is_some() {
             return;
         }
@@ -247,6 +268,59 @@ impl Lumen {
             Some(Ok(json)) => json.trim() != "false",
             Some(Err(_)) | None => true,
         }
+    }
+
+    /// CSS `:active` for a held Space/Enter on an activatable element (the
+    /// same target the shim's `_lumen_key_activate` would click on the
+    /// matching keyup/keydown). Callers pass `is_space` and have already
+    /// filtered modifiers/repeat/focus-frame; `down=false` releases a
+    /// keyboard-set `:active` — also what a focus change does via
+    /// `focus_page_node`.
+    pub(super) fn sync_key_active(&mut self, is_space: bool, down: bool) {
+        if !down {
+            if self.active_from_keyboard {
+                self.active_from_keyboard = false;
+                self.active_nid = None;
+                self.sync_active_mirror();
+                self.relayout_chrome();
+                self.request_redraw();
+            }
+            return;
+        }
+        if self.active_from_keyboard || self.focused_frame.is_some() || !self.js_present {
+            return;
+        }
+        let Some(nid) = self.focused_node else { return };
+        let script = format!(
+            "(typeof _lumen_key_active_target==='function'?_lumen_key_active_target({},{}):-1)",
+            nid.index(),
+            is_space
+        );
+        let target = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+            js.eval_js_value(&script)
+        })
+        .and_then(|r| r.ok())
+        .and_then(|raw| raw.trim().parse::<i64>().ok())
+        .filter(|&i| i >= 0);
+        if let Some(i) = target {
+            self.active_nid = Some(lumen_dom::NodeId::from_index(i as usize));
+            self.active_from_keyboard = true;
+            self.sync_active_mirror();
+            self.relayout_chrome();
+            self.request_redraw();
+        }
+    }
+
+    /// Push the shell's `active_nid` into the engine thread's `:active`
+    /// mirror — `querySelector`/`matches(':active')` resolve it without a
+    /// layout pass (the same-tick counterpart of `set_interactive_state` on
+    /// the relayout path).
+    pub(crate) fn sync_active_mirror(&self) {
+        let nid = self.active_nid.map(|n| n.index() as u32);
+        let keyboard = self.active_from_keyboard;
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+            js.notify_active_changed(nid, keyboard);
+        });
     }
 }
 

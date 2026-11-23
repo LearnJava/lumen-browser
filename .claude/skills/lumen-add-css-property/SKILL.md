@@ -107,12 +107,17 @@ UPDATE_SNAPSHOTS=1 cargo test -p lumen-layout --test snapshot_tests
 
 После регенерации запусти тесты без флага и убедись, что все проходят.
 
-## Шаг 7 — Clippy + полные тесты
+## Шаг 7 — Clippy + тесты (по строке матрицы гейтов)
+
+Свойство обычно трогает несколько крейтов (css-parser, layout, paint) — это строка
+«публичный API либо два и более крейтов» из `docs/commands.md` §Gate discipline:
+clippy каждого затронутого крейта + `scoped-test.sh`. `cargo test --workspace`
+не нужен ни в одной строке.
 
 ```bash
 export PATH="$HOME/.cargo/bin:$PATH"
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo clippy -p <crate> --all-targets -- -D warnings   # для каждого затронутого крейта
+bash scripts/scoped-test.sh
 ```
 
 Исправь все warnings. Не коммить с warnings.

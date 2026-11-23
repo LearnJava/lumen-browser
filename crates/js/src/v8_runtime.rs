@@ -510,6 +510,7 @@ impl V8JsRuntime {
                 Arc::clone(&doc),
                 Arc::clone(&self.focused_nid),
                 Arc::clone(&self.hovered_nid),
+                Arc::clone(&self.active_nid),
                 Arc::clone(&self.keyboard_focus),
             )?;
 
