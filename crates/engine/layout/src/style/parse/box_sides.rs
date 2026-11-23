@@ -127,6 +127,45 @@ pub(in crate::style) fn split_box_tokens(val: &str) -> Vec<&str> {
     tokens
 }
 
+/// Allocation-free variant of [`split_box_tokens`]: fills `buf` with up to
+/// `N` tokens and returns the token count. When the value holds more than `N`
+/// tokens the count is `N + 1` (the extra tokens are not stored), so callers
+/// matching `1..=N` still see the overflow case as "too many".
+pub(in crate::style) fn split_box_tokens_arr<'a, const N: usize>(val: &'a str, buf: &mut [&'a str; N]) -> usize {
+    let mut n = 0usize;
+    let mut depth: u32 = 0;
+    let mut start: Option<usize> = None;
+    for (i, ch) in val.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ' ' | '\t' if depth == 0 => {
+                if let Some(s) = start.take() {
+                    if n < N {
+                        buf[n] = &val[s..i];
+                    }
+                    n += 1;
+                    if n > N {
+                        return n;
+                    }
+                }
+                continue;
+            }
+            _ => {}
+        }
+        if start.is_none() && (ch != ' ' && ch != '\t') {
+            start = Some(i);
+        }
+    }
+    if let Some(s) = start {
+        if n < N {
+            buf[n] = &val[s..];
+        }
+        n += 1;
+    }
+    n
+}
+
 /// Парсит CSS `margin` shorthand — 1-4 токена. CSS 2.1 §8.3.
 /// Возвращает `(top, right, bottom, left)` как `LengthOrAuto`.
 pub(in crate::style) fn parse_margin_shorthand(
@@ -137,18 +176,19 @@ pub(in crate::style) fn parse_margin_shorthand(
         if s.trim() == "auto" { return Some(LengthOrAuto::Auto); }
         parse_length_q(s, is_quirks).map(LengthOrAuto::Length)
     };
-    let parts = split_box_tokens(val);
-    match parts.as_slice() {
-        [a] => { let v = parse(a)?; Some((v.clone(), v.clone(), v.clone(), v)) }
-        [tb, lr] => {
+    let mut buf = [""; 4];
+    let n = split_box_tokens_arr(val, &mut buf);
+    match &buf[..n.min(4)] {
+        [a] if n == 1 => { let v = parse(a)?; Some((v.clone(), v.clone(), v.clone(), v)) }
+        [tb, lr] if n == 2 => {
             let t = parse(tb)?; let r = parse(lr)?;
             Some((t.clone(), r.clone(), t, r))
         }
-        [t, lr, b] => {
+        [t, lr, b] if n == 3 => {
             let tv = parse(t)?; let rv = parse(lr)?; let bv = parse(b)?;
             Some((tv, rv.clone(), bv, rv))
         }
-        [t, r, b, l] => {
+        [t, r, b, l] if n == 4 => {
             Some((parse(t)?, parse(r)?, parse(b)?, parse(l)?))
         }
         _ => None,
@@ -164,18 +204,19 @@ pub(in crate::style) fn parse_padding_shorthand(val: &str, is_quirks: bool) -> O
         if matches!(&len, Length::Px(v) if *v < 0.0) { return None; }
         Some(len)
     };
-    let parts = split_box_tokens(val);
-    match parts.as_slice() {
-        [a] => { let v = parse(a)?; Some((v.clone(), v.clone(), v.clone(), v)) }
-        [tb, lr] => {
+    let mut buf = [""; 4];
+    let n = split_box_tokens_arr(val, &mut buf);
+    match &buf[..n.min(4)] {
+        [a] if n == 1 => { let v = parse(a)?; Some((v.clone(), v.clone(), v.clone(), v)) }
+        [tb, lr] if n == 2 => {
             let t = parse(tb)?; let r = parse(lr)?;
             Some((t.clone(), r.clone(), t, r))
         }
-        [t, lr, b] => {
+        [t, lr, b] if n == 3 => {
             let tv = parse(t)?; let rv = parse(lr)?; let bv = parse(b)?;
             Some((tv, rv.clone(), bv, rv))
         }
-        [t, r, b, l] => {
+        [t, r, b, l] if n == 4 => {
             Some((parse(t)?, parse(r)?, parse(b)?, parse(l)?))
         }
         _ => None,
@@ -845,8 +886,61 @@ pub(in crate::style) fn apply_border_side_shorthand(
 /// 3 → (T, R=L, B)
 /// 4 → (T, R, B, L)
 pub(in crate::style) fn expand_border_4(val: &str) -> [&str; 4] {
-    let parts: Vec<&str> = split_top_level_ws(val);
-    match parts.len() {
+    // Stack-scan of the first ≤4 top-level whitespace tokens — same grammar
+    // as `split_top_level_ws` (quotes + `()`/`[]` depth), but without the
+    // per-call Vec. ≥4 tokens resolve identically, so the scan can stop
+    // early once the fourth token is found.
+    let mut parts: [&str; 4] = [""; 4];
+    let mut n = 0usize;
+    let mut start: Option<usize> = None;
+    let mut depth = 0i32;
+    let mut quote: Option<char> = None;
+    for (i, c) in val.char_indices() {
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '"' | '\'' => {
+                quote = Some(c);
+                start.get_or_insert(i);
+            }
+            '(' | '[' => {
+                depth += 1;
+                start.get_or_insert(i);
+            }
+            ')' | ']' => {
+                depth -= 1;
+                start.get_or_insert(i);
+            }
+            c if c.is_whitespace() && depth == 0 => {
+                if let Some(st) = start.take() {
+                    if n < 4 {
+                        parts[n] = &val[st..i];
+                        n += 1;
+                    } else {
+                        // 5th+ token: result identical to 4-token case; stop.
+                        n = 4;
+                        break;
+                    }
+                }
+            }
+            _ => {
+                start.get_or_insert(i);
+            }
+        }
+    }
+    if let Some(st) = start {
+        if n < 4 {
+            parts[n] = &val[st..];
+            n += 1;
+        } else {
+            n = 4;
+        }
+    }
+    match n {
         // Пустое (или состоящее из одних пробелов) значение — невалидное
         // объявление вида `border-radius: ;`. React-приложения пишут такие
         // пустышки в inline-стиль пачками (`style="height: ; color: ;"`) для
@@ -858,13 +952,7 @@ pub(in crate::style) fn expand_border_4(val: &str) -> [&str; 4] {
         1 => [parts[0], parts[0], parts[0], parts[0]],
         2 => [parts[0], parts[1], parts[0], parts[1]],
         3 => [parts[0], parts[1], parts[2], parts[1]],
-        _ => {
-            let t = parts[0];
-            let r = parts.get(1).copied().unwrap_or(t);
-            let b = parts.get(2).copied().unwrap_or(t);
-            let l = parts.get(3).copied().unwrap_or(r);
-            [t, r, b, l]
-        }
+        _ => [parts[0], parts[1], parts[2], parts[3]],
     }
 }
 
