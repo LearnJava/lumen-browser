@@ -377,6 +377,13 @@ impl Lumen {
         {
             return false;
         }
+        self.implicit_submit_enter_focused()
+    }
+
+    /// The submission half of [`Self::implicit_submit_on_enter`], split out so
+    /// the injected-key path (`inject_key_events`, WebDriver `send_keys`)
+    /// reaches it too — it has no `KeyEvent`, only the already-filtered key.
+    pub(super) fn implicit_submit_enter_focused(&mut self) -> bool {
         if let Some((idx, nid)) = self.focused_frame {
             let target = self
                 .frames

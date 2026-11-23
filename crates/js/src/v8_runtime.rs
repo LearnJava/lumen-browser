@@ -508,10 +508,12 @@ impl V8JsRuntime {
                 ctx,
                 store,
                 Arc::clone(&doc),
-                Arc::clone(&self.focused_nid),
-                Arc::clone(&self.hovered_nid),
-                Arc::clone(&self.active_nid),
-                Arc::clone(&self.keyboard_focus),
+                install::InteractiveMirror::new(
+                    Arc::clone(&self.focused_nid),
+                    Arc::clone(&self.hovered_nid),
+                    Arc::clone(&self.active_nid),
+                    Arc::clone(&self.keyboard_focus),
+                ),
             )?;
 
             install::install_node_properties(

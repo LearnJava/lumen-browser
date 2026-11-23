@@ -901,6 +901,13 @@ function _lumen_focus_update(newNid) {
     var oldEl = (oldNid !== -1) ? _lumen_make_element(oldNid) : null;
     var newEl = (newNid !== -1) ? _lumen_make_element(newNid) : null;
     if (oldEl !== null) {
+        // HTML LS §4.10.5.3: a text-like control that received `input` since
+        // it was focused commits with `change` as part of losing focus —
+        // dispatched ahead of `blur`, matching the unfocusing steps.
+        if (_lumen_text_change_pending[oldNid] === true) {
+            delete _lumen_text_change_pending[oldNid];
+            _lumen_dispatch_rich(oldNid, new Event('change', { bubbles: true, cancelable: false, composed: false }));
+        }
         _lumen_dispatch_focus_event(oldNid, 'blur', false, newEl);
         _lumen_dispatch_focus_event(oldNid, 'focusout', true, newEl);
     }
@@ -2595,6 +2602,27 @@ function _lumen_listed_controls(owner_nid) {
     return out;
 }
 
+// HTML LS §4.10.3 named getter backing (`form.text`, `form.elements`-style
+// access on the <form> itself): the listed controls whose `name` or `id`
+// equals `name`. One match → the element; several → a collection (the spec's
+// RadioNodeList case collapses to a plain HTMLCollection here — no interface
+// of its own is defined).
+function _lumen_form_named_control(form_nid, name) {
+    var matches = null;
+    var controls = _lumen_listed_controls(form_nid);
+    for (var i = 0; i < controls.length; i++) {
+        var c = controls[i];
+        var nm = _lumen_u2n(_lumen_get_attr(c, 'name'));
+        var id = _lumen_u2n(_lumen_get_attr(c, 'id'));
+        if ((nm !== null && String(nm) === name) || (id !== null && String(id) === name)) {
+            (matches || (matches = [])).push(c);
+        }
+    }
+    if (matches === null) return null;
+    if (matches.length === 1) return _lumen_make_element(matches[0]);
+    return _lumen_make_nid_collection(function() { return matches; }, HTMLCollection.prototype);
+}
+
 // HTML LS §4.10.3 — `HTMLFormControlsCollection`, the interface `form.elements`
 // is supposed to return. It was a plain `Array` before, which silently lacked
 // `namedItem()` and named access while `Array` methods made it look complete.
@@ -2837,6 +2865,23 @@ function _lumen_select_set_value(select_nid, value) {
     }
     _lumen_select_set_index(select_nid, match);
     if (match === -1) _input_values[select_nid] = '';
+}
+// HTML LS §4.10.7 «selectedness» via keyboard: ArrowUp/ArrowDown on a closed
+// single-selection <select> move the selection and commit it at once —
+// `input` + `change` fire immediately (text fields defer `change` to blur).
+function _lumen_select_key_move(select_nid, dir) {
+    var opts = _lumen_select_options(select_nid);
+    if (opts.length === 0) return;
+    var i = _lumen_select_selected_index(select_nid);
+    for (var guard = 0; guard < opts.length; guard++) {
+        i += dir;
+        if (i < 0 || i >= opts.length) break;
+        if (_lumen_has_attr(opts[i], 'disabled')) continue;
+        _lumen_select_set_index(select_nid, i);
+        _lumen_dispatch_rich(select_nid, new Event('input',  { bubbles: true, cancelable: false, composed: true }));
+        _lumen_dispatch_rich(select_nid, new Event('change', { bubbles: true, cancelable: false, composed: false }));
+        return;
+    }
 }
 
 Object.defineProperty(HTMLSelectElement.prototype, 'options', {
@@ -3688,8 +3733,10 @@ function _lumen_radio_select(nid) {
     _lumen_set_dirty_checked(nid, true);
 }
 function _lumen_fire_input_and_change(nid) {
-    _lumen_dispatch_rich(nid, new Event('input',  { bubbles: true, cancelable: false }));
-    _lumen_dispatch_rich(nid, new Event('change', { bubbles: true, cancelable: false }));
+    // UI Events: `input` is composed (crosses shadow boundaries), `change`
+    // is not — WPT `input-change-event-properties` asserts exactly that.
+    _lumen_dispatch_rich(nid, new Event('input',  { bubbles: true, cancelable: false, composed: true }));
+    _lumen_dispatch_rich(nid, new Event('change', { bubbles: true, cancelable: false, composed: false }));
 }
 // Tags that carry an activation behaviour of their own — the table
 // `_lumen_run_activation_behavior` below dispatches on, kept separate so the
