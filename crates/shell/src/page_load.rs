@@ -2346,9 +2346,13 @@ impl Lumen {
         self.validation_tooltip = None;
         self.color_picker_node = None;
         self.date_picker_node = None;
+        self.datalist_picker_node = None;
         self.date_picker_year = 0;
         self.date_picker_month = 0;
         self.select_dropdown_node = None;
+        // The sentinel named a node of the document being replaced — the new
+        // document never carried the attribute, so only the mirror resets.
+        self.input_picker_sentinel = None;
         // FRAME-6: same reset, frame-scoped overlays — see `frame_text_cursor`
         // above for why the page's own document load invalidates them too.
         self.frame_color_picker = None;

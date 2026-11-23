@@ -486,6 +486,13 @@ impl V8JsRuntime {
                 Arc::clone(&self.focused_nid),
             )?;
 
+            install::install_picker_requests(
+                scope,
+                ctx,
+                store,
+                Arc::clone(&self.pending_picker_requests),
+            )?;
+
             install::install_document_meta(scope, ctx, store, Arc::clone(&doc))?;
 
             install::install_document_fonts(

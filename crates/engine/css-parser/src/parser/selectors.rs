@@ -262,6 +262,12 @@ pub enum PseudoClass {
     /// определяет, что элемент **может быть** popover-ом, но открытое
     /// состояние — runtime-only.
     PopoverOpen,
+    /// `:open` (CSS Selectors L4, HTML LS §4.11.2/§6.12.2) — элемент в
+    /// «открытом» состоянии: `<details open>`, `<dialog open>`, popover в
+    /// showing-состоянии и `<select>` с открытым выпадающим списком.
+    /// Открытость popover/select — runtime-only: sentinel-атрибуты
+    /// `data-lumen-popover-open`/`data-lumen-select-open`.
+    Open,
     /// `:interest-source` (Interest Invokers, WHATWG HTML PR #11006) —
     /// `interestfor`-инвокер, у которого сейчас показан интерес. Runtime-only:
     /// JS-шим ставит `data-lumen-interest-source`.
@@ -803,6 +809,7 @@ pub(crate) fn pc_to_css_str(pc: &PseudoClass) -> String {
         PseudoClass::Fullscreen => ":fullscreen".into(),
         PseudoClass::Modal => ":modal".into(),
         PseudoClass::PopoverOpen => ":popover-open".into(),
+        PseudoClass::Open => ":open".into(),
         PseudoClass::InterestSource => ":interest-source".into(),
         PseudoClass::InterestTarget => ":interest-target".into(),
         PseudoClass::Current => ":current".into(),

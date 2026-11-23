@@ -99,6 +99,7 @@ impl Parser<'_> {
             "fullscreen" => PseudoClass::Fullscreen,
             "modal" => PseudoClass::Modal,
             "popover-open" => PseudoClass::PopoverOpen,
+            "open" => PseudoClass::Open,
             "interest-source" => PseudoClass::InterestSource,
             "interest-target" => PseudoClass::InterestTarget,
             "current" => PseudoClass::Current,

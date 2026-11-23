@@ -218,6 +218,13 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// мутаций сам этого не видит, и флаш движкового потока оставил бы узлам
     /// прежний стиль. Default no-op: движок без трекера и так идёт полным каскадом.
     fn note_shell_attr_writes(&self, _nids: &[u32]) {}
+
+    /// Record a single shell-side attribute write (`data-lumen-*-open`
+    /// sentinels for `:open`) into the page's DOM-touch tracker, so the next
+    /// cascade/restyle sees the node as dirty — same channel
+    /// [`Self::note_shell_attr_writes`] uses for intrinsic `width`/`height`.
+    #[allow(dead_code)]
+    fn note_shell_attr_write(&self, _nid: u32, _attr: &str) {}
     /// BUG-935 S43: shared, lock-free handle to a flag set `true` once the
     /// page has read `getComputedStyle(el, pseudoElt)`/`computedStyleMap()`'s
     /// pseudo-element path — lets the embedder skip
@@ -994,6 +1001,12 @@ pub(crate) trait PersistentJs: Send + Sync {
     #[allow(dead_code)]
     fn take_focus_requests(&self) -> Vec<Option<u32>> { Vec::new() }
 
+    /// Drain UA-picker requests queued by `_lumen_request_picker`
+    /// (`showPicker()` on `<select>`/picker-capable `<input>`). Each entry is
+    /// a node index; the shell opens the matching native picker.
+    #[allow(dead_code)]
+    fn take_picker_requests(&self) -> Vec<u32> { Vec::new() }
+
     /// Close a `<dialog>` as a result of a `<form method="dialog">` submission.
     ///
     /// Calls `dialog.close(return_value)` in the JS runtime so the `close` event
@@ -1257,6 +1270,10 @@ impl PersistentJs for V8PersistentJs {
     fn note_shell_attr_writes(&self, nids: &[u32]) {
         let nodes: Vec<lumen_dom::NodeId> = nids.iter().map(|&n| lumen_dom::NodeId::from_raw(n)).collect();
         self.rt.note_shell_attr_writes(&nodes, &["width", "height"]);
+    }
+    fn note_shell_attr_write(&self, nid: u32, attr: &str) {
+        self.rt
+            .note_shell_attr_writes(&[lumen_dom::NodeId::from_raw(nid)], &[attr]);
     }
     fn stall_handle(&self) -> Option<lumen_core::script_stall::StallHandle> {
         Some(self.rt.stall_handle())
@@ -1735,6 +1752,9 @@ impl PersistentJs for V8PersistentJs {
     }
     fn take_focus_requests(&self) -> Vec<Option<u32>> {
         self.rt.take_focus_requests()
+    }
+    fn take_picker_requests(&self) -> Vec<u32> {
+        self.rt.take_picker_requests()
     }
     fn fire_dialog_close(&self, dialog_nid: u32, return_value: &str) {
         let rv = return_value.replace('\\', r"\\").replace('"', r#"\""#);

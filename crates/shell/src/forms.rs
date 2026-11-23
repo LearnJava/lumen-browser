@@ -72,6 +72,11 @@ pub enum FormClickAction {
     OpenDatePicker(NodeId),
     /// Open a dropdown overlay showing the `<option>` children of the `<select>`.
     OpenSelectDropdown(NodeId),
+    /// Open the datalist suggestion popup for a text-like `<input list=…>`.
+    /// No popup UI exists yet — the shell tracks the open state only so
+    /// `:open`/`data-lumen-input-open` reflect it (WPT
+    /// `input-element-pseudo-open*`).
+    OpenDatalist(NodeId),
     /// Open the OS native file-picker dialog for `<input type="file">`.
     ///
     /// Shell reads `accept` + `multiple` attributes, calls `platform::file_dialog::open_file_dialog`,
@@ -204,6 +209,18 @@ pub fn classify_click(doc: &Document, node: NodeId) -> FormClickAction {
                 InputType::File => FormClickAction::OpenFilePicker(node),
                 InputType::Submit => FormClickAction::SubmitForm(node),
                 InputType::Range => FormClickAction::SlideRange(node),
+                // HTML LS §4.10.5.3.10: text-like inputs with a `list`
+                // attribute open the datalist popup on click.
+                InputType::Text
+                | InputType::Search
+                | InputType::Tel
+                | InputType::Url
+                | InputType::Email
+                | InputType::Password
+                    if n.get_attr("list").is_some_and(|v| !v.is_empty()) =>
+                {
+                    FormClickAction::OpenDatalist(node)
+                }
                 _ => FormClickAction::Nothing,
             }
         }
@@ -251,6 +268,43 @@ pub fn toggle_details_open(doc: &mut Document, id: NodeId) {
             attrs.retain(|a| !a.name.local.eq_ignore_ascii_case("open"));
         } else {
             attrs.push(Attribute { name: QualName::html("open"), value: String::new() });
+        }
+    }
+}
+
+/// Reflect the shell-side `<select>` dropdown state into the DOM as the
+/// `data-lumen-select-open` sentinel `:open` reads (CSS Selectors L4).
+/// Called wherever `select_dropdown_node`/`frame_select_dropdown` changes —
+/// the attribute write rides the same relayout the dropdown itself needs.
+pub fn set_select_open_sentinel(doc: &mut Document, id: NodeId, open: bool) {
+    let node = doc.get_mut(id);
+    if let NodeData::Element { ref mut attrs, .. } = node.data {
+        let has = attrs.iter().any(|a| a.name.local == "data-lumen-select-open");
+        if open && !has {
+            attrs.push(Attribute {
+                name: QualName::html("data-lumen-select-open"),
+                value: String::new(),
+            });
+        } else if !open && has {
+            attrs.retain(|a| a.name.local != "data-lumen-select-open");
+        }
+    }
+}
+
+/// Mirror an input's open UA picker (color/date) into the DOM as the
+/// `data-lumen-input-open` sentinel `:open` reads — same bridge as
+/// [`set_select_open_sentinel`] for `<select>` dropdowns.
+pub fn set_input_picker_sentinel(doc: &mut Document, id: NodeId, open: bool) {
+    let node = doc.get_mut(id);
+    if let NodeData::Element { ref mut attrs, .. } = node.data {
+        let has = attrs.iter().any(|a| a.name.local == "data-lumen-input-open");
+        if open && !has {
+            attrs.push(Attribute {
+                name: QualName::html("data-lumen-input-open"),
+                value: String::new(),
+            });
+        } else if !open && has {
+            attrs.retain(|a| a.name.local != "data-lumen-input-open");
         }
     }
 }

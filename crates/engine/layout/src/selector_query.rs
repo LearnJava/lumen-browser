@@ -2301,6 +2301,16 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         ContentVisibility::Hidden => "hidden",
     }.into());
     m.insert("contain".into(), contain_to_css(style.contain));
+    // CSS Will Change L1 §2.1: computed value is `auto` or the `<ident-list>`;
+    // `apply::paint` stores an empty list for `auto`.
+    m.insert(
+        "will-change".into(),
+        if style.will_change.is_empty() {
+            "auto".to_string()
+        } else {
+            style.will_change.join(", ")
+        },
+    );
     // CSS Conditional 5 §3.1: `normal | [ [ size | inline-size ] || scroll-state ]`, the size
     // axis first.
     let container_type = {

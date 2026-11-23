@@ -587,6 +587,13 @@ class LumenTestharnessExecutor(TestharnessExecutor):
         pointer.pointer_down(0)
         pointer.pointer_up(0)
         await session.input.perform_actions(actions=actions, context=target_context)
+        # `performActions` acks once the actions are queued to the shell, not
+        # once the click has been dispatched through `handle_click_at_*` —
+        # DOM-visible effects of the click (sentinel attrs, `:open`, focus)
+        # land a pump later. Tests that assert right after `await click()`
+        # (e.g. css-pseudo `input-element-pseudo-open*`) read the pre-click
+        # state without this beat.
+        await asyncio.sleep(0.1)
         return None
 
     async def _action_generate_test_report(self, session, context, params):
@@ -646,6 +653,9 @@ class LumenTestharnessExecutor(TestharnessExecutor):
                     step["y"] = round(ey + (step.get("y") or 0))
                     step["origin"] = "viewport"
         await session.input.perform_actions(actions=actions, context=target_context)
+        # Same post-dispatch beat as `_action_click`: the ack precedes the
+        # shell-side handling of the final pointer/key events.
+        await asyncio.sleep(0.1)
         return None
 
     async def _action_send_keys(self, session, context, params):
@@ -665,6 +675,10 @@ class LumenTestharnessExecutor(TestharnessExecutor):
         actions = Actions()
         actions.add_key().send_keys(params.get("keys") or "")
         await session.input.perform_actions(actions=actions, context=target_context)
+        # Typed text reaches the DOM a pump after the actions ack — tests
+        # asserting `input.value`/`:read-only` state right after send_keys
+        # need the beat (same contract as `_action_click`).
+        await asyncio.sleep(0.1)
         return None
 
     async def _focus_element_via_script(self, session, context, selectors):

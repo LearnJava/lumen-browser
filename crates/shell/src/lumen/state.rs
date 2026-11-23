@@ -972,6 +972,10 @@ pub(crate) struct Lumen {
     /// NodeId of the `<input type="date/datetime-local/time/month/week">` whose
     /// calendar picker overlay is open. `None` when no picker is visible.
     pub(crate) date_picker_node: Option<NodeId>,
+    /// NodeId of the text-like `<input list=…>` whose datalist popup is open.
+    /// State only — the popup UI itself is not implemented; the node exists so
+    /// `:open`/`data-lumen-input-open` and click-outside dismissal work.
+    pub(crate) datalist_picker_node: Option<NodeId>,
     /// Calendar year currently displayed in the open date picker (1-based).
     pub(crate) date_picker_year: i32,
     /// Calendar month currently displayed in the open date picker (1-based, 1=January).
@@ -979,6 +983,12 @@ pub(crate) struct Lumen {
     /// NodeId of the `<select>` whose dropdown is currently open.
     /// The dropdown overlay is viewport-locked; clicking an option closes it.
     pub(crate) select_dropdown_node: Option<NodeId>,
+    /// NodeId of the `<input>` whose UA picker (color/date) is currently open,
+    /// mirrored into the DOM as the `data-lumen-input-open` sentinel that
+    /// `:open` reads. Only one page-level picker can be open at a time, so a
+    /// single node suffices — the pickers themselves live in
+    /// `color_picker_node`/`date_picker_node`.
+    pub(crate) input_picker_sentinel: Option<NodeId>,
     /// BUG-683 срез 7: modal `<dialog>` NodeIds seen by the last frame that
     /// could read the document, keyed by that document's `Arc` address (a
     /// navigation/tab switch changes the key, so stale ids never leak into

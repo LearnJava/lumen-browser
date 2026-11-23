@@ -79,9 +79,11 @@ impl Lumen {
         self.validation_tooltip = None;
         self.color_picker_node = None;
         self.date_picker_node = None;
+        self.datalist_picker_node = None;
         self.date_picker_year = 0;
         self.date_picker_month = 0;
-        self.select_dropdown_node = None;
+        self.set_select_dropdown_node(None);
+        self.input_picker_sentinel = None;
         // FRAME-6: same reset, frame-scoped overlays — see `frame_text_cursor` above.
         self.frame_color_picker = None;
         self.frame_date_picker = None;
