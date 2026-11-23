@@ -21,7 +21,7 @@ Branch names: short kebab-case. **Developer sessions (P1–P6) must prefix the b
 ## Commits
 
 - **One logical step = one commit.** Don't batch unrelated changes.
-- **Before commit:** `cargo clippy -p <crate> --all-targets -- -D warnings` + targeted tests of the touched crate ([`commands.md`](commands.md) §Gate discipline).
+- **Before commit:** the gate row that matches the diff ([`commands.md`](commands.md) §Gate discipline) — for one crate without a public-API change that is `cargo clippy -p <crate> --all-targets -- -D warnings` + `cargo test -p <crate>`; a public-API change or several crates add `scripts/scoped-test.sh`.
 - **Commit message in Russian.** Short subject (under 80 chars), blank line, body explains *why* (not *what* — that's in the diff).
 - **Trailer always at the end**, naming the model that actually authored the commit — not a pinned
   string. Four different values were in circulation by 2026-09-03 (this file said `Opus 4.7 (1M
@@ -223,7 +223,7 @@ Manual fallback is fine when the skill is unavailable, but then read it as the s
 The list is the *invariant*, not the procedure — the skill is what achieves it. Each line is here
 because skipping it has cost the project something measurable:
 
-- **The gate ran.** Workspace clippy + `scripts/scoped-test.sh`, once, synchronously.
+- **The gate ran** — the row of the gate matrix that matches the diff ([commands.md](commands.md) §Gate discipline), once, synchronously.
 - **Docs moved with the code** — [`doc-sync.md`](doc-sync.md) matrix; at minimum the `STATUS-PN.md`
   pointer line of the finished task is deleted (history lives in `git log`).
 - **The branch is merged `--no-ff` and pushed.** Never by committing on `main` directly — that is

@@ -125,7 +125,20 @@ tail -5 .tmp/clippy.log
 grep -E "^error" .tmp/clippy.log      # re-filter for free
 ```
 
-**Gate discipline — when to run what.** During iteration: `cargo check -p <crate>` only. Right before the closing commit (a WIP commit to the task branch needs `cargo check` only): one `cargo clippy -p <crate> --all-targets -- -D warnings` + targeted tests (`cargo test -p <crate> -- <module>`). Full gates — workspace clippy + `scripts/scoped-test.sh` — run exactly **once**, inside `/lumen-task-finish`; don't run them manually before or after it. Run gates **synchronously in the foreground** (Bash `timeout: 600000`), never as background tasks: background output files buffer through pipes, look empty for the whole run, and provoke minutes of polling plus a duplicate run of the same command.
+**Gate discipline — when to run what.** During iteration: `cargo check -p <crate>` only. A WIP commit (task unfinished, pushed to the task branch for a handoff) needs `cargo check -p <crate>` and, if useful, `cargo test -p <crate> -- <module>`. Right before the closing commit, **once**, take the row that matches the diff — a heavier row includes the lighter ones:
+
+| The diff | Gate before the closing commit |
+|---|---|
+| No crate under `crates/` — docs, `scripts/`, config | nothing from cargo |
+| One crate, no public-API change (function bodies, private items, constants, tests) | `cargo clippy -p <crate> --all-targets -- -D warnings` + `cargo test -p <crate>` — the whole crate, not a `-- <module>` filter |
+| A public-API change (`pub` items, signatures, types, a crate's features or dependencies) or two or more crates | clippy of every touched crate + `scripts/scoped-test.sh` (touched crates and their reverse dependencies) |
+| Workspace level — `[workspace.lints]`, toolchain, `workspace-hack`, a mass version bump | `cargo clippy --workspace --all-targets -- -D warnings` + `scripts/scoped-test.sh` |
+
+A public-API change is read off the diff: added or removed lines that start with `pub ` outside test modules, or a changed `Cargo.toml`. The rows differ because the tools answer different questions. Workspace clippy catches a cross-crate build break, so it has nothing to find when no `pub` surface moved. `scripts/scoped-test.sh` compiles the test binaries of every crate above the touched one — for `lumen-network` that is `lumen-driver`, `lumen-shell` and the rest, tens of minutes — so it is paid for when dependents can be affected; their unit tests also run in CI on `main` after the push ([git-workflow.md](git-workflow.md) §The local gate is NOT replaced by CI).
+
+On top of the row: `python graphic_tests/dump_golden.py` when the diff can alter the display list or the layout dump (render-path crates — `lumen-layout`, `lumen-paint`, `lumen-css-parser`, `lumen-html-parser`, `lumen-dom`, the shell's render code); the full `python graphic_tests/run.py --continue-on-fail` with regenerated goldens **in the same commit** when it can move pixels ([graphic-tests.md](graphic-tests.md)). Network, JS, tooling, Python and docs run neither.
+
+Whatever the row, run gates **synchronously in the foreground** (Bash `timeout: 600000`), never as background tasks: background output files buffer through pipes, look empty for the whole run, and provoke minutes of polling plus a duplicate run of the same command. `/lumen-task-finish` applies this matrix in its steps 1–2 — don't run its rows manually before or after it.
 
 **Long *iteration* runs are the opposite case — background them.** A gate blocks: you cannot proceed without its verdict, so you wait for it in the foreground. A long build/test you don't need the answer to *right now* (a baseline build, a `--no-run` test build, a full graphic pipeline) should go to the background with the Bash tool's `run_in_background: true`, so the harness notifies you on exit and you keep working meanwhile.
 
@@ -134,7 +147,7 @@ What this replaces: `cmd & ... sleep 540; check-log` — the anti-pattern that a
 - Never combine the two mechanisms: `cmd &` **plus** `run_in_background` silently kills the process.
 - Don't poll a background job with `sleep`. Wait for the completion notification; if you must peek, `Read` the output file once — but note it buffers and usually looks empty until the command exits.
 - Two exceptions that must stay in the foreground: the final gates (above) and the **full graphic pipeline** — gdigrab captures the desktop, so a backgrounded run has no focused window and TEST-00 fails with "magenta marker not found", cascading to every test (verified 2026-07-27).
-- Don't hand-run the expensive crate tests before the gate: `scripts/scoped-test.sh` runs them again. A manual `cargo test -p lumen-shell` cost 17 minutes that the gate then repeated. Targeted tests (`-- <module>`) on the crate you touched are fine.
+- Don't hand-run the expensive crate tests before a row with `scripts/scoped-test.sh`: it runs them again. A manual `cargo test -p lumen-shell` cost 17 minutes that the gate then repeated. In the single-crate row the crate's own tests are the gate — run them once, at the closing commit. Targeted tests (`-- <module>`) on the crate you touched are fine at any time.
 
 **Docs-only changes don't pay for a worktree.** A full `git worktree add` here copies the whole code tree — 126 983 files, 42 minutes on Windows (measured 2026-11-02); a plan, a `STATUS-*` pointer or a `ROADMAP.md` row needs only `docs/`, `scripts/` and the root files. Recipe — [`git-workflow.md`](git-workflow.md) §Worktree isolation, "Docs-only changes".
 

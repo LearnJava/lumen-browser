@@ -1561,3 +1561,36 @@ subresource'ом. Drift-guard `scripts/check_fingerprint_literals.py`
 (CI-runnable) — чист после правки driver/context.rs. Тесты:
 `cargo test -p lumen-network --lib http` 46/46 (4 новых манифестных),
 `--test all http_client_fingerprint_profile` 32/32, driver context 8/8.
+
+## 2026-11-23 — okko.tv: один сайт, Lumen против Chrome — Windows 10, dev-release, ветка `tls-parity-ja4` (main `8b05b02681` + BUG-1836), маршрут home-direct
+
+**Маршрут:** напрямую, без прокси — Lumen `LUMEN_NO_SYSTEM_PROXY=1`, Chrome `--no-proxy-server` (системный прокси Windows включён, `http=127.0.0.1:12334`, без этого он забирает трафик обоих). Холодный профиль и свежий процесс на прогон, прогоны чередуются (L, C, L, C, L, C), блокировщик выключен. Инструмент — `scripts/perf/site_ab.py`, результаты — [runs/2026-11-23-okko-site-ab.json](runs/2026-11-23-okko-site-ab.json). Сайт в корпусе отсутствовал — первый прогон okko.tv.
+
+| | Lumen до BUG-1836 (1 прогон) | Lumen после (медиана 3) | Chrome 157.0.8103.79 (медиана 3) |
+|---|---|---|---|
+| Первый документ | js-challenge, `200`, 1813 Б | `302` → приложение | `307` → приложение |
+| `DOMContentLoaded` | 805 мс | 828 мс | 731 мс |
+| Первый кадр | 12157 мс | 2573 мс (2069 / 2573 / 4695) | 1352 мс (1184 / 1352 / 1384) |
+| `load` | 8685 мс | 7868 мс (6260 / 7868 / 9981) | 2787 мс (2471 / 2787 / 2826) |
+| Сумма longtask главного потока | 20.8 с | 24.5 с | 3.3 с |
+| CPU дерева процессов за прогон | — | 90–120 с | 21 с |
+| Пиковая память | — | 1718–1756 МБ | 1089 МБ RSS |
+
+Время кадров и `load` — от начала документа приложения (Navigation Timing); для строки «до» challenge перед ним шёл ещё 11.8 с. Опросный сигнал `t_content` скрипта для Lumen завышен (занятая нить движка не отвечает на `eval` до 8 с) — в таблице его нет.
+
+**Сравнение с прошлым прогоном:** сайт не измерялся.
+
+**Находки:**
+
+- **Антибот ветвит по TLS-отпечатку.** Матрица клиентов напрямую, без cookie: TLS-профиль актуального Chrome → `302` без challenge (и по HTTP/1.1 тоже), TLS-профиль Chrome 131 → js-challenge, обычный curl TLS → `403`.
+- **Дельта ClientHello → [BUG-1836](../../bugs/BUG-1836-FIXED.md) (FIXED).** В `CHROME_157.tls` шифры `c009`,`c013` вместо `c013`,`c014`, в `sigalgs` нет ML-DSA. После правки шифры и `signature_algorithms` равны Chrome (peet.ws, навигация документа: JA4 `t13d1518h2_8daaf6152771_…` против `t13d1517h2_8daaf6152771_…`), сайт отдаёт приложение сразу. Итог: первый кадр с 12.2 с до 2.6 с, `load` с 8.7 с (плюс 10 с challenge) до 7.9 с.
+- **Честный токен `Lumen` challenge не вызывает:** `chrome_lumen` и `chrome_unbranded` получают приложение одинаково (`--dump-source`: 437 622 и 437 467 Б).
+- **Остаток TLS:** расширение `4832` (`server_padding`) — CfT 157.0.8103.78 шлёт, стабильный Chrome 157.0.8103.79 нет; okko.tv принимает оба. Какой вариант у большинства — не проверено.
+- **Главное отставание после снятия challenge — главный поток → [BUG-1837](../../bugs/BUG-1837-OPEN.md).** Нить JS: 46.3% тактов ждёт другой поток, 44.4% — нативный код, чистый JS 0.6%. Принудительные пересчёты из JS: 52 вызова на 9692 мс, из них 6 полных (5130 мс, максимум 1269 мс) — пять по причине «stylesheet revision changed». Горячее: `RuleIndex::candidates_into` 1786 мс, SipHash 1065 мс, `SplitWhitespace` 920 мс, `compute_style_shareable` 562 мс.
+- **Видео в обработчике кадра → [BUG-1838](../../bugs/BUG-1838-OPEN.md).** Кадры 9818 / 6874 / 2645 мс (`anim` 9400 / 6790 / 2641 мс) сразу после `video: загружен … (1920×1080, 102869мс)`; `lumen-render` 30–34 CPU-с за прогон.
+- **Наблюдения, не разложенные:** 8 безымянных потоков по 3.5–4.4 CPU-с (около трети CPU процесса) — адреса старта все указывают на общий вход `std`, не опознаны; в Navigation Timing Lumen `encodedBodySize == decodedBodySize` (437 КБ), сервер же отдаёт `content-encoding: gzip`, Chrome видит 116 КБ — сжат ли трафик Lumen реально, не проверено.
+- **Консоль:** в каждом прогоне Lumen `v8: document_pip::install_document_pip_api_v8 failed: Cannot assign to read only property 'documentPictureInPicture'` и `[JS warn] PerformanceObserver: unsupported entryType first-input`; у обоих браузеров `visor.sberbank.ru` не проходит по сертификату (Lumen `UnknownIssuer`, Chrome `ERR_CERT_AUTHORITY_INVALID`).
+- **Гейт строки «один крейт»** (полный `cargo test -p lumen-network`): два устаревших ожидания — `Host` без порта и `Referer`-origin без слэша, красные на `main` с `b141ffaa36` (BUG-1835), — актуализированы; после этого 2666 + 69 + 3 теста зелёные. `python graphic_tests/dump_golden.py` (`dev-release`): 2 несовпадения из 12 — `samples/page.html` и `samples/test-06-layout.html`, `--dump-display-list`, — те же на бинаре до правки; к BUG-1836 отношения не имеют, не локализовано.
+- **Инструменты:** `node --prof-process` на логе V8 относит 99.4% тактов к «Shared libraries» без имён; доли ожидания и работы дают `shared-library`-строки лога, имена — `scripts/native_resolve.py`. Build-скрипт `boring-sys` (bindgen) в окружении без `LIBCLANG_PATH` падает с `Unable to find libclang` — собирать с `LIBCLANG_PATH` (в репозитории подходит `libclang.dll` из `v8-150.1.0/third_party/rust-toolchain/bin`).
+
+**Заведённые баги:** BUG-1836 (FIXED), BUG-1837, BUG-1838.

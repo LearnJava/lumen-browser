@@ -1,0 +1,2267 @@
+{
+ "meta": {
+  "url": "https://okko.tv/",
+  "date": "2026-11-23 19:13:14",
+  "commit": "a80a13fa71",
+  "args": {
+   "url": "https://okko.tv/",
+   "runs": 3,
+   "arms": "lumen,chrome",
+   "settle": 12.0,
+   "total": 60.0,
+   "probe_ms": 250,
+   "content_imgs": 10,
+   "challenge_selector": "js-challenge-loader,#id_spinner",
+   "exe": "C:\\kostja\\Rust_Projects\\Lumen_browser\\target\\dev-release\\lumen.exe",
+   "env": {},
+   "chrome_arg": [],
+   "out": ".tmp/site-ab/final1"
+  },
+  "route": "напрямую, без прокси (Lumen: LUMEN_NO_SYSTEM_PROXY=1, Chrome: --no-proxy-server)",
+  "note": "okko.tv, Lumen vs Chrome, 3 interleaved runs each; direct, no proxy; trimmed: raw samples/net/console arrays removed (see scripts/perf/site_ab.py output for them)"
+ },
+ "runs": [
+  {
+   "arm": "lumen",
+   "run": 1,
+   "spawn_s": 0.54,
+   "nav_ack_s": 1.544,
+   "poll": {
+    "poll_errors": 4,
+    "poll_last_err": "RuntimeError: tools/call: [{'text': 'Eval error: JS context not available: page is still loading', 'type': 'text'}]"
+   },
+   "final": {
+    "nav": {
+     "fetchStart": 2,
+     "domainLookupStart": 2,
+     "domainLookupEnd": 2,
+     "connectStart": 2,
+     "secureConnectionStart": 0,
+     "connectEnd": 2,
+     "requestStart": 4,
+     "responseStart": 494.2,
+     "responseEnd": 537.2,
+     "domInteractive": 819.3,
+     "domContentLoadedEventEnd": 827.5,
+     "domComplete": 6259.2,
+     "loadEventEnd": 6259.7,
+     "transferSize": 437001,
+     "encodedBodySize": 436701,
+     "decodedBodySize": 436701,
+     "redirectCount": 1,
+     "type": "navigate"
+    },
+    "paint": {
+     "first-paint": 2573,
+     "first-contentful-paint": 2573
+    },
+    "res": {
+     "n": 145,
+     "bytes": 103151424,
+     "hosts": {
+      "okko.tv": 28,
+      "stream.datago.ru": 4,
+      "top-fwz1.mail.ru": 6,
+      "vk.com": 5,
+      "static.okko.tv": 27,
+      "mc.yandex.ru": 7,
+      "api.mindbox.ru": 5,
+      "kraken-cls.rambler.ru": 1,
+      "stat2.okko.tv": 21,
+      "stat.okko.tv": 6,
+      "web-static.mindbox.ru": 1,
+      "px.segmel.com": 5,
+      "okko-msk-cdp14.playfamily.ru": 1,
+      "d0c8daea-a5e0-4205-9e49-7f6b2f7d455f.selcdn.net": 3,
+      "ext.clickstream.sbrf.ru": 1,
+      "privacy-cs.mail.ru": 3,
+      "www.googletagmanager.com": 2,
+      "cstatic-ru-cv.weborama-tech.ru": 1,
+      "abt.s3.yandex.net": 1,
+      "st.top100.ru": 2,
+      "ad.adriver.ru": 1,
+      "uaas.yandex.ru": 1,
+      "kraken.rambler.ru": 3,
+      "auth.okko.tv": 1,
+      "id.sber.ru": 1,
+      "bs.serving-sys.ru": 2,
+      "counter.rambler.ru": 1,
+      "wcm-ru.frontend.weborama.fr": 2,
+      "wcm.weborama-tech.ru": 1,
+      "www.google.com": 1,
+      "okko-msk-cdp1.playfamily.ru": 1
+     },
+     "slow": [
+      [
+       6254,
+       7468,
+       477,
+       "https://px.segmel.com/M-MRRZLRW2/data?id=M-MRRZLRW2"
+      ],
+      [
+       6266,
+       7455,
+       519594,
+       "https://api.mindbox.ru/scripts/modules/webpush.js?version=1.0.850"
+      ],
+      [
+       5981,
+       6589,
+       67500313,
+       "https://okko-msk-cdp14.playfamily.ru/vod/cid/7eff0b0ccbb4-1795636748-UMYSxKazcPcPFoCadA4hpQ/storage123/trl/09093151-edd2-4f85-a460-fcbde47f9"
+      ],
+      [
+       22791,
+       3380,
+       22782003,
+       "https://okko-msk-cdp1.playfamily.ru/vod/cid/7eff0b0ccbb4-1795628050-WZ6pPiA0qTQdyQ-8BHWzxw/storage101/trl/886d4c89-61ad-4fab-bf4d-2b68499444"
+      ],
+      [
+       18231,
+       2692,
+       300,
+       "https://stat2.okko.tv/telemetry/v1/logs/web"
+      ],
+      [
+       20979,
+       2485,
+       496287,
+       "https://www.googletagmanager.com/gtag/js?id=AW-16811046867"
+      ],
+      [
+       3034,
+       2313,
+       421,
+       "https://kraken-cls.rambler.ru/id"
+      ],
+      [
+       18649,
+       2274,
+       300,
+       "https://stat2.okko.tv/telemetry/v1/timings/web"
+      ],
+      [
+       16380,
+       2270,
+       423,
+       "https://api.mindbox.ru/v3/js/operations/sync?version=1.0.850&transport=XmlHttpRequest&operation=popmechanic-check-segment&endpointId=Okko.We"
+      ],
+      [
+       18745,
+       2233,
+       311,
+       "https://vk.com/rtrg?p=VK-RTRG-1152375-b02EC&e=1&c=view_content&v=0"
+      ],
+      [
+       18768,
+       2155,
+       85574,
+       "https://privacy-cs.mail.ru/static/sync-loader.js"
+      ],
+      [
+       16377,
+       1844,
+       300,
+       "https://ext.clickstream.sbrf.ru/metrics/ecosystem/okko"
+      ],
+      [
+       16382,
+       1840,
+       300,
+       "https://stat.okko.tv/kollector/v2/player"
+      ],
+      [
+       16370,
+       1833,
+       537537,
+       "https://d0c8daea-a5e0-4205-9e49-7f6b2f7d455f.selcdn.net/webchat/chatBot.js"
+      ],
+      [
+       4040,
+       1591,
+       300,
+       "https://stat2.okko.tv/telemetry/v1/logs/web"
+      ],
+      [
+       23445,
+       1429,
+       1071,
+       "https://mc.yandex.ru/watch/44916361?wmode=7&page-url=https%3A%2F%2Fokko.tv%2F&charset=utf-8&site-info=%7B%22app_ver%22%3A%2226.111.75452%22%"
+      ],
+      [
+       23446,
+       1428,
+       1015,
+       "https://mc.yandex.ru/watch/88649920?wmode=7&page-url=https%3A%2F%2Fokko.tv%2F&charset=utf-8&uah=chu%0A%22Not-A.Brand%22%3Bv%3D%2299%22%2C%22"
+      ],
+      [
+       23061,
+       1409,
+       380,
+       "https://stream.datago.ru/collector/com.snowplowanalytics.snowplow/tp2"
+      ],
+      [
+       23484,
+       1391,
+       300,
+       "https://stat2.okko.tv/telemetry/v1/logs/web"
+      ],
+      [
+       23485,
+       1390,
+       300,
+       "https://stat2.okko.tv/telemetry/v1/logs/web"
+      ],
+      [
+       13740,
+       1360,
+       300,
+       "https://stat2.okko.tv/telemetry/v1/logs/web"
+      ],
+      [
+       23134,
+       1339,
+       473,
+       "https://uaas.yandex.ru/v1/exps/?client_id=metrika.44916361&url=https%3A%2F%2Fokko.tv%2F&i=&duid=1795450420285865417&client_features=%7B%7D"
+      ],
+      [
+       15117,
+       1242,
+       300,
+       "https://stat2.okko.tv/telemetry/v1/timings/web"
+      ],
+      [
+       23327,
+       1186,
+       343,
+       "https://kraken.rambler.ru/cnt/v2/"
+      ],
+      [
+       14038,
+       1179,
+       300,
+       "https://stat2.okko.tv/telemetry/v1/logs/web"
+      ]
+     ]
+    }
+   },
+   "async": {
+    "lt": [
+     [
+      1019,
+      113
+     ],
+     [
+      1215,
+      388
+     ],
+     [
+      1604,
+      500
+     ],
+     [
+      3108,
+      1609
+     ],
+     [
+      4718,
+      626
+     ],
+     [
+      5347,
+      360
+     ],
+     [
+      5722,
+      266
+     ],
+     [
+      5989,
+      269
+     ],
+     [
+      6260,
+      65
+     ],
+     [
+      6336,
+      182
+     ],
+     [
+      6519,
+      77
+     ],
+     [
+      6597,
+      108
+     ],
+     [
+      6707,
+      1041
+     ],
+     [
+      7756,
+      58
+     ],
+     [
+      12874,
+      59
+     ],
+     [
+      12975,
+      743
+     ],
+     [
+      13721,
+      474
+     ],
+     [
+      14207,
+      893
+     ],
+     [
+      15100,
+      277
+     ],
+     [
+      15378,
+      142
+     ],
+     [
+      15661,
+      345
+     ],
+     [
+      16040,
+      319
+     ],
+     [
+      16444,
+      1517
+     ],
+     [
+      18175,
+      2747
+     ],
+     [
+      20926,
+      707
+     ],
+     [
+      21634,
+      1829
+     ],
+     [
+      23464,
+      1409
+     ],
+     [
+      24874,
+      110
+     ],
+     [
+      25116,
+      73
+     ],
+     [
+      25190,
+      93
+     ],
+     [
+      25363,
+      176
+     ],
+     [
+      25566,
+      1120
+     ],
+     [
+      26793,
+      805
+     ],
+     [
+      27598,
+      110
+     ],
+     [
+      27744,
+      765
+     ],
+     [
+      28514,
+      1018
+     ],
+     [
+      29541,
+      75
+     ],
+     [
+      29702,
+      231
+     ],
+     [
+      30007,
+      780
+     ],
+     [
+      30793,
+      1961
+     ],
+     [
+      32755,
+      108
+     ]
+    ],
+    "lcp": []
+   },
+   "cur_mb": 1756.2,
+   "peak_mb": 1756.2,
+   "cpu_s": 99.54,
+   "os_samples": 43,
+   "os_threads_max": 78,
+   "os_handles_max": 850,
+   "os_gdi_max": 13,
+   "os_user_max": 37,
+   "os_private_mb_max": 1699.7,
+   "os_ws_mb_max": 1757.9,
+   "os_tcp_max": 45,
+   "os_children_max": 0,
+   "os_threads_end": 72,
+   "os_handles_end": 816,
+   "os_private_mb_end": 1699.7,
+   "os_pagefile_peak_mb": 1868.7,
+   "os_cpu_user_s": 96.47,
+   "os_cpu_kernel_s": 4.39,
+   "os_page_faults": 2297802,
+   "os_io_read_mb": 188.72,
+   "os_io_write_mb": 4.69,
+   "os_io_other_mb": 97.59,
+   "os_io_read_ops": 3429,
+   "os_io_write_ops": 3608,
+   "os_io_other_ops": 31694,
+   "os_cpu_pct_max": 485.3,
+   "os_cpu_pct_avg": 225.9,
+   "os_cpu_pct_p50": 244.6,
+   "os_busy_s": 42.5,
+   "os_tcp_states_at_max": {
+    "ESTABLISHED": 38,
+    "SYN_SENT": 1,
+    "CLOSE_WAIT": 5,
+    "LISTEN": 1
+   },
+   "sys_cpu_pct_avg": 36.9,
+   "sys_cpu_pct_max": 66.9,
+   "sys_free_mb_min": 3333,
+   "proc": {
+    "proc_stats_error": "'pmmap_grouped' object has no attribute 'addr'"
+   },
+   "stderr": {
+    "net_reqs": 196,
+    "net_fail": 4,
+    "stderr_lines": 634,
+    "stderr_errors": [
+     "v8: document_pip::install_document_pip_api_v8 failed: JS runtime error: Cannot assign to read only property 'documentPictureInPicture' of object '#<Window>'",
+     "[sw https://okko.tvhttps://okko.tv/mindbox/] v8 script eval error: Runtime(\"Notification is not defined\")",
+     "[JS error] TypeError: ServiceWorker script evaluation failed.",
+     "Не декодируется https://wcm-ru.frontend.weborama.fr/fcgi-bin/dispatch.fcgi?a.A=co&a.si=8727&a.cp=29&a.ct=d: формат изображения не распознан по сигнатуре",
+     "повтор после сорванного TLS-рукопожатия: https://4--1f1e758cce4e6c9f8d1e40b4a180d267--s.stbid.ru/ (network error: TLS handshake: Попытка установить соединение была безуспешной, т.к. от другого компьютера за требуемое время не получен нужный",
+     "[JS warn] PerformanceObserver: unsupported entryType first-input"
+    ]
+   },
+   "wall_s": 45.9,
+   "m": {
+    "challenge": false,
+    "t_load": 15.474,
+    "t_ch_gone": null,
+    "t_app_load": 15.474,
+    "t_content": 15.474,
+    "doc_dcl_ms": 827.5,
+    "doc_load_ms": 6259.7,
+    "doc_resp_ms": 537.2,
+    "fp_ms": 2573,
+    "lcp_ms": null,
+    "longtask_ms": 24548,
+    "longtask_n": 41,
+    "res_n": 145,
+    "obs_err": null
+   }
+  },
+  {
+   "arm": "chrome",
+   "run": 1,
+   "spawn_s": 1.43,
+   "browser": "Chrome/157.0.8103.79",
+   "nav_ack_s": 0.371,
+   "poll": {
+    "poll_errors": 0,
+    "poll_last_err": null
+   },
+   "final": {
+    "nav": {
+     "fetchStart": 299.7,
+     "domainLookupStart": 299.7,
+     "domainLookupEnd": 299.7,
+     "connectStart": 299.7,
+     "secureConnectionStart": 299.7,
+     "connectEnd": 299.7,
+     "requestStart": 301.5,
+     "responseStart": 356.6,
+     "responseEnd": 412.3,
+     "domInteractive": 947.9,
+     "domContentLoadedEventEnd": 948.1,
+     "domComplete": 2461.2,
+     "loadEventEnd": 2471.2,
+     "transferSize": 115763,
+     "encodedBodySize": 115463,
+     "decodedBodySize": 437612,
+     "redirectCount": 0,
+     "type": "navigate"
+    },
+    "paint": {
+     "first-paint": 1184,
+     "first-contentful-paint": 1184
+    },
+    "res": {
+     "n": 162,
+     "bytes": 3553679,
+     "hosts": {
+      "api.mindbox.ru": 4,
+      "okko.tv": 24,
+      "stream.datago.ru": 3,
+      "mc.yandex.ru": 9,
+      "vk.com": 4,
+      "top-fwz1.mail.ru": 4,
+      "static.okko.tv": 44,
+      "web-static.mindbox.ru": 1,
+      "kraken-cls.rambler.ru": 1,
+      "visor.sberbank.ru": 1,
+      "player-static.okko.tv": 1,
+      "px.segmel.com": 2,
+      "4--1f1e758e730860278ad0c6675feeb947--s.stbid.ru": 1,
+      "stat2.okko.tv": 14,
+      "stat.okko.tv": 5,
+      "d0c8daea-a5e0-4205-9e49-7f6b2f7d455f.selcdn.net": 3,
+      "privacy-cs.mail.ru": 3,
+      "www.googletagmanager.com": 2,
+      "cstatic-ru-cv.weborama-tech.ru": 1,
+      "abt.s3.yandex.net": 1,
+      "st.top100.ru": 2,
+      "ad.adriver.ru": 1,
+      "wcm-ru.frontend.weborama.fr": 2,
+      "bs.serving-sys.ru": 2,
+      "wcm.weborama-tech.ru": 2,
+      "auth.okko.tv": 1,
+      "www.google.com": 1,
+      "uaas.yandex.ru": 1,
+      "kraken.rambler.ru": 4,
+      "id.sber.ru": 6,
+      "cdn-s01.rambler.ru": 1,
+      "ext.clickstream.sbrf.ru": 5,
+      "kraken-mdt.rambler.ru": 6
+     },
+     "slow": [
+      [
+       4541,
+       1303,
+       0,
+       "https://id.sber.ru/sdk/web/assets/SBSansUI-Regular.woff2"
+      ],
+      [
+       2795,
+       1297,
+       0,
+       "https://wcm.weborama-tech.ru/fcgi-bin/dispatch.fcgi?a.A=co&a.si=8727&a.cp=52&a.ct=b&gdpr_cmp_failure=1&a.cid=undefined&da=1795461244&g.ru=&g"
+      ],
+      [
+       2575,
+       1095,
+       22374,
+       "https://privacy-cs.mail.ru/static/sync-loader.js"
+      ],
+      [
+       4707,
+       927,
+       0,
+       "https://ext.clickstream.sbrf.ru/metrics/inner-partners/sber-id"
+      ],
+      [
+       4705,
+       907,
+       0,
+       "https://ext.clickstream.sbrf.ru/metrics/inner-partners/sber-id"
+      ],
+      [
+       4708,
+       907,
+       0,
+       "https://id.sber.ru/CSAFront/oidc/authorizelow?client_id=f843788c-6474-41bb-9d83-ca5b70bf5fec&client_type=PRIVATE&nonce=0cfceed4-c92e-4daf-16"
+      ],
+      [
+       4704,
+       877,
+       0,
+       "https://ext.clickstream.sbrf.ru/metrics/inner-partners/sber-id"
+      ],
+      [
+       4427,
+       681,
+       300,
+       "https://privacy-cs.mail.ru/fp/?id=-IHgb8sNe8LUMxUGPolZa"
+      ],
+      [
+       370,
+       599,
+       0,
+       "https://vk.com/js/api/openapi.js?169"
+      ],
+      [
+       369,
+       537,
+       0,
+       "https://stream.datago.ru/server-side/gtm.js?id=GTM-MRRZLRW"
+      ],
+      [
+       369,
+       500,
+       74926,
+       "https://mc.yandex.ru/metrika/tag.js"
+      ],
+      [
+       370,
+       432,
+       19984,
+       "https://top-fwz1.mail.ru/js/code.js"
+      ],
+      [
+       2298,
+       416,
+       0,
+       "https://4--1f1e758e730860278ad0c6675feeb947--s.stbid.ru/"
+      ],
+      [
+       2662,
+       387,
+       0,
+       "https://wcm-ru.frontend.weborama.fr/fcgi-bin/dispatch.fcgi?a.A=co&a.si=8727&a.cp=29&a.ct=d"
+      ],
+      [
+       2658,
+       357,
+       0,
+       "https://www.googletagmanager.com/gtag/js?id=AW-16811046867"
+      ],
+      [
+       418,
+       315,
+       22856,
+       "https://static.okko.tv/images/v4/dd0e8605-37af-46a9-adca-9eddb8d410b4?width=350&scale=1&quality=80&mediaType=webp"
+      ],
+      [
+       418,
+       315,
+       13524,
+       "https://static.okko.tv/images/v4/c62bf0a4-b649-4805-80c0-374de9b18a5e?width=350&scale=1&quality=80&mediaType=webp"
+      ],
+      [
+       418,
+       315,
+       20690,
+       "https://static.okko.tv/images/v4/b6acfbd4-1bb2-4356-8b7d-e702e345bdf0?width=350&scale=1&quality=80&mediaType=webp"
+      ],
+      [
+       417,
+       313,
+       1414,
+       "https://static.okko.tv/images/v4/4fff9921-44f2-41a5-a7bf-f6c3de0901f7?width=26&scale=1&quality=80&mediaType=webp"
+      ],
+      [
+       417,
+       313,
+       1320,
+       "https://static.okko.tv/images/v4/7593caab-1ee8-4b22-9dd5-9ede467a7fef?width=26&scale=1&quality=80&mediaType=webp"
+      ],
+      [
+       417,
+       313,
+       1278,
+       "https://static.okko.tv/images/v4/d3ef0b50-c602-4bd1-be19-5c7415806610?width=26&scale=1&quality=80&mediaType=webp"
+      ],
+      [
+       418,
+       313,
+       26784,
+       "https://static.okko.tv/images/v4/bea7711a-931c-4e66-876c-e81aedf047d2?width=350&scale=1&quality=80&mediaType=webp"
+      ],
+      [
+       417,
+       300,
+       1236,
+       "https://static.okko.tv/images/v4/0d0d63d3-fa8f-4f3f-9f5b-8d5b2fb72833?width=26&scale=1&quality=80&mediaType=webp"
+      ],
+      [
+       417,
+       299,
+       1388,
+       "https://static.okko.tv/images/v4/df5f19f5-63d1-41dc-8b36-cb9e5c8482d9?width=26&scale=1&quality=80&mediaType=webp"
+      ],
+      [
+       416,
+       298,
+       1216,
+       "https://static.okko.tv/images/v4/2267863a-d327-40b5-8167-8bab1227dd19?width=26&scale=1&quality=80&mediaType=webp"
+      ]
+     ]
+    }
+   },
+   "async": {
+    "lt": [
+     [
+      606,
+      59
+     ],
+     [
+      840,
+      86
+     ],
+     [
+      962,
+      1115
+     ],
+     [
+      2216,
+      72
+     ],
+     [
+      2480,
+      78
+     ],
+     [
+      2594,
+      68
+     ],
+     [
+      2710,
+      65
+     ],
+     [
+      2815,
+      95
+     ],
+     [
+      3071,
+      220
+     ],
+     [
+      3301,
+      781
+     ],
+     [
+      4151,
+      155
+     ],
+     [
+      4752,
+      241
+     ],
+     [
+      5061,
+      129
+     ],
+     [
+      5284,
+      71
+     ]
+    ],
+    "lcp": [
+     [
+      1184,
+      597425,
+      "https://static.okko.tv/images/v4/6f4f2d24-9714-4b0d-90bd-b2f330650f0a?height=577&scale=1&quality=80&mediaType=webp"
+     ]
+    ]
+   },
+   "perf_metrics": {},
+   "proc": {
+    "proc_stats_error": "'pmmap_grouped' object has no attribute 'addr'"
+   },
+   "wall_s": 17.4,
+   "m": {
+    "challenge": false,
+    "t_load": 2.613,
+    "t_ch_gone": null,
+    "t_app_load": 2.613,
+    "t_content": 2.613,
+    "doc_dcl_ms": 948.1,
+    "doc_load_ms": 2471.2,
+    "doc_resp_ms": 412.3,
+    "fp_ms": 1184,
+    "lcp_ms": 1184,
+    "longtask_ms": 3235,
+    "longtask_n": 14,
+    "res_n": 162,
+    "obs_err": null
+   }
+  },
+  {
+   "arm": "lumen",
+   "run": 2,
+   "spawn_s": 0.52,
+   "nav_ack_s": 0.579,
+   "poll": {
+    "poll_errors": 5,
+    "poll_last_err": "RuntimeError: tools/call: [{'text': 'Eval error: JS context not available: page is still loading', 'type': 'text'}]"
+   },
+   "final": {
+    "nav": {
+     "fetchStart": 2,
+     "domainLookupStart": 2,
+     "domainLookupEnd": 2,
+     "connectStart": 2,
+     "secureConnectionStart": 0,
+     "connectEnd": 2,
+     "requestStart": 4,
+     "responseStart": 448.5,
+     "responseEnd": 487.5,
+     "domInteractive": 770.4,
+     "domContentLoadedEventEnd": 776.1,
+     "domComplete": 7867.5,
+     "loadEventEnd": 7868.2,
+     "transferSize": 437030,
+     "encodedBodySize": 436730,
+     "decodedBodySize": 436730,
+     "redirectCount": 1,
+     "type": "navigate"
+    },
+    "paint": {
+     "first-paint": 2069,
+     "first-contentful-paint": 2069
+    },
+    "res": {
+     "n": 108,
+     "bytes": 79426883,
+     "hosts": {
+      "okko.tv": 26,
+      "mc.yandex.ru": 3,
+      "top-fwz1.mail.ru": 5,
+      "vk.com": 5,
+      "stream.datago.ru": 3,
+      "api.mindbox.ru": 4,
+      "static.okko.tv": 24,
+      "web-static.mindbox.ru": 1,
+      "kraken-cls.rambler.ru": 1,
+      "stat2.okko.tv": 11,
+      "4--1f1e758f287065a28d1ed9e99de4f95d--s.stbid.ru": 1,
+      "px.segmel.com": 5,
+      "stat.okko.tv": 5,
+      "okko-msk2-cdp14.playfamily.ru": 1,
+      "d0c8daea-a5e0-4205-9e49-7f6b2f7d455f.selcdn.net": 1,
+      "ext.clickstream.sbrf.ru": 1,
+      "bs.serving-sys.ru": 1,
+      "counter.rambler.ru": 1,
+      "wcm-ru.frontend.weborama.fr": 1,
+      "privacy-cs.mail.ru": 1,
+      "www.googletagmanager.com": 2,
+      "cstatic-ru-cv.weborama-tech.ru": 1,
+      "abt.s3.yandex.net": 1,
+      "st.top100.ru": 1,
+      "ad.adriver.ru": 1,
+      "auth.okko.tv": 1
+     },
+     "slow": [
+      [
+       12101,
+       7345,
+       537537,
+       "https://d0c8daea-a5e0-4205-9e49-7f6b2f7d455f.selcdn.net/webchat/chatBot.js"
+      ],
+      [
+       12100,
+       7334,
+       49297,
+       "https://top-fwz1.mail.ru/js/code.js"
+      ],
+      [
+       12100,
+       7319,
+       58293,
+       "https://vk.com/js/api/openapi.js?169"
+      ],
+      [
+       12100,
+       7304,
+       634183,
+       "https://stream.datago.ru/server-side/gtm.js?id=GTM-MRRZLRW"
+      ],
+      [
+       12107,
+       6647,
+       67500313,
+       "https://okko-msk2-cdp14.playfamily.ru/vod/cid/4bbb105dec27-1795636748-fJc1Aqiip7ENRkA7ATRklg/storage123/trl/09093151-edd2-4f85-a460-fcbde47f"
+      ],
+      [
+       1253,
+       5276,
+       434,
+       "https://api.mindbox.ru/v1.1/customer/track-visit?version=1.0.850&transport=XmlHttpRequest"
+      ],
+      [
+       1267,
+       5241,
+       642344,
+       "https://web-static.mindbox.ru/js/byendpoint/okko.website.js?_=5984834"
+      ],
+      [
+       6932,
+       5095,
+       300,
+       "https://stat.okko.tv/kollector/v2/product"
+      ],
+      [
+       22217,
+       4684,
+       423,
+       "https://api.mindbox.ru/v3/js/operations/sync?version=1.0.850&transport=XmlHttpRequest&operation=popmechanic-check-segment&endpointId=Okko.We"
+      ],
+      [
+       20884,
+       4619,
+       300,
+       "https://stat2.okko.tv/telemetry/v1/timings/web"
+      ],
+      [
+       7825,
+       4202,
+       300,
+       "https://stat.okko.tv/kollector/v2/player"
+      ],
+      [
+       21986,
+       3606,
+       311,
+       "https://vk.com/rtrg?p=VK-RTRG-1152375-b02EC&e=1&c=view_content&v=0"
+      ],
+      [
+       22011,
+       3491,
+       85574,
+       "https://privacy-cs.mail.ru/static/sync-loader.js"
+      ],
+      [
+       22191,
+       3340,
+       3873,
+       "https://top-fwz1.mail.ru/js/dyn-goal-config.js?ids=3239431"
+      ],
+      [
+       22194,
+       3338,
+       5334,
+       "https://okko.tv/assets/styles/sherlock-crm/chatBot.css"
+      ],
+      [
+       8708,
+       3319,
+       342,
+       "https://px.segmel.com/M-MRRZLRW2/collect"
+      ],
+      [
+       8814,
+       3214,
+       300,
+       "https://stat2.okko.tv/telemetry/v1/logs/web"
+      ],
+      [
+       3785,
+       2740,
+       421,
+       "https://kraken-cls.rambler.ru/id"
+      ],
+      [
+       20178,
+       2016,
+       300,
+       "https://stat2.okko.tv/telemetry/v1/logs/web"
+      ],
+      [
+       20179,
+       2016,
+       300,
+       "https://stat2.okko.tv/telemetry/v1/timings/web"
+      ],
+      [
+       4914,
+       1715,
+       300,
+       "https://stat2.okko.tv/telemetry/v1/logs/web"
+      ],
+      [
+       25593,
+       1518,
+       496287,
+       "https://www.googletagmanager.com/gtag/js?id=AW-16811046867"
+      ],
+      [
+       25592,
+       1517,
+       1398,
+       "https://ad.adriver.ru/cgi-bin/erle.cgi?sid=225181&bt=62&loc=https%253A%252F%252Fokko.tv%252F&ph=1&rnd=853654&tail256=unknown"
+      ],
+      [
+       25590,
+       1499,
+       342,
+       "https://px.segmel.com/M-MRRZLRW2/collect"
+      ],
+      [
+       25591,
+       1498,
+       157936,
+       "https://st.top100.ru/top100/top100.js"
+      ]
+     ]
+    }
+   },
+   "async": {
+    "lt": [
+     [
+      1071,
+      96
+     ],
+     [
+      1169,
+      85
+     ],
+     [
+      1269,
+      647
+     ],
+     [
+      3076,
+      2556
+     ],
+     [
+      5634,
+      716
+     ],
+     [
+      6352,
+      586
+     ],
+     [
+      6940,
+      894
+     ],
+     [
+      7874,
+      203
+     ],
+     [
+      8078,
+      620
+     ],
+     [
+      8699,
+      125
+     ],
+     [
+      8826,
+      1082
+     ],
+     [
+      9969,
+      1954
+     ],
+     [
+      12027,
+      82
+     ],
+     [
+      12145,
+      141
+     ],
+     [
+      19014,
+      285
+     ],
+     [
+      19300,
+      54
+     ],
+     [
+      19438,
+      780
+     ],
+     [
+      20227,
+      546
+     ],
+     [
+      20878,
+      1339
+     ],
+     [
+      23466,
+      2032
+     ],
+     [
+      25502,
+      1527
+     ],
+     [
+      27077,
+      3572
+     ],
+     [
+      30657,
+      311
+     ],
+     [
+      31019,
+      145
+     ],
+     [
+      31165,
+      93
+     ]
+    ],
+    "lcp": []
+   },
+   "cur_mb": 1572.1,
+   "peak_mb": 1578.5,
+   "cpu_s": 78.67,
+   "os_samples": 33,
+   "os_threads_max": 73,
+   "os_handles_max": 794,
+   "os_gdi_max": 14,
+   "os_user_max": 35,
+   "os_private_mb_max": 1536.4,
+   "os_ws_mb_max": 1577.0,
+   "os_tcp_max": 42,
+   "os_children_max": 0,
+   "os_threads_end": 69,
+   "os_handles_end": 793,
+   "os_private_mb_end": 1491.6,
+   "os_pagefile_peak_mb": 1543.9,
+   "os_cpu_user_s": 75.38,
+   "os_cpu_kernel_s": 3.17,
+   "os_page_faults": 1651566,
+   "os_io_read_mb": 188.39,
+   "os_io_write_mb": 4.43,
+   "os_io_other_mb": 51.95,
+   "os_io_read_ops": 893,
+   "os_io_write_ops": 3226,
+   "os_io_other_ops": 18815,
+   "os_cpu_pct_max": 345.9,
+   "os_cpu_pct_avg": 231.9,
+   "os_cpu_pct_p50": 269.1,
+   "os_busy_s": 32.5,
+   "os_tcp_states_at_max": {
+    "ESTABLISHED": 38,
+    "CLOSE_WAIT": 2,
+    "LISTEN": 1,
+    "SYN_SENT": 1
+   },
+   "sys_cpu_pct_avg": 38.4,
+   "sys_cpu_pct_max": 63.4,
+   "sys_free_mb_min": 3490,
+   "proc": {
+    "proc_stats_error": "'pmmap_grouped' object has no attribute 'addr'"
+   },
+   "stderr": {
+    "net_reqs": 180,
+    "net_fail": 1,
+    "stderr_lines": 590,
+    "stderr_errors": [
+     "v8: document_pip::install_document_pip_api_v8 failed: JS runtime error: Cannot assign to read only property 'documentPictureInPicture' of object '#<Window>'",
+     "[JS error] SecurityError: Failed to register a ServiceWorker: the script resource request redirects.",
+     "Не декодируется https://wcm-ru.frontend.weborama.fr/fcgi-bin/dispatch.fcgi?a.A=co&a.si=8727&a.cp=29&a.ct=d: формат изображения не распознан по сигнатуре",
+     "[JS warn] PerformanceObserver: unsupported entryType first-input"
+    ]
+   },
+   "wall_s": 35.9,
+   "m": {
+    "challenge": false,
+    "t_load": 8.669,
+    "t_ch_gone": null,
+    "t_app_load": 8.669,
+    "t_content": 8.669,
+    "doc_dcl_ms": 776.1,
+    "doc_load_ms": 7868.2,
+    "doc_resp_ms": 487.5,
+    "fp_ms": 2069,
+    "lcp_ms": null,
+    "longtask_ms": 20471,
+    "longtask_n": 25,
+    "res_n": 108,
+    "obs_err": null
+   }
+  },
+  {
+   "arm": "chrome",
+   "run": 2,
+   "spawn_s": 0.65,
+   "browser": "Chrome/157.0.8103.79",
+   "nav_ack_s": 0.484,
+   "poll": {
+    "poll_errors": 0,
+    "poll_last_err": null
+   },
+   "final": {
+    "nav": {
+     "fetchStart": 363.1,
+     "domainLookupStart": 365.6,
+     "domainLookupEnd": 365.6,
+     "connectStart": 365.6,
+     "secureConnectionStart": 383.6,
+     "connectEnd": 404,
+     "requestStart": 404.1,
+     "responseStart": 469.2,
+     "responseEnd": 505.1,
+     "domInteractive": 730.7,
+     "domContentLoadedEventEnd": 731,
+     "domComplete": 2776.4,
+     "loadEventEnd": 2787,
+     "transferSize": 115761,
+     "encodedBodySize": 115461,
+     "decodedBodySize": 437612,
+     "redirectCount": 0,
+     "type": "navigate"
+    },
+    "paint": {
+     "first-paint": 1384,
+     "first-contentful-paint": 1384
+    },
+    "res": {
+     "n": 161,
+     "bytes": 3553679,
+     "hosts": {
+      "api.mindbox.ru": 4,
+      "okko.tv": 24,
+      "stream.datago.ru": 3,
+      "mc.yandex.ru": 9,
+      "vk.com": 4,
+      "top-fwz1.mail.ru": 4,
+      "static.okko.tv": 44,
+      "web-static.mindbox.ru": 1,
+      "kraken-cls.rambler.ru": 1,
+      "visor.sberbank.ru": 1,
+      "player-static.okko.tv": 1,
+      "stat2.okko.tv": 14,
+      "stat.okko.tv": 5,
+      "px.segmel.com": 2,
+      "d0c8daea-a5e0-4205-9e49-7f6b2f7d455f.selcdn.net": 3,
+      "privacy-cs.mail.ru": 3,
+      "www.googletagmanager.com": 2,
+      "cstatic-ru-cv.weborama-tech.ru": 1,
+      "abt.s3.yandex.net": 1,
+      "st.top100.ru": 2,
+      "ad.adriver.ru": 1,
+      "wcm-ru.frontend.weborama.fr": 2,
+      "bs.serving-sys.ru": 2,
+      "wcm.weborama-tech.ru": 2,
+      "auth.okko.tv": 1,
+      "uaas.yandex.ru": 1,
+      "kraken.rambler.ru": 4,
+      "www.google.com": 1,
+      "id.sber.ru": 6,
+      "cdn-s01.rambler.ru": 1,
+      "ext.clickstream.sbrf.ru": 5,
+      "kraken-mdt.rambler.ru": 6
+     },
+     "slow": [
+      [
+       4688,
+       1120,
+       300,
+       "https://privacy-cs.mail.ru/fp/?id=UMbpnlrs0mQxw67XdWcbU"
+      ],
+      [
+       3122,
+       1092,
+       0,
+       "https://wcm.weborama-tech.ru/fcgi-bin/dispatch.fcgi?a.A=co&a.si=8727&a.cp=52&a.ct=b&gdpr_cmp_failure=1&a.cid=undefined&da=1795461297&g.ru=&g"
+      ],
+      [
+       2955,
+       872,
+       0,
+       "https://www.googletagmanager.com/gtag/js?id=AW-16811046867"
+      ],
+      [
+       4821,
+       730,
+       0,
+       "https://id.sber.ru/sdk/web/config.json"
+      ],
+      [
+       4817,
+       706,
+       0,
+       "https://id.sber.ru/sdk/web/config.json"
+      ],
+      [
+       4816,
+       665,
+       0,
+       "https://id.sber.ru/sdk/web/assets/SBSansUI-Regular.woff2"
+      ],
+      [
+       3377,
+       651,
+       0,
+       "https://auth.okko.tv/external-auth/v1/login/sberbank/init"
+      ],
+      [
+       485,
+       569,
+       74926,
+       "https://mc.yandex.ru/metrika/tag.js"
+      ],
+      [
+       485,
+       534,
+       19984,
+       "https://top-fwz1.mail.ru/js/code.js"
+      ],
+      [
+       5612,
+       530,
+       0,
+       "https://id.sber.ru/CSAFront/oidc/authorizelow?client_id=f843788c-6474-41bb-9d83-ca5b70bf5fec&client_type=PRIVATE&nonce=15c29305-8c01-6a78-a1"
+      ],
+      [
+       517,
+       503,
+       824,
+       "https://okko.tv/assets/manifest.json"
+      ],
+      [
+       2871,
+       446,
+       22374,
+       "https://privacy-cs.mail.ru/static/sync-loader.js"
+      ],
+      [
+       4775,
+       417,
+       2720,
+       "https://mc.yandex.ru/metrika/match.html"
+      ],
+      [
+       485,
+       346,
+       0,
+       "https://vk.com/js/api/openapi.js?169"
+      ],
+      [
+       4619,
+       346,
+       13294,
+       "https://mc.yandex.ru/metrika/tag_phono.js"
+      ],
+      [
+       2959,
+       341,
+       0,
+       "https://wcm-ru.frontend.weborama.fr/fcgi-bin/dispatch.fcgi?a.A=co&a.si=8727&a.cp=29&a.ct=d"
+      ],
+      [
+       13383,
+       337,
+       0,
+       "https://kraken-mdt.rambler.ru/cnt/v2/"
+      ],
+      [
+       2301,
+       334,
+       11276,
+       "https://static.okko.tv/images/v4/1a1a2004-7d27-4769-b776-057f93d990c2?width=288&scale=1&quality=80&mediaType=webp&trimBorder=true"
+      ],
+      [
+       2921,
+       315,
+       0,
+       "https://www.googletagmanager.com/gtm.js?id=GTM-MRRZLRW&gtg_health=1"
+      ],
+      [
+       484,
+       280,
+       1496853,
+       "https://okko.tv/assets/js/3837153f_ru.js"
+      ],
+      [
+       485,
+       266,
+       0,
+       "https://stream.datago.ru/server-side/gtm.js?id=GTM-MRRZLRW"
+      ],
+      [
+       484,
+       251,
+       68616,
+       "https://okko.tv/assets/64d7bd55cab96b676cc4.woff2"
+      ],
+      [
+       485,
+       251,
+       68364,
+       "https://okko.tv/assets/4977bd0b6ab52af81923.woff2"
+      ],
+      [
+       485,
+       251,
+       69664,
+       "https://okko.tv/assets/c354fbd196527154abe4.woff2"
+      ],
+      [
+       2513,
+       237,
+       158265,
+       "https://api.mindbox.ru/scripts/modules/webpush.js?version=1.0.850"
+      ]
+     ]
+    }
+   },
+   "async": {
+    "lt": [
+     [
+      594,
+      121
+     ],
+     [
+      979,
+      1304
+     ],
+     [
+      2514,
+      72
+     ],
+     [
+      2796,
+      60
+     ],
+     [
+      2892,
+      67
+     ],
+     [
+      2992,
+      67
+     ],
+     [
+      3173,
+      126
+     ],
+     [
+      3400,
+      810
+     ],
+     [
+      4275,
+      159
+     ],
+     [
+      4462,
+      127
+     ],
+     [
+      4844,
+      269
+     ],
+     [
+      5241,
+      147
+     ]
+    ],
+    "lcp": [
+     [
+      1384,
+      597425,
+      "https://static.okko.tv/images/v4/6f4f2d24-9714-4b0d-90bd-b2f330650f0a?height=577&scale=1&quality=80&mediaType=webp"
+     ]
+    ]
+   },
+   "perf_metrics": {},
+   "proc": {
+    "proc_stats_error": "'pmmap_grouped' object has no attribute 'addr'"
+   },
+   "wall_s": 16.6,
+   "m": {
+    "challenge": false,
+    "t_load": 2.865,
+    "t_ch_gone": null,
+    "t_app_load": 2.865,
+    "t_content": 2.865,
+    "doc_dcl_ms": 731,
+    "doc_load_ms": 2787,
+    "doc_resp_ms": 505.1,
+    "fp_ms": 1384,
+    "lcp_ms": 1384,
+    "longtask_ms": 3329,
+    "longtask_n": 12,
+    "res_n": 161,
+    "obs_err": null
+   }
+  },
+  {
+   "arm": "lumen",
+   "run": 3,
+   "spawn_s": 0.54,
+   "nav_ack_s": 0.732,
+   "poll": {
+    "poll_errors": 4,
+    "poll_last_err": "RuntimeError: tools/call: [{'text': 'Eval error: JS context not available: page is still loading', 'type': 'text'}]"
+   },
+   "final": {
+    "nav": {
+     "fetchStart": 2,
+     "domainLookupStart": 2,
+     "domainLookupEnd": 2,
+     "connectStart": 2,
+     "secureConnectionStart": 0,
+     "connectEnd": 2,
+     "requestStart": 4,
+     "responseStart": 370.3,
+     "responseEnd": 402.5,
+     "domInteractive": 846.4,
+     "domContentLoadedEventEnd": 855.1,
+     "domComplete": 9979.8,
+     "loadEventEnd": 9980.6,
+     "transferSize": 437030,
+     "encodedBodySize": 436730,
+     "decodedBodySize": 436730,
+     "redirectCount": 1,
+     "type": "navigate"
+    },
+    "paint": {
+     "first-paint": 4695,
+     "first-contentful-paint": 4695
+    },
+    "res": {
+     "n": 142,
+     "bytes": 103224024,
+     "hosts": {
+      "mc.yandex.ru": 6,
+      "vk.com": 5,
+      "okko.tv": 28,
+      "top-fwz1.mail.ru": 6,
+      "stream.datago.ru": 4,
+      "static.okko.tv": 28,
+      "api.mindbox.ru": 5,
+      "kraken-cls.rambler.ru": 1,
+      "stat2.okko.tv": 20,
+      "stat.okko.tv": 5,
+      "web-static.mindbox.ru": 1,
+      "4--1f1e759130bb6f1a8ad0dee6859483cd--s.stbid.ru": 1,
+      "px.segmel.com": 5,
+      "okko-msk2-cdp14.playfamily.ru": 1,
+      "ext.clickstream.sbrf.ru": 1,
+      "d0c8daea-a5e0-4205-9e49-7f6b2f7d455f.selcdn.net": 3,
+      "privacy-cs.mail.ru": 2,
+      "bs.serving-sys.ru": 2,
+      "counter.rambler.ru": 1,
+      "wcm-ru.frontend.weborama.fr": 2,
+      "okko-msk2-cdp1.playfamily.ru": 1,
+      "www.googletagmanager.com": 2,
+      "cstatic-ru-cv.weborama-tech.ru": 1,
+      "abt.s3.yandex.net": 1,
+      "st.top100.ru": 2,
+      "ad.adriver.ru": 1,
+      "uaas.yandex.ru": 1,
+      "kraken.rambler.ru": 2,
+      "auth.okko.tv": 1,
+      "id.sber.ru": 1,
+      "wcm.weborama-tech.ru": 1,
+      "www.google.com": 1
+     },
+     "slow": [
+      [
+       9987,
+       7503,
+       519594,
+       "https://api.mindbox.ru/scripts/modules/webpush.js?version=1.0.850"
+      ],
+      [
+       9984,
+       7478,
+       153709,
+       "https://okko.tv/assets/js/5964ff94_ru.js"
+      ],
+      [
+       9984,
+       7454,
+       85031,
+       "https://okko.tv/assets/css/fbcf7bc3.css"
+      ],
+      [
+       9983,
+       7427,
+       49779,
+       "https://okko.tv/assets/js/40bc1ab0_ru.js"
+      ],
+      [
+       9983,
+       7376,
+       60736,
+       "https://okko.tv/assets/css/be9fd723.css"
+      ],
+      [
+       9973,
+       7373,
+       477,
+       "https://px.segmel.com/M-MRRZLRW2/data?id=M-MRRZLRW2"
+      ],
+      [
+       9982,
+       7365,
+       25181,
+       "https://okko.tv/assets/js/8734f381_ru.js"
+      ],
+      [
+       9697,
+       6705,
+       67500313,
+       "https://okko-msk2-cdp14.playfamily.ru/vod/cid/4bbb105dec27-1795636748-fJc1Aqiip7ENRkA7ATRklg/storage123/trl/09093151-edd2-4f85-a460-fcbde47f"
+      ],
+      [
+       33466,
+       5995,
+       342,
+       "https://px.segmel.com/M-MRRZLRW2/collect"
+      ],
+      [
+       33521,
+       5940,
+       300,
+       "https://stat2.okko.tv/telemetry/v1/timings/web"
+      ],
+      [
+       24936,
+       4411,
+       300,
+       "https://stat2.okko.tv/telemetry/v1/timings/web"
+      ],
+      [
+       29709,
+       4341,
+       300,
+       "https://stat2.okko.tv/telemetry/v1/logs/web"
+      ],
+      [
+       29710,
+       4341,
+       300,
+       "https://stat2.okko.tv/telemetry/v1/timings/web"
+      ],
+      [
+       18080,
+       3933,
+       300,
+       "https://stat2.okko.tv/telemetry/v1/logs/web"
+      ],
+      [
+       18656,
+       3442,
+       300,
+       "https://stat2.okko.tv/telemetry/v1/logs/web"
+      ],
+      [
+       18603,
+       3410,
+       342,
+       "https://px.segmel.com/M-MRRZLRW2/collect"
+      ],
+      [
+       18723,
+       3290,
+       498395,
+       "https://api.mindbox.ru/scripts/service-worker.js"
+      ],
+      [
+       5760,
+       3208,
+       421,
+       "https://kraken-cls.rambler.ru/id"
+      ],
+      [
+       29323,
+       3142,
+       5334,
+       "https://okko.tv/assets/styles/sherlock-crm/chatBot.css"
+      ],
+      [
+       29346,
+       3121,
+       300,
+       "https://stat.okko.tv/kollector/v2/product"
+      ],
+      [
+       29480,
+       3057,
+       1398,
+       "https://ad.adriver.ru/cgi-bin/erle.cgi?sid=225181&bt=62&loc=https%253A%252F%252Fokko.tv%252F&ph=1&rnd=860796&tail256=unknown"
+      ],
+      [
+       29481,
+       3057,
+       496287,
+       "https://www.googletagmanager.com/gtag/js?id=AW-16811046867"
+      ],
+      [
+       29479,
+       3036,
+       157936,
+       "https://st.top100.ru/top100/top100.js"
+      ],
+      [
+       29478,
+       3032,
+       14873,
+       "https://abt.s3.yandex.net/expjs/latest/exp.js"
+      ],
+      [
+       29478,
+       3030,
+       5265,
+       "https://cstatic-ru-cv.weborama-tech.ru/public/js/advertiserv2/adperf_conversion.js"
+      ]
+     ]
+    }
+   },
+   "async": {
+    "lt": [
+     [
+      1812,
+      129
+     ],
+     [
+      1999,
+      807
+     ],
+     [
+      2900,
+      663
+     ],
+     [
+      3566,
+      1359
+     ],
+     [
+      5683,
+      2598
+     ],
+     [
+      8282,
+      663
+     ],
+     [
+      8968,
+      389
+     ],
+     [
+      9364,
+      339
+     ],
+     [
+      9704,
+      275
+     ],
+     [
+      9981,
+      62
+     ],
+     [
+      10045,
+      220
+     ],
+     [
+      10277,
+      97
+     ],
+     [
+      10414,
+      57
+     ],
+     [
+      16702,
+      610
+     ],
+     [
+      17347,
+      1378
+     ],
+     [
+      18736,
+      1089
+     ],
+     [
+      19839,
+      2121
+     ],
+     [
+      22046,
+      313
+     ],
+     [
+      22361,
+      201
+     ],
+     [
+      22565,
+      505
+     ],
+     [
+      23149,
+      149
+     ],
+     [
+      23309,
+      1125
+     ],
+     [
+      24434,
+      415
+     ],
+     [
+      24929,
+      4417
+     ],
+     [
+      29350,
+      363
+     ],
+     [
+      29737,
+      1241
+     ],
+     [
+      30992,
+      60
+     ],
+     [
+      32470,
+      6986
+     ],
+     [
+      39461,
+      396
+     ],
+     [
+      39906,
+      102
+     ],
+     [
+      40008,
+      103
+     ],
+     [
+      40131,
+      122
+     ],
+     [
+      40277,
+      622
+     ],
+     [
+      40929,
+      166
+     ],
+     [
+      41219,
+      166
+     ],
+     [
+      41386,
+      96
+     ],
+     [
+      41491,
+      542
+     ]
+    ],
+    "lcp": []
+   },
+   "cur_mb": 1622.2,
+   "peak_mb": 1632.7,
+   "cpu_s": 122.75,
+   "os_samples": 52,
+   "os_threads_max": 74,
+   "os_handles_max": 794,
+   "os_gdi_max": 13,
+   "os_user_max": 37,
+   "os_private_mb_max": 1675.8,
+   "os_ws_mb_max": 1640.1,
+   "os_tcp_max": 39,
+   "os_children_max": 0,
+   "os_threads_end": 66,
+   "os_handles_end": 772,
+   "os_private_mb_end": 1584.8,
+   "os_pagefile_peak_mb": 1754.3,
+   "os_cpu_user_s": 120.53,
+   "os_cpu_kernel_s": 4.42,
+   "os_page_faults": 2480581,
+   "os_io_read_mb": 187.11,
+   "os_io_write_mb": 4.44,
+   "os_io_other_mb": 81.66,
+   "os_io_read_ops": 891,
+   "os_io_write_ops": 3435,
+   "os_io_other_ops": 23464,
+   "os_cpu_pct_max": 427.2,
+   "os_cpu_pct_avg": 233.0,
+   "os_cpu_pct_p50": 268.3,
+   "os_busy_s": 53.2,
+   "os_tcp_states_at_max": {
+    "ESTABLISHED": 26,
+    "CLOSE_WAIT": 11,
+    "LISTEN": 1,
+    "SYN_SENT": 1
+   },
+   "sys_cpu_pct_avg": 39.1,
+   "sys_cpu_pct_max": 63.1,
+   "sys_free_mb_min": 3397,
+   "proc": {
+    "proc_stats_error": "'pmmap_grouped' object has no attribute 'addr'"
+   },
+   "stderr": {
+    "net_reqs": 192,
+    "net_fail": 3,
+    "stderr_lines": 624,
+    "stderr_errors": [
+     "v8: document_pip::install_document_pip_api_v8 failed: JS runtime error: Cannot assign to read only property 'documentPictureInPicture' of object '#<Window>'",
+     "[sw https://okko.tvhttps://okko.tv/mindbox/] v8 script eval error: Runtime(\"Notification is not defined\")",
+     "[JS error] TypeError: ServiceWorker script evaluation failed.",
+     "Не декодируется https://wcm-ru.frontend.weborama.fr/fcgi-bin/dispatch.fcgi?a.A=co&a.si=8727&a.cp=29&a.ct=d: формат изображения не распознан по сигнатуре",
+     "[JS warn] PerformanceObserver: unsupported entryType first-input"
+    ]
+   },
+   "wall_s": 54.6,
+   "m": {
+    "challenge": false,
+    "t_load": 22.993,
+    "t_ch_gone": null,
+    "t_app_load": 22.993,
+    "t_content": 22.993,
+    "doc_dcl_ms": 855.1,
+    "doc_load_ms": 9980.6,
+    "doc_resp_ms": 402.5,
+    "fp_ms": 4695,
+    "lcp_ms": null,
+    "longtask_ms": 30946,
+    "longtask_n": 37,
+    "res_n": 142,
+    "obs_err": null
+   }
+  },
+  {
+   "arm": "chrome",
+   "run": 3,
+   "spawn_s": 0.73,
+   "browser": "Chrome/157.0.8103.79",
+   "nav_ack_s": 0.433,
+   "poll": {
+    "poll_errors": 0,
+    "poll_last_err": null
+   },
+   "final": {
+    "nav": {
+     "fetchStart": 324.8,
+     "domainLookupStart": 326.8,
+     "domainLookupEnd": 326.8,
+     "connectStart": 326.8,
+     "secureConnectionStart": 343.7,
+     "connectEnd": 364.4,
+     "requestStart": 364.6,
+     "responseStart": 419,
+     "responseEnd": 499.6,
+     "domInteractive": 725.8,
+     "domContentLoadedEventEnd": 726,
+     "domComplete": 2813,
+     "loadEventEnd": 2825.5,
+     "transferSize": 116099,
+     "encodedBodySize": 115799,
+     "decodedBodySize": 436731,
+     "redirectCount": 0,
+     "type": "navigate"
+    },
+    "paint": {
+     "first-paint": 1352,
+     "first-contentful-paint": 1352
+    },
+    "res": {
+     "n": 160,
+     "bytes": 3553679,
+     "hosts": {
+      "api.mindbox.ru": 4,
+      "okko.tv": 24,
+      "stream.datago.ru": 3,
+      "mc.yandex.ru": 9,
+      "vk.com": 4,
+      "top-fwz1.mail.ru": 4,
+      "static.okko.tv": 44,
+      "web-static.mindbox.ru": 1,
+      "px.segmel.com": 2,
+      "kraken-cls.rambler.ru": 1,
+      "visor.sberbank.ru": 1,
+      "player-static.okko.tv": 1,
+      "stat2.okko.tv": 13,
+      "stat.okko.tv": 5,
+      "d0c8daea-a5e0-4205-9e49-7f6b2f7d455f.selcdn.net": 3,
+      "privacy-cs.mail.ru": 3,
+      "www.googletagmanager.com": 2,
+      "cstatic-ru-cv.weborama-tech.ru": 1,
+      "abt.s3.yandex.net": 1,
+      "st.top100.ru": 2,
+      "ad.adriver.ru": 1,
+      "wcm-ru.frontend.weborama.fr": 2,
+      "bs.serving-sys.ru": 2,
+      "wcm.weborama-tech.ru": 2,
+      "auth.okko.tv": 1,
+      "www.google.com": 1,
+      "kraken.rambler.ru": 4,
+      "uaas.yandex.ru": 1,
+      "id.sber.ru": 6,
+      "cdn-s01.rambler.ru": 1,
+      "ext.clickstream.sbrf.ru": 5,
+      "kraken-mdt.rambler.ru": 6
+     },
+     "slow": [
+      [
+       3189,
+       1354,
+       0,
+       "https://wcm.weborama-tech.ru/fcgi-bin/dispatch.fcgi?a.A=co&a.si=8727&a.cp=52&a.ct=b&gdpr_cmp_failure=1&a.cid=undefined&da=1795461369&g.ru=&g"
+      ],
+      [
+       4923,
+       1107,
+       300,
+       "https://privacy-cs.mail.ru/fp/?id=dvtv9vvEppIjRYzfYeYfe"
+      ],
+      [
+       433,
+       614,
+       1496853,
+       "https://okko.tv/assets/js/3837153f_ru.js"
+      ],
+      [
+       434,
+       586,
+       0,
+       "https://stream.datago.ru/server-side/gtm.js?id=GTM-MRRZLRW"
+      ],
+      [
+       5095,
+       560,
+       54485,
+       "https://okko.tv/assets/js/5964ff94_ru.js"
+      ],
+      [
+       434,
+       548,
+       19984,
+       "https://top-fwz1.mail.ru/js/code.js"
+      ],
+      [
+       5857,
+       547,
+       0,
+       "https://id.sber.ru/CSAFront/oidc/authorizelow?client_id=f843788c-6474-41bb-9d83-ca5b70bf5fec&client_type=PRIVATE&nonce=7f122ce2-cba9-8c67-24"
+      ],
+      [
+       434,
+       542,
+       69664,
+       "https://okko.tv/assets/c354fbd196527154abe4.woff2"
+      ],
+      [
+       433,
+       539,
+       5903,
+       "https://okko.tv/assets/js/d0f4b49c_ru.js"
+      ],
+      [
+       433,
+       538,
+       68364,
+       "https://okko.tv/assets/4977bd0b6ab52af81923.woff2"
+      ],
+      [
+       433,
+       537,
+       68616,
+       "https://okko.tv/assets/64d7bd55cab96b676cc4.woff2"
+      ],
+      [
+       5062,
+       514,
+       0,
+       "https://id.sber.ru/sdk/web/config.json"
+      ],
+      [
+       434,
+       479,
+       0,
+       "https://vk.com/js/api/openapi.js?169"
+      ],
+      [
+       5059,
+       477,
+       0,
+       "https://id.sber.ru/sdk/web/config.json"
+      ],
+      [
+       5059,
+       443,
+       0,
+       "https://id.sber.ru/sdk/web/assets/SBSansUI-Regular.woff2"
+      ],
+      [
+       509,
+       431,
+       1586,
+       "https://static.okko.tv/images/v4/b8ca77b9-b74c-454a-a003-7052eb9f678b?presetId=6511&width=348&scale=1&quality=80&mediaType=webp"
+      ],
+      [
+       510,
+       428,
+       1860,
+       "https://static.okko.tv/images/v4/6a0d4535-0e93-40c1-8ebc-0fdd35af678b?presetId=6511&width=348&scale=1&quality=80&mediaType=webp"
+      ],
+      [
+       575,
+       412,
+       67086,
+       "https://okko.tv/assets/40605fdf.svg#okko"
+      ],
+      [
+       581,
+       399,
+       30264,
+       "https://okko.tv/assets/icons/packages/icons/cdd1786c.svg#arrow-right-small-regular"
+      ],
+      [
+       584,
+       395,
+       1049,
+       "https://okko.tv/assets/icons/components/social-icons/63e13215.svg#social-telegram"
+      ],
+      [
+       3028,
+       348,
+       0,
+       "https://www.googletagmanager.com/gtag/js?id=AW-16811046867"
+      ],
+      [
+       3031,
+       348,
+       0,
+       "https://wcm-ru.frontend.weborama.fr/fcgi-bin/dispatch.fcgi?a.A=co&a.si=8727&a.cp=29&a.ct=d"
+      ],
+      [
+       434,
+       327,
+       74926,
+       "https://mc.yandex.ru/metrika/tag.js"
+      ],
+      [
+       432,
+       272,
+       29249,
+       "https://api.mindbox.ru/scripts/v1/tracker.js"
+      ],
+      [
+       874,
+       237,
+       207964,
+       "https://web-static.mindbox.ru/js/byendpoint/okko.website.js?_=5984835"
+      ]
+     ]
+    }
+   },
+   "async": {
+    "lt": [
+     [
+      588,
+      127
+     ],
+     [
+      1175,
+      96
+     ],
+     [
+      1286,
+      1248
+     ],
+     [
+      2829,
+      88
+     ],
+     [
+      2953,
+      78
+     ],
+     [
+      3069,
+      75
+     ],
+     [
+      3193,
+      104
+     ],
+     [
+      3455,
+      178
+     ],
+     [
+      3640,
+      898
+     ],
+     [
+      4629,
+      200
+     ],
+     [
+      5112,
+      296
+     ],
+     [
+      5483,
+      81
+     ],
+     [
+      5604,
+      131
+     ]
+    ],
+    "lcp": [
+     [
+      1352,
+      597425,
+      "https://static.okko.tv/images/v4/6f4f2d24-9714-4b0d-90bd-b2f330650f0a?height=577&scale=1&quality=80&mediaType=webp"
+     ]
+    ]
+   },
+   "perf_metrics": {},
+   "proc": {
+    "proc_stats_error": "'pmmap_grouped' object has no attribute 'addr'"
+   },
+   "wall_s": 16.9,
+   "m": {
+    "challenge": false,
+    "t_load": 2.823,
+    "t_ch_gone": null,
+    "t_app_load": 2.823,
+    "t_content": 2.823,
+    "doc_dcl_ms": 726,
+    "doc_load_ms": 2825.5,
+    "doc_resp_ms": 499.6,
+    "fp_ms": 1352,
+    "lcp_ms": 1352,
+    "longtask_ms": 3600,
+    "longtask_n": 13,
+    "res_n": 160,
+    "obs_err": null
+   }
+  }
+ ]
+}
