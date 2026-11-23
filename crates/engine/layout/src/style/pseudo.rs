@@ -979,7 +979,7 @@ fn compute_pseudo_element_style_inner(
         }
         if let Some(item) = ua_quote {
             let mut style = pseudo_inherited_style(parent);
-            style.content = Content::Items(vec![item]);
+            style.content = Content::Items(std::sync::Arc::new(vec![item]));
             return Some(style);
         }
         // CSS Overflow L5 §scroll-marker-group: an originating element whose
@@ -996,7 +996,7 @@ fn compute_pseudo_element_style_inner(
         let _prof_init = lumen_core::profile::scope_detail("ps_init");
         let mut style = if pseudo.eq_ignore_ascii_case("marker") { marker_base_style(parent) } else { pseudo_inherited_style(parent) };
         if let Some(item) = ua_quote {
-            style.content = Content::Items(vec![item]);
+            style.content = Content::Items(std::sync::Arc::new(vec![item]));
         }
         if is_scroll_group {
             style.display = Display::Block;

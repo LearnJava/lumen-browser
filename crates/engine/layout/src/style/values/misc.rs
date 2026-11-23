@@ -22,8 +22,9 @@ pub enum Content {
     None,
     /// Список фрагментов: строки, counter()/counters(), attr(), url().
     /// Phase 0 хранит список typed-фрагментов; конкатенация для render —
-    /// задача paint pipeline.
-    Items(Vec<ContentItem>),
+    /// задача paint pipeline. `Arc` — список иммутабелен после apply, а
+    /// клонируется в computed style каждого узла при каскаде.
+    Items(Arc<Vec<ContentItem>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

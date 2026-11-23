@@ -814,7 +814,7 @@ pub(in crate::style) fn apply_decl_text(
             } else {
                 let items = parse_content_items(trimmed);
                 if !items.is_empty() {
-                    style.content = Content::Items(items);
+                    style.content = Content::Items(std::sync::Arc::new(items));
                 }
             }
         }

@@ -2191,7 +2191,7 @@ fn record_quote_depths(content: &Content, depth: &mut usize) -> Vec<usize> {
         return Vec::new();
     };
     let mut out = Vec::new();
-    for item in items {
+    for item in items.iter() {
         match item {
             ContentItem::OpenQuote => {
                 out.push(*depth);
@@ -3458,10 +3458,10 @@ mod tests {
         // Document order for `<q><q></q></q>`: outer ::before open, inner
         // ::before open, inner ::after close, outer ::after close.
         let mut depth = 0;
-        let ob = record_quote_depths(&Content::Items(vec![ContentItem::OpenQuote]), &mut depth);
-        let ib = record_quote_depths(&Content::Items(vec![ContentItem::OpenQuote]), &mut depth);
-        let ia = record_quote_depths(&Content::Items(vec![ContentItem::CloseQuote]), &mut depth);
-        let oa = record_quote_depths(&Content::Items(vec![ContentItem::CloseQuote]), &mut depth);
+        let ob = record_quote_depths(&Content::Items(std::sync::Arc::new(vec![ContentItem::OpenQuote])), &mut depth);
+        let ib = record_quote_depths(&Content::Items(std::sync::Arc::new(vec![ContentItem::OpenQuote])), &mut depth);
+        let ia = record_quote_depths(&Content::Items(std::sync::Arc::new(vec![ContentItem::CloseQuote])), &mut depth);
+        let oa = record_quote_depths(&Content::Items(std::sync::Arc::new(vec![ContentItem::CloseQuote])), &mut depth);
         assert_eq!(ob, vec![0]);
         assert_eq!(ib, vec![1]);
         assert_eq!(ia, vec![1]);
@@ -3473,12 +3473,12 @@ mod tests {
     fn quote_depths_no_quote_adjusts_without_emit() {
         let mut depth = 0;
         let v = record_quote_depths(
-            &Content::Items(vec![
+            &Content::Items(std::sync::Arc::new(vec![
                 ContentItem::OpenQuote,
                 ContentItem::NoOpenQuote,
                 ContentItem::CloseQuote,
                 ContentItem::NoCloseQuote,
-            ]),
+            ])),
             &mut depth,
         );
         // open→emit 0 (depth 1); no-open→depth 2; close→depth 1, emit 1; no-close→depth 0.
@@ -3489,7 +3489,7 @@ mod tests {
     #[test]
     fn quote_depths_close_underflow_clamped() {
         let mut depth = 0;
-        let v = record_quote_depths(&Content::Items(vec![ContentItem::CloseQuote]), &mut depth);
+        let v = record_quote_depths(&Content::Items(std::sync::Arc::new(vec![ContentItem::CloseQuote])), &mut depth);
         // Unbalanced close at depth 0 stays at 0 (saturating).
         assert_eq!(v, vec![0]);
         assert_eq!(depth, 0);

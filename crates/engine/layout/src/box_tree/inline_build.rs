@@ -1630,7 +1630,7 @@ pub(crate) fn content_to_inline_segments_as(
     // the pending run and emits its own inline-replaced image segment.
     let mut text = String::new();
 
-    for item in items {
+    for item in items.iter() {
         // CSS Generated Content L3 §2.1 — a `url()` value is an inline-replaced
         // image. It interrupts the surrounding text run and becomes its own image
         // segment (mirrors the inline-`<img>` path in `collect_inline_segments`).

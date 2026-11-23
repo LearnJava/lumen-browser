@@ -180,7 +180,7 @@ pub fn collect_cascade_background_image_requests(
                 for layer in &ps.background_layers {
                     push_bg_image_urls(&layer.image, dpr, &mut out);
                 }
-                for item in items {
+                for item in items.iter() {
                     if let ContentItem::Url(src) = item
                         && !src.is_empty()
                         && !out.contains(src)
