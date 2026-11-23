@@ -112,6 +112,26 @@ pub(crate) fn install_dialog_focus(
     Ok(())
 }
 
+/// `_lumen_request_picker(nid)` — UA-picker requests from
+/// `HTMLSelectElement.showPicker()` and the picker-capable input types.
+/// Queued like the dialog focus requests; the shell drains them in
+/// `about_to_wait` and opens the matching native picker (select dropdown,
+/// color/date picker, file picker), which is also what flips `:open`.
+pub(crate) fn install_picker_requests(
+    scope: &mut v8::PinScope<'_, '_>,
+    ctx: v8::Local<'_, v8::Context>,
+    store: &mut Vec<OwnedNativeFn>,
+    pending_picker_requests: Arc<Mutex<Vec<u32>>>,
+) -> JsResult<()> {
+    reg!(scope, ctx, store, "_lumen_request_picker", move |nid: u32| {
+        pending_picker_requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(nid);
+    });
+    Ok(())
+}
+
 /// `performance.now()` / `Date.now()` clock source, deterministic mode included.
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn install_performance_now(

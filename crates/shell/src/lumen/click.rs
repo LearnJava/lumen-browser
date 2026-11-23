@@ -34,6 +34,204 @@ pub(crate) struct PendingClick {
 }
 
 impl Lumen {
+    /// Set `select_dropdown_node` and mirror the `:open` sentinel
+    /// (`data-lumen-select-open`) into the page DOM — CSS Selectors L4
+    /// `:open` reads it during the same relayout the dropdown needs.
+    pub(crate) fn set_select_dropdown_node(&mut self, node: Option<NodeId>) {
+        let prev = std::mem::replace(&mut self.select_dropdown_node, node);
+        if let Some(src) = self.layout_source.as_ref() {
+            let mut doc = src.document.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(p) = prev {
+                forms::set_select_open_sentinel(&mut doc, p, false);
+                self.note_sentinel_touch(p, "data-lumen-select-open");
+            }
+            if let Some(n) = node {
+                forms::set_select_open_sentinel(&mut doc, n, true);
+                self.note_sentinel_touch(n, "data-lumen-select-open");
+            }
+        }
+        // `:open` is a style input: the sentinel attribute only reaches the
+        // cascade on a relayout, and the dropdown itself paints from a redraw
+        // snapshot — without this, `select:open` rules (and `:open`-keyed
+        // invalidation) stay stale until the next unrelated relayout.
+        if prev != node {
+            self.relayout_form();
+        }
+    }
+
+    /// Tell the page's DOM-touch tracker that the shell wrote `attr` on `nid`
+    /// — sentinel attributes (`data-lumen-*-open`) are cascade inputs for
+    /// `:open`, and without the touch the next relayout's incremental restyle
+    /// keeps the node's stale style (BUG-935 channel, same as intrinsic
+    /// `width`/`height` writes).
+    fn note_sentinel_touch(&self, nid: NodeId, attr: &'static str) {
+        let raw = nid.raw();
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+            j.note_shell_attr_write(raw, attr);
+        });
+    }
+
+    /// Mirror whichever page-level input picker is open (`color_picker_node` /
+    /// `date_picker_node`) into the DOM as `data-lumen-input-open` — the
+    /// sentinel `:open` reads for `<input>`. Picker open/close sites all over
+    /// the click/hint/tabs paths mutate the node fields directly, so this sync
+    /// runs after every click dispatch and whenever the fields change through
+    /// [`Self::set_input_picker_node`].
+    pub(crate) fn sync_input_picker_sentinel(&mut self) {
+        let desired = self
+            .color_picker_node
+            .or(self.date_picker_node)
+            .or(self.datalist_picker_node);
+        if self.input_picker_sentinel == desired {
+            return;
+        }
+        let prev = std::mem::replace(&mut self.input_picker_sentinel, desired);
+        if let Some(src) = self.layout_source.as_ref() {
+            let mut doc = src.document.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(p) = prev {
+                forms::set_input_picker_sentinel(&mut doc, p, false);
+                self.note_sentinel_touch(p, "data-lumen-input-open");
+            }
+            if let Some(n) = desired {
+                forms::set_input_picker_sentinel(&mut doc, n, true);
+                self.note_sentinel_touch(n, "data-lumen-input-open");
+            }
+        }
+        self.relayout_form();
+    }
+
+    /// Single write path for `color_picker_node`/`date_picker_node` from the
+    /// JS-facing picker request — keeps the `:open` sentinel in step.
+    pub(crate) fn set_input_picker_node(&mut self, color: Option<NodeId>, date: Option<NodeId>) {
+        self.color_picker_node = color;
+        self.date_picker_node = date;
+        self.sync_input_picker_sentinel();
+    }
+
+    /// Write path for `datalist_picker_node` (text-like `<input list=…>`
+    /// popup state — no popup UI, `:open` tracking only).
+    pub(crate) fn set_datalist_picker_node(&mut self, node: Option<NodeId>) {
+        self.datalist_picker_node = node;
+        self.sync_input_picker_sentinel();
+    }
+
+    /// Remove `data-lumen-*-open` sentinel attributes no tracked picker /
+    /// dropdown node owns. `showPicker()` writes the attribute synchronously
+    /// in JS (so `:open` matches in the same script turn) while the
+    /// shell-side picker state only catches up when the queued request
+    /// drains — a click processed in between used to leave the stale
+    /// attribute behind, keeping `:open` matching after the picker was
+    /// dismissed (WPT `input-element-pseudo-open*.optional.html`).
+    fn sweep_stale_open_sentinels(&mut self) {
+        let keep_input = self
+            .color_picker_node
+            .or(self.date_picker_node)
+            .or(self.datalist_picker_node);
+        let keep_select = self.select_dropdown_node;
+        let Some(src) = self.layout_source.as_ref() else { return };
+        let mut removals: Vec<(NodeId, &'static str)> = Vec::new();
+        {
+            let doc = src.document.lock().unwrap_or_else(|e| e.into_inner());
+            for (sel, keep, attr) in [
+                ("[data-lumen-input-open]", keep_input, "data-lumen-input-open"),
+                ("[data-lumen-select-open]", keep_select, "data-lumen-select-open"),
+            ] {
+                for nid in lumen_layout::selector_query::query_all(&doc, sel) {
+                    if Some(nid) != keep {
+                        removals.push((nid, attr));
+                    }
+                }
+            }
+        }
+        if removals.is_empty() {
+            return;
+        }
+        {
+            let mut doc = src.document.lock().unwrap_or_else(|e| e.into_inner());
+            for (nid, attr) in &removals {
+                if *attr == "data-lumen-input-open" {
+                    forms::set_input_picker_sentinel(&mut doc, *nid, false);
+                } else {
+                    forms::set_select_open_sentinel(&mut doc, *nid, false);
+                }
+            }
+        }
+        for (nid, attr) in removals {
+            self.note_sentinel_touch(nid, attr);
+        }
+        self.relayout_form();
+    }
+
+    /// Open the UA picker `showPicker()` asked for (HTML LS §4.10.5.1.14 /
+    /// §4.10.7): `<select>` → its dropdown, `<input type=color>` → the color
+    /// picker, `type=date` → the date picker, `type=file` → the file dialog.
+    /// Types without a picker UI are ignored — the shim already threw
+    /// `NotSupportedError` for them before queueing the request.
+    ///
+    /// The request is only honoured while its sentinel attribute is still on
+    /// the element: JS sets it synchronously for `:open`, and a click that
+    /// landed before this drain already swept it — reopening then would
+    /// resurrect a picker the user dismissed.
+    pub(crate) fn show_picker_for(&mut self, id: NodeId) {
+        let Some(src) = self.layout_source.as_ref() else { return };
+        let doc = src.document.lock().unwrap_or_else(|e| e.into_inner());
+        // The request may outlive its node (removed between showPicker() and
+        // the drain) — `doc.get` on a stale id is not safe to call blindly.
+        if !doc.contains_id(id) {
+            return;
+        }
+        let NodeData::Element { name, .. } = &doc.get(id).data else { return };
+        let local = name.local.as_str();
+        if local == "select" {
+            let fresh = doc.get(id).get_attr("data-lumen-select-open").is_some();
+            drop(doc);
+            if fresh {
+                self.set_select_dropdown_node(Some(id));
+            }
+            return;
+        }
+        if local != "input" {
+            return;
+        }
+        let ty = doc
+            .get(id)
+            .get_attr("type")
+            .map(|t| t.trim().to_ascii_lowercase())
+            .unwrap_or_else(|| "text".into());
+        let wants_open = doc.get(id).get_attr("data-lumen-input-open").is_some();
+        match ty.as_str() {
+            "color" if wants_open => {
+                drop(doc);
+                self.set_input_picker_node(Some(id), None);
+                self.request_redraw();
+            }
+            "date" | "datetime-local" | "week" | "month" | "time" if wants_open => {
+                let (y, m) = forms::parse_date_value(doc.control_value(id).as_ref())
+                    .map(|(y, m, _)| (y, m))
+                    .unwrap_or_else(forms::today_year_month);
+                drop(doc);
+                self.set_input_picker_node(None, Some(id));
+                self.date_picker_year = y;
+                self.date_picker_month = m;
+                self.request_redraw();
+            }
+            "file" => {
+                drop(doc);
+                self.open_file_picker(id);
+            }
+            // `<input type=text list=…>`: the datalist popup has no UI yet —
+            // track the open state only so `:open` reflects `showPicker()`.
+            "text" | "search" | "tel" | "url" | "email" | "password"
+                if wants_open
+                    && doc.get(id).get_attr("list").is_some_and(|v| !v.is_empty()) =>
+            {
+                drop(doc);
+                self.set_datalist_picker_node(Some(id));
+            }
+            _ => {}
+        }
+    }
+
     /// Клик по точке вьюпорта — и, если он сдвинул фокус ВНУТРИ фрейма,
     /// пересчёт под-документа (BUG-480 срез 23).
     ///
@@ -94,6 +292,12 @@ impl Lumen {
         self.address_bar.close();
         let before = self.focused_frame;
         self.handle_click_at_inner(x_css, y_css, press_events);
+        // Click-outside branches close `color_picker_node`/`date_picker_node`
+        // directly; keep the `:open` sentinel in step on every dispatch, then
+        // sweep sentinel attributes a not-yet-drained `showPicker()` left on
+        // nodes the shell does not track.
+        self.sync_input_picker_sentinel();
+        self.sweep_stale_open_sentinels();
         if self.focused_frame != before {
             self.notify_frame_focus(before, self.focused_frame);
             self.refresh_frames(None);
@@ -202,6 +406,17 @@ impl Lumen {
         // Dismiss validation tooltip on any non-scrollbar click.
         self.validation_tooltip = None;
         let scroll_y = self.scroll_y;
+        // `x_css`/`y_css` are window-CSS coords (chrome origin included), but
+        // every overlay hit-test below (`hit_color_swatch`, `hit_date_picker`,
+        // `hit_select_option`) compares against page-viewport rects
+        // (`anchor.y - scroll_y`). Strip the chrome origin once — without it
+        // picker/dropdown clicks land `page_offset` (~chrome height) low and
+        // either miss the control or hit the wrong cell (WPT
+        // `input-element-pseudo-open*`: the close-click fell on the picker's
+        // prev-month arrow instead of the button).
+        let (off_x, off_y) = self.page_offset();
+        let pv_x = x_css - off_x;
+        let pv_y = y_css - off_y;
 
         // DevTools inspector: a click pins the box under the cursor and shows
         // its computed style, suppressing normal navigation / JS dispatch.
@@ -272,7 +487,7 @@ impl Lumen {
                     pn,
                 )?;
                 let color = forms::hit_color_swatch(
-                    anchor, scroll_y, x_css, y_css,
+                    anchor, scroll_y, pv_x, pv_y,
                 )?;
                 Some((pn, color))
             })
@@ -300,7 +515,7 @@ impl Lumen {
             .frame_color_picker
             .and_then(|(idx, pn)| {
                 let anchor = self.frame_overlay_anchor(idx, pn)?;
-                let color = forms::hit_color_swatch(anchor, scroll_y, x_css, y_css)?;
+                let color = forms::hit_color_swatch(anchor, scroll_y, pv_x, pv_y)?;
                 Some((idx, pn, color))
             });
         if let Some((idx, pn, color)) = frame_picker_swatch_result {
@@ -319,7 +534,7 @@ impl Lumen {
             dp_node.and_then(|dn| {
                 let anchor = forms::find_box_rect(self.layout_box.as_ref()?, dn)?;
                 let vp_w2 = self.viewport_width_css();
-                let hit = forms::hit_date_picker(anchor, scroll_y, vp_w2, self.date_picker_year, self.date_picker_month, x_css, y_css);
+                let hit = forms::hit_date_picker(anchor, scroll_y, vp_w2, self.date_picker_year, self.date_picker_month, pv_x, pv_y);
                 Some((dn, hit))
             })
         };
@@ -355,6 +570,10 @@ impl Lumen {
         }
         // Any click outside the date picker closes it.
         self.date_picker_node = None;
+        // The datalist popup has no hit zone — any click that survived the
+        // picker checks above is outside it, so it closes unconditionally
+        // (a click on the input itself re-opens it via `classify_click`).
+        self.datalist_picker_node = None;
 
         // ── Frame date picker hit (FRAME-6) ───────────────
         let frame_date_hit: Option<(usize, NodeId, forms::DatePickerHit)> =
@@ -364,7 +583,7 @@ impl Lumen {
                 let hit = forms::hit_date_picker(
                     anchor, scroll_y, vp_w2,
                     self.frame_date_picker_year, self.frame_date_picker_month,
-                    x_css, y_css,
+                    pv_x, pv_y,
                 );
                 Some((idx, dn, hit))
             });
@@ -414,12 +633,12 @@ impl Lumen {
                     .unwrap_or(0);
                 let vp_h = self.viewport_height_css();
                 let vp_w2 = self.viewport_width_css();
-                let idx = forms::hit_select_option(anchor, opts_count, scroll_y, vp_w2, vp_h, x_css, y_css)?;
+                let idx = forms::hit_select_option(anchor, opts_count, scroll_y, vp_w2, vp_h, pv_x, pv_y)?;
                 Some((sn, idx))
             })
         };
         if let Some((sn, idx)) = select_hit {
-            self.select_dropdown_node = None;
+            self.set_select_dropdown_node(None);
             if let Some(src) = self.layout_source.as_mut() {
                 let mut doc = src.document.lock().unwrap();
                 let opts = forms::collect_select_options(&doc, sn);
@@ -437,7 +656,7 @@ impl Lumen {
             return;
         }
         // Any click outside the dropdown closes it.
-        self.select_dropdown_node = None;
+        self.set_select_dropdown_node(None);
 
         // ── Frame select dropdown option hit (FRAME-6) ────
         let frame_select_hit: Option<(usize, NodeId, usize)> =
@@ -452,7 +671,7 @@ impl Lumen {
                 let vp_h = self.viewport_height_css();
                 let vp_w2 = self.viewport_width_css();
                 let opt_idx =
-                    forms::hit_select_option(anchor, opts_count, scroll_y, vp_w2, vp_h, x_css, y_css)?;
+                    forms::hit_select_option(anchor, opts_count, scroll_y, vp_w2, vp_h, pv_x, pv_y)?;
                 Some((idx, sn, opt_idx))
             });
         if let Some((idx, sn, opt_idx)) = frame_select_hit {
@@ -921,6 +1140,13 @@ impl Lumen {
                         outcome: click_log::ClickOutcome::FormAction("OpenSelectDropdown"),
                     });
                 }
+                forms::FormClickAction::OpenDatalist(_) => {
+                    click_log::log_click(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome: click_log::ClickOutcome::FormAction("OpenDatalist"),
+                    });
+                }
                 forms::FormClickAction::OpenFilePicker(_) => {
                     click_log::log_click(&click_log::ClickInfo {
                         win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
@@ -972,10 +1198,8 @@ impl Lumen {
                 self.relayout_form();
             }
             forms::FormClickAction::OpenColorPicker(id) => {
-                self.color_picker_node = Some(id);
-                if let Some(w) = self.window.as_ref() {
-                    w.request_redraw();
-                }
+                self.set_input_picker_node(Some(id), None);
+                self.request_redraw();
             }
             forms::FormClickAction::OpenDatePicker(id) => {
                 let (y, m) = self.layout_source.as_ref()
@@ -985,18 +1209,19 @@ impl Lumen {
                         forms::parse_date_value(&val).map(|(y, m, _)| (y, m))
                     })
                     .unwrap_or_else(forms::today_year_month);
-                self.date_picker_node = Some(id);
+                self.set_input_picker_node(None, Some(id));
                 self.date_picker_year = y;
                 self.date_picker_month = m;
+                self.request_redraw();
+            }
+            forms::FormClickAction::OpenSelectDropdown(id) => {
+                self.set_select_dropdown_node(Some(id));
                 if let Some(w) = self.window.as_ref() {
                     w.request_redraw();
                 }
             }
-            forms::FormClickAction::OpenSelectDropdown(id) => {
-                self.select_dropdown_node = Some(id);
-                if let Some(w) = self.window.as_ref() {
-                    w.request_redraw();
-                }
+            forms::FormClickAction::OpenDatalist(id) => {
+                self.set_datalist_picker_node(Some(id));
             }
             forms::FormClickAction::OpenFilePicker(id) => {
                 self.open_file_picker(id);

@@ -83,7 +83,7 @@ impl Lumen {
                 self.relayout_form();
             }
             forms::FormClickAction::OpenColorPicker(id) => {
-                self.color_picker_node = Some(id);
+                self.set_input_picker_node(Some(id), None);
                 if let Some(w) = self.window.as_ref() {
                     w.request_redraw();
                 }
@@ -96,18 +96,21 @@ impl Lumen {
                         forms::parse_date_value(&val).map(|(y, m, _)| (y, m))
                     })
                     .unwrap_or_else(forms::today_year_month);
-                self.date_picker_node = Some(id);
                 self.date_picker_year = y;
                 self.date_picker_month = m;
+                self.set_input_picker_node(None, Some(id));
                 if let Some(w) = self.window.as_ref() {
                     w.request_redraw();
                 }
             }
             forms::FormClickAction::OpenSelectDropdown(id) => {
-                self.select_dropdown_node = Some(id);
+                self.set_select_dropdown_node(Some(id));
                 if let Some(w) = self.window.as_ref() {
                     w.request_redraw();
                 }
+            }
+            forms::FormClickAction::OpenDatalist(id) => {
+                self.set_datalist_picker_node(Some(id));
             }
             forms::FormClickAction::OpenFilePicker(id) => {
                 self.open_file_picker(id);

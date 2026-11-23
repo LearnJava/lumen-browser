@@ -141,6 +141,9 @@ pub(in crate::style) fn matches_pseudo_class(p: &PseudoClass, doc: &Document, no
         // Runtime-only: атрибут `popover` декларирует тип, но не открытое
         // состояние. Phase 0 без Popover API runtime — всегда `false`.
         PseudoClass::PopoverOpen => doc.get(node).get_attr("data-lumen-popover-open").is_some(),
+        // CSS Selectors L4 `:open` — `<details open>`/`<dialog open>` по
+        // атрибуту, popover/select по runtime sentinel-атрибутам.
+        PseudoClass::Open => matches_open(doc, node),
         // Interest Invokers `:interest-source`/`:interest-target` — тот же
         // мост через скрытый атрибут, его ставит JS-шим при показе интереса.
         PseudoClass::InterestSource => doc.get(node).get_attr("data-lumen-interest-source").is_some(),
@@ -234,6 +237,29 @@ pub(in crate::style) fn matches_defined(doc: &Document, node: NodeId) -> bool {
     // между «built-in» и «custom». В Phase 0 без CustomElementRegistry
     // считаем все built-in defined, все custom-имена — undefined.
     !name.local.as_str().contains('-')
+}
+
+/// CSS Selectors L4 `:open` / HTML LS §4.11.2 (`<details open>`),
+/// §6.12.2 (`<dialog open>`, showing popover) и §4.10.7 (`<select>` с
+/// открытым списком). Открытость popover/select — runtime-only состояние,
+/// которое мостится sentinel-атрибутами: `data-lumen-popover-open` ставит
+/// JS-шим (`showPopover()`), `data-lumen-select-open` — shell при открытии
+/// нативного dropdown-а.
+pub(in crate::style) fn matches_open(doc: &Document, node: NodeId) -> bool {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return false;
+    };
+    let local = name.local.as_str();
+    if (local == "details" || local == "dialog") && doc.get(node).get_attr("open").is_some() {
+        return true;
+    }
+    if doc.get(node).get_attr("data-lumen-popover-open").is_some() {
+        return true;
+    }
+    if doc.get(node).get_attr("data-lumen-input-open").is_some() {
+        return true;
+    }
+    local == "select" && doc.get(node).get_attr("data-lumen-select-open").is_some()
 }
 
 /// Default-значение `<input type>` — `text` (HTML5 §4.10.5.1.2). Возвращает

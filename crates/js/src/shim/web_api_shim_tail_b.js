@@ -2467,6 +2467,25 @@ Object.defineProperty(HTMLFieldSetElement.prototype, 'type', {
     get: function() { return 'fieldset'; }, enumerable: true, configurable: true,
 });
 
+// HTML LS §4.10.7: `showPicker()` opens the select's dropdown — the same
+// native picker a click opens, so `:open` matches while it is up. Queued to
+// the shell via `_lumen_request_picker`, drained in `about_to_wait`.
+HTMLSelectElement.prototype.showPicker = function() {
+    var nid = _lumen_reflect_nid(this);
+    if (nid === -1) return;
+    if (this.disabled) {
+        var err = new Error('showPicker() called on a disabled element');
+        err.name = 'InvalidStateError';
+        throw err;
+    }
+    // Same contract as the input version: `:open` is synchronous, the shell
+    // request only opens the dropdown UI.
+    if (typeof _lumen_request_picker === 'function') {
+        this.setAttribute('data-lumen-select-open', '');
+        _lumen_request_picker(nid);
+    }
+};
+
 // HTML LS §4.12.3 — `readonly attribute DocumentFragment content`, an IDL
 // attribute of HTMLTemplateElement and of nothing else. It used to be declared in
 // `_LUMEN_WRAPPER_MEMBERS`, i.e. on the shared wrapper prototype every element

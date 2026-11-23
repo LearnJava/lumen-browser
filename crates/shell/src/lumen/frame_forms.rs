@@ -75,6 +75,11 @@ impl Lumen {
             // оверлей разбирается ТАМ ЖЕ, где страничное — в начале функции,
             // до hit-теста, потому что оверлей рисуется viewport-locked поверх
             // всего, а не внутри фрейма.
+            // Datalist popup state is page-level only (`:open` sentinel lives
+            // in the page document) — inside a frame the click is consumed
+            // without opening anything, same as the other unimplemented
+            // overlay types here.
+            forms::FormClickAction::OpenDatalist(_) => false,
             forms::FormClickAction::OpenColorPicker(id) => {
                 self.frame_color_picker = Some((idx, id));
                 self.request_redraw();

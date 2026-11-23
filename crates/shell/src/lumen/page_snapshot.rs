@@ -86,6 +86,7 @@ impl Lumen {
             validation_tooltip: self.validation_tooltip.take(),
             color_picker_node: self.color_picker_node.take(),
             date_picker_node: self.date_picker_node.take(),
+            datalist_picker_node: self.datalist_picker_node.take(),
             select_dropdown_node: self.select_dropdown_node.take(),
             ls_storage: std::mem::take(&mut self.ls_storage),
             ss_storage: std::mem::take(&mut self.ss_storage),
@@ -192,6 +193,7 @@ impl Lumen {
         self.validation_tooltip = snap.validation_tooltip;
         self.color_picker_node = snap.color_picker_node;
         self.date_picker_node = snap.date_picker_node;
+        self.datalist_picker_node = snap.datalist_picker_node;
         self.select_dropdown_node = snap.select_dropdown_node;
         self.ls_storage = snap.ls_storage;
         self.ss_storage = snap.ss_storage;

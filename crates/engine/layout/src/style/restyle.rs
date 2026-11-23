@@ -894,6 +894,12 @@ pub(crate) fn pseudo_class_read_attr_names(pc: &PseudoClass) -> &'static [&'stat
         PseudoClass::Fullscreen => &["data-lumen-fullscreen"],
         PseudoClass::Modal => &["data-lumen-modal"],
         PseudoClass::PopoverOpen => &["data-lumen-popover-open"],
+        PseudoClass::Open => &[
+            "open",
+            "data-lumen-popover-open",
+            "data-lumen-select-open",
+            "data-lumen-input-open",
+        ],
         PseudoClass::InterestSource | PseudoClass::InterestTarget => {
             &["data-lumen-interest-source", "data-lumen-interest-target"]
         }
