@@ -53,6 +53,10 @@ struct Entry {
     /// targets no pseudo-elements; a name the worker skipped simply misses the
     /// lookup and the pseudo probe matches sequentially, as before.
     pseudo: Vec<(Box<str>, Arc<[super::pseudo::PseudoMatch]>)>,
+    /// PERF-PSEUDO-STORE: at least one record was computed this pass rather
+    /// than served from `pseudo_snapshot` — only those need `store_matches_bulk`
+    /// (a snapshot hit is already in the cache under the same pass key).
+    pseudo_dirty: bool,
 }
 
 struct Table {
@@ -118,6 +122,10 @@ impl Guard {
                     table
                         .nodes
                         .iter()
+                        // Snapshot-served records are already in the pass's
+                        // PseudoCache — re-storing them is pure write
+                        // amplification on every incremental flush.
+                        .filter(|(_, e)| e.pseudo_dirty)
                         .map(|(node, e)| {
                             (
                                 *node,
@@ -257,22 +265,26 @@ fn install_impl(
                 // Reuse last pass's pseudo match records where the caller
                 // vouches they are not stale (subset passes pre-drop the
                 // recomputed set); a miss recomputes — the bulk store after
-                // the walk persists it for the next pass.
+                // the walk persists it for the next pass. `pseudo_dirty`
+                // marks entries holding at least one computed record: a
+                // pure snapshot hit needs no re-store (PERF-PSEUDO-STORE).
+                let mut pseudo_dirty = false;
                 let pseudo = pseudo_names
                     .iter()
                     .filter_map(|name| {
-                        let rec = pseudo_snapshot
-                            .as_ref()
-                            .and_then(|s| s.get(node, name))
-                            .or_else(|| {
-                                super::pseudo::match_pseudo_owned(
-                                    doc, node, name, sheet, viewport, dark_mode,
-                                )
-                            })?;
-                        Some((name.clone().into_boxed_str(), rec))
+                        if let Some(rec) =
+                            pseudo_snapshot.as_ref().and_then(|s| s.get(node, name))
+                        {
+                            return Some((name.clone().into_boxed_str(), rec));
+                        }
+                        pseudo_dirty = true;
+                        super::pseudo::match_pseudo_owned(
+                            doc, node, name, sheet, viewport, dark_mode,
+                        )
+                        .map(|rec| (name.clone().into_boxed_str(), rec))
                     })
                     .collect();
-                (node, Entry { rules, shareable, pseudo })
+                (node, Entry { rules, shareable, pseudo, pseudo_dirty })
             })
             .collect()
     };
