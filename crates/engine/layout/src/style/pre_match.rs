@@ -307,25 +307,29 @@ pub(crate) fn lookup(
     viewport: Size,
     dark_mode: bool,
 ) -> Option<(Arc<[MatchedRule]>, bool)> {
-    let res = TABLE.with(|t| {
+    // PERF-PRE-MATCH-HIT: count only lookups that found a live table — calls
+    // after the guard dropped (build_box/post passes) would otherwise read as
+    // misses and swamp the census the walk actually produces.
+    TABLE.with(|t| {
         let t = t.borrow();
         let table = t.as_ref()?;
-        if table.revision != sheet.revision()
+        let res = if table.revision != sheet.revision()
             || table.dark_mode != dark_mode
             || table.viewport != (viewport.width.to_bits(), viewport.height.to_bits())
         {
-            return None;
-        }
-        table.nodes.get(&node).and_then(|e| {
-            e.rules.as_ref().map(|rules| {
-                #[cfg(test)]
-                HITS.with(|c| c.set(c.get() + 1));
-                (Arc::clone(rules), e.shareable)
+            None
+        } else {
+            table.nodes.get(&node).and_then(|e| {
+                e.rules.as_ref().map(|rules| {
+                    #[cfg(test)]
+                    HITS.with(|c| c.set(c.get() + 1));
+                    (Arc::clone(rules), e.shareable)
+                })
             })
-        })
-    });
-    crate::counters::note_pre_match_lookup(res.is_some());
-    res
+        };
+        crate::counters::note_pre_match_lookup(res.is_some());
+        res
+    })
 }
 
 /// PERF-PSEUDO-PRE — this node's pre-matched pseudo declarations for `pseudo`
