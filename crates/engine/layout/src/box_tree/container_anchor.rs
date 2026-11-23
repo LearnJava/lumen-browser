@@ -119,7 +119,7 @@ pub fn apply_container_styles(
     let mut pending = HashMap::new();
     if let Some(sweep) = &sweep {
         let _p = lumen_core::profile::scope_detail("cq.sweep");
-        sweep.run(root, None, viewport.height, &mut boxless, &mut pending);
+        let _ = sweep.run(root, None, viewport.height, &mut boxless, &mut pending, &mut boxed);
         drop(_p);
     }
     let _p = lumen_core::profile::scope_detail("cq.shadowed");
@@ -206,13 +206,16 @@ fn apply_container_inner(
             // Re-apply container rules to all direct + indirect descendants.
             let _p = lumen_core::profile::scope_detail("cq.restype");
             let mut any_changed = false;
+            // PERF-CQ-SWEEP-CHANGE: the sweep now reports whether any element's
+            // restyled style differs from last pass's geometry basis — a clean
+            // sweep needs neither `mark_subtree_dirty` nor the child re-layout
+            // below (CQ-INCR-SKIP), same licence the non-sweep path has.
+            let mut sweep_changed = false;
             if let Some(sweep) = sweep {
-                sweep.run(b, Some(Arc::clone(&ctx)), content_h_val, boxless, pending);
-                // The sweep restyles without a per-node change probe: inside the
-                // incremental window a CLEAN bit would translate-stale the mutated
-                // boxes, so the whole subtree is marked for real re-layout — the
-                // same cost the pass always paid before the window existed.
-                crate::incremental::mark_subtree_dirty(b);
+                sweep_changed = sweep.run(b, Some(Arc::clone(&ctx)), content_h_val, boxless, pending, boxed_new);
+                if sweep_changed {
+                    crate::incremental::mark_subtree_dirty(b);
+                }
             } else {
                 let boxed_prev = counters.styles().cq_boxed();
                 let mut seen = SeenBoxes::default();
@@ -285,7 +288,7 @@ fn apply_container_inner(
             // requires the mode to be on.
             if geom_same
                 && !any_changed
-                && sweep.is_none()
+                && !sweep_changed
                 && super::incremental_layout_mode()
                 && b.dirty.is_clean()
                 && b.children.iter().all(|c| c.dirty.is_clean())
@@ -1073,11 +1076,20 @@ impl StyleSweep<'_> {
         start_h: f32,
         out: &mut HashMap<NodeId, Arc<ComputedStyle>>,
         pending: &mut HashMap<NodeId, SweepCtx>,
-    ) {
+        boxed: &mut HashMap<NodeId, Arc<ComputedStyle>>,
+    ) -> bool {
         self.boxless_below(start.node, &ctx, out);
         // `(box, context of the parent element, parent node, parent content height)`.
         let mut stack: Vec<(&mut LayoutBox, SweepCtx, NodeId, f32)> =
             start.children.iter_mut().map(|c| (c, ctx.clone(), start.node, start_h)).collect();
+        // PERF-CQ-SWEEP-CHANGE: whether any element's final style differs from
+        // the one last pass's geometry was computed with (`cq_boxed`) — the
+        // sweep-mode counterpart of `re_style_subtree`'s `changed` probe. The
+        // caller uses it to skip `mark_subtree_dirty`+re-layout when a
+        // container's restyle came out identical, the same licence the
+        // non-sweep path already had (CQ-INCR-SKIP below).
+        let mut changed = false;
+        let boxed_prev = self.counters.styles().cq_boxed();
         while let Some((b, pc, parent_node, parent_h)) = stack.pop() {
             // `display: none`: no principal box, walked through the document.
             if matches!(b.kind, BoxKind::Skip) {
@@ -1098,6 +1110,22 @@ impl StyleSweep<'_> {
             }
             // An anonymous or pseudo-element box shares its element's node: the context stays.
             let is_element = b.node != parent_node && matches!(self.doc.get(b.node).data, NodeData::Element { .. });
+            if is_element {
+                // Same bookkeeping `re_style_subtree` does for the non-sweep
+                // path: adopt the carried `Arc` when the restyle came out
+                // identical (restoring sharing), record the final style as
+                // this pass's geometry basis, and report a difference as a
+                // change. No `boxed_prev` entry means the element was not
+                // swept last pass — conservative `changed`, same as a
+                // first-pass node there.
+                match boxed_prev.get(&b.node) {
+                    Some(prev) if prev.as_ref() == b.style.as_ref() => {
+                        b.style = prev.clone();
+                    }
+                    _ => changed = true,
+                }
+                boxed.insert(b.node, b.style.clone());
+            }
             if is_element && is_query_container(&b.style) {
                 pending.insert(b.node, pc);
                 continue;
@@ -1116,6 +1144,7 @@ impl StyleSweep<'_> {
                 stack.push((child, child_ctx.clone(), b.node, content.h));
             }
         }
+        changed
     }
 
     /// Restyles the elements below `node` that own no box (plain inline elements,
