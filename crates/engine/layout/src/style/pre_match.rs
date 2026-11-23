@@ -111,30 +111,24 @@ pub(crate) fn take_hits() -> u64 {
 pub(crate) struct Guard;
 
 impl Guard {
-    /// PERF-PSEUDO-PRE — clones the per-node pseudo match records out of the
-    /// table before it drops, for bulk-loading into the pass's `PseudoCache`
-    /// (box build runs after this guard is gone). Arc clones only.
+    /// PERF-PSEUDO-PRE — drains the per-node pseudo match records out of the
+    /// table for bulk-loading into the pass's `PseudoCache` (box build runs
+    /// after this guard is gone). The table is dead the moment the cascade
+    /// walk ends — both callers drop the guard right after — so taking it
+    /// moves the records instead of cloning every `Box<str>` name and bumping
+    /// every `Arc` (~15k allocations saved per flush on real pages).
+    /// Snapshot-served records are already in the pass's `PseudoCache` —
+    /// re-storing them is pure write amplification, so `pseudo_dirty` only.
     pub(crate) fn pseudo_records(&self) -> super::pseudo::PseudoRecords {
         TABLE.with(|t| {
-            t.borrow()
-                .as_ref()
+            t.borrow_mut()
+                .take()
                 .map(|table| {
                     table
                         .nodes
-                        .iter()
-                        // Snapshot-served records are already in the pass's
-                        // PseudoCache — re-storing them is pure write
-                        // amplification on every incremental flush.
+                        .into_iter()
                         .filter(|(_, e)| e.pseudo_dirty)
-                        .map(|(node, e)| {
-                            (
-                                *node,
-                                e.pseudo
-                                    .iter()
-                                    .map(|(n, rec)| (n.clone(), Arc::clone(rec)))
-                                    .collect(),
-                            )
-                        })
+                        .map(|(node, e)| (node, e.pseudo))
                         .collect()
                 })
                 .unwrap_or_default()

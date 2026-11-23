@@ -444,11 +444,21 @@ impl PseudoCache {
         let interned: Interned = records
             .into_iter()
             .map(|(node, pseudos)| {
+                // PERF-PSEUDO-STORE: probe by `&str` first — the sheet has a
+                // handful of pseudo names, so nearly every record hits an
+                // existing intern and the old `entry(name.to_string())`
+                // allocated a `String` per record anyway (~15k allocs/flush).
                 let names: Vec<(u32, _)> = pseudos
                     .into_iter()
                     .map(|(name, rec)| {
-                        let next = inner.names.len() as u32;
-                        let idx = *inner.names.entry(name.to_string()).or_insert(next);
+                        let idx = match inner.names.get(&*name) {
+                            Some(&idx) => idx,
+                            None => {
+                                let next = inner.names.len() as u32;
+                                inner.names.insert(name.to_string(), next);
+                                next
+                            }
+                        };
                         (idx, rec)
                     })
                     .collect();
@@ -1679,9 +1689,13 @@ pub fn incremental_precompute_counters(
     }
     // PERF-PSEUDO-PRE: same hand-off as the full pass — the subset table's
     // records cover exactly the elements the scoped walk can recompute.
-    let pseudo_records = _pre_matched.pseudo_records();
+    let pseudo_records = {
+        let _prof = lumen_core::profile::scope_detail("pseudo_records");
+        _pre_matched.pseudo_records()
+    };
     drop(_pre_matched);
     if !pseudo_records.is_empty() {
+        let _prof = lumen_core::profile::scope_detail("pseudo_store");
         map.styles
             .pseudo_cache()
             .store_matches_bulk(pseudo_records, pseudo_pass_key(doc, sheet, viewport, dark_mode));
@@ -1691,7 +1705,10 @@ pub fn incremental_precompute_counters(
         map.styles.finish_pass();
     }
     map.styles.note_sheet_revision(sheet.revision());
-    map.record_generated_content(doc, flat);
+    {
+        let _prof = lumen_core::profile::scope_detail("record_gen");
+        map.record_generated_content(doc, flat);
+    }
     map
 }
 
