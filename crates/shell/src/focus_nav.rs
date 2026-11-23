@@ -12,7 +12,8 @@
 //!
 //! Used by [`crate::lumen::focus_tab`].
 
-use lumen_dom::{Document, FlatTree, InputType, NodeData, NodeId};
+use lumen_dom::{find_ancestor_form, Document, FlatTree, InputType, NodeData, NodeId};
+use std::collections::HashMap;
 
 /// Effective `tabindex` for sequential (Tab-key) navigation, or `None` if the
 /// node is not reachable that way at all.
@@ -63,12 +64,62 @@ pub(crate) fn click_focusable(doc: &Document, node: NodeId) -> bool {
     }
 }
 
-/// DOM order of every sequentially-focusable node under `root`, sorted per
-/// HTML Standard §6.6.6: positive `tabindex` first (ascending, ties broken
-/// by tree order), then `tabindex="0"`/implicitly-focusable elements in tree
-/// order. A `hidden` element (and its whole subtree — HTML: `hidden` means
-/// not rendered) is skipped entirely.
-fn build_focus_order(doc: &Document, flat_tree: &FlatTree, root: NodeId) -> Vec<NodeId> {
+/// Radio-group tab-stop collapse (HTML LS §6.6.6 sequential focus
+/// navigation): a radio button group contributes ONE stop — its checked
+/// member, or its first member when none is checked. Every other member
+/// stays in the sequence (so «next after a script-focused member» still
+/// lands correctly) but is not itself a stop.
+///
+/// Group identity mirrors the checkedness rule: same non-empty `name`,
+/// same form owner (nearest `<form>` ancestor — the `form=` attribute is
+/// not consulted here, matching `find_ancestor_form`'s scope). Radios
+/// without a `name` are singletons and always their own stop.
+fn collapse_radio_stops(doc: &Document, zero: &[NodeId]) -> (Vec<NodeId>, Vec<bool>) {
+    // Group key → member indices into `zero`, in tree order.
+    let mut groups: HashMap<(String, Option<NodeId>), Vec<usize>> = HashMap::new();
+    for (i, &id) in zero.iter().enumerate() {
+        let node = doc.get(id);
+        if !matches!(node.input_type(), Some(InputType::Radio)) {
+            continue;
+        }
+        let name = node.get_attr("name").unwrap_or("");
+        if name.is_empty() {
+            continue;
+        }
+        let owner = find_ancestor_form(doc, id);
+        groups
+            .entry((name.to_owned(), owner))
+            .or_default()
+            .push(i);
+    }
+    let mut stop = vec![true; zero.len()];
+    for (_, members) in groups {
+        if members.len() < 2 {
+            continue;
+        }
+        // Representative: first checked member in tree order, else the first.
+        let rep = members
+            .iter()
+            .copied()
+            .find(|&i| doc.control_checked(zero[i]))
+            .unwrap_or(members[0]);
+        for &i in &members {
+            if i != rep {
+                stop[i] = false;
+            }
+        }
+    }
+    (zero.to_vec(), stop)
+}
+
+/// DOM order of every sequentially-focusable node under `root`, plus a
+/// parallel `is_stop` flag per entry. Sorted per HTML Standard §6.6.6:
+/// positive `tabindex` first (ascending, ties broken by tree order), then
+/// `tabindex="0"`/implicitly-focusable elements in tree order with radio
+/// groups collapsed to their representative (see [`collapse_radio_stops`]).
+/// A `hidden` element (and its whole subtree — HTML: `hidden` means not
+/// rendered) is skipped entirely.
+fn build_focus_seq(doc: &Document, flat_tree: &FlatTree, root: NodeId) -> (Vec<NodeId>, Vec<bool>) {
     let mut positive: Vec<(i32, usize, NodeId)> = Vec::new();
     let mut zero: Vec<NodeId> = Vec::new();
     let mut seq: usize = 0;
@@ -93,10 +144,25 @@ fn build_focus_order(doc: &Document, flat_tree: &FlatTree, root: NodeId) -> Vec<
         }
     }
     positive.sort_by_key(|&(tabindex, seq, _)| (tabindex, seq));
-    positive
-        .into_iter()
-        .map(|(_, _, id)| id)
-        .chain(zero)
+    let (zero_seq, zero_stops) = collapse_radio_stops(doc, &zero);
+    let mut out_seq: Vec<NodeId> = Vec::with_capacity(positive.len() + zero_seq.len());
+    let mut out_stop: Vec<bool> = Vec::with_capacity(positive.len() + zero_seq.len());
+    for (_, _, id) in positive {
+        out_seq.push(id);
+        out_stop.push(true);
+    }
+    out_seq.extend(zero_seq);
+    out_stop.extend(zero_stops);
+    (out_seq, out_stop)
+}
+
+/// Stops-only view of [`build_focus_seq`] — what the unit tests assert on.
+#[cfg(test)]
+fn build_focus_order(doc: &Document, flat_tree: &FlatTree, root: NodeId) -> Vec<NodeId> {
+    let (seq, stops) = build_focus_seq(doc, flat_tree, root);
+    seq.into_iter()
+        .zip(stops)
+        .filter_map(|(id, stop)| stop.then_some(id))
         .collect()
 }
 
@@ -152,6 +218,39 @@ pub(crate) fn find_accesskey_target(
 /// `current = None`, or a `current` no longer in the order (e.g. it left the
 /// document), starts from the first (forward) or last (backward) entry.
 /// `None` iff the document has no focusable node at all.
+/// Index of the first stop at or after `from` in `seq` (wrapping when
+/// `wrap`), or `None` when there is none.
+fn next_stop(seq: &[NodeId], stops: &[bool], from: usize, step: isize, wrap: bool) -> Option<usize> {
+    let n = seq.len();
+    if n == 0 {
+        return None;
+    }
+    let mut i = from;
+    for _ in 0..n {
+        i = if step > 0 {
+            if i + 1 >= n {
+                if !wrap {
+                    return None;
+                }
+                0
+            } else {
+                i + 1
+            }
+        } else if i == 0 {
+            if !wrap {
+                return None;
+            }
+            n - 1
+        } else {
+            i - 1
+        };
+        if stops[i] {
+            return Some(i);
+        }
+    }
+    None
+}
+
 pub(crate) fn next_focus_target(
     doc: &Document,
     flat_tree: &FlatTree,
@@ -159,18 +258,24 @@ pub(crate) fn next_focus_target(
     current: Option<NodeId>,
     forward: bool,
 ) -> Option<NodeId> {
-    let order = build_focus_order(doc, flat_tree, root);
-    if order.is_empty() {
+    let (seq, stops) = build_focus_seq(doc, flat_tree, root);
+    if !stops.iter().any(|&s| s) {
         return None;
     }
-    let pos = current.and_then(|c| order.iter().position(|&id| id == c));
-    let next_idx = match (pos, forward) {
-        (Some(i), true) => (i + 1) % order.len(),
-        (Some(i), false) => (i + order.len() - 1) % order.len(),
-        (None, true) => 0,
-        (None, false) => order.len() - 1,
-    };
-    Some(order[next_idx])
+    let step: isize = if forward { 1 } else { -1 };
+    match current.and_then(|c| seq.iter().position(|&id| id == c)) {
+        Some(i) => next_stop(&seq, &stops, i, step, true).map(|j| seq[j]),
+        // `current` is not in the sequence at all (e.g. `tabindex=-1` or it
+        // left the document): start from the first/last stop.
+        None => {
+            let idx = if forward {
+                stops.iter().position(|&s| s)
+            } else {
+                stops.iter().rposition(|&s| s)
+            };
+            idx.map(|j| seq[j])
+        }
+    }
 }
 
 /// Like [`next_focus_target`] but does not wrap: `None` once `current` is the
@@ -190,16 +295,21 @@ pub(crate) fn next_focus_target_no_wrap(
     current: Option<NodeId>,
     forward: bool,
 ) -> Option<NodeId> {
-    let order = build_focus_order(doc, flat_tree, root);
-    if order.is_empty() {
+    let (seq, stops) = build_focus_seq(doc, flat_tree, root);
+    if !stops.iter().any(|&s| s) {
         return None;
     }
-    let pos = current.and_then(|c| order.iter().position(|&id| id == c));
-    match (pos, forward) {
-        (Some(i), true) => order.get(i + 1).copied(),
-        (Some(i), false) => (i > 0).then(|| order[i - 1]),
-        (None, true) => order.first().copied(),
-        (None, false) => order.last().copied(),
+    let step: isize = if forward { 1 } else { -1 };
+    match current.and_then(|c| seq.iter().position(|&id| id == c)) {
+        Some(i) => next_stop(&seq, &stops, i, step, false).map(|j| seq[j]),
+        None => {
+            let idx = if forward {
+                stops.iter().position(|&s| s)
+            } else {
+                stops.iter().rposition(|&s| s)
+            };
+            idx.map(|j| seq[j])
+        }
     }
 }
 
