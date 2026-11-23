@@ -62,14 +62,14 @@ git pull -q origin main
 # сборка с профилем (нужен LIBCLANG_PATH для boring-sys):
 LIBCLANG_PATH="C:\Users\konstantin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\v8-150.1.0\third_party\rust-toolchain\bin" \
   cargo build --profile dev-release -p lumen-shell
-# живой профиль одного сайта (одно окно, логи в .tmp/prof-run):
-python .tmp/prof_site.py "https://habr.com/ru/" 90     # python = pythoncore-3.14-64
+# живой профиль одного сайта (одно окно, логи в .tmp/prof-run — gitignored):
+python scripts/perf/prof_site.py "https://habr.com/ru/" 90     # python = pythoncore-3.14-64
 # агрегация scope-ов:
-python .tmp/agg_prof.py .tmp/prof-run/live.stderr.prof.0.log
+python scripts/perf/agg_prof.py .tmp/prof-run/live.stderr.prof.0.log
 # apply-census: LUMEN_APPLY_CENSUS=1 в env перед prof_site.py
 ```
 
-- Eval-коллектор resource-timing: `.tmp/probe_collect.py` + `.tmp/habr_collect.js` (JS собирает navigation/resource/paint/longtask entries; парсит `r["result"]` → двойной json.loads).
+- Eval-коллектор resource-timing: `scripts/perf/probe_collect.py` + `scripts/perf/habr_collect.js` (JS собирает navigation/resource/paint/longtask entries; парсит `r["result"]` → двойной json.loads).
 - Важно: у eval-ошибок `engine thread busy` — не баг скрипта, а symptom busy-окна; просто ретраить.
 - После КАЖДОГО изменения: `cargo test -p lumen-layout --lib -- <фильтр>` + `cargo clippy -p lumen-layout --all-targets -- -D warnings`, коммит explicit paths, push в main. Пиксельные изменения → `python graphic_tests/run.py --continue-on-fail` + golden в том же коммите.
 - Числа проверять по логам/тестам, не по памяти; measured vs inferred разделять.

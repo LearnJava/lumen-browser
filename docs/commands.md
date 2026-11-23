@@ -51,6 +51,14 @@ LUMEN_FRAME_LOG=1 cargo run -p lumen-shell -- samples/page.html
 # crates/core/src/profile.rs and docs/plan/security-performance.md §14.3.
 LUMEN_PROFILE_TREE=1 cargo run -p lumen-shell -- samples/page.html
 
+# Live real-site profiling (one browser window, MCP eval, logs -> .tmp/prof-run):
+# wraps LUMEN_PROFILE_TREE + LUMEN_FRAME_LOG + LUMEN_PROFILE_DETAIL, waits for
+# readyState=complete, prints top [profile] scopes; agg_prof.py aggregates a
+# stderr log; probe_collect.py + habr_collect.js dump navigation/resource/
+# paint/longtask timing. See scripts/perf/README.md.
+python scripts/perf/prof_site.py "https://habr.com/ru/" 90
+python scripts/perf/agg_prof.py .tmp/prof-run/live.stderr.prof.0.log
+
 # Real visual profiler with a timeline (Tracy GUI) instead of a printed tree —
 # download + start the Tracy GUI app FIRST (https://github.com/wolfpld/tracy),
 # then run with the `tracy` feature (NOT in default, adds tracy-client):

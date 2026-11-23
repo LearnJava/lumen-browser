@@ -1,0 +1,19 @@
+# scripts/perf — живое профилирование загрузки сайтов
+
+Инструменты для замеров реальных сайтов в живом окне Lumen (MCP `eval`, один процесс браузера за раз). Вывод и логи пишутся в `.tmp/prof-run/` (gitignored) — в репозиторий попадают только сами скрипты.
+
+| файл | назначение |
+|---|---|
+| `prof_site.py <url> [wait_s]` | живой прогон с `LUMEN_PROFILE_TREE=1` + `LUMEN_FRAME_LOG=1` + `LUMEN_PROFILE_DETAIL=1`; ждёт `document.readyState === "complete"`, печатает топ `[profile]`-скоупов по суммарному ms |
+| `agg_prof.py <log>` | агрегирует `[profile]`-строки stderr-лога по имени скоупа |
+| `probe_collect.py` | повторяющиеся eval-прогоны `habr_collect.js` до `readyState=complete`; сохраняет resource-timing/navigation/paint/longtask в `.tmp/habr_data.json` |
+| `habr_collect.js` | JS-сниппет для `probe_collect.py`: `performance.getEntriesByType('navigation'|'resource'|'paint'|'longtask')` |
+
+Запуск (Windows, Python — полный путь к pythoncore):
+
+```bash
+python scripts/perf/prof_site.py "https://habr.com/ru/" 90
+python scripts/perf/agg_prof.py .tmp/prof-run/live.stderr.prof.0.log
+```
+
+Зависимости: `scripts/perf_audit.py` (`LiveBrowser`, MCP-обёртка). Правила живых прогонов — `docs/automation.md` §Flags (`--maximized`, `LUMEN_NO_ADBLOCK=1`). Контекст эпика — `HANDOFF-PERF.md`.
