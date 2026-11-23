@@ -313,21 +313,27 @@ pub(crate) fn lookup(
     TABLE.with(|t| {
         let t = t.borrow();
         let table = t.as_ref()?;
-        let res = if table.revision != sheet.revision()
+        if table.revision != sheet.revision()
             || table.dark_mode != dark_mode
             || table.viewport != (viewport.width.to_bits(), viewport.height.to_bits())
         {
-            None
-        } else {
-            table.nodes.get(&node).and_then(|e| {
-                e.rules.as_ref().map(|rules| {
-                    #[cfg(test)]
-                    HITS.with(|c| c.set(c.get() + 1));
-                    (Arc::clone(rules), e.shareable)
-                })
+            // Stale table — count as absent, not as a coverage miss.
+            crate::counters::note_pre_match_lookup_kind(1);
+            return None;
+        }
+        let entry = table.nodes.get(&node);
+        let res = entry.and_then(|e| {
+            e.rules.as_ref().map(|rules| {
+                #[cfg(test)]
+                HITS.with(|c| c.set(c.get() + 1));
+                (Arc::clone(rules), e.shareable)
             })
-        };
-        crate::counters::note_pre_match_lookup(res.is_some());
+        });
+        crate::counters::note_pre_match_lookup_kind(match (entry, res.is_some()) {
+            (_, true) => 0,
+            (None, _) => 1,
+            (Some(_), _) => 2,
+        });
         res
     })
 }
