@@ -43,7 +43,7 @@ use crate::{Error, NetErrorCode, net_failure};
 /// TLS ClientHello-списки Chrome берутся из `crate::http::chrome_manifest::CHROME_157.tls`
 /// (FINGERPRINT-MANIFEST): cipher_list (TLS 1.2 + 1.3 AEAD в порядке
 /// предпочтения Chrome; TLS 1.3 suites в BoringSSL неявные), sigalgs
-/// (без `rsa_pkcs1_sha1` и PQ-схем), groups (X25519MLKEM768 первым,
+/// (ML-DSA первыми, без `rsa_pkcs1_sha1`), groups (X25519MLKEM768 первым,
 /// Chrome ≥124), ALPN. Значения перенесены без изменений — рефакторинг
 /// WS-B не должен двигать wire.
 const TLS: &crate::http::chrome_manifest::TlsSpec = &crate::http::chrome_manifest::CHROME_157.tls;
@@ -89,8 +89,12 @@ fn endpoint(profile: TlsProfile, h1_only: bool) -> Result<Arc<Endpoint>, Error> 
 fn build_endpoint(profile: TlsProfile, h1_only: bool) -> Result<Endpoint, Error> {
     let mut b = SslConnector::builder(SslMethod::tls())
         .map_err(|e| net_failure(NetErrorCode::SslProtocolError, format!("BoringSSL init: {e}")))?;
-    let _ = b.set_cipher_list(TLS.cipher_list);
-    let _ = b.set_sigalgs_list(TLS.sigalgs);
+    // Ошибка здесь — на проводе дефолтные списки стека, то есть чужой JA4;
+    // лучше отказ соединения, чем молчаливая подмена отпечатка.
+    b.set_cipher_list(TLS.cipher_list)
+        .map_err(|e| net_failure(NetErrorCode::SslProtocolError, format!("BoringSSL cipher_list: {e}")))?;
+    b.set_sigalgs_list(TLS.sigalgs)
+        .map_err(|e| net_failure(NetErrorCode::SslProtocolError, format!("BoringSSL sigalgs: {e}")))?;
     // Handshake-time chain validation stays OFF: `LumenVerifier` re-runs the
     // full policy (webpki + AIA + NUC + OCSP + bypass) on the DER chain after
     // the handshake — see module docs. `set_default_verify_paths` from

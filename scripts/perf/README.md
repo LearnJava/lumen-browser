@@ -8,6 +8,7 @@
 | `agg_prof.py <log>` | агрегирует `[profile]`-строки stderr-лога по имени скоупа |
 | `probe_collect.py` | повторяющиеся eval-прогоны `habr_collect.js` до `readyState=complete`; сохраняет resource-timing/navigation/paint/longtask в `.tmp/habr_data.json` |
 | `habr_collect.js` | JS-сниппет для `probe_collect.py`: `performance.getEntriesByType('navigation'|'resource'|'paint'|'longtask')` |
+| `site_ab.py --url <url> --runs N [--arms lumen,chrome] [--challenge-selector S]` | один сайт в Lumen и в Chrome: время до `load`/контента, сеть, консоль, ошибки, CPU по потокам. Только напрямую, без прокси (Lumen `LUMEN_NO_SYSTEM_PROXY=1`, Chrome `--no-proxy-server`); холодный профиль и свежий процесс на прогон (у Lumen — жёсткая ссылка на exe в пустом каталоге), прогоны чередуются. `<out>/results.json`, `r<NN>-<arm>/` (stderr-лог, `screen.jpg`) |
 
 Запуск (Windows, Python — полный путь к pythoncore):
 

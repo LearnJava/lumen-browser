@@ -39,7 +39,9 @@ pub struct H2Spec {
 #[derive(Debug, Clone, Copy)]
 pub struct TlsSpec {
     /// `set_cipher_list` — TLS 1.3 suites неявно в BoringSSL, список
-    /// упорядочивает ≤1.2 половину.
+    /// упорядочивает ≤1.2 половину. TLS 1.2 fallback у Chrome — только
+    /// ECDHE-RSA CBC-SHA (`c013`, `c014`); состав и порядок на проводе
+    /// сторожит тест `tls_cipher_list_is_measured_chrome_157`.
     pub cipher_list: &'static str,
     /// `set_sigalgs_list` — signature_algorithms.
     pub sigalgs: &'static str,
@@ -103,9 +105,11 @@ pub const CHROME_157: ChromeManifest = ChromeManifest {
 TLS_CHACHA20_POLY1305_SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:\
 ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:\
 ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:\
-ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES128-SHA:AES128-GCM-SHA256:AES256-GCM-SHA384:\
+ECDHE-RSA-AES128-SHA:ECDHE-RSA-AES256-SHA:AES128-GCM-SHA256:AES256-GCM-SHA384:\
 AES128-SHA:AES256-SHA",
-        sigalgs: "ecdsa_secp256r1_sha256:rsa_pss_rsae_sha256:rsa_pkcs1_sha256:\
+        // ML-DSA-44/65/87 (0x0904–0x0906) Chrome 157 объявляет первыми,
+        // перед классическими схемами (peet.ws, 2026-11-23).
+        sigalgs: "mldsa44:mldsa65:mldsa87:ecdsa_secp256r1_sha256:rsa_pss_rsae_sha256:rsa_pkcs1_sha256:\
 ecdsa_secp384r1_sha384:rsa_pss_rsae_sha384:rsa_pkcs1_sha384:\
 rsa_pss_rsae_sha512:rsa_pkcs1_sha512",
         groups: "X25519MLKEM768:X25519:P-256:P-384",
@@ -118,6 +122,41 @@ rsa_pss_rsae_sha512:rsa_pkcs1_sha512",
 #[cfg(test)]
 mod tests {
     use super::*;
+    use boring::ssl::{SslContext, SslMethod};
+
+    /// TLS 1.2-половину списка манифеста так, как её держит BoringSSL, —
+    /// состав и порядок Chrome 157 (JA3-хвост `49195-…-53`, peet.ws 2026-11-23;
+    /// suites 1.3 в `ciphers()` не входят — BoringSSL шлёт их неявно первыми).
+    /// Ловит подмену имени: `ECDHE-ECDSA-AES128-SHA` (`c009`) вместо
+    /// `ECDHE-RSA-AES256-SHA` (`c014`) прошла молча — JA4 разошёлся с Chrome.
+    #[test]
+    fn tls_cipher_list_is_measured_chrome_157() {
+        let mut ctx = SslContext::builder(SslMethod::tls()).unwrap();
+        ctx.set_cipher_list(CHROME_157.tls.cipher_list).unwrap();
+        let ids: Vec<u16> = ctx.ciphers().unwrap().iter().map(|c| c.protocol_id()).collect();
+        assert_eq!(
+            ids,
+            [
+                0xc02b, 0xc02f, 0xc02c, 0xc030, 0xcca9, 0xcca8, 0xc013, 0xc014, 0x009c, 0x009d,
+                0x002f, 0x0035,
+            ],
+            "список шифров разошёлся с измеренным Chrome 157"
+        );
+    }
+
+    /// Все три TLS-списка обязаны приниматься BoringSSL: неизвестное имя в
+    /// строке — ошибка `set_*_list`, иначе на проводе остаётся дефолт стека.
+    #[test]
+    fn tls_lists_are_accepted_by_boringssl() {
+        let mut b = SslContext::builder(SslMethod::tls()).unwrap();
+        b.set_cipher_list(CHROME_157.tls.cipher_list).expect("cipher_list");
+        b.set_sigalgs_list(CHROME_157.tls.sigalgs).expect("sigalgs");
+        b.set_curves_list(CHROME_157.tls.groups).expect("groups");
+        assert!(
+            CHROME_157.tls.sigalgs.starts_with("mldsa44:mldsa65:mldsa87:"),
+            "ML-DSA в signature_algorithms Chrome 157 идут первыми"
+        );
+    }
 
     /// Манифест не дублирует UA/CH, но обязан с ним согласовываться:
     /// major == CHROME_MAJOR, UA и Sec-CH-UA бренды содержат тот же мажор.
