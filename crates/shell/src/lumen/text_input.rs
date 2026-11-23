@@ -109,7 +109,7 @@ impl Lumen {
     /// Events have `isTrusted=true`; JS `dispatchEvent()` is never used.
     pub(crate) fn inject_special_key(&mut self, code: &str) {
         // A special-key press is keyboard input (`:focus-visible` modality).
-        self.focus_from_keyboard = true;
+        self.set_focus_modality(true);
         let key = input::native::code_to_key(code);
         self.inject_key_events(key, code, &["keydown", "keyup"]);
     }
@@ -128,9 +128,14 @@ impl Lumen {
         // (по умолчанию) — прежние синхронные вызовы, байт-идентично (`js_ctx == None`
         // → `route_eval_js` no-op + `route_query_js` → `None`, как прежний early-`return`).
         for event_type in events {
+            // `injected_modifiers` carries the BiDi chord state (Alt held for
+            // `accesskey`, Ctrl for shortcuts) into `altKey`/`ctrlKey` of the
+            // dispatched event — without it a page handler inspecting
+            // `ev.altKey` sees a modifier-less keydown.
             let script = format!(
                 "_lumen_dispatch_synth_key({}, '{}', '{}', '{}', {})",
-                node_id, event_type, key, code, platform::keyboard_state::caps_lock_mask(),
+                node_id, event_type, key, code,
+                platform::keyboard_state::caps_lock_mask() | u32::from(self.injected_modifiers),
             );
             route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
         }
@@ -480,7 +485,7 @@ impl Lumen {
     pub(crate) fn inject_char(&mut self, ch: char) -> bool {
         // Typed characters are keyboard input — same modality rule as a
         // real/synthetic keydown (`:focus-visible`, CSS UI L4 §3.3).
-        self.focus_from_keyboard = true;
+        self.set_focus_modality(true);
         let node_id = self.focused_node.map(|n| n.index()).unwrap_or(0);
         let key = escape_js_string_char(ch);
         // ADR-016 M2.2c-2d (10): same read-after-eval routing as `inject_special_key`

@@ -2486,6 +2486,19 @@ fn webdriver_special_key(ch: char) -> Option<(&'static str, &'static str)> {
     })
 }
 
+/// DOM `KeyboardEvent.code` for a printable char used as a key chord
+/// (Alt/Ctrl/Meta + char): letters → `KeyX`, digits → `DigitN`, anything
+/// else → empty (the `key` value alone still identifies it).
+fn char_dom_code(ch: char) -> String {
+    if ch.is_ascii_alphabetic() {
+        format!("Key{}", ch.to_ascii_uppercase())
+    } else if ch.is_ascii_digit() {
+        format!("Digit{ch}")
+    } else {
+        String::new()
+    }
+}
+
 /// Replay the pointer and key-input subset of a BiDi `input.performActions`
 /// action chain against a live window (SDC-2 MVP).
 ///
@@ -2500,6 +2513,14 @@ fn webdriver_special_key(ch: char) -> Option<(&'static str, &'static str)> {
 /// semantics - full W3C Actions fidelity is future work.
 fn replay_input_actions(live: &mut LiveWindowSession, sources: &[JsonValue]) {
     let mut last_point: Option<Target> = None;
+    // Modifier mask mirrored locally (bits match `AutomationCommand::Key`'s
+    // `injected_modifiers`) so a printable char pressed while Alt/Ctrl/Meta
+    // is held replays as a real key chord — `accesskey`, shortcuts — instead
+    // of being swallowed into the type-text buffer. Shift alone does NOT
+    // reroute: `Shift+a` still types the shifted character.
+    let mut held_mods: u8 = 0;
+    // Printable chars sent as `press_key` keyDowns, kept for their keyUps.
+    let mut chord_keys: Vec<(char, String, String)> = Vec::new();
     for source in sources {
         let source_type = source.get("type").and_then(|v| v.as_str()).unwrap_or("");
         let Some(actions) = source.get("actions").and_then(|v| v.as_array()) else { continue };
@@ -2535,9 +2556,43 @@ fn replay_input_actions(live: &mut LiveWindowSession, sources: &[JsonValue]) {
                             Some((key, code)) => {
                                 flush_typed_text(live, last_point.as_ref(), &mut text);
                                 let _ = live.press_key(key, code, down);
+                                let bit = match key {
+                                    "Control" => 0b0001,
+                                    "Shift" => 0b0010,
+                                    "Alt" => 0b0100,
+                                    "Meta" => 0b1000,
+                                    _ => 0,
+                                };
+                                if bit != 0 {
+                                    if down {
+                                        held_mods |= bit;
+                                    } else {
+                                        held_mods &= !bit;
+                                    }
+                                }
                             }
-                            None if down && !('\u{E000}'..='\u{E05D}').contains(&ch) => text.push(ch),
-                            None => {}
+                            None if ('\u{E000}'..='\u{E05D}').contains(&ch) => {}
+                            None => {
+                                let chord_mods = held_mods & !0b0010;
+                                if down && chord_mods != 0 {
+                                    // Alt/Ctrl/Meta + char is a key chord
+                                    // (accesskey, browser shortcut), not text
+                                    // input — replay it as a real key press.
+                                    flush_typed_text(live, last_point.as_ref(), &mut text);
+                                    let key_s = ch.to_string();
+                                    let code_s = char_dom_code(ch);
+                                    let _ = live.press_key(&key_s, &code_s, true);
+                                    chord_keys.push((ch, key_s, code_s));
+                                } else if !down
+                                    && let Some(pos) =
+                                        chord_keys.iter().position(|(c, _, _)| *c == ch)
+                                {
+                                    let (_, k, c) = chord_keys.remove(pos);
+                                    let _ = live.press_key(&k, &c, false);
+                                } else if down {
+                                    text.push(ch);
+                                }
+                            }
                         }
                     }
                 }

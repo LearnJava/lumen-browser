@@ -807,7 +807,39 @@ function _lumen_is_focusable(nid) {
         var ctrl = _lumen_label_control_nid(nid);
         return ctrl !== -1 && _lumen_is_focusable(ctrl);
     }
+    // HTML LS §6.6.1: a shadow host whose shadow root has `delegatesFocus`
+    // is itself a focusable area — `focus()` then redirects into the shadow
+    // tree (see `_lumen_shadow_delegates_focus`).
+    if (_lumen_shadow_delegates_focus(nid)) return true;
     return _LUMEN_FOCUSABLE_TAGS[tag] === 1;
+}
+
+// `true` when `nid` hosts a shadow root created with `delegatesFocus: true`
+// (the flag `attachShadow()` recorded in `_lumen_shadow_root_init`).
+function _lumen_shadow_delegates_focus(nid) {
+    var sr = _lumen_u2n(_lumen_get_shadow_root(nid));
+    if (sr === null || sr === undefined) return false;
+    var init = _lumen_shadow_root_init[sr];
+    return !!(init && init.delegatesFocus);
+}
+
+// First focusable area in `nid`'s subtree, in tree order. A nested
+// delegatesFocus host delegates into its own shadow tree first; slotted
+// light-DOM children are reached through the ordinary child pointers.
+function _lumen_first_focusable_in(nid) {
+    var children = _lumen_get_children(nid);
+    for (var i = 0; i < children.length; i++) {
+        var cur = children[i];
+        if (_lumen_is_text_node(cur) || _lumen_is_comment_node(cur)) continue;
+        if (_lumen_shadow_delegates_focus(cur)) {
+            var inner = _lumen_first_focusable_in(_lumen_u2n(_lumen_get_shadow_root(cur)));
+            if (inner !== -1) return inner;
+        }
+        if (_lumen_is_focusable(cur)) return cur;
+        var deep = _lumen_first_focusable_in(cur);
+        if (deep !== -1) return deep;
+    }
+    return -1;
 }
 
 // Dispatch one focus-family event. `focus`/`blur` do not bubble and must not
@@ -971,6 +1003,16 @@ HTMLElement.prototype.focus = function(options) {
         nid = _lumen_label_control_nid(nid);
         if (nid === -1) return;
         target = _lumen_make_element(nid);
+    }
+    // HTML LS §6.6.3 «delegate focus»: a shadow host whose shadow root has
+    // `delegatesFocus` forwards focus to the first focusable area inside the
+    // shadow tree; with none, the host itself keeps focus.
+    if (_lumen_shadow_delegates_focus(nid)) {
+        var delegated = _lumen_first_focusable_in(_lumen_u2n(_lumen_get_shadow_root(nid)));
+        if (delegated !== -1) {
+            nid = delegated;
+            target = _lumen_make_element(delegated);
+        }
     }
     if (!_lumen_is_focusable(nid) || !_lumen_resource_is_connected(nid)) return;
     _lumen_request_focus(nid);

@@ -1019,6 +1019,13 @@ pub(crate) trait PersistentJs: Send + Sync {
     #[allow(dead_code)]
     fn notify_hover_changed(&self, _nid: Option<u32>) {}
 
+    /// CSS UI L4 §3.3: the shell's input modality flipped between keyboard
+    /// and pointer. Keeps the engine thread's `:focus-visible` mirror in step,
+    /// so `matches(':focus-visible')` and `getComputedStyle()` agree with the
+    /// painted relayout's `set_keyboard_focus`.
+    #[allow(dead_code)]
+    fn notify_keyboard_focus(&self, _keyboard: bool) {}
+
     /// Return the node ID of the current pointer capture target, if any.
     ///
     /// Non-consuming: the capture stays active until `take_pointer_capture()`.
@@ -1751,6 +1758,9 @@ impl PersistentJs for V8PersistentJs {
     }
     fn notify_hover_changed(&self, nid: Option<u32>) {
         self.rt.set_hovered_nid(nid);
+    }
+    fn notify_keyboard_focus(&self, keyboard: bool) {
+        self.rt.set_keyboard_focus(keyboard);
     }
     fn pointer_capture_nid(&self) -> Option<u32> {
         self.rt.pointer_capture_nid()

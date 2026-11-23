@@ -116,7 +116,8 @@ impl Lumen {
                             // BUG-1044: a `Dead` chrome hit is reported, not
                             // `Ack`ed — the point was over chrome furniture but
                             // nothing actionable sits under it.
-                            match self.dispatch_chrome_click(resolved.x, resolved.y, event_loop) {
+                            let chrome_outcome = self.dispatch_chrome_click(resolved.x, resolved.y, event_loop);
+                            match chrome_outcome {
                                 crate::chrome_action::ChromeClickOutcome::Actioned => {
                                     let _ = reply_tx.send(AutomationReply::Ack);
                                 }
@@ -138,7 +139,7 @@ impl Lumen {
                                             let _ = reply_tx.send(AutomationReply::Error(err));
                                         }
                                         None => {
-                                            self.handle_click_at(resolved.x, resolved.y);
+                                            self.handle_click_at_automation(resolved.x, resolved.y);
                                             let _ = reply_tx.send(AutomationReply::Ack);
                                         }
                                     }
@@ -190,7 +191,7 @@ impl Lumen {
                         }
                         Some(resolved) => {
                             let (x, y) = (resolved.x, resolved.y);
-                            self.handle_click_at(x, y);
+                            self.handle_click_at_automation(x, y);
                             // BUG-480 срез 22: клик мог адресовать typeable-поле
                             // ВНУТРИ фрейма (`self.focused_frame`) вместо поля
                             // страницы — тот же выбор пути, что в
@@ -266,11 +267,13 @@ impl Lumen {
                             self.injected_modifiers &= !mod_bit;
                         }
                     }
-                    if down {
-                        // Any key press is keyboard modality for
+                    if down && mod_bit == 0 {
+                        // Any non-modifier key press is keyboard modality for
                         // `:focus-visible` — the same rule a real keydown
-                        // applies in `handle_key`.
-                        self.focus_from_keyboard = true;
+                        // applies in `handle_key`. Bare modifier presses are
+                        // RawKeyDown and must NOT flip the modality (WPT
+                        // `focus-visible-012`).
+                        self.set_focus_modality(true);
                     }
                     // Tab moves page focus exactly like a real Tab press
                     // (`keyboard.rs`): the frame's own order first, then the
@@ -291,6 +294,23 @@ impl Lumen {
                     }
                     let event = if down { "keydown" } else { "keyup" };
                     self.inject_key_events(&key, &code, &[event]);
+                    // Alt+key is the page's `accesskey` — the same chord a
+                    // real Alt press resolves in `keyboard.rs`. WebDriver
+                    // sends Shift+Alt (Windows) or Ctrl+Alt (macOS); Alt is
+                    // the bit that matters, matching `activate_accesskey`'s
+                    // ALT|ALT+SHIFT rule. The `key` string stands in for the
+                    // layout character a winit event would carry.
+                    if down && mod_bit == 0 && self.injected_modifiers & 0b0100 != 0 {
+                        let chars: Vec<char> = key
+                            .chars()
+                            .filter(|c| c.is_alphanumeric())
+                            .flat_map(char::to_lowercase)
+                            .collect();
+                        // The page keydown above already went out, same as
+                        // the real-key path which dispatches the key to the
+                        // page before resolving the chord.
+                        self.activate_accesskey_chars(&chars);
+                    }
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
                 // BUG-1194: characters into the already focused element.

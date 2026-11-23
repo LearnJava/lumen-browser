@@ -413,6 +413,8 @@ impl V8JsRuntime {
                 last_flushed_focus: Arc::clone(&self.last_flushed_focus),
                 hovered_nid: Arc::clone(&self.hovered_nid),
                 last_flushed_hover: Arc::clone(&self.last_flushed_hover),
+                keyboard_focus: Arc::clone(&self.keyboard_focus),
+                last_flushed_keyboard_focus: Arc::clone(&self.last_flushed_keyboard_focus),
                 style_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
                 transition_stale: Arc::new(Mutex::new(HashMap::new())),
                 transition_stale_needed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -501,6 +503,7 @@ impl V8JsRuntime {
                 Arc::clone(&doc),
                 Arc::clone(&self.focused_nid),
                 Arc::clone(&self.hovered_nid),
+                Arc::clone(&self.keyboard_focus),
             )?;
 
             install::install_node_properties(

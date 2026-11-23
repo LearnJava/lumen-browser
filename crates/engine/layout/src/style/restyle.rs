@@ -407,6 +407,32 @@ pub fn restyle_root_set_for_state_change(
     set
 }
 
+/// CSS UI L4 §3.3 — root set for a keyboard-modality flip (`:focus-visible`'s
+/// only input beyond "is focused") where the focused node did *not* move, so
+/// [`restyle_root_set_for_state_change`] would early-return on `prev == new`.
+///
+/// `:focus-visible` matches the focused element alone, but its compounds reach
+/// descendants (`:focus-visible X` — covered by the focused node's own subtree
+/// restyle) and, through a dynamic `:has()`, ancestors — the same reach the
+/// interactive-state index already models. Walking the focused node's whole
+/// ancestor chain and applying [`StateRestyleIndex::state_flip_can_matter`]
+/// narrows it exactly like a focus transition does. Empty when nothing is
+/// focused: `:focus-visible` cannot match then.
+pub fn restyle_root_set_for_modality_change(
+    doc: &Document,
+    focus: Option<NodeId>,
+    index: &StateRestyleIndex<'_>,
+) -> HashSet<NodeId> {
+    let mut set = HashSet::new();
+    let root_for = |n: NodeId| if index.needs_fanout { doc.get(n).parent.unwrap_or(n) } else { n };
+    for &n in ancestor_chain_inclusive(doc, focus).iter() {
+        if index.state_flip_can_matter(doc, n) {
+            set.insert(root_for(n));
+        }
+    }
+    set
+}
+
 /// BUG-341 S17 — true if `complex` contains a `:has()` anywhere, regardless of
 /// what it looks for.
 ///

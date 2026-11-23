@@ -562,9 +562,14 @@ pub(crate) struct Lumen {
     pub(crate) status_hover_source: Option<NodeId>,
     /// UX-STATUS-BUBBLE / `:focus-visible`: the last page interaction was a
     /// keyboard one (Tab, `accesskey`, any keydown — real or injected via
-    /// WebDriver/BiDi), not a pointer press. Pointer clicks clear it
-    /// (`click.rs`); programmatic `element.focus()` preserves it — the CSS
-    /// UI L4 §3.3 modality is about the last *input*, not who moved focus.
+    /// WebDriver/BiDi), not a pointer press on a click-focusable element.
+    /// Starts `true` — no interaction yet reads as keyboard, so script
+    /// `focus()` matches `:focus-visible` (CSS UI L4 §3.3, WPT
+    /// `focus-visible-script-focus-001`). Pointer clicks clear it only when
+    /// they land on a click-focusable node (`click.rs` +
+    /// `focus_nav::click_focusable`); programmatic `element.focus()`
+    /// preserves it — the modality is about the last *input*, not who moved
+    /// focus.
     pub(crate) focus_from_keyboard: bool,
     /// Modifier mask of keys currently held via injected (WebDriver/BiDi)
     /// `AutomationCommand::Key` presses — real `self.modifiers` only tracks
@@ -712,6 +717,13 @@ pub(crate) struct Lumen {
     pub(crate) click_proceed_inbox: Arc<std::sync::Mutex<Vec<(u64, bool)>>>,
     /// THREAD-9 срез 6: клики, ждущие ответа движка (`id` → контекст активации).
     pub(crate) pending_clicks: Vec<(u64, crate::lumen::click::PendingClick)>,
+    /// Hit-тест синтетического клика, отвеченный движком по СВЕЖЕМУ
+    /// flush-layout (`_lumen_hit_test_at_point`), пока закоммиченный
+    /// `layout_box` мог отставать на same-tick flush. `Some(None)` — точка
+    /// промаха; `None` — оверрайда нет, работает обычный `pointer_target`.
+    /// Заполняется в `handle_click_at_automation`, читается один раз в
+    /// `handle_click_at_inner`.
+    pub(crate) automation_hit_override: Option<Option<lumen_paint::HitTestResult>>,
     pub(crate) next_click_proceed_id: u64,
     /// То же для `submit`-события формы: (`id`, форма, submitter, страница, момент).
     pub(crate) pending_submits: Vec<(u64, NodeId, Option<NodeId>, String, std::time::Instant)>,

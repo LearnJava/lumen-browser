@@ -249,14 +249,18 @@ fn input_type_lower(doc: &Document, node: NodeId) -> String {
 
 /// CSS UI L4 §3.3 `:focus-visible` — focused element, когда фокус пришёл
 /// с клавиатуры ([`crate::style::env::set_keyboard_focus`]); текстовые поля
-/// матчатся всегда, как в Chrome (клик по полю даёт кольцо, клик по кнопке нет).
+/// и editing hosts (`contenteditable`) матчатся всегда, как в Chrome
+/// (клик по полю даёт кольцо, клик по кнопке нет; спек: «an element that is
+/// an editing host always matches»).
 /// Тот же предикат читает UA-хинт кольца (`ua::apply_ua_focus_ring`), поэтому
 /// селектор и кольцо не могут разойтись.
 pub(in crate::style) fn matches_focus_visible(doc: &Document, node: NodeId) -> bool {
     if FOCUS_NID.with(Cell::get) != node.index() as u32 {
         return false;
     }
-    KEYBOARD_FOCUS.with(Cell::get) || is_text_field(doc, node)
+    KEYBOARD_FOCUS.with(Cell::get)
+        || is_text_field(doc, node)
+        || is_effectively_contenteditable(doc, node)
 }
 
 /// Текстовое поле — `<textarea>` или text-like `<input>` (HTML LS §4.10.5).
@@ -273,21 +277,22 @@ fn is_text_field(doc: &Document, node: NodeId) -> bool {
 
 /// `<input>`-типы, к которым применимы `:read-only` / `:read-write` per HTML5
 /// §4.16.4 «mutable input» — text-like (введение текста).
+/// Text-like per HTML LS §4.10.5: the enumerated text types plus ANY value
+/// the parser does not recognise — an invalid `type` falls back to the Text
+/// state, so `type="telephone"` is a text field (WPT `focus-visible-002`).
 fn input_is_text_like(input_type: &str) -> bool {
-    matches!(
+    !matches!(
         input_type,
-        "text"
-            | "search"
-            | "url"
-            | "tel"
-            | "email"
-            | "password"
-            | "number"
-            | "date"
-            | "month"
-            | "week"
-            | "time"
-            | "datetime-local"
+        "hidden"
+            | "checkbox"
+            | "radio"
+            | "file"
+            | "submit"
+            | "image"
+            | "reset"
+            | "button"
+            | "range"
+            | "color"
     )
 }
 

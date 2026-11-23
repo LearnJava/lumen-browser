@@ -20,6 +20,16 @@ impl Lumen {
             return false;
         }
         let chars = accesskey_chars(physical, key_event);
+        self.activate_accesskey_chars(&chars)
+    }
+
+    /// Find the `accesskey` target for `chars` (lower-cased candidates, best
+    /// first), focus it with keyboard modality and run its activation
+    /// behavior. Shared by the real Alt-chord path ([`Self::activate_accesskey`])
+    /// and injected/WebDriver key chords (`automation_cmds.rs`), where the
+    /// character comes from the action's `key` string rather than a winit
+    /// event. `true` iff an element took the chord.
+    pub(crate) fn activate_accesskey_chars(&mut self, chars: &[char]) -> bool {
         if chars.is_empty() {
             return false;
         }
@@ -29,7 +39,7 @@ impl Lumen {
         let (target, focus_only) = {
             let doc = src.document.lock().unwrap_or_else(|e| e.into_inner());
             let flat_tree = lumen_dom::build_flat_tree(&doc);
-            let Some(target) = focus_nav::find_accesskey_target(&doc, &flat_tree, doc.root(), &chars)
+            let Some(target) = focus_nav::find_accesskey_target(&doc, &flat_tree, doc.root(), chars)
             else {
                 return false;
             };
