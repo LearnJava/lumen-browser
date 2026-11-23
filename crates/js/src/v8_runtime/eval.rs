@@ -61,7 +61,12 @@ pub(super) fn eval_script(inner: &mut V8Inner, script: &str) -> JsResult<JsValue
         let compiled = compiled
             .ok_or_else(|| JsError::Runtime("script compile returned None".into()))?;
 
+        // PERF-JS-PROF: тот же скоуп, что у eval_and_report_via — eval() —
+        // основной путь диспетчера колбэков (тысячи вызовов на загрузку),
+        // без него время исполнения скрипта было невидимо.
+        let _run_prof = lumen_core::profile::scope("js.run");
         let result = compiled.run(tc);
+        drop(_run_prof);
         if tc.has_caught() {
             let exc = tc.exception().unwrap();
             return Err(v8_err(tc, exc));
@@ -189,7 +194,11 @@ impl JsRuntime for V8JsRuntime {
                     v8_args.push(to_v8(tc, a)?);
                 }
                 let recv = v8::undefined(tc).into();
+                // PERF-JS-PROF: вход в JS-колбэк (rAF/таймер/событие через
+                // `_lumen_*`-диспетчер) — внутри js.job, но вне js.run.
+                let _call_prof = lumen_core::profile::scope("js.call");
                 let result = func.call(tc, recv, &v8_args);
+                drop(_call_prof);
                 if tc.has_caught() {
                     let exc = tc.exception().unwrap();
                     return Err(v8_err(tc, exc));
@@ -717,7 +726,9 @@ impl FramePeerBridge for V8JsRuntime {
                     }
                 }
                 let recv = v8::undefined(tc).into();
+                let _call_prof = lumen_core::profile::scope("js.call");
                 let result = func.call(tc, recv, &v8_args);
+                drop(_call_prof);
                 if tc.has_caught() {
                     let msg = tc
                         .exception()

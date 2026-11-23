@@ -91,13 +91,30 @@ fn run_platform_tasks(
     }
     stall.job_started();
     let mut ran = false;
+    // PERF-JS-PROF: задача платформы и её микрозадачный чекпоинт — разные
+    // статьи расхода (колбэк `.then`/`setTimeout` против чистого JS без
+    // DOM-работы). `record`, а не `scope`: гард печатал бы дерево на каждый
+    // пустой опрос очереди. При выключенном профиле — одна проверка bool.
+    let prof = lumen_core::profile::enabled();
     loop {
         let mut pumped_now = false;
-        while v8::Platform::pump_message_loop(platform, &inner.isolate, false) {
+        loop {
+            let t = prof.then(std::time::Instant::now);
+            let pumped = v8::Platform::pump_message_loop(platform, &inner.isolate, false);
+            if let Some(t) = t {
+                lumen_core::profile::record("js.ptask", t.elapsed());
+            }
+            if !pumped {
+                break;
+            }
             pumped_now = true;
             // End of a task = end of its microtask checkpoint (HTML LS §8.1.7.3);
             // a `.then` chained onto the settled promise runs here, not later.
+            let t = prof.then(std::time::Instant::now);
             inner.isolate.perform_microtask_checkpoint();
+            if let Some(t) = t {
+                lumen_core::profile::record("js.microtasks", t.elapsed());
+            }
         }
         if pumped_now {
             ran = true;
@@ -288,7 +305,13 @@ pub(super) fn v8_thread_main(
                 // убить следующую.
                 terminate_handle.cancel_terminate_execution();
                 stall.job_started();
-                job(&mut inner);
+                {
+                    // PERF-JS-PROF: вся синхронная JS-работа команды (скрипт,
+                    // обработчик события, вызов из shell) — включая вложенные
+                    // js.run/js.module_eval и flush-и, которые она будит.
+                    let _js_job_prof = lumen_core::profile::scope("js.job");
+                    job(&mut inner);
+                }
                 stall.job_finished();
                 // После `TerminateExecution` изолят остаётся «прерываемым» до
                 // возврата на верхний уровень — снимаем, чтобы следующая задача

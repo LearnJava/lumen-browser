@@ -171,6 +171,9 @@ fn fetch_module_source(specifier: &str) -> Result<String, String> {
     let Some(provider) = provider else {
         return Err(format!("module '{specifier}' not found (no fetch provider)"));
     };
+    // PERF-JS-PROF: синхронный сетевой промах резолв-колбэка — идёт мимо
+    // js.module_eval (инстанцирование вне его скоупа).
+    let _fetch_prof = lumen_core::profile::scope("js.module_fetch");
     match fetch_over_network(&provider, specifier) {
         Ok(text) => Ok(text),
         Err(msg) => {
@@ -541,6 +544,9 @@ fn compile<'s>(
         None,  // host defined options
     );
     let mut source = v8::script_compiler::Source::new(src, Some(&origin));
+    // PERF-JS-PROF: компиляция модуля — и ленивая, и из prefetch_graph —
+    // идёт мимо js.module_eval, поэтому меряется отдельно.
+    let _compile_prof = lumen_core::profile::scope("js.module_compile");
     let module = v8::script_compiler::compile_module(scope, &mut source)?;
     let hash = module.get_identity_hash().get();
     let global = v8::Global::new(scope, module);
@@ -619,6 +625,10 @@ fn prefetch_graph(scope: &mut v8::PinScope<'_, '_>, root_specifier: &str, root_k
         return;
     };
 
+    // PERF-JS-PROF: предзабор графа (сеть + компиляция уровней) идёт до
+    // js.module_eval — отдельный скоуп, js.module_compile внутри него виден
+    // как дочерний.
+    let _prefetch_prof = lumen_core::profile::scope("js.module_prefetch");
     let mut seen: HashSet<String> = HashSet::from([root_key.to_owned()]);
     let mut frontier = vec![(root_specifier.to_owned(), root)];
     let mut level = 0usize;

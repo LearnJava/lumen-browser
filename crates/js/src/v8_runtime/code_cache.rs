@@ -60,6 +60,9 @@ pub(super) fn code_cache_hash(src: &str) -> u64 {
 /// always be valid — correctness never depends on a hit.
 macro_rules! compile_cached {
     ($tc:expr, $src_str:expr, $v8_src:expr) => {{
+        // PERF-JS-PROF: компиляция классического скрипта — вне js.run,
+        // поэтому без своего скоупа невидима (кэш-хит тоже считается).
+        let _compile_prof = lumen_core::profile::scope("js.compile");
         let __src_str: &str = $src_str;
         let __v8_src: v8::Local<v8::String> = $v8_src;
         if __src_str.len() < CODE_CACHE_MIN_LEN {

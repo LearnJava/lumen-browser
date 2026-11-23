@@ -62,7 +62,34 @@ use std::time::Instant;
 #[doc(hidden)]
 pub use tracy_client;
 
-fn enabled() -> bool {
+/// Whether scope recording is on — the same cached `LUMEN_PROFILE_TREE`
+/// check [`scope`] makes, exposed for call sites that must time work they
+/// cannot wrap in a [`ScopeGuard`] (e.g. a poll loop that is usually empty:
+/// a guard there would print a tree per call). Pair with [`record`].
+pub fn enabled() -> bool {
+    tree_enabled()
+}
+
+/// Records `elapsed` under `name` as a standalone `[profile]` line, without
+/// a call-tree node.
+///
+/// For work timed manually because a [`scope`] guard would have to exist
+/// *before* it is known whether any work happened — the guard's drop prints
+/// a tree unconditionally, which a per-poll-site guard would turn into a
+/// stderr flood. Children opened inside the timed region still print their
+/// own trees as roots, exactly as they do without this call; only the
+/// parent's total is recorded here, so the printed line carries no indent.
+///
+/// No-op unless [`enabled`]. Unlike [`scope`], this does not check
+/// [`owns_tree`] — use it only on threads that own the tree.
+pub fn record(name: &'static str, elapsed: std::time::Duration) {
+    if !tree_enabled() {
+        return;
+    }
+    eprintln!("[profile] {:>9.2}ms  {}", elapsed.as_secs_f64() * 1000.0, name);
+}
+
+fn tree_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var("LUMEN_PROFILE_TREE").is_ok())
 }
@@ -70,7 +97,7 @@ fn enabled() -> bool {
 /// Whether the fine-grained per-node scopes ([`scope_detail`]) are on.
 fn detail_enabled() -> bool {
     static DETAIL: OnceLock<bool> = OnceLock::new();
-    *DETAIL.get_or_init(|| enabled() && std::env::var("LUMEN_PROFILE_DETAIL").is_ok())
+    *DETAIL.get_or_init(|| tree_enabled() && std::env::var("LUMEN_PROFILE_DETAIL").is_ok())
 }
 
 /// The thread that opened the first root scope — the only one whose trees are
@@ -106,7 +133,7 @@ thread_local! {
 /// is set. Only call it from a thread that is not a worker pool member, or the
 /// per-call-tree print flood described above returns.
 pub fn claim_tree() {
-    if enabled() {
+    if tree_enabled() {
         CLAIMED.with(|c| c.set(true));
     }
 }
@@ -167,7 +194,7 @@ pub struct ScopeGuard {
 ///
 /// No-op (a single cached env-var check) unless `LUMEN_PROFILE_TREE` is set.
 pub fn scope(name: &'static str) -> ScopeGuard {
-    if !enabled() {
+    if !tree_enabled() {
         return ScopeGuard { active: false };
     }
     open(name)
