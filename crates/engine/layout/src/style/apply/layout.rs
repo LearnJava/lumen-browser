@@ -1137,10 +1137,13 @@ pub(in crate::style) fn apply_decl_layout(
             set_padding_side(&mut style.padding_block_end, e, is_quirks);
         }
         "box-sizing" => {
-            style.box_sizing = match val.trim().to_ascii_lowercase().as_str() {
-                "border-box" => BoxSizing::BorderBox,
-                "content-box" => BoxSizing::ContentBox,
-                _ => style.box_sizing,
+            let v = val.trim();
+            style.box_sizing = if v.eq_ignore_ascii_case("border-box") {
+                BoxSizing::BorderBox
+            } else if v.eq_ignore_ascii_case("content-box") {
+                BoxSizing::ContentBox
+            } else {
+                style.box_sizing
             };
         }
         // CSS Rhythmic Sizing L1 §3 (BUG-517): `block-step-size`/`-insert`/

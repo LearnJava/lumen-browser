@@ -347,7 +347,7 @@ mod census {
                 e.1 += ns;
             }
         }
-        if CALLS.fetch_add(1, Ordering::Relaxed) % 500_000 == 499_999 {
+        if CALLS.fetch_add(1, Ordering::Relaxed) % 100_000 == 99_999 {
             dump();
         }
         out

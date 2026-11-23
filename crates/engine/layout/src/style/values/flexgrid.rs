@@ -1299,70 +1299,108 @@ impl AlignValue {
     /// keyword, whether it was `safe`, and whether it was a writing-mode
     /// relative `start`/`end` (as opposed to `flex-start`/`flex-end`).
     pub fn parse_with_overflow(s: &str) -> Option<(Self, bool, bool)> {
-        let lc = s.trim().to_ascii_lowercase();
-        let (rest, safe) = if let Some(rest) = lc.strip_prefix("safe ") {
-            (rest, true)
-        } else if let Some(rest) = lc.strip_prefix("unsafe ") {
-            (rest, false)
+        let t = s.trim();
+        // ASCII-case-insensitive prefix probes — the old code lowercased a
+        // fresh `String` here and `AlignValue::parse` lowercased another one
+        // inside, ~3 allocations per declaration on the hot align path.
+        let (rest, safe) = if t.len() > 5 && t[..5].eq_ignore_ascii_case("safe ") {
+            (t[5..].trim_start(), true)
+        } else if t.len() > 7 && t[..7].eq_ignore_ascii_case("unsafe ") {
+            (t[7..].trim_start(), false)
         } else {
-            (lc.as_str(), false)
+            (t, false)
         };
-        let wm_relative = matches!(rest.trim(), "start" | "end" | "self-start" | "self-end");
+        let wm_relative = ["start", "end", "self-start", "self-end"]
+            .iter()
+            .any(|k| rest.eq_ignore_ascii_case(k));
         Self::parse(rest).map(|v| (v, safe, wm_relative))
     }
 
     /// Was the value written with an explicit `unsafe` overflow keyword?
     pub fn is_unsafe(s: &str) -> bool {
-        s.trim().to_ascii_lowercase().starts_with("unsafe ")
+        let t = s.trim();
+        t.len() > 7 && t[..7].eq_ignore_ascii_case("unsafe ")
     }
 
     /// Was the keyword `self-start` / `self-end` (items' own axes)?
     pub fn is_self_relative(s: &str) -> bool {
-        let lc = s.trim().to_ascii_lowercase();
-        let rest = lc.strip_prefix("safe ").or_else(|| lc.strip_prefix("unsafe ")).unwrap_or(&lc);
-        matches!(rest.trim(), "self-start" | "self-end")
+        let t = s.trim();
+        let rest = if t.len() > 5 && t[..5].eq_ignore_ascii_case("safe ") {
+            t[5..].trim_start()
+        } else if t.len() > 7 && t[..7].eq_ignore_ascii_case("unsafe ") {
+            t[7..].trim_start()
+        } else {
+            t
+        };
+        rest.eq_ignore_ascii_case("self-start") || rest.eq_ignore_ascii_case("self-end")
     }
 
     /// `[safe | unsafe]? left | right` as a `justify-self` / `justify-items` value: the side
     /// and whether it was `safe`.
     pub fn parse_self_side(s: &str) -> Option<(ContentSide, bool)> {
-        let lc = s.trim().to_ascii_lowercase();
-        let (rest, safe) = if let Some(rest) = lc.strip_prefix("safe ") {
-            (rest, true)
-        } else if let Some(rest) = lc.strip_prefix("unsafe ") {
-            (rest, false)
+        let t = s.trim();
+        let (rest, safe) = if t.len() > 5 && t[..5].eq_ignore_ascii_case("safe ") {
+            (t[5..].trim_start(), true)
+        } else if t.len() > 7 && t[..7].eq_ignore_ascii_case("unsafe ") {
+            (t[7..].trim_start(), false)
         } else {
-            (lc.as_str(), false)
+            (t, false)
         };
         Self::parse_content_side(rest).map(|side| (side, safe))
     }
 
     /// `left` / `right` as a `justify-content` value.
     pub fn parse_content_side(s: &str) -> Option<ContentSide> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "left" => Some(ContentSide::Left),
-            "right" => Some(ContentSide::Right),
-            _ => None,
+        let t = s.trim();
+        if t.eq_ignore_ascii_case("left") {
+            Some(ContentSide::Left)
+        } else if t.eq_ignore_ascii_case("right") {
+            Some(ContentSide::Right)
+        } else {
+            None
         }
     }
 }
 
 impl AlignValue {
     pub fn parse(s: &str) -> Option<Self> {
-        let lc = s.split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_lowercase();
-        match lc.as_str() {
-            "auto" => Some(Self::Auto),
-            "normal" => Some(Self::Normal),
-            "stretch" => Some(Self::Stretch),
-            "start" | "flex-start" | "self-start" => Some(Self::Start),
-            "end" | "flex-end" | "self-end" => Some(Self::End),
-            "center" => Some(Self::Center),
-            "baseline" | "first baseline" => Some(Self::Baseline),
-            "last baseline" => Some(Self::LastBaseline),
-            "space-between" => Some(Self::SpaceBetween),
-            "space-around" => Some(Self::SpaceAround),
-            "space-evenly" => Some(Self::SpaceEvenly),
-            _ => None,
+        let t = s.trim();
+        // Single-token values (the common case) skip the whitespace-collapse
+        // Vec and lowercase String entirely — keyword compare is ASCII-ci.
+        if !t.contains(char::is_whitespace) {
+            return Self::parse_keyword(t);
+        }
+        let lc = t.split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_lowercase();
+        Self::parse_keyword(&lc)
+    }
+
+    fn parse_keyword(lc: &str) -> Option<Self> {
+        // `lc` is either already normalized or a raw single token — compare
+        // ASCII-case-insensitively so both paths agree.
+        if lc.eq_ignore_ascii_case("auto") {
+            Some(Self::Auto)
+        } else if lc.eq_ignore_ascii_case("normal") {
+            Some(Self::Normal)
+        } else if lc.eq_ignore_ascii_case("stretch") {
+            Some(Self::Stretch)
+        } else if ["start", "flex-start", "self-start"].iter().any(|k| lc.eq_ignore_ascii_case(k)) {
+            Some(Self::Start)
+        } else if ["end", "flex-end", "self-end"].iter().any(|k| lc.eq_ignore_ascii_case(k)) {
+            Some(Self::End)
+        } else if lc.eq_ignore_ascii_case("center") {
+            Some(Self::Center)
+        } else if lc.eq_ignore_ascii_case("baseline") || lc.eq_ignore_ascii_case("first baseline") {
+            Some(Self::Baseline)
+        } else if lc.eq_ignore_ascii_case("last baseline") {
+            Some(Self::LastBaseline)
+        } else if lc.eq_ignore_ascii_case("space-between") {
+            Some(Self::SpaceBetween)
+        } else if lc.eq_ignore_ascii_case("space-around") {
+            Some(Self::SpaceAround)
+        } else if lc.eq_ignore_ascii_case("space-evenly") {
+            Some(Self::SpaceEvenly)
+        } else {
+            None
         }
     }
 }
