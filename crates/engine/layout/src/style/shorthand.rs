@@ -53,69 +53,58 @@ pub(in crate::style) fn parse_text_decoration_shorthand_q(val: &str, is_quirks: 
     // Соберём «не-линия / не-стиль» токены и попытаемся склеить.
     let mut residue: Vec<&str> = Vec::new();
     for token in val.split_whitespace() {
-        let lower = token.to_ascii_lowercase();
-        match lower.as_str() {
-            "none" => {
-                none_seen = true;
-                any_line = true;
-                any_recognized = true;
-            }
-            "underline" => {
-                out_line.underline = true;
-                any_line = true;
-                any_recognized = true;
-            }
-            "overline" => {
-                out_line.overline = true;
-                any_line = true;
-                any_recognized = true;
-            }
-            "line-through" => {
-                out_line.line_through = true;
-                any_line = true;
-                any_recognized = true;
-            }
-            "solid" => {
-                out_style = Some(TextDecorationStyle::Solid);
-                any_recognized = true;
-            }
-            "double" => {
-                out_style = Some(TextDecorationStyle::Double);
-                any_recognized = true;
-            }
-            "dotted" => {
-                out_style = Some(TextDecorationStyle::Dotted);
-                any_recognized = true;
-            }
-            "dashed" => {
-                out_style = Some(TextDecorationStyle::Dashed);
-                any_recognized = true;
-            }
-            "wavy" => {
-                out_style = Some(TextDecorationStyle::Wavy);
-                any_recognized = true;
-            }
-            "blink" => {
-                // CSS2 deprecated: хранится ради getComputedStyle, не рисуется.
-                out_line.blink = true;
-                any_line = true;
-                any_recognized = true;
-            }
-            "spelling-error" => {
-                out_line.spelling_error = true;
-                any_line = true;
-                any_recognized = true;
-            }
-            "grammar-error" => {
-                out_line.grammar_error = true;
-                any_line = true;
-                any_recognized = true;
-            }
-            "currentcolor" => {
-                color = Some(CssColor::CurrentColor);
-                any_recognized = true;
-            }
-            _ => residue.push(token),
+        // ASCII-ci keyword probes — the old `to_ascii_lowercase()` per token
+        // allocated a String for every word of every `text-decoration`
+        // declaration on the page.
+        if token.eq_ignore_ascii_case("none") {
+            none_seen = true;
+            any_line = true;
+            any_recognized = true;
+        } else if token.eq_ignore_ascii_case("underline") {
+            out_line.underline = true;
+            any_line = true;
+            any_recognized = true;
+        } else if token.eq_ignore_ascii_case("overline") {
+            out_line.overline = true;
+            any_line = true;
+            any_recognized = true;
+        } else if token.eq_ignore_ascii_case("line-through") {
+            out_line.line_through = true;
+            any_line = true;
+            any_recognized = true;
+        } else if token.eq_ignore_ascii_case("solid") {
+            out_style = Some(TextDecorationStyle::Solid);
+            any_recognized = true;
+        } else if token.eq_ignore_ascii_case("double") {
+            out_style = Some(TextDecorationStyle::Double);
+            any_recognized = true;
+        } else if token.eq_ignore_ascii_case("dotted") {
+            out_style = Some(TextDecorationStyle::Dotted);
+            any_recognized = true;
+        } else if token.eq_ignore_ascii_case("dashed") {
+            out_style = Some(TextDecorationStyle::Dashed);
+            any_recognized = true;
+        } else if token.eq_ignore_ascii_case("wavy") {
+            out_style = Some(TextDecorationStyle::Wavy);
+            any_recognized = true;
+        } else if token.eq_ignore_ascii_case("blink") {
+            // CSS2 deprecated: хранится ради getComputedStyle, не рисуется.
+            out_line.blink = true;
+            any_line = true;
+            any_recognized = true;
+        } else if token.eq_ignore_ascii_case("spelling-error") {
+            out_line.spelling_error = true;
+            any_line = true;
+            any_recognized = true;
+        } else if token.eq_ignore_ascii_case("grammar-error") {
+            out_line.grammar_error = true;
+            any_line = true;
+            any_recognized = true;
+        } else if token.eq_ignore_ascii_case("currentcolor") {
+            color = Some(CssColor::CurrentColor);
+            any_recognized = true;
+        } else {
+            residue.push(token);
         }
     }
     if !residue.is_empty() {
@@ -162,11 +151,11 @@ pub(in crate::style) fn parse_text_decoration_thickness(
     viewport: Size,
 ) -> Option<TextDecorationThickness> {
     let trimmed = val.trim();
-    let lower = trimmed.to_ascii_lowercase();
-    match lower.as_str() {
-        "auto" => return Some(TextDecorationThickness::Auto),
-        "from-font" => return Some(TextDecorationThickness::FromFont),
-        _ => {}
+    if trimmed.eq_ignore_ascii_case("auto") {
+        return Some(TextDecorationThickness::Auto);
+    }
+    if trimmed.eq_ignore_ascii_case("from-font") {
+        return Some(TextDecorationThickness::FromFont);
     }
     let (px, frac) = parse_length_percentage_parts(trimmed, em_basis, viewport)?;
     Some(if frac == 0.0 {
