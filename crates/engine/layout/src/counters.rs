@@ -1667,8 +1667,18 @@ pub fn incremental_precompute_counters(
         // ~3.5-4.1 s → ~1.8 s, `compute_style` ~3.2 s → ~1.6 s, `pre_match`
         // ~1.2 s → ~1.7 s — net ≈ −1.5 s per load. The empty-`needed` case
         // (font-metrics relayout: nothing recomputes) keeps the cheap subset
-        // path, which exits before any matching.
+        // path, which exits before any matching. A size threshold was tried
+        // and rejected: `needed` stays small even on flushes whose forced
+        // recomputes reach thousands of nodes, so it cannot predict the
+        // serial re-match tail — measured regression on habr.
         Some(needed) if needed.is_empty() => {
+            // pre_match workers may reuse pseudo match records from the
+            // carried cache — drop exactly the set this walk will recompute
+            // first, the same invalidation `pseudo_drop_node` applies
+            // mid-walk, so no stale record can be replayed.
+            for &id in needed.iter() {
+                map.styles.pseudo_drop_node(id);
+            }
             crate::style::pre_match::install_subset(
                 doc,
                 sheet,
