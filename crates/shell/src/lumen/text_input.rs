@@ -99,6 +99,74 @@ pub(crate) fn history_op_for(code: KeyCode, mods: ModifiersState) -> Option<Hist
 }
 
 impl Lumen {
+    /// Apply JS-queued focus requests (`_lumen_request_focus`/`_lumen_request_blur`)
+    /// ahead of an injected key press. `about_to_wait` drains the same queue
+    /// every pump, but a script-driven `element.focus()` followed immediately
+    /// by WebDriver keys can land inside that gap — the JS side already sees
+    /// the new `activeElement` while `self.focused_node` still points at the
+    /// previous control, so typed characters and `input`/`change` events go
+    /// to the wrong element (or nowhere). Draining here is the same code the
+    /// pump runs; it is idempotent and cheap when the queue is empty.
+    #[cfg(feature = "v8")]
+    pub(crate) fn drain_js_focus_requests(&mut self) {
+        self.drain_js_focus_requests_mode(false);
+    }
+
+    /// Input-injection variant: a `element.focus()` immediately followed by
+    /// WebDriver/typed keys must not lose the race to a busy engine thread.
+    /// `drain_query_js` defers (returns `None`) while a rAF turn or relayout
+    /// job is in flight — fine for the per-frame pump, fatal here: the key
+    /// would dispatch to the stale `focused_node` and the page's `input`/
+    /// `change` listeners never fire (WPT `input-change-event-properties`
+    /// flakes). Blocking on `route_query_js` waits out the in-flight job —
+    /// the same trade `inject_key_events`' Enter path already makes for
+    /// implicit submission — bounded by `QUERY_TIMEOUT` and the
+    /// dialog/script-stall guards inside `route_query_js`.
+    #[cfg(feature = "v8")]
+    fn drain_js_focus_requests_for_input(&mut self) {
+        self.drain_js_focus_requests_mode(true);
+    }
+
+    #[cfg(feature = "v8")]
+    fn drain_js_focus_requests_mode(&mut self, block_on_busy: bool) {
+        // ADR-016 M2.2d: value-drain через `route_query_js`.
+        let focus_reqs = if block_on_busy {
+            match self.drain_query_js(|j| j.take_focus_requests()) {
+                Some(reqs) => reqs,
+                None => route_query_js(
+                    self.engine_thread.as_ref(),
+                    self.js_ctx.as_ref(),
+                    |j| j.take_focus_requests(),
+                )
+                .unwrap_or_default(),
+            }
+        } else {
+            self.drain_query_js(|j| j.take_focus_requests()).unwrap_or_default()
+        };
+        if focus_reqs.is_empty() {
+            return;
+        }
+        // Only the last request in the batch matters.
+        let Some(last_req) = focus_reqs.into_iter().last() else { return };
+        let new_nid = last_req.map(|n| lumen_dom::NodeId::from_index(n as usize));
+        if new_nid == self.focused_node {
+            return;
+        }
+        self.focused_node = new_nid;
+        // `focus_from_keyboard` is deliberately NOT reset: it records the
+        // last *input* modality (CSS UI L4 §3.3 `:focus-visible`), and a
+        // programmatic `element.focus()` must not overwrite it.
+        self.relayout_chrome();
+        self.platform_bridge.focused_node_changed(new_nid);
+        // BUG-381: echo the applied focus back into JS — a no-op for requests
+        // that came from `element.focus()` itself, required for
+        // showModal()/close() which move focus without `focus()`.
+        let focus_idx = new_nid.map(|n| n.index() as u32);
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+            js.notify_focus_changed(focus_idx);
+        });
+    }
+
     /// Inject a typed character into the focused element (TypeText injection path).
     ///
     /// Inject a special (non-printable) key press: `keydown` → `keyup`.
@@ -119,6 +187,8 @@ impl Lumen {
     /// press and release as separate actions, with `key` != `code` for
     /// modifiers such as `Shift` / `ShiftLeft`).
     pub(crate) fn inject_key_events(&mut self, key: &str, code: &str, events: &[&str]) {
+        #[cfg(feature = "v8")]
+        self.drain_js_focus_requests_for_input();
         let node_id = self.focused_node.map(|n| n.index()).unwrap_or(0);
         // ADR-016 M2.2c-2d (10): keyboard injection — `_lumen_dispatch_key_event`
         // (keydown → keyup) уходит fire-and-forget через `route_eval_js`, а
@@ -137,7 +207,20 @@ impl Lumen {
                 node_id, event_type, key, code,
                 platform::keyboard_state::caps_lock_mask() | u32::from(self.injected_modifiers),
             );
-            route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
+            // Enter `keydown` is dispatched synchronously so an uncancelled
+            // press can run implicit form submission (HTML LS §4.10.21.2) —
+            // the same place `page_keys.rs` reaches it for real keys.
+            // Ctrl/Alt/Meta chords never submit (bit 0b1101 mask, as in
+            // `sync_key_active`).
+            let enter_submit = *event_type == "keydown" && key == "Enter"
+                && self.injected_modifiers & 0b1101 == 0;
+            if enter_submit {
+                if self.eval_key_script(script) {
+                    self.implicit_submit_enter_focused();
+                }
+            } else {
+                route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
+            }
             // CSS `:active` mirror for a held Space/Enter — WebDriver press
             // and release arrive as separate `AutomationCommand::Key`s, so
             // each event edge syncs the state the real-key path sets in
@@ -497,6 +580,8 @@ impl Lumen {
         // Typed characters are keyboard input — same modality rule as a
         // real/synthetic keydown (`:focus-visible`, CSS UI L4 §3.3).
         self.set_focus_modality(true);
+        #[cfg(feature = "v8")]
+        self.drain_js_focus_requests_for_input();
         let node_id = self.focused_node.map(|n| n.index()).unwrap_or(0);
         let key = escape_js_string_char(ch);
         // ADR-016 M2.2c-2d (10): same read-after-eval routing as `inject_special_key`
@@ -507,10 +592,20 @@ impl Lumen {
             self.dispatch_injected_key(node_id, "keyup", &key);
             return false;
         }
-        let consumed = self.edit_focused_field_at_cursor(EditAction::InsertChar(ch));
-        for event_type in &["input", "keyup"] {
-            self.dispatch_injected_key(node_id, event_type, &key);
+        // Input Events L2: `beforeinput` (cancelable) gates the edit, then a
+        // real `input` InputEvent — not a KeyboardEvent named "input" —
+        // follows it. `change` is deferred to blur (see the shim's
+        // `_lumen_focus_update`).
+        let nid = self.focused_node;
+        let ch_text = ch.to_string();
+        let proceed = nid.is_none_or(|n| {
+            self.page_input_event(n, "beforeinput", "insertText", Some(&ch_text))
+        });
+        let consumed = proceed && self.edit_focused_field_at_cursor(EditAction::InsertChar(ch));
+        if consumed && let Some(n) = nid {
+            self.page_input_event(n, "input", "insertText", Some(&ch_text));
         }
+        self.dispatch_injected_key(node_id, "keyup", &key);
         self.queue_js_navigate_read();
         consumed
     }
@@ -523,15 +618,22 @@ impl Lumen {
     /// filled but never corrected. Returns `true` when a form control consumed
     /// the key.
     pub(crate) fn inject_backspace(&mut self) -> bool {
+        #[cfg(feature = "v8")]
+        self.drain_js_focus_requests_for_input();
         let node_id = self.focused_node.map(|n| n.index()).unwrap_or(0);
         if !self.injected_keydown_allowed(node_id, "Backspace") {
             self.dispatch_injected_key(node_id, "keyup", "Backspace");
             return false;
         }
-        let consumed = self.edit_focused_field_at_cursor(EditAction::Backspace);
-        for event_type in &["input", "keyup"] {
-            self.dispatch_injected_key(node_id, event_type, "Backspace");
+        let nid = self.focused_node;
+        let proceed = nid.is_none_or(|n| {
+            self.page_input_event(n, "beforeinput", "deleteContentBackward", None)
+        });
+        let consumed = proceed && self.edit_focused_field_at_cursor(EditAction::Backspace);
+        if consumed && let Some(n) = nid {
+            self.page_input_event(n, "input", "deleteContentBackward", None);
         }
+        self.dispatch_injected_key(node_id, "keyup", "Backspace");
         consumed
     }
 
@@ -543,15 +645,22 @@ impl Lumen {
     /// was no cursor position for "after" to mean anything relative to.
     /// Returns `true` when a form control consumed the key.
     pub(crate) fn inject_delete_forward(&mut self) -> bool {
+        #[cfg(feature = "v8")]
+        self.drain_js_focus_requests_for_input();
         let node_id = self.focused_node.map(|n| n.index()).unwrap_or(0);
         if !self.injected_keydown_allowed(node_id, "Delete") {
             self.dispatch_injected_key(node_id, "keyup", "Delete");
             return false;
         }
-        let consumed = self.edit_focused_field_at_cursor(EditAction::DeleteForward);
-        for event_type in &["input", "keyup"] {
-            self.dispatch_injected_key(node_id, event_type, "Delete");
+        let nid = self.focused_node;
+        let proceed = nid.is_none_or(|n| {
+            self.page_input_event(n, "beforeinput", "deleteContentForward", None)
+        });
+        let consumed = proceed && self.edit_focused_field_at_cursor(EditAction::DeleteForward);
+        if consumed && let Some(n) = nid {
+            self.page_input_event(n, "input", "deleteContentForward", None);
         }
+        self.dispatch_injected_key(node_id, "keyup", "Delete");
         consumed
     }
 

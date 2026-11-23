@@ -417,10 +417,15 @@ impl Lumen {
         let node_id = nid.index();
         let key = escape_js_string_char(ch);
         self.dispatch_frame_key(idx, node_id, "keydown", &key);
-        let consumed = self.edit_focused_frame_field_at_cursor(EditAction::InsertChar(ch));
-        for event_type in &["input", "keyup"] {
-            self.dispatch_frame_key(idx, node_id, event_type, &key);
+        // Input Events L2 — зеркало `inject_char`: cancelable `beforeinput`,
+        // затем настоящий `input` InputEvent (не KeyboardEvent "input").
+        let ch_text = ch.to_string();
+        let proceed = self.frame_clip_input_event(idx, nid, "beforeinput", "insertText", Some(&ch_text));
+        let consumed = proceed && self.edit_focused_frame_field_at_cursor(EditAction::InsertChar(ch));
+        if consumed {
+            self.frame_clip_input_event(idx, nid, "input", "insertText", Some(&ch_text));
         }
+        self.dispatch_frame_key(idx, node_id, "keyup", &key);
         consumed
     }
 
@@ -430,10 +435,12 @@ impl Lumen {
         let Some((idx, nid)) = self.focused_frame else { return false };
         let node_id = nid.index();
         self.dispatch_frame_key(idx, node_id, "keydown", "Backspace");
-        let consumed = self.edit_focused_frame_field_at_cursor(EditAction::Backspace);
-        for event_type in &["input", "keyup"] {
-            self.dispatch_frame_key(idx, node_id, event_type, "Backspace");
+        let proceed = self.frame_clip_input_event(idx, nid, "beforeinput", "deleteContentBackward", None);
+        let consumed = proceed && self.edit_focused_frame_field_at_cursor(EditAction::Backspace);
+        if consumed {
+            self.frame_clip_input_event(idx, nid, "input", "deleteContentBackward", None);
         }
+        self.dispatch_frame_key(idx, node_id, "keyup", "Backspace");
         consumed
     }
 
@@ -444,10 +451,12 @@ impl Lumen {
         let Some((idx, nid)) = self.focused_frame else { return false };
         let node_id = nid.index();
         self.dispatch_frame_key(idx, node_id, "keydown", "Delete");
-        let consumed = self.edit_focused_frame_field_at_cursor(EditAction::DeleteForward);
-        for event_type in &["input", "keyup"] {
-            self.dispatch_frame_key(idx, node_id, event_type, "Delete");
+        let proceed = self.frame_clip_input_event(idx, nid, "beforeinput", "deleteContentForward", None);
+        let consumed = proceed && self.edit_focused_frame_field_at_cursor(EditAction::DeleteForward);
+        if consumed {
+            self.frame_clip_input_event(idx, nid, "input", "deleteContentForward", None);
         }
+        self.dispatch_frame_key(idx, node_id, "keyup", "Delete");
         consumed
     }
 }
