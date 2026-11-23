@@ -846,6 +846,16 @@ impl Lumen {
             dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
                 &doc, prev_active, new_interactive.2, &state_index,
             ));
+            // The UA `:focus-visible` ring (`apply_ua_focus_ring`) matches any
+            // focused element off the interactive-state mirrors — no author
+            // rule names it, so `state_index` cannot see which nodes need
+            // recomputing. Restyle both endpoints unconditionally on a focus
+            // move or the painted ring stays stale (same defect class as the
+            // engine-thread flush's `focus-visible-017-2` fix).
+            if prev_focus != new_interactive.1 {
+                dirty_roots.extend(prev_focus);
+                dirty_roots.extend(new_interactive.1);
+            }
             // BUG-935 срез 81: the tracker names what changed (attribute with its old
             // value, child list) — the same classification the engine thread's flush
             // uses (`DomTouched::changes_since`). Every node used to go in as

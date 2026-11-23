@@ -1558,6 +1558,21 @@ impl FlushHandles {
             })
             .flatten();
         if focus_changed || keyboard_changed {
+            // The UA `:focus-visible` ring (`apply_ua_focus_ring`) matches any
+            // focused element purely off the interactive-state mirrors — no
+            // author rule names it, so `restyle_state_index` (built from the
+            // page sheet) cannot see which nodes need recomputing. Without
+            // these unconditional roots a same-tick flush kept serving the
+            // pre-transition outline (WPT `focus-visible-017-2`: sequential
+            // `.focus()` calls returned the stale ring for every element but
+            // the first). Both endpoints must restyle: the old target loses
+            // `:focus`/`:focus-visible`, the new one gains them.
+            if let Some(prev) = basis.focus.map(lumen_dom::NodeId::from_raw) {
+                dirty_roots.insert(prev);
+            }
+            if let Some(cur) = current_focus.map(lumen_dom::NodeId::from_raw) {
+                dirty_roots.insert(cur);
+            }
             let state_index = lumen_layout::style::restyle_state_index(doc, sheet);
             if focus_changed {
                 dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(

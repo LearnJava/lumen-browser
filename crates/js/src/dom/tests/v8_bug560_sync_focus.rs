@@ -184,3 +184,33 @@ fn focus_target_removed_by_focusout_listener_leaves_no_focus() {
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
+
+/// WPT `focus-visible-017-2` shape: sequential programmatic `focus()` calls,
+/// each followed by a `getComputedStyle` read. The UA `:focus-visible`
+/// `outline-style: auto` hint must apply to whichever element is focused at
+/// read time — and only to it — across repeated focus transitions (the
+/// incremental style-collect path must not serve the pre-focus snapshot).
+#[test]
+fn sequential_programmatic_focus_updates_focus_visible_ring() {
+    let rt = v8_runtime_with_focus_rule(make_doc());
+    let r = rt
+        .eval(
+            "(function() {
+                var root = document.getElementById('main');
+                root.innerHTML = '<div id=a tabindex=0></div><div id=b tabindex=0></div>';
+                var a = document.getElementById('a');
+                var b = document.getElementById('b');
+                a.focus();
+                var first = getComputedStyle(a).outlineStyle;
+                b.focus();
+                var second = getComputedStyle(b).outlineStyle;
+                var stale = getComputedStyle(a).outlineStyle;
+                return first + ',' + second + ',' + stale;
+            })()",
+        )
+        .unwrap();
+    assert_eq!(
+        r,
+        lumen_core::JsValue::String("auto,auto,none".to_string())
+    );
+}
