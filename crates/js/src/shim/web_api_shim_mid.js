@@ -7175,6 +7175,37 @@ function ValidityState(flags) {
               && !this.badInput       && !this.customError;
 }
 
+// Current checkedness of `nid` without minting a wrapper: the dirty flag
+// first, the `checked` content attribute as the default (BUG-444 shape).
+function _lumen_raw_checked(nid) {
+    var dc = _lumen_u2n(_lumen_get_dirty_checked(nid));
+    return dc !== null ? dc : _lumen_has_attr(nid, 'checked');
+}
+
+// Whether any member of `nid`'s radio button group (HTML LS §4.10.5.1.13:
+// same tree, same form owner, same non-empty `name`) is checked — the
+// «suffers from missing value» test for a required radio.
+function _lumen_radio_group_any_checked(nid) {
+    var name = _lumen_u2n(_lumen_get_attr(nid, 'name'));
+    if (name === null || String(name) === '') {
+        // Singleton group — only the element itself can satisfy it.
+        return _lumen_raw_checked(nid);
+    }
+    var owner = _lumen_form_owner(nid);
+    var scope = _lumen_selection_tree_root_nid(nid);
+    var all = _lumen_descendant_elements(scope, []);
+    for (var i = 0; i < all.length; i++) {
+        if ((_lumen_get_tag_name(all[i]) || '').toUpperCase() !== 'INPUT') continue;
+        var t = _lumen_u2n(_lumen_get_attr(all[i], 'type'));
+        if (t === null || String(t).toLowerCase() !== 'radio') continue;
+        var nm = _lumen_u2n(_lumen_get_attr(all[i], 'name'));
+        if (nm === null || String(nm) !== String(name)) continue;
+        if (_lumen_form_owner(all[i]) !== owner) continue;
+        if (_lumen_raw_checked(all[i])) return true;
+    }
+    return false;
+}
+
 // Computes ValidityState for a form control element (HTML LS §4.10.21.1).
 function _compute_validity(el) {
     var flags = {};
@@ -7183,9 +7214,17 @@ function _compute_validity(el) {
     var enid  = el.__nid__;
     var customMsg = (enid !== undefined && _validity_msg[enid]) ? _validity_msg[enid] : '';
 
-    // §4.10.21.1 #1: valueMissing — required + empty
-    if (el.hasAttribute && el.hasAttribute('required') && val.trim() === '') {
-        flags.valueMissing = true;
+    // §4.10.21.1 #1: valueMissing — required + empty. Checkbox/radio have
+    // their own rule: required + unchecked (for radio, «unchecked» means the
+    // whole group — any checked member satisfies every required member).
+    if (el.hasAttribute && el.hasAttribute('required')) {
+        if (type === 'checkbox' && enid !== undefined) {
+            if (!_lumen_raw_checked(enid)) flags.valueMissing = true;
+        } else if (type === 'radio' && enid !== undefined) {
+            if (!_lumen_radio_group_any_checked(enid)) flags.valueMissing = true;
+        } else if (val.trim() === '') {
+            flags.valueMissing = true;
+        }
     }
 
     // §4.10.21.1 #3: typeMismatch — email/url/number format
@@ -11147,7 +11186,16 @@ var _LUMEN_WRAPPER_MEMBERS = {
             return dc !== null ? dc : _lumen_has_attr(nid, 'checked');
         },
         set checked(v) { var nid = this.__nid__;
-            _lumen_set_dirty_checked(nid, !!v);
+            v = !!v;
+            // HTML LS §4.10.5.1.13: making a radio checked unchecks every
+            // other radio in its group — the same rule a click runs through
+            // `_lumen_radio_select`; a script write must not leave the group
+            // half-checked (WPT the-input-element/radio*.html, clone.html).
+            if (v && (_lumen_u2n(_lumen_get_attr(nid, 'type')) || '').toLowerCase() === 'radio') {
+                _lumen_radio_select(nid);
+            } else {
+                _lumen_set_dirty_checked(nid, v);
+            }
         },
         // ── Constraint Validation API (HTML LS §4.10.21) ─────────────────────────
         get validity() { var nid = this.__nid__; return _compute_validity(this); },
@@ -11201,10 +11249,35 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // NotSupportedError, as the spec allows.
         showPicker: function() { var nid = this.__nid__;
             var t = (this.type || 'text').toLowerCase();
+            // Spec order (HTML LS §4.10.5.1.14 «showPicker()»):
+            // 1. mutable — not disabled, and not `readonly` in a state where
+            //    the readonly content attribute applies (the text-entry,
+            //    number and date/time states; buttons/checkbox/color/file/
+            //    hidden/image/radio/range/reset/submit ignore it).
+            var readonlyApplies = {
+                'text': 1, 'search': 1, 'tel': 1, 'url': 1, 'email': 1,
+                'password': 1, 'date': 1, 'month': 1, 'week': 1, 'time': 1,
+                'datetime-local': 1, 'number': 1,
+            };
+            if (this.disabled || (this.readOnly && readonlyApplies[t] === 1)) {
+                throw new DOMException('showPicker() called on a non-mutable element', 'InvalidStateError');
+            }
+            // 3. transient activation — checked BEFORE consuming, and the
+            // activation is consumed even when the type has no picker UI
+            // («show the picker, if applicable» consumes first, then returns
+            // for unsupported types — a silent no-op, never NotSupportedError
+            // for input).
+            var act = (typeof navigator !== 'undefined') ? navigator.userActivation : null;
+            if (!act || act.isActive !== true) {
+                throw new DOMException('showPicker() requires transient user activation', 'NotAllowedError');
+            }
+            if (typeof _lumen_consume_user_activation === 'function') {
+                _lumen_consume_user_activation();
+            }
             // `file` stays unsupported: the OS dialog blocks the event loop,
-            // so `showPicker()` on it would hang the page. `text[list]`
-            // opens the datalist popup — tracked shell-side for `:open`
-            // (the popup UI itself is not implemented yet).
+            // so `showPicker()` on it would hang the page — treated as «no
+            // picker», the spec-permitted no-op. `text[list]` opens the
+            // datalist popup — tracked shell-side for `:open`.
             var pickerTypes = ['color', 'date', 'datetime-local', 'week', 'month', 'time'];
             var supported = false;
             for (var _pi = 0; _pi < pickerTypes.length; _pi++) {
@@ -11215,16 +11288,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                     this.hasAttribute('list')) {
                 supported = true;
             }
-            if (!supported) {
-                var err = new Error('showPicker() is not supported for type ' + t);
-                err.name = 'NotSupportedError';
-                throw err;
-            }
-            if (this.disabled) {
-                var err2 = new Error('showPicker() called on a disabled element');
-                err2.name = 'InvalidStateError';
-                throw err2;
-            }
+            if (!supported) return;
             // `:open` must match in the same script turn (WPT asserts right
             // after showPicker()), so the sentinel goes on synchronously via
             // the normal setAttribute path; the shell drain only opens the

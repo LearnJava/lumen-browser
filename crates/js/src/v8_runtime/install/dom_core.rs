@@ -1095,6 +1095,36 @@ pub(crate) fn install_node_properties(
                 stale.store(true, Ordering::Relaxed);
             }
         });
+        // ── input.indeterminate (HTML LS §4.10.5.3.16) ──────────────────────
+        // Document-side like the dirty maps: cloning steps copy it and it
+        // survives wrapper GC. No content attribute, no reset path.
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store,
+            "_lumen_get_indeterminate",
+            move |node_id: u32| -> bool {
+                let doc = d.lock().unwrap();
+                doc.is_indeterminate(NodeId::from_raw(node_id))
+            }
+        );
+        let d = Arc::clone(&doc);
+        let dirty = Arc::clone(&dom_dirty);
+        let stale = Arc::clone(&flush_stale);
+        let touched = Arc::clone(&dom_touched);
+        reg!(scope, ctx, store,
+            "_lumen_set_indeterminate",
+            move |node_id: u32, on: bool| {
+                let mut doc = d.lock().unwrap();
+                let nid = NodeId::from_raw(node_id);
+                let changed = doc.is_indeterminate(nid) != on;
+                doc.set_indeterminate(nid, on);
+                if changed {
+                    // Drives `:indeterminate` matching and the painted mark.
+                    record_dom_touch(&touched, nid);
+                    dirty.store(true, Ordering::Relaxed);
+                    stale.store(true, Ordering::Relaxed);
+                }
+            }
+        );
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store,
             "_lumen_get_attr_names",

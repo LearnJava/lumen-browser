@@ -2600,8 +2600,6 @@ var _LUMEN_SELECTABLE_INPUT_TYPES = {
 // `option.selected = …` / `select.selectedIndex = …`. Absent means «follow the
 // `selected` content attribute», which is the markup default.
 var _lumen_option_selected = {};
-// nid → indeterminate flag for checkboxes (never reflected as an attribute).
-var _lumen_indeterminate = {};
 // nid → true while an activation behaviour is running on that node, so a
 // `click()` inside a click handler for the same element cannot recurse forever
 // (label → control → label is the usual cycle).
@@ -3739,11 +3737,11 @@ function _lumen_set_text_selection(nid, start, end, direction) {
 Object.defineProperty(HTMLInputElement.prototype, 'indeterminate', {
     get: function() {
         var n = _lumen_reflect_nid(this);
-        return n === -1 ? false : !!_lumen_indeterminate[n];
+        return n === -1 ? false : !!_lumen_u2n(_lumen_get_indeterminate(n));
     },
     set: function(v) {
         var n = _lumen_reflect_nid(this);
-        if (n !== -1) _lumen_indeterminate[n] = !!v;
+        if (n !== -1) _lumen_set_indeterminate(n, !!v);
     },
     enumerable: true, configurable: true,
 });
@@ -4055,52 +4053,114 @@ Object.defineProperty(HTMLInputElement.prototype, 'valueAsDate', {
 // start a download through a synthetic `<a download>`. Runs the full sequence:
 // pre-click activation (checkbox/radio flip) → dispatch a cancelable `click` →
 // activation behaviour, or undo the pre-click flip when a handler cancelled.
+// Snapshot of a control's checkedness for canceled-activation restore:
+// the dirty flag's exact state (`null` = still following the attribute),
+// the effective value, and the indeterminate flag.
+function _lumen_checked_snapshot(nid) {
+    var dc = _lumen_u2n(_lumen_get_dirty_checked(nid));
+    var el = _lumen_make_element(nid);
+    return {
+        dirty: dc === null ? null : dc,
+        checked: el.checked,
+        indeterminate: !!_lumen_u2n(_lumen_get_indeterminate(nid)),
+    };
+}
+function _lumen_restore_checked_snapshot(nid, snap) {
+    if (snap.dirty === null || snap.dirty === undefined) {
+        _lumen_clear_dirty_checked(nid);
+    } else {
+        _lumen_set_dirty_checked(nid, snap.dirty);
+    }
+    _lumen_set_indeterminate(nid, snap.indeterminate);
+}
 function _lumen_pre_click_activation(nid) {
     var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
     if (tag !== 'INPUT') return null;
     var t = _lumen_u2n(_lumen_get_attr(nid, 'type'));
     t = (t === null) ? 'text' : String(t).toLowerCase();
-    var el = _lumen_make_element(nid);
     if (t === 'checkbox') {
-        var was = el.checked;
-        _lumen_indeterminate[nid] = false;
-        el.checked = !was;
-        return { kind: 'checkbox', checked: was };
+        var snap = _lumen_checked_snapshot(nid);
+        _lumen_set_indeterminate(nid, false);
+        _lumen_make_element(nid).checked = !snap.checked;
+        return { kind: 'checkbox', snap: snap };
     }
     if (t === 'radio') {
-        var wasR = el.checked;
+        var snapR = _lumen_checked_snapshot(nid);
+        // The group member this click is about to uncheck — canceled
+        // activation must hand checkedness back to it (WPT radio.html t5).
+        var prev = _lumen_radio_other_checked(nid);
+        _lumen_set_indeterminate(nid, false);
         _lumen_radio_select(nid);
-        return { kind: 'radio', checked: wasR };
+        return { kind: 'radio', snap: snapR, prev: prev };
     }
     return null;
 }
 function _lumen_undo_pre_click_activation(nid, pre) {
     if (!pre) return;
-    _lumen_make_element(nid).checked = pre.checked;
+    if (pre.kind === 'radio' && pre.prev !== undefined && pre.prev !== -1 &&
+            pre.snap.checked === false) {
+        // The click unchecked `prev`'s group sibling; restore `prev` as the
+        // checked member — `_lumen_radio_select` re-clears the rest of the
+        // group, which is exactly the pre-click state.
+        _lumen_radio_select(pre.prev);
+        _lumen_set_indeterminate(nid, pre.snap.indeterminate);
+        return;
+    }
+    _lumen_restore_checked_snapshot(nid, pre.snap);
 }
-// HTML LS §4.10.5.1.13 «radio button group»: same form owner, same name.
-// BUG-444: goes through the dirty-checkedness accessors, not the `checked`
-// attribute directly — the `checked` getter now reads the dirty flag first,
-// so writing the attribute on a sibling that already has one is a no-op.
-function _lumen_radio_select(nid) {
+// The radio button group `nid` belongs to (HTML LS §4.10.5.1.13): same tree,
+// same form owner, same non-empty `name`. Always contains `nid` itself;
+// nameless radios are singletons.
+function _lumen_radio_group(nid) {
     var name = _lumen_u2n(_lumen_get_attr(nid, 'name'));
+    name = (name === null) ? '' : String(name);
+    if (name === '') return [nid];
     var owner = _lumen_form_owner(nid);
-    var scope = (owner !== -1) ? owner : _lumen_root_nid;
+    // «Same tree» — the root of THIS tree, which for a detached/orphan
+    // subtree is that subtree's own root, not the document (WPT radio.html
+    // «orphan tree» case).
+    var scope = _lumen_selection_tree_root_nid(nid);
     var all = _lumen_descendant_elements(scope, []);
+    var out = [];
+    var foundSelf = false;
     for (var i = 0; i < all.length; i++) {
         if ((_lumen_get_tag_name(all[i]) || '').toUpperCase() !== 'INPUT') continue;
         var t = _lumen_u2n(_lumen_get_attr(all[i], 'type'));
         if (t === null || String(t).toLowerCase() !== 'radio') continue;
-        if (name !== null && _lumen_u2n(_lumen_get_attr(all[i], 'name')) !== name) continue;
-        if (all[i] !== nid) _lumen_set_dirty_checked(all[i], false);
+        var oname = _lumen_u2n(_lumen_get_attr(all[i], 'name'));
+        if (oname === null || String(oname) !== name) continue;
+        if (_lumen_form_owner(all[i]) !== owner) continue;
+        if (all[i] === nid) foundSelf = true;
+        out.push(all[i]);
+    }
+    if (!foundSelf) out.push(nid);
+    return out;
+}
+// First checked member of `nid`'s group other than `nid` itself, or -1.
+function _lumen_radio_other_checked(nid) {
+    var g = _lumen_radio_group(nid);
+    for (var i = 0; i < g.length; i++) {
+        if (g[i] === nid) continue;
+        var dc = _lumen_u2n(_lumen_get_dirty_checked(g[i]));
+        var ck = dc !== null ? dc : _lumen_has_attr(g[i], 'checked');
+        if (ck) return g[i];
+    }
+    return -1;
+}
+function _lumen_radio_select(nid) {
+    var g = _lumen_radio_group(nid);
+    for (var i = 0; i < g.length; i++) {
+        if (g[i] !== nid) _lumen_set_dirty_checked(g[i], false);
     }
     _lumen_set_dirty_checked(nid, true);
 }
 function _lumen_fire_input_and_change(nid) {
     // UI Events: `input` is composed (crosses shadow boundaries), `change`
     // is not — WPT `input-change-event-properties` asserts exactly that.
-    _lumen_dispatch_rich(nid, new Event('input',  { bubbles: true, cancelable: false, composed: true }));
-    _lumen_dispatch_rich(nid, new Event('change', { bubbles: true, cancelable: false, composed: false }));
+    // Activation-behaviour events are UA-fired: `isTrusted` is true even when
+    // the activation itself came from a script `el.click()` (WPT radio.html).
+    _lumen_dispatch_rich(nid, new Event('input',  { bubbles: true, cancelable: false, composed: true, isTrusted: true }));
+    _lumen_dispatch_rich(nid, new Event('change', { bubbles: true, cancelable: false, composed: false, isTrusted: true }));
 }
 // Tags that carry an activation behaviour of their own — the table
 // `_lumen_run_activation_behavior` below dispatches on, kept separate so the
@@ -4338,7 +4398,7 @@ HTMLFormElement.prototype.reset = function() {
         _lumen_clear_dirty_value(cn);
         delete _input_values[cn];
         _lumen_clear_text_selection(cn);
-        delete _lumen_indeterminate[cn];
+        _lumen_set_indeterminate(cn, false);
         // Dropping the dirty checkedness restores `checked` to its default —
         // the `checked` content attribute (BUG-444, same shape as the dirty
         // value clear above).
@@ -9231,7 +9291,7 @@ function _lumen_gc_collect(nids) {
         // BUG-383 per-nid form state.
         delete _lumen_option_selected[nid];
         _lumen_clear_text_selection(nid);
-        delete _lumen_indeterminate[nid];
+        _lumen_set_indeterminate(nid, false);
         delete _lumen_click_in_progress[nid];
     }
 }
