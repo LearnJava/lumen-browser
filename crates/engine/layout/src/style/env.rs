@@ -159,8 +159,14 @@ thread_local! {
     /// `:focus` matches exactly; `:focus-within` matches the element and its ancestors.
     pub(in crate::style) static FOCUS_NID:  Cell<u32> = const { Cell::new(u32::MAX) };
     /// Raw NodeId.0 of the mouse-pressed element, or `u32::MAX` if none.
-    /// `:active` matches the active element and all its ancestors (CSS Selectors L4 §4.5).
+    /// `:active` matches the active element and all its ancestors (CSS Selectors L4 §9.2).
     pub(in crate::style) static ACTIVE_NID: Cell<u32> = const { Cell::new(u32::MAX) };
+    /// `true` when `ACTIVE_NID` came from a held Space/Enter key rather than a
+    /// pointing device. Selectors L4 §9.2 propagates `:active` to ancestors
+    /// only for the pointing-device clause — a keyboard-activated element
+    /// matches `:active` itself, and `document.querySelector(':active')` must
+    /// not return `<html>` (WPT `active-onblur`).
+    pub(in crate::style) static ACTIVE_KEYBOARD: Cell<bool> = const { Cell::new(false) };
     /// `true` when the current focus arrived from the keyboard (Tab, accesskey) —
     /// CSS UI L4 §3.3: `:focus-visible` matches for such focus, and for a
     /// text-like `<input>`/`<textarea>` regardless of how it got focused.
@@ -194,10 +200,17 @@ pub fn set_keyboard_focus(keyboard: bool) {
     KEYBOARD_FOCUS.with(|k| k.set(keyboard));
 }
 
+/// Records whether `ACTIVE_NID` came from a held Space/Enter key. Call after
+/// [`set_interactive_state`]; cleared by [`clear_interactive_state`].
+pub fn set_active_keyboard(keyboard: bool) {
+    ACTIVE_KEYBOARD.with(|k| k.set(keyboard));
+}
+
 /// Clears hover/focus/active state after layout.
 pub fn clear_interactive_state() {
     set_interactive_state(None, None, None);
     set_keyboard_focus(false);
+    set_active_keyboard(false);
 }
 
 thread_local! {

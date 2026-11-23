@@ -1567,42 +1567,8 @@ impl Lumen {
         // Focus management (HTML LS §6.6.3): apply focus changes requested by JS via
         // _lumen_request_focus / _lumen_request_blur — `element.focus()`/`blur()`
         // (BUG-381) as well as the older showModal() / close() pair.
-        // ADR-016 M2.2d: value-drain через `route_query_js`.
         #[cfg(feature = "v8")]
-        {
-            let focus_reqs = self.drain_query_js(|j| j.take_focus_requests()).unwrap_or_default();
-            if !focus_reqs.is_empty() {
-                // Only the last request in the batch matters.
-                if let Some(last_req) = focus_reqs.into_iter().last() {
-                    let new_nid = last_req.map(|n| lumen_dom::NodeId::from_index(n as usize));
-                    if new_nid != self.focused_node {
-                        self.focused_node = new_nid;
-                        // `focus_from_keyboard` is deliberately NOT reset:
-                        // it records the last *input* modality (CSS UI L4
-                        // §3.3 `:focus-visible`), and a programmatic
-                        // `element.focus()` must not overwrite it — keyboard
-                        // focus followed by script focus still matches.
-                        // ADR-016 M2.2b-7: `focused_node` is set synchronously above,
-                        // so `:focus`/`:focus-within` re-evaluates correctly on any
-                        // later relayout (it feeds `set_interactive_state` at the top
-                        // of every pass). This is a pure restyle with no synchronous
-                        // page-geometry read afterwards (the follow-up only notifies
-                        // the accessibility bridge), so route it off-thread.
-                        self.relayout_chrome();
-                        self.platform_bridge.focused_node_changed(new_nid);
-                        // BUG-381: echo the applied focus back into JS. For a request
-                        // that came from `element.focus()` this is a no-op (the shim
-                        // already recorded it synchronously); for `showModal()`/`close()`,
-                        // which move focus without going through `focus()`, it is what
-                        // updates `document.activeElement` and fires the focus events.
-                        let focus_idx = new_nid.map(|n| n.index() as u32);
-                        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
-                            js.notify_focus_changed(focus_idx);
-                        });
-                    }
-                }
-            }
-        }
+        self.drain_js_focus_requests();
 
         // CSS View Transitions API: drain snapshot/animation events from JS.
         // ADR-016 M2.2d: value-drain через `route_query_js`.

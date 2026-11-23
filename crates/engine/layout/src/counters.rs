@@ -444,11 +444,21 @@ impl PseudoCache {
         let interned: Interned = records
             .into_iter()
             .map(|(node, pseudos)| {
+                // PERF-PSEUDO-STORE: probe by `&str` first — the sheet has a
+                // handful of pseudo names, so nearly every record hits an
+                // existing intern and the old `entry(name.to_string())`
+                // allocated a `String` per record anyway (~15k allocs/flush).
                 let names: Vec<(u32, _)> = pseudos
                     .into_iter()
                     .map(|(name, rec)| {
-                        let next = inner.names.len() as u32;
-                        let idx = *inner.names.entry(name.to_string()).or_insert(next);
+                        let idx = match inner.names.get(&*name) {
+                            Some(&idx) => idx,
+                            None => {
+                                let next = inner.names.len() as u32;
+                                inner.names.insert(name.to_string(), next);
+                                next
+                            }
+                        };
                         (idx, rec)
                     })
                     .collect();
@@ -1653,7 +1663,20 @@ pub fn incremental_precompute_counters(
         (ctx, map, IncrRestyle { dirty_roots, shallow_roots, point_roots, content_dirty, spine, prev_counter_scopes, invalidation, prev_sheet }, pre_match_needed)
     };
     let _pre_matched = match &pre_match_needed {
-        Some(needed) => {
+        // PERF-PRE-MATCH-FULL: the scoped walk's forced recomputes escape
+        // `needed` — they hang off spine ancestors and cache misses, not the
+        // delta's roots — so on real pages the subset table served ~1 % of
+        // lookups while the walk re-matched ~2400 nodes serially per flush
+        // (`forced_same` ≈ 96 %). Matching the whole document in parallel
+        // costs less than that serial tail: measured on habr, `cascade_walk`
+        // ~3.5-4.1 s → ~1.8 s, `compute_style` ~3.2 s → ~1.6 s, `pre_match`
+        // ~1.2 s → ~1.7 s — net ≈ −1.5 s per load. The empty-`needed` case
+        // (font-metrics relayout: nothing recomputes) keeps the cheap subset
+        // path, which exits before any matching. A size threshold was tried
+        // and rejected: `needed` stays small even on flushes whose forced
+        // recomputes reach thousands of nodes, so it cannot predict the
+        // serial re-match tail — measured regression on habr.
+        Some(needed) if needed.is_empty() => {
             // pre_match workers may reuse pseudo match records from the
             // carried cache — drop exactly the set this walk will recompute
             // first, the same invalidation `pseudo_drop_node` applies
@@ -1671,7 +1694,7 @@ pub fn incremental_precompute_counters(
                 Some(map.styles.pseudo_cache_arc()),
             )
         }
-        None => crate::style::pre_match::install(doc, sheet, viewport, dark_mode, flat),
+        _ => crate::style::pre_match::install(doc, sheet, viewport, dark_mode, flat),
     };
     {
         let _prof = lumen_core::profile::scope("cascade_walk");
@@ -1681,9 +1704,17 @@ pub fn incremental_precompute_counters(
     }
     // PERF-PSEUDO-PRE: same hand-off as the full pass — the subset table's
     // records cover exactly the elements the scoped walk can recompute.
-    let pseudo_records = _pre_matched.pseudo_records();
+    let pseudo_records = {
+        let _prof = lumen_core::profile::scope_detail("pseudo_records");
+        _pre_matched.pseudo_records()
+    };
     drop(_pre_matched);
     if !pseudo_records.is_empty() {
+        if std::env::var_os("LUMEN_FRAME_LOG").is_some_and(|v| v != "0") {
+            let n: usize = pseudo_records.iter().map(|(_, v)| v.len()).sum();
+            eprintln!("[engine] pseudo_store nodes={} records={n}", pseudo_records.len());
+        }
+        let _prof = lumen_core::profile::scope_detail("pseudo_store");
         map.styles
             .pseudo_cache()
             .store_matches_bulk(pseudo_records, pseudo_pass_key(doc, sheet, viewport, dark_mode));
@@ -1693,7 +1724,10 @@ pub fn incremental_precompute_counters(
         map.styles.finish_pass();
     }
     map.styles.note_sheet_revision(sheet.revision());
-    map.record_generated_content(doc, flat);
+    {
+        let _prof = lumen_core::profile::scope_detail("record_gen");
+        map.record_generated_content(doc, flat);
+    }
     map
 }
 
@@ -2027,6 +2061,12 @@ pub struct CascadeStats {
     /// `rules=None` pseudo-only entries).
     pub pre_match_lookups: u32,
     pub pre_match_hits: u32,
+    /// PERF-PRE-MATCH-HIT-2 — miss split: node absent from the table entirely
+    /// vs present but `rules=None` (pseudo-only entry — outside `needed`).
+    /// Both mean "not covered", but the second proves the element was seen
+    /// by `collect_elements` and rejected by `in_scope`.
+    pub pre_match_miss_absent: u32,
+    pub pre_match_miss_norules: u32,
 }
 
 thread_local! {
@@ -2062,6 +2102,8 @@ thread_local! {
             match_nested: 0,
             pre_match_lookups: 0,
             pre_match_hits: 0,
+            pre_match_miss_absent: 0,
+            pre_match_miss_norules: 0,
         })
     };
 }
@@ -2202,11 +2244,18 @@ fn note_clean_insert() {
 /// PERF-PRE-MATCH-HIT — one `pre_match::lookup` call; `hit` when it returned
 /// a record. Called from `style::pre_match`, counted into the same per-pass
 /// tally the `[engine] incr cascade` line prints.
-pub(crate) fn note_pre_match_lookup(hit: bool) {
+/// PERF-PRE-MATCH-HIT-2 — one `pre_match::lookup` against a live table.
+/// `kind`: 0 = hit, 1 = node absent from the table, 2 = entry present but
+/// `rules=None` (pseudo-only — outside `needed`).
+pub(crate) fn note_pre_match_lookup_kind(kind: u8) {
     CASCADE_STATS.with(|s| {
         let mut v = s.get();
         v.pre_match_lookups += 1;
-        v.pre_match_hits += u32::from(hit);
+        match kind {
+            0 => v.pre_match_hits += 1,
+            1 => v.pre_match_miss_absent += 1,
+            _ => v.pre_match_miss_norules += 1,
+        }
         s.set(v);
     });
 }

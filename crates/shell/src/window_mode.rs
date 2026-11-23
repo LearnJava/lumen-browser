@@ -517,6 +517,7 @@ fn run_window_mode_inner(
         hovered_nid: None,
         hovered_frame: None,
         active_nid: None,
+        active_from_keyboard: false,
         scroll_drag: None,
         hscroll_drag: None,
         last_thumb_states: Default::default(),

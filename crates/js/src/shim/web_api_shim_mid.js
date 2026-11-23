@@ -1710,10 +1710,60 @@ function _lumen_dispatch_capture_event(nid, type) {
 // own edit and before it dispatches `input`, so a listener reading `this.value`
 // sees exactly what the field now renders. `_input_values` is kept in step for
 // the remaining control kinds that still shadow their value in JS.
+// HTML LS §4.10.5.1.13 — the two number sanitizations. The *value
+// sanitization algorithm* (script `.value =`, the `value` content attribute)
+// keeps the string only when it is a valid floating-point number, else "".
+// The *user-input* path instead runs «rules for parsing floating-point number
+// values»: a parseable-but-noncanonical string ("1.") collapses to the best
+// representation ("1"), an unparsable one ("1.e") becomes "" and sets
+// `badInput` — tracked in `_bad_input_values`, read by `_compute_validity`.
+var _bad_input_values = {};
+function _lumen_is_valid_float(s) {
+    return /^-?(\d+(\.\d+)?|\.\d+)([eE][+-]?\d+)?$/.test(s);
+}
+function _lumen_number_sanitize_strict(v) {
+    var s = String(v);
+    return _lumen_is_valid_float(s) ? s : '';
+}
+function _lumen_number_sanitize_user(v) {
+    var s = String(v);
+    if (s.trim() === '') return { text: '', bad: false };
+    // Already canonical — return verbatim ("1e5" must not become "100000").
+    if (_lumen_is_valid_float(s)) return { text: s, bad: false };
+    // Not a valid floating-point number: the «rules for parsing» still
+    // rescue a parseable prefix-shape ("1." → 1 → "1"); anything Number()
+    // rejects — or accepts only via hex/Infinity, which the HTML grammar
+    // does not — is badInput.
+    if (!/^[+-]?[0-9.eE+-]+$/.test(s)) return { text: '', bad: true };
+    var n = Number(s);
+    if (!isFinite(n)) return { text: '', bad: true };
+    return { text: _lumen_float_repr(n), bad: false };
+}
+// «Best representation of the number n as a floating-point number» — close
+// enough to the spec's algorithm for the values a number field can hold.
+function _lumen_float_repr(n) {
+    if (n === 0) return '0';
+    var s = String(n);
+    // JS prints small/large magnitudes in exponent form ("1e-7"); the HTML
+    // grammar accepts that shape already, so pass it through.
+    return s;
+}
 function _lumen_set_field_value(nid, value) {
     var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
     if (tag === 'INPUT' || tag === 'TEXTAREA') {
-        _lumen_set_dirty_value(nid, String(value));
+        var raw = String(value);
+        if (tag === 'INPUT') {
+            var itype = (_lumen_u2n(_lumen_get_attr(nid, 'type')) || 'text');
+            if (String(itype).toLowerCase() === 'number') {
+                // The dirty value keeps the raw text (it is also what the
+                // field renders and what the next keystroke edits); `.value`
+                // applies `_lumen_number_sanitize_user` on read, and only
+                // the badInput flag is decided here.
+                if (_lumen_number_sanitize_user(raw).bad) _bad_input_values[nid] = true;
+                else delete _bad_input_values[nid];
+            }
+        }
+        _lumen_set_dirty_value(nid, raw);
         return;
     }
     _input_values[nid] = String(value);
@@ -1767,6 +1817,16 @@ function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location
             notCancelled = _lumen_dispatch_rich(start_nid, pev) && notCancelled;
         }
     }
+    // HTML LS §4.10.7: ArrowUp/ArrowDown on a closed single-line <select>
+    // move and commit the selection (`input` + `change` fire at once).
+    if (type === 'keydown' && !repeat && !isComposing && !ev.defaultPrevented
+        && (key === 'ArrowDown' || key === 'ArrowUp')) {
+        var stag = (_lumen_get_tag_name(start_nid) || '').toUpperCase();
+        if (stag === 'SELECT' && !_lumen_has_attr(start_nid, 'multiple')
+            && !_lumen_has_attr(start_nid, 'disabled')) {
+            _lumen_select_key_move(start_nid, key === 'ArrowDown' ? 1 : -1);
+        }
+    }
     // Keyboard activation behavior (HTML LS «activation behavior» reached
     // through key events): Enter on `keydown`, Space on `keyup` run the same
     // sequence `el.click()` does — pre-click flip, `click` dispatch,
@@ -1789,20 +1849,30 @@ function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location
 // path), Space inserts a space — neither is a click. Checkable/button
 // <input> types DO activate (Space toggles them per UI Events).
 function _lumen_key_activate(nid, isSpace) {
-    var at = _lumen_activation_target(nid);
+    var at = _lumen_key_active_target(nid, isSpace);
     if (at === -1) return;
+    _lumen_perform_click(at);
+}
+
+// The element a Space/Enter press would activate, or -1 — the same target
+// `_lumen_key_activate` clicks. The shell asks this synchronously to mirror
+// the pressed state into CSS `:active` (`page_keys.rs`/`text_input.rs`).
+function _lumen_key_active_target(nid, isSpace) {
+    var at = _lumen_activation_target(nid);
+    if (at === -1) return -1;
     var tag = (_lumen_get_tag_name(at) || '').toUpperCase();
+    if (_LUMEN_DISABLEABLE_TAGS[tag] === 1 && _lumen_has_attr(at, 'disabled')) return -1;
     if (tag === 'INPUT') {
         var t = _lumen_u2n(_lumen_get_attr(at, 'type'));
         t = (t === null) ? 'text' : String(t).toLowerCase();
         if (isSpace) {
             if (t !== 'checkbox' && t !== 'radio' && t !== 'button'
-                && t !== 'submit' && t !== 'reset' && t !== 'image' && t !== 'file') return;
+                && t !== 'submit' && t !== 'reset' && t !== 'image' && t !== 'file') return -1;
         } else if (t !== 'button' && t !== 'submit' && t !== 'reset' && t !== 'image') {
-            return;
+            return -1;
         }
     }
-    _lumen_perform_click(at);
+    return at;
 }
 
 // BUG-1622: synthetic keyboard input (WebDriver key actions, `type_text`, the
@@ -1891,12 +1961,29 @@ function _lumen_dispatch_clipboard_event(nid, type, text) {
 
 // UX-CLIPBOARD: trusted `beforeinput` (cancelable) / `input` after a clipboard
 // edit. Reply '1' = not cancelled.
+//
+// HTML LS §4.10.5.3: text-like controls defer `change` to blur — an `input`
+// on one of them marks `_lumen_text_change_pending`, and `_lumen_focus_update`
+// (tail shim) fires `change` when the control loses focus.
+var _lumen_text_change_pending = {};
+function _lumen_is_text_change_control(nid) {
+    var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
+    if (tag === 'TEXTAREA') return true;
+    if (tag !== 'INPUT') return false;
+    var t = _lumen_get_attr(nid, 'type');
+    t = (t === null || t === undefined) ? 'text' : String(t).toLowerCase();
+    return t === 'text' || t === 'search' || t === 'tel' || t === 'url'
+        || t === 'email' || t === 'password' || t === 'number';
+}
 function _lumen_dispatch_input_event(nid, type, inputType, data) {
     var evt = new InputEvent(type, {
         bubbles: true, cancelable: type === 'beforeinput', composed: true, isTrusted: true,
         inputType: inputType, data: data == null ? null : String(data)
     });
     _lumen_dispatch_rich(nid, evt);
+    if (type === 'input' && _lumen_is_text_change_control(nid)) {
+        _lumen_text_change_pending[nid] = true;
+    }
     return evt.defaultPrevented ? '0' : '1';
 }
 
@@ -7006,6 +7093,12 @@ function _compute_validity(el) {
     // §4.10.21.1 #10: customError
     if (customMsg) flags.customError = true;
 
+    // §4.10.21.1 #9: badInput — the user typed something the control cannot
+    // represent (number state: unparsable floating-point input).
+    if (enid !== undefined && _bad_input_values[enid] === true) {
+        flags.badInput = true;
+    }
+
     return new globalThis.ValidityState(flags);
 }
 
@@ -10804,10 +10897,29 @@ var _LUMEN_WRAPPER_MEMBERS = {
             // see. Everything else keeps the `_input_values` map.
             if (tag0 === 'INPUT' || tag0 === 'TEXTAREA') {
                 var dv = _lumen_u2n(_lumen_get_dirty_value(nid));
-                if (dv !== null) return String(dv);
+                if (dv !== null) {
+                    // Number state: the stored dirty value is the raw user
+                    // text; `.value` reports the sanitized form.
+                    if (tag0 === 'INPUT') {
+                        var dit = (_lumen_u2n(_lumen_get_attr(nid, 'type')) || 'text');
+                        if (String(dit).toLowerCase() === 'number') {
+                            return _lumen_number_sanitize_user(String(dv)).text;
+                        }
+                    }
+                    return String(dv);
+                }
                 if (tag0 === 'TEXTAREA') return _lumen_get_text_content(nid);
                 var dav = _lumen_u2n(_lumen_get_attr(nid, 'value'));
-                return dav !== null ? dav : '';
+                if (dav === null) return '';
+                // The `value` content attribute goes through the same strict
+                // number sanitization as a script-set value.
+                if (tag0 === 'INPUT') {
+                    var itype = (_lumen_u2n(_lumen_get_attr(nid, 'type')) || 'text');
+                    if (String(itype).toLowerCase() === 'number') {
+                        return _lumen_number_sanitize_strict(String(dav));
+                    }
+                }
+                return String(dav);
             }
             if (_input_values[nid] !== undefined) return _input_values[nid];
             var tag = tag0;
@@ -10837,7 +10949,17 @@ var _LUMEN_WRAPPER_MEMBERS = {
             // `value` content attribute is left alone on purpose — it is the
             // default value `defaultValue`/`form.reset()` restore.
             if (tag === 'INPUT' || tag === 'TEXTAREA') {
-                _lumen_set_dirty_value(nid, String(v));
+                var sv = String(v);
+                if (tag === 'INPUT') {
+                    var itype = (_lumen_u2n(_lumen_get_attr(nid, 'type')) || 'text');
+                    if (String(itype).toLowerCase() === 'number') {
+                        // Script-set sanitization is the strict one — never
+                        // badInput (that flag belongs to user edits only).
+                        sv = _lumen_number_sanitize_strict(sv);
+                        delete _bad_input_values[nid];
+                    }
+                }
+                _lumen_set_dirty_value(nid, sv);
                 return;
             }
             _input_values[nid] = String(v);
@@ -12073,6 +12195,26 @@ function _lumen_build_element(nid, ifaceOverride) {
                 _lumen_remove_child(_lumen_u2n(_lumen_get_parent(opts[idx].__nid__)), opts[idx].__nid__);
             }
         };
+    }
+    // HTML LS §4.10.3 named getter: `form.name` / `form.id` resolve to the
+    // listed control(s) carrying that name — WebIDL named properties only
+    // answer when nothing on the prototype chain does (`form.action`,
+    // `form.submit`, … always win). Wrappers are plain objects, so the named
+    // half needs a Proxy; it is installed only for <form> elements.
+    if ((_lumen_get_tag_name(nid) || '').toUpperCase() === 'FORM') {
+        return new Proxy(_obj, {
+            get: function(t, prop, receiver) {
+                if (typeof prop !== 'string' || prop in t) {
+                    return Reflect.get(t, prop, receiver);
+                }
+                var found = _lumen_form_named_control(nid, prop);
+                return found === null ? undefined : found;
+            },
+            has: function(t, prop) {
+                return prop in t
+                    || (typeof prop === 'string' && _lumen_form_named_control(nid, prop) !== null);
+            },
+        });
     }
     return _obj;
 }

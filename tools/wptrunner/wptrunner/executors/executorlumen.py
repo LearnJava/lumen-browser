@@ -672,6 +672,12 @@ class LumenTestharnessExecutor(TestharnessExecutor):
         target_context = params.get("context") or context
         selectors = params.get("selectors") or []
         await self._focus_element_via_script(session, target_context, selectors)
+        # `activeElement` flips in the JS context one pump before the shell's
+        # `focused_node` catches up — typing that lands in the gap dispatches
+        # key events to the previously focused node (or nowhere), so the
+        # `input`/`change` events the test asserts never fire. Same settle
+        # beat `_action_click` already takes after its dispatch.
+        await asyncio.sleep(0.1)
         actions = Actions()
         actions.add_key().send_keys(params.get("keys") or "")
         await session.input.perform_actions(actions=actions, context=target_context)

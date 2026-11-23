@@ -402,12 +402,27 @@ fn parse_scripted_font_weight(s: &str) -> u16 {
 /// match needs: the focused node (BUG-560) and the node under the pointer
 /// (BUG-1458), each mirrored from the shell by the runtime.
 #[derive(Clone)]
-struct InteractiveMirror {
+pub(crate) struct InteractiveMirror {
     focused: Arc<Mutex<Option<u32>>>,
     hovered: Arc<Mutex<Option<u32>>>,
+    /// CSS `:active`'s mirror — `(nid, from_keyboard)`, written by the shell's
+    /// `notify_active_changed`. The flag gates ancestor propagation (Selectors
+    /// L4 §9.2: pointing-device clause only).
+    active: Arc<Mutex<Option<(u32, bool)>>>,
     /// CSS UI L4 §3.3: `:focus-visible`'s second input — without it
     /// `el.matches(':focus-visible')` always saw "mouse focus".
     keyboard: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl InteractiveMirror {
+    pub(crate) fn new(
+        focused_nid: Arc<Mutex<Option<u32>>>,
+        hovered_nid: Arc<Mutex<Option<u32>>>,
+        active_nid: Arc<Mutex<Option<(u32, bool)>>>,
+        keyboard_focus: Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
+        Self { focused: focused_nid, hovered: hovered_nid, active: active_nid, keyboard: keyboard_focus }
+    }
 }
 
 /// BUG-560: `query_all`/`matches_selector` (and their scoped siblings) match
@@ -421,8 +436,8 @@ struct InteractiveMirror {
 /// restores the thread-local to "nothing focused" afterwards so an unrelated
 /// selector match elsewhere on this thread (e.g. inside the same-tick style
 /// flush's own bracketing, `style_flush::FlushHandles::maybe_flush`) is not
-/// left with a stale focus target. `:hover` (BUG-1458) comes from the pointer
-/// mirror installed alongside; `:active` is still unmatched here, as before.
+/// left with a stale focus target. `:hover` (BUG-1458) and `:active` come from
+/// the pointer/pressed mirrors installed alongside.
 fn with_focus_state<R>(mirror: &InteractiveMirror, f: impl FnOnce() -> R) -> R {
     let nid = mirror
         .focused
@@ -434,7 +449,14 @@ fn with_focus_state<R>(mirror: &InteractiveMirror, f: impl FnOnce() -> R) -> R {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .map(NodeId::from_raw);
-    lumen_layout::set_interactive_state(hover, nid, None);
+    let (active, active_keyboard) = mirror
+        .active
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .map(|(i, k)| (Some(NodeId::from_raw(i)), k))
+        .unwrap_or((None, false));
+    lumen_layout::set_interactive_state(hover, nid, active);
+    lumen_layout::set_active_keyboard(active_keyboard);
     lumen_layout::set_keyboard_focus(
         mirror.keyboard.load(std::sync::atomic::Ordering::Relaxed),
     );
@@ -450,11 +472,8 @@ pub(crate) fn install_node_lookup(
     ctx: v8::Local<'_, v8::Context>,
     store: &mut Vec<OwnedNativeFn>,
     doc: Arc<Mutex<lumen_dom::Document>>,
-    focused_nid: Arc<Mutex<Option<u32>>>,
-    hovered_nid: Arc<Mutex<Option<u32>>>,
-    keyboard_focus: Arc<std::sync::atomic::AtomicBool>,
+    mirror: InteractiveMirror,
 ) -> JsResult<()> {
-    let mirror = InteractiveMirror { focused: focused_nid, hovered: hovered_nid, keyboard: keyboard_focus };
     // ── node lookup ──────────────────────────────────────────────────────────
     {
         let d = Arc::clone(&doc);
