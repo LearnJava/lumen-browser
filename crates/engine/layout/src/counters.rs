@@ -1044,7 +1044,17 @@ impl CounterMap {
         // so it arms the same "walk everything" licence.
         self.styles.quotes_recorded = !self.quotes.is_empty() || !self.pseudo_counters.is_empty();
         let mut scopes = IdSet::with_capacity_and_hasher(self.nodes.len() * 4, Default::default());
-        for &id in self.nodes.keys().chain(self.pseudo_counters.keys().map(|(id, _)| id)) {
+        // PERF-SPINE-QUOTES: quote producers join the climb too — `quotes`
+        // is rebuilt by the walk exactly like `nodes`, so a subtree holding
+        // one must never be spine-skipped (`skip_clean_subtree` reads this
+        // set). Without it `restyle_spine` had to deny the licence
+        // document-wide whenever the sheet could produce quotes at all.
+        for &id in self
+            .nodes
+            .keys()
+            .chain(self.pseudo_counters.keys().map(|(id, _)| id))
+            .chain(self.quotes.keys().map(|(id, _)| id))
+        {
             let mut cur = Some(id);
             while let Some(n) = cur.filter(|n| scopes.insert(*n)) {
                 cur = flat.parent_of(doc, n);
@@ -1596,7 +1606,6 @@ pub fn incremental_precompute_counters(
         // BUG-341 S27: read off the carried cache before it is moved into the
         // map — it is the previous walking pass's report, and the licence to
         // skip depends on it.
-        let prev_quotes = prev_styles.quotes_recorded();
         let prev_sheet = prev_styles.sheet_revision();
         let prev_counter_scopes = std::mem::take(&mut prev_styles.counter_scopes);
         let spine = restyle_spine(
@@ -1604,8 +1613,6 @@ pub fn incremental_precompute_counters(
             flat,
             dirty_roots.iter().chain(shallow_roots.iter()).chain(point_roots.iter()).copied(),
             &content_dirty,
-            ctx.pseudo_probe,
-            prev_quotes,
         );
         // PERF-PRE-MATCH-INCR: the scoped walk recomputes only the spine plus the
         // subtrees under the delta's roots — pre-match exactly those elements in
@@ -1749,24 +1756,22 @@ struct IncrRestyle<'a> {
 ///
 /// * **A complete content record.** [`ContentDirty::Untracked`] means "any node
 ///   may have changed", which no spine can narrow.
-/// * **No quote content in the sheet.** `quote_depth` is a running
-///   document-order counter; a subtree that is not entered cannot advance it.
-/// * **No quote depth in the previous pass.** `quotes` is rebuilt by the walk
-///   rather than carried (the S26 licence, for the same reason), and a skipped
-///   subtree contributes nothing to it, which is only equivalent when it would
-///   have contributed nothing anyway. Counter snapshots (`nodes`) are the same
-///   story but decided per subtree — BUG-935 срез 90: [`skip_clean_subtree`]
-///   declines a subtree the previous pass put a snapshot in, so a document with
-///   one `counter-reset` keeps skipping everywhere else.
+/// * **No quote/counter producer outside the delta.** `quote_depth` and
+///   counter snapshots are rebuilt by the walk rather than carried (the S26
+///   licence), and a skipped subtree contributes nothing — which is only
+///   equivalent when it would have contributed nothing anyway. That is now
+///   decided per subtree: [`skip_clean_subtree`] declines any subtree the
+///   previous pass recorded a counter snapshot, pseudo-counter or quote
+///   depth in ([`CascadeStyles::counter_scopes`], which since PERF-SPINE-QUOTES
+///   climbs from quote producers too), so a document with one `counter-reset`
+///   or one `open-quote` keeps skipping everywhere else.
 fn restyle_spine(
     doc: &Document,
     flat: &FlatTree,
     roots: impl Iterator<Item = NodeId>,
     content_dirty: &ContentDirty<'_>,
-    pseudo_probe: bool,
-    prev_quotes: bool,
 ) -> Option<HashSet<NodeId>> {
-    if !content_dirty.tracked() || pseudo_probe || prev_quotes {
+    if !content_dirty.tracked() {
         return None;
     }
     let content: &[NodeId] = match content_dirty {
