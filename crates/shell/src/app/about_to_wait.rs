@@ -977,6 +977,25 @@ impl Lumen {
             }
         }
 
+        // UA-picker requests (HTML LS §4.10.5.1.14 `showPicker()`): open the
+        // matching native picker — select dropdown, color/date picker, file
+        // dialog — which is also what flips `:open` for the element.
+        //
+        // This drain MUST run before `drain_automation_commands` below: a
+        // `showPicker()` queued by the previous script turn and a click
+        // arriving in the same frame have to keep program order — picker
+        // opens first, then the click sees it open and closes it (WPT
+        // `input-element-pseudo-open*.optional.html` asserts `:open` right
+        // after `test_driver.click`).
+        #[cfg(feature = "v8")]
+        {
+            let picker_reqs =
+                self.drain_query_js(|j| j.take_picker_requests()).unwrap_or_default();
+            for raw in picker_reqs {
+                self.show_picker_for(lumen_dom::NodeId::from_raw(raw));
+            }
+        }
+
         // ── Automation commands (SDC-1b/SDC-2) ──────────────────────────────────────
         // Drain external commands (BiDi/MCP/graphic_tests) and route to shell actions.
         // Each request already carries the reply sender for its specific caller

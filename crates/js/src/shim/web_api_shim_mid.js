@@ -10897,15 +10897,26 @@ var _LUMEN_WRAPPER_MEMBERS = {
             else delete _validity_msg[nid];
         },
         // HTML LS §4.10.5.1.14: showPicker() — programmatically opens the
-        // UA-provided picker for applicable input types.
-        // Phase 0: fires a synthetic 'click' event so shell integrations can hook it;
-        // throws NotSupportedError for types that have no picker.
+        // UA-provided picker for applicable input types. Queued to the shell
+        // via `_lumen_request_picker`, which opens the same native picker a
+        // click would (color swatch, date calendar, file dialog) — that is
+        // also what flips `:open`. Types without a picker UI throw
+        // NotSupportedError, as the spec allows.
         showPicker: function() { var nid = this.__nid__;
             var t = (this.type || 'text').toLowerCase();
-            var pickerTypes = ['color', 'date', 'datetime-local', 'month', 'time', 'week', 'file'];
+            // `file` stays unsupported: the OS dialog blocks the event loop,
+            // so `showPicker()` on it would hang the page. `text[list]`
+            // opens the datalist popup — tracked shell-side for `:open`
+            // (the popup UI itself is not implemented yet).
+            var pickerTypes = ['color', 'date', 'datetime-local', 'week', 'month', 'time'];
             var supported = false;
             for (var _pi = 0; _pi < pickerTypes.length; _pi++) {
                 if (pickerTypes[_pi] === t) { supported = true; break; }
+            }
+            if (!supported && (t === 'text' || t === 'search' || t === 'tel' ||
+                    t === 'url' || t === 'email' || t === 'password') &&
+                    this.hasAttribute('list')) {
+                supported = true;
             }
             if (!supported) {
                 var err = new Error('showPicker() is not supported for type ' + t);
@@ -10917,8 +10928,14 @@ var _LUMEN_WRAPPER_MEMBERS = {
                 err2.name = 'InvalidStateError';
                 throw err2;
             }
-            // Fire a click event; shell / test code can listen to open a native picker.
-            this.dispatchEvent(new Event('click', { bubbles: true, cancelable: true }));
+            // `:open` must match in the same script turn (WPT asserts right
+            // after showPicker()), so the sentinel goes on synchronously via
+            // the normal setAttribute path; the shell drain only opens the
+            // picker UI and keeps the sentinel in step on close.
+            if (typeof _lumen_request_picker === 'function') {
+                this.setAttribute('data-lumen-input-open', '');
+                _lumen_request_picker(nid);
+            }
         },
         // `elements` (was a plain `Array` on every element) and `noValidate` moved
         // to `HTMLFormElement.prototype`/`HTMLFieldSetElement.prototype` — the

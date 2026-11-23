@@ -323,6 +323,12 @@ pub struct V8JsRuntime {
     pub(super) print_requests: Arc<Mutex<Vec<crate::dom::PrintRequest>>>,
     /// Focus requests queued by JS via `_lumen_request_focus` / `_lumen_request_blur`.
     pub(super) pending_focus_requests: Arc<Mutex<Vec<Option<u32>>>>,
+    /// UA-picker requests queued by JS via `_lumen_request_picker` —
+    /// `HTMLSelectElement.showPicker()` and the picker-capable
+    /// `HTMLInputElement` types. Drained by the shell in `about_to_wait`,
+    /// which opens the matching native picker (`select_dropdown_node`,
+    /// `color_picker_node`, `date_picker_node`, file picker).
+    pub(super) pending_picker_requests: Arc<Mutex<Vec<u32>>>,
     /// BUG-560: the engine thread's own up-to-date view of "what node is
     /// currently focused", mirroring the shell's `focused_node` but updated
     /// synchronously (no queue, no pump) from both directions — written by
@@ -610,6 +616,7 @@ impl V8JsRuntime {
             view_transition_events: Arc::new(Mutex::new(Vec::new())),
             print_requests: Arc::new(Mutex::new(Vec::new())),
             pending_focus_requests: Arc::new(Mutex::new(Vec::new())),
+            pending_picker_requests: Arc::new(Mutex::new(Vec::new())),
             focused_nid: Arc::new(Mutex::new(None)),
             last_flushed_focus: Arc::new(Mutex::new(None)),
             hovered_nid: Arc::new(Mutex::new(None)),
@@ -1716,6 +1723,11 @@ impl V8JsRuntime {
     /// Mirrors [`crate::QuickJsRuntime::take_focus_requests`].
     pub fn take_focus_requests(&self) -> Vec<Option<u32>> {
         std::mem::take(&mut *self.pending_focus_requests.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Drain UA-picker requests queued by `_lumen_request_picker`.
+    pub fn take_picker_requests(&self) -> Vec<u32> {
+        std::mem::take(&mut *self.pending_picker_requests.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     /// BUG-560: record the shell's current focus target on the engine thread's

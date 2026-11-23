@@ -130,6 +130,9 @@ pub(crate) struct PageSnapshot {
     pub(crate) color_picker_node: Option<NodeId>,
     /// NodeId of the `<input type="date/…">` whose calendar picker is open in this tab snapshot.
     pub(crate) date_picker_node: Option<NodeId>,
+    /// NodeId of the text-like `<input list=…>` whose datalist popup is open
+    /// in this tab snapshot (open state only — no popup UI yet).
+    pub(crate) datalist_picker_node: Option<NodeId>,
     /// NodeId of the `<select>` whose dropdown is open in this tab snapshot.
     pub(crate) select_dropdown_node: Option<NodeId>,
     pub(crate) ls_storage: HashMap<String, Arc<Mutex<lumen_core::WebStorage>>>,

@@ -816,6 +816,7 @@ use super::*;
             ("fullscreen", PseudoClass::Fullscreen),
             ("modal", PseudoClass::Modal),
             ("popover-open", PseudoClass::PopoverOpen),
+            ("open", PseudoClass::Open),
             ("current", PseudoClass::Current),
             ("past", PseudoClass::Past),
             ("future", PseudoClass::Future),
