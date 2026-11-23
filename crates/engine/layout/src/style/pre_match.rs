@@ -307,7 +307,7 @@ pub(crate) fn lookup(
     viewport: Size,
     dark_mode: bool,
 ) -> Option<(Arc<[MatchedRule]>, bool)> {
-    TABLE.with(|t| {
+    let res = TABLE.with(|t| {
         let t = t.borrow();
         let table = t.as_ref()?;
         if table.revision != sheet.revision()
@@ -323,7 +323,9 @@ pub(crate) fn lookup(
                 (Arc::clone(rules), e.shareable)
             })
         })
-    })
+    });
+    crate::counters::note_pre_match_lookup(res.is_some());
+    res
 }
 
 /// PERF-PSEUDO-PRE — this node's pre-matched pseudo declarations for `pseudo`

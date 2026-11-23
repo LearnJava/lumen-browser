@@ -2016,6 +2016,12 @@ pub struct CascadeStats {
     /// рекурсия внутрь `:is`/`:where`/`:not`/`:has` (на github вдвое больше
     /// входных вызовов).
     pub match_nested: u32,
+    /// PERF-PRE-MATCH-HIT — `style::pre_match::lookup` calls this pass and how
+    /// many returned a record. `lookups - hits` is the sequential-match share
+    /// the table failed to cover (nodes outside `needed`, stale revision,
+    /// `rules=None` pseudo-only entries).
+    pub pre_match_lookups: u32,
+    pub pre_match_hits: u32,
 }
 
 thread_local! {
@@ -2049,6 +2055,8 @@ thread_local! {
             cand_class: 0,
             cand_attr: 0,
             match_nested: 0,
+            pre_match_lookups: 0,
+            pre_match_hits: 0,
         })
     };
 }
@@ -2182,6 +2190,18 @@ fn note_clean_insert() {
     CASCADE_STATS.with(|s| {
         let mut v = s.get();
         v.clean_inserts += 1;
+        s.set(v);
+    });
+}
+
+/// PERF-PRE-MATCH-HIT — one `pre_match::lookup` call; `hit` when it returned
+/// a record. Called from `style::pre_match`, counted into the same per-pass
+/// tally the `[engine] incr cascade` line prints.
+pub(crate) fn note_pre_match_lookup(hit: bool) {
+    CASCADE_STATS.with(|s| {
+        let mut v = s.get();
+        v.pre_match_lookups += 1;
+        v.pre_match_hits += u32::from(hit);
         s.set(v);
     });
 }
