@@ -838,10 +838,12 @@ fn load_and_evaluate<'s>(
     {
         return Err(ModuleFailure::Load);
     }
-    if module.get_status() == v8::ModuleStatus::Instantiated
-        && module.evaluate(scope).is_none()
-    {
-        return Err(ModuleFailure::Runtime);
+    if module.get_status() == v8::ModuleStatus::Instantiated {
+        let _eval_prof = lumen_core::profile::scope("js.module_eval");
+        if module.evaluate(scope).is_none() {
+            return Err(ModuleFailure::Runtime);
+        }
+        drop(_eval_prof);
     }
     if module.get_status() == v8::ModuleStatus::Errored {
         let exc = module.get_exception();
@@ -977,9 +979,11 @@ pub(crate) fn evaluate_entry_module(
     if module.instantiate_module(scope, resolve_module_callback).is_none() {
         return Err(ModuleFailure::Load);
     }
+    let _eval_prof = lumen_core::profile::scope("js.module_eval");
     if module.evaluate(scope).is_none() {
         return Err(ModuleFailure::Runtime);
     }
+    drop(_eval_prof);
     if module.get_status() == v8::ModuleStatus::Errored {
         let exc = module.get_exception();
         scope.throw_exception(exc);

@@ -446,7 +446,9 @@ impl V8JsRuntime {
                 let compiled = compiled
                     .ok_or_else(|| JsError::Runtime("script compile returned None".into()))?;
 
+                let _run_prof = lumen_core::profile::scope("js.run");
                 let result = compiled.run(tc);
+                drop(_run_prof);
                 if tc.has_caught() {
                     let exc = tc.exception().unwrap();
                     report_exception_via!(tc, exc, reporter.as_str());
@@ -513,7 +515,9 @@ impl V8JsRuntime {
                 let compiled = compiled
                     .ok_or_else(|| JsError::Runtime("script compile returned None".into()))?;
 
+                let _run_prof = lumen_core::profile::scope("js.run");
                 let result = compiled.run(tc);
+                drop(_run_prof);
                 if tc.has_caught() {
                     let exc = tc.exception().unwrap();
                     report_exception_via!(tc, exc, reporter.as_str());
