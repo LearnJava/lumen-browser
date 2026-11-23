@@ -1789,20 +1789,30 @@ function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location
 // path), Space inserts a space — neither is a click. Checkable/button
 // <input> types DO activate (Space toggles them per UI Events).
 function _lumen_key_activate(nid, isSpace) {
-    var at = _lumen_activation_target(nid);
+    var at = _lumen_key_active_target(nid, isSpace);
     if (at === -1) return;
+    _lumen_perform_click(at);
+}
+
+// The element a Space/Enter press would activate, or -1 — the same target
+// `_lumen_key_activate` clicks. The shell asks this synchronously to mirror
+// the pressed state into CSS `:active` (`page_keys.rs`/`text_input.rs`).
+function _lumen_key_active_target(nid, isSpace) {
+    var at = _lumen_activation_target(nid);
+    if (at === -1) return -1;
     var tag = (_lumen_get_tag_name(at) || '').toUpperCase();
+    if (_LUMEN_DISABLEABLE_TAGS[tag] === 1 && _lumen_has_attr(at, 'disabled')) return -1;
     if (tag === 'INPUT') {
         var t = _lumen_u2n(_lumen_get_attr(at, 'type'));
         t = (t === null) ? 'text' : String(t).toLowerCase();
         if (isSpace) {
             if (t !== 'checkbox' && t !== 'radio' && t !== 'button'
-                && t !== 'submit' && t !== 'reset' && t !== 'image' && t !== 'file') return;
+                && t !== 'submit' && t !== 'reset' && t !== 'image' && t !== 'file') return -1;
         } else if (t !== 'button' && t !== 'submit' && t !== 'reset' && t !== 'image') {
-            return;
+            return -1;
         }
     }
-    _lumen_perform_click(at);
+    return at;
 }
 
 // BUG-1622: synthetic keyboard input (WebDriver key actions, `type_text`, the

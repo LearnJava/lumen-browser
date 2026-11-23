@@ -353,6 +353,14 @@ pub struct V8JsRuntime {
     /// same-tick style flush, so `getComputedStyle()` sees `:hover` rules.
     /// Without it the engine thread matched `:hover` never.
     pub(super) hovered_nid: Arc<Mutex<Option<u32>>>,
+    /// CSS `:active`'s engine-thread mirror — the `:hover`/`:focus` twin of
+    /// [`Self::focused_nid`]. Written by `V8JsRuntime::set_active_nid` when the
+    /// shell's pressed-element state changes (mouse press/release or a held
+    /// Space/Enter); read by `matches()`/`querySelectorAll()` selector matching
+    /// so `:active` resolves without a layout pass. The `bool` is
+    /// `active_from_keyboard`: Selectors L4 §9.2 propagates `:active` to
+    /// ancestors only for the pointing-device clause.
+    pub(super) active_nid: Arc<Mutex<Option<(u32, bool)>>>,
     /// CSS UI L4 §3.3: whether the current focus arrived via the keyboard —
     /// `:focus-visible`'s second input. The `:hover`/`:focus` twin of
     /// [`Self::focused_nid`]: written by `V8JsRuntime::set_keyboard_focus`
@@ -620,6 +628,7 @@ impl V8JsRuntime {
             focused_nid: Arc::new(Mutex::new(None)),
             last_flushed_focus: Arc::new(Mutex::new(None)),
             hovered_nid: Arc::new(Mutex::new(None)),
+            active_nid: Arc::new(Mutex::new(None::<(u32, bool)>)),
             last_flushed_hover: Arc::new(Mutex::new(None)),
             // CSS UI L4 §3.3: mirrors the shell's `focus_from_keyboard`
             // default — `true` until the first pointer press on a
@@ -1746,6 +1755,17 @@ impl V8JsRuntime {
     /// the shell's hit test changes the hovered node.
     pub fn set_hovered_nid(&self, nid: Option<u32>) {
         *self.hovered_nid.lock().unwrap_or_else(|e| e.into_inner()) = nid;
+    }
+
+    /// CSS `:active`: record the shell's pressed-element target on the engine
+    /// thread's own mirror ([`Self::active_nid`]) — the `:active` counterpart
+    /// of [`Self::set_focused_nid`]. `keyboard` mirrors the shell's
+    /// `active_from_keyboard` (Selectors L4 §9.2 ancestor propagation applies
+    /// only to the pointing-device clause). Called from
+    /// `notify_active_changed` each time the shell's `active_nid` changes.
+    pub fn set_active_nid(&self, nid: Option<u32>, keyboard: bool) {
+        *self.active_nid.lock().unwrap_or_else(|e| e.into_inner()) =
+            nid.map(|n| (n, keyboard));
     }
 
     /// CSS UI L4 §3.3: record whether the shell's current focus came from the

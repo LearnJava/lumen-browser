@@ -107,6 +107,8 @@ impl Lumen {
             // CSS :active — set immediately on press so :active rules apply.
             if self.active_nid != self.hovered_nid {
                 self.active_nid = self.hovered_nid;
+                self.active_from_keyboard = false;
+                self.sync_active_mirror();
                 // ADR-016 M2.2b-5: :active restyle is async-safe — the
                 // click hit-test below reads the pre-:active layout (the
                 // geometry the user pressed on), which is correct.
@@ -589,6 +591,8 @@ impl Lumen {
             // CSS :active — clear on release.
             if self.active_nid.is_some() {
                 self.active_nid = None;
+                self.active_from_keyboard = false;
+                self.sync_active_mirror();
                 // ADR-016 M2.2b-5: :active clear is async-safe — the
                 // mouseup/pointerup JS events below target `hovered_nid`,
                 // not this reflow's geometry.

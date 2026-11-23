@@ -644,6 +644,9 @@ pub(crate) struct Lumen {
     /// DOM node whose mouse button is currently held down (CSS `:active` target).
     /// Set on `MouseInput(Pressed)`, cleared on `MouseInput(Released)`.
     pub(crate) active_nid: Option<NodeId>,
+    /// `active_nid` was set by a held Space/Enter key, not a mouse press —
+    /// the matching `keyup` or a focus change clears it (`active-onblur`).
+    pub(crate) active_from_keyboard: bool,
     /// Активный drag scrollbar-thumb-а: `Some` пока зажата левая кнопка после
     /// click-а по thumb-у. `MouseInput Released` или `CursorLeft` сбрасывают
     /// в `None`. Снапшот `(start_scroll_y, start_mouse_y)` фиксирован на момент

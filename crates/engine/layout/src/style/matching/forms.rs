@@ -19,7 +19,7 @@ use std::cell::Cell;
 use lumen_css_parser::{Combinator, ComplexSelector, DirArg, PseudoClass};
 use lumen_dom::{Document, NodeData, NodeId};
 
-use crate::style::env::{ACTIVE_NID, FOCUS_NID, HOVER_NID, KEYBOARD_FOCUS};
+use crate::style::env::{ACTIVE_KEYBOARD, ACTIVE_NID, FOCUS_NID, HOVER_NID, KEYBOARD_FOCUS};
 use crate::style::presentational::{first_strong_direction, first_strong_in_text, slot_assigned_directionality};
 use crate::style::{Direction, SHADOW_HOST_SCOPE};
 
@@ -186,10 +186,17 @@ pub(in crate::style) fn matches_pseudo_class(p: &PseudoClass, doc: &Document, no
         PseudoClass::Focus => {
             FOCUS_NID.with(Cell::get) == node.index() as u32
         }
-        // `:active` — mouse-pressed element and its ancestors (CSS Selectors L4 §4.5).
+        // `:active` — mouse-pressed element and its ancestors (CSS Selectors
+        // L4 §9.2); a keyboard-held Space/Enter marks only the activated
+        // element itself — ancestor propagation belongs to the pointing-device
+        // clause, so `querySelector(':active')` returns the button, not <html>.
         PseudoClass::Active => {
             let aid = ACTIVE_NID.with(Cell::get);
             if aid == u32::MAX { return false; }
+            let keyboard = ACTIVE_KEYBOARD.with(Cell::get);
+            if keyboard {
+                return aid == node.index() as u32;
+            }
             is_self_or_ancestor(doc, node, NodeId::from_index(aid as usize))
         }
         // `:focus-within` — element or any descendant has focus (CSS Selectors L4 §4.4.2).

@@ -138,6 +138,17 @@ impl Lumen {
                 platform::keyboard_state::caps_lock_mask() | u32::from(self.injected_modifiers),
             );
             route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
+            // CSS `:active` mirror for a held Space/Enter — WebDriver press
+            // and release arrive as separate `AutomationCommand::Key`s, so
+            // each event edge syncs the state the real-key path sets in
+            // `page_keys.rs`. Ctrl/Alt/Meta chords never activate.
+            if matches!(key, " " | "Enter") && self.injected_modifiers & 0b1101 == 0 {
+                match *event_type {
+                    "keydown" => self.sync_key_active(key == " ", true),
+                    "keyup" => self.sync_key_active(key == " ", false),
+                    _ => {}
+                }
+            }
         }
         self.queue_js_navigate_read();
     }

@@ -1032,6 +1032,15 @@ pub(crate) trait PersistentJs: Send + Sync {
     #[allow(dead_code)]
     fn notify_hover_changed(&self, _nid: Option<u32>) {}
 
+    /// CSS `:active`: the shell's pressed-element target changed (mouse
+    /// press/release or a held Space/Enter). `keyboard` mirrors
+    /// `active_from_keyboard` — Selectors L4 §9.2 propagates `:active` to
+    /// ancestors only for the pointing-device clause. Keeps the engine
+    /// thread's `:active` mirror in step so `matches(':active')`/
+    /// `querySelector` resolve it without a layout pass.
+    #[allow(dead_code)]
+    fn notify_active_changed(&self, _nid: Option<u32>, _keyboard: bool) {}
+
     /// CSS UI L4 §3.3: the shell's input modality flipped between keyboard
     /// and pointer. Keeps the engine thread's `:focus-visible` mirror in step,
     /// so `matches(':focus-visible')` and `getComputedStyle()` agree with the
@@ -1778,6 +1787,9 @@ impl PersistentJs for V8PersistentJs {
     }
     fn notify_hover_changed(&self, nid: Option<u32>) {
         self.rt.set_hovered_nid(nid);
+    }
+    fn notify_active_changed(&self, nid: Option<u32>, keyboard: bool) {
+        self.rt.set_active_nid(nid, keyboard);
     }
     fn notify_keyboard_focus(&self, keyboard: bool) {
         self.rt.set_keyboard_focus(keyboard);
