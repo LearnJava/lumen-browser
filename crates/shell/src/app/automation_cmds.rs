@@ -248,6 +248,24 @@ impl Lumen {
                     self.flush_pointer_moves();
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
+                // WPT drag gestures (`selection-pointer.html`): a press arms
+                // the same selection drags a real mouse press arms; pointer
+                // moves between down/up extend them via `on_cursor_moved`.
+                AutomationCommand::PointerDown { x, y } => {
+                    // Same coordinate contract as `Click`/`PointerMove`:
+                    // content-viewport CSS px → window CSS px via page_offset.
+                    let (ox, oy) = self.page_offset();
+                    let (wx, wy) = (x + ox, y + oy);
+                    self.handle_click_at_automation(wx, wy);
+                    self.begin_text_drag_select(wx, wy);
+                    self.begin_doc_select(wx, wy);
+                    let _ = reply_tx.send(AutomationReply::Ack);
+                }
+                AutomationCommand::PointerUp => {
+                    self.doc_select = None;
+                    self.text_drag = None;
+                    let _ = reply_tx.send(AutomationReply::Ack);
+                }
                 // BUG-1194: a bare key press/release (Escape, Tab, Shift, …).
                 AutomationCommand::Key { key, code, down } => {
                     // BiDi sends each key of a chord as its own Key command —

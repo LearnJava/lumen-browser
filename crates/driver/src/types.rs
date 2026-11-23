@@ -557,6 +557,19 @@ pub enum AutomationCommand {
         /// Viewport Y, CSS px.
         y: f32,
     },
+    /// Left-button press at viewport CSS-pixel coordinates (WPT drag
+    /// gestures): runs the click's press half and arms text-selection drag;
+    /// the matching [`Self::PointerUp`] releases it. Coordinates are the
+    /// same content-viewport space as [`Self::PointerMove`].
+    PointerDown {
+        /// Viewport X, CSS px.
+        x: f32,
+        /// Viewport Y, CSS px.
+        y: f32,
+    },
+    /// Left-button release — ends an armed text-selection drag; the
+    /// selection itself stays.
+    PointerUp,
     /// Press or release one non-text key (BUG-1194): dispatches `keydown` or
     /// `keyup` with the given `KeyboardEvent.key`/`code` at the focused
     /// element, without clicking anywhere.
