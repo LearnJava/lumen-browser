@@ -111,30 +111,24 @@ pub(crate) fn take_hits() -> u64 {
 pub(crate) struct Guard;
 
 impl Guard {
-    /// PERF-PSEUDO-PRE — clones the per-node pseudo match records out of the
-    /// table before it drops, for bulk-loading into the pass's `PseudoCache`
-    /// (box build runs after this guard is gone). Arc clones only.
+    /// PERF-PSEUDO-PRE — drains the per-node pseudo match records out of the
+    /// table for bulk-loading into the pass's `PseudoCache` (box build runs
+    /// after this guard is gone). The table is dead the moment the cascade
+    /// walk ends — both callers drop the guard right after — so taking it
+    /// moves the records instead of cloning every `Box<str>` name and bumping
+    /// every `Arc` (~15k allocations saved per flush on real pages).
+    /// Snapshot-served records are already in the pass's `PseudoCache` —
+    /// re-storing them is pure write amplification, so `pseudo_dirty` only.
     pub(crate) fn pseudo_records(&self) -> super::pseudo::PseudoRecords {
         TABLE.with(|t| {
-            t.borrow()
-                .as_ref()
+            t.borrow_mut()
+                .take()
                 .map(|table| {
                     table
                         .nodes
-                        .iter()
-                        // Snapshot-served records are already in the pass's
-                        // PseudoCache — re-storing them is pure write
-                        // amplification on every incremental flush.
+                        .into_iter()
                         .filter(|(_, e)| e.pseudo_dirty)
-                        .map(|(node, e)| {
-                            (
-                                *node,
-                                e.pseudo
-                                    .iter()
-                                    .map(|(n, rec)| (n.clone(), Arc::clone(rec)))
-                                    .collect(),
-                            )
-                        })
+                        .map(|(node, e)| (node, e.pseudo))
                         .collect()
                 })
                 .unwrap_or_default()
@@ -313,21 +307,27 @@ pub(crate) fn lookup(
     TABLE.with(|t| {
         let t = t.borrow();
         let table = t.as_ref()?;
-        let res = if table.revision != sheet.revision()
+        if table.revision != sheet.revision()
             || table.dark_mode != dark_mode
             || table.viewport != (viewport.width.to_bits(), viewport.height.to_bits())
         {
-            None
-        } else {
-            table.nodes.get(&node).and_then(|e| {
-                e.rules.as_ref().map(|rules| {
-                    #[cfg(test)]
-                    HITS.with(|c| c.set(c.get() + 1));
-                    (Arc::clone(rules), e.shareable)
-                })
+            // Stale table — count as absent, not as a coverage miss.
+            crate::counters::note_pre_match_lookup_kind(1);
+            return None;
+        }
+        let entry = table.nodes.get(&node);
+        let res = entry.and_then(|e| {
+            e.rules.as_ref().map(|rules| {
+                #[cfg(test)]
+                HITS.with(|c| c.set(c.get() + 1));
+                (Arc::clone(rules), e.shareable)
             })
-        };
-        crate::counters::note_pre_match_lookup(res.is_some());
+        });
+        crate::counters::note_pre_match_lookup_kind(match (entry, res.is_some()) {
+            (_, true) => 0,
+            (None, _) => 1,
+            (Some(_), _) => 2,
+        });
         res
     })
 }
