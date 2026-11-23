@@ -186,6 +186,12 @@ impl Lumen {
                     new_interactive.2,
                     state_index,
                 ));
+                // UA `:focus-visible` ring is invisible to `state_index`
+                // (see `relayout.rs`) — restyle both focus endpoints on a move.
+                if prev_focus != new_interactive.1 {
+                    dirty_roots.extend(prev_focus);
+                    dirty_roots.extend(new_interactive.1);
+                }
                 // BUG-341 S6: DOM-mutation root-set, unioned with the
                 // interactive-state one above — `touched` is empty on a pure
                 // hover/focus/active-only pass (S5's original case), non-empty
