@@ -1695,6 +1695,10 @@ pub fn incremental_precompute_counters(
     };
     drop(_pre_matched);
     if !pseudo_records.is_empty() {
+        if std::env::var_os("LUMEN_FRAME_LOG").is_some_and(|v| v != "0") {
+            let n: usize = pseudo_records.iter().map(|(_, v)| v.len()).sum();
+            eprintln!("[engine] pseudo_store nodes={} records={n}", pseudo_records.len());
+        }
         let _prof = lumen_core::profile::scope_detail("pseudo_store");
         map.styles
             .pseudo_cache()

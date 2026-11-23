@@ -847,13 +847,27 @@ pub(in crate::style) fn match_pseudo_owned(
         // "matched nothing" instead of leaving every exempt probe
         // (`::marker`, `q::before`, …) to rescan the candidate index.
         if part_scopes.is_empty() {
-            return Some(std::sync::Arc::from(Vec::new()));
+            return Some(empty_pseudo_matches());
         }
     }
     let mut out = Vec::new();
     collect_pseudo_matches(doc, node, pseudo, pseudo_base, sheet, viewport, dark_mode, &part_scopes, &mut out);
     out.sort_by_key(|m| (m.important, m.spec, m.key, m.decl_idx));
-    Some(std::sync::Arc::from(out))
+    Some(if out.is_empty() {
+        empty_pseudo_matches()
+    } else {
+        std::sync::Arc::from(out)
+    })
+}
+
+/// PERF-PSEUDO-STORE: the overwhelmingly common record is "matched nothing" —
+/// `pre_match` workers produce one per (node, pseudo-name) pair, tens of
+/// thousands per flush. A shared allocation turns each into a refcount bump
+/// instead of a fresh `Arc` box.
+fn empty_pseudo_matches() -> std::sync::Arc<[PseudoMatch]> {
+    static EMPTY: std::sync::LazyLock<std::sync::Arc<[PseudoMatch]>> =
+        std::sync::LazyLock::new(|| std::sync::Arc::from(Vec::new()));
+    std::sync::Arc::clone(&EMPTY)
 }
 
 /// The body of [`compute_pseudo_element_style`] — split out so the census hook
