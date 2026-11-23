@@ -10,6 +10,10 @@
 // Область исключения — файл. Счётчики по крейтам — docs/lint-policy.md §10.
 #![allow(missing_docs)]
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use serde::{Deserialize, Serialize};
 
 use lumen_core::geom::Size;
@@ -297,15 +301,54 @@ pub(in crate::style) fn parse_sizing_length(s: &str, is_quirks: bool) -> Option<
     }
 }
 
+thread_local! {
+    /// PERF-LEN-CACHE — `parse_length_q` is the hottest primitive in the
+    /// cascade (every margin/padding/inset/size declaration on every node,
+    /// every flush). Its result depends only on `(s, is_quirks)` — the `cq*`
+    /// side effect (`note_cq_unit`) is monotone, so a cache hit skipping it
+    /// is safe. Bounded per quirks-mode; clear-on-overflow like the other
+    /// declaration caches. `Rc` keeps hits cheap for `Calc` payloads.
+    static LENGTH_PARSE_CACHE: RefCell<LengthParseCache> = RefCell::new(LengthParseCache::default());
+}
+
+#[derive(Default)]
+struct LengthParseCache {
+    std: HashMap<String, Option<Rc<Length>>>,
+    quirks: HashMap<String, Option<Rc<Length>>>,
+}
+
 /// Парсит CSS-длину: число + опциональная единица (`px`, `em`, `rem`, `%`,
 /// `vh`/`vw`/`vmin`/`vmax`). Голое число (`0`) считаем `Px(0)` — CSS позволяет
 /// опускать единицу только для нуля, но мы прощаем и для других чисел.
+/// Кэшированная обёртка над [`parse_length_q_uncached`] (см. `LENGTH_PARSE_CACHE`).
 ///
 /// Порядок проверки суффиксов важен: более длинные сначала (`vmin`/`vmax`
 /// перед `vw`/`vh`, `rem` перед `em`).
+pub(in crate::style) fn parse_length_q(s: &str, is_quirks: bool) -> Option<Length> {
+    LENGTH_PARSE_CACHE.with(|cell| {
+        {
+            let map = cell.borrow();
+            let slot = if is_quirks { &map.quirks } else { &map.std };
+            if let Some(hit) = slot.get(s) {
+                return hit.as_ref().map(|rc| rc.as_ref().clone());
+            }
+        }
+        // Parse outside the borrow: nothing in the parse path re-enters
+        // `parse_length_q`, but keeping the RefCell free costs nothing.
+        let parsed = parse_length_q_uncached(s, is_quirks);
+        let mut map = cell.borrow_mut();
+        let slot = if is_quirks { &mut map.quirks } else { &mut map.std };
+        if slot.len() >= 16384 {
+            slot.clear();
+        }
+        slot.insert(s.to_string(), parsed.as_ref().map(|l| Rc::new(l.clone())));
+        parsed
+    })
+}
+
 /// CSS Quirks Mode §3.3: в quirks-mode unitless non-zero число принимается
 /// как px; в standards-mode — только `0` валиден без единицы (CSS Values §6).
-pub(in crate::style) fn parse_length_q(s: &str, is_quirks: bool) -> Option<Length> {
+fn parse_length_q_uncached(s: &str, is_quirks: bool) -> Option<Length> {
     let s = s.trim();
     // CSS Values L4: math-функции calc() / min() / max() / clamp().
     // Если значение начинается с буквы и содержит `(` — обрабатываем как
