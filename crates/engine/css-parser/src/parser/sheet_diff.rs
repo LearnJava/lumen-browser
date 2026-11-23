@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::hash::{Hash, Hasher};
+use std::hash::Hasher;
 
 use super::{Rule, Stylesheet};
 
@@ -23,16 +23,21 @@ impl Stylesheet {
     /// recascade it all.
     ///
     /// Why that is enough for an element to keep its style. The cascade orders the plain rules
-    /// and the `@media`/`@supports` blocks by order of appearance (a block's [`super::BlockPos`]
-    /// says how many plain rules precede it, and is part of the block's equality, so a block
-    /// that moved against the plain rules counts as changed), then `@layer` after them.
-    /// Inserting or removing a rule (a block) shifts no other rule's standing against another,
-    /// and a block that is equal in both sheets is active in both (its condition is evaluated per
-    /// block, against the same viewport). Within one group, the rules returned here are all that
-    /// changed: the rest are present in both sheets in the same relative order (the longest such
-    /// run is kept). An
-    /// element that no returned rule selects therefore matches the same rules in the same
-    /// order in both sheets, and cascades to the same style.
+    /// and the `@media`/`@supports` blocks by order of appearance — a block's [`super::BlockPos`]
+    /// says how many plain rules precede it —, then `@layer` after them. So the plain rules and
+    /// the two kinds of block are diffed as that one sequence ([`Stylesheet::cascade_items`]),
+    /// and a block counts as the same item when it holds the same condition and rules, wherever
+    /// it stands. BUG-1837: a block used to be compared with its position, and a page that
+    /// rewrites a `<style>` ahead of other sheets shifts the position of every block behind
+    /// it — okko.tv reported 1 230 blocks for one rule that really changed. A block whose place
+    /// in the sequence did change (against the plain rules or another block) still falls
+    /// outside the longest in-order run, and is returned.
+    /// Inserting or removing an item shifts no other item's standing against another, and a
+    /// block that is equal in both sheets is active in both (its condition is evaluated per
+    /// block, against the same viewport). The rules returned here are all that changed: the
+    /// rest are present in both sheets in the same relative order (the longest such run is
+    /// kept). An element that no returned rule selects therefore matches the same rules in the
+    /// same order in both sheets, and cascades to the same style.
     ///
     /// BUG-1800: the same argument covers `@container` blocks, with one extra step. The
     /// cascade never reads them (`compute_style` walks only `rules`/`media_rules`;
@@ -55,17 +60,53 @@ impl Stylesheet {
         if !self.fields_differing_from_style_rules(newer).is_empty() {
             return None;
         }
-        let mut changed: Vec<&Rule> = changed_items(&self.rules, &newer.rules);
-        for block in changed_items(&self.media_rules, &newer.media_rules) {
-            changed.extend(&block.rules);
-        }
-        for block in changed_items(&self.supports_rules, &newer.supports_rules) {
-            changed.extend(&block.rules);
+        let mut changed: Vec<&Rule> = Vec::new();
+        let old_items = self.cascade_items();
+        let new_items = newer.cascade_items();
+        for item in changed_items(&old_items, &new_items) {
+            match item {
+                CascadeItem::Rule(rule) => changed.push(rule),
+                CascadeItem::Media(block) => changed.extend(block.rules),
+                CascadeItem::Supports(block) => changed.extend(block.rules),
+            }
         }
         for block in changed_items(&self.container_rules, &newer.container_rules) {
             changed.extend(&block.rules);
         }
         Some(changed)
+    }
+
+    /// The sheet as the cascade reads it: the plain rules and the `@media`/`@supports` blocks
+    /// in one sequence, by order of appearance, the way the cascade sorts them (a block stands
+    /// before the plain rule that follows it in the source). A block is represented without its
+    /// [`super::BlockPos`], so two blocks are one and the same item when they hold the same
+    /// condition, rules and enclosing conditions — see [`Self::changed_style_rules`].
+    fn cascade_items(&self) -> Vec<CascadeItem<'_>> {
+        // (plain rules before it, kind, place within the kind): plain rules sort last at a
+        // position, the two block kinds keep the order the cascade numbers them in.
+        let mut items: Vec<(usize, u8, usize, CascadeItem<'_>)> =
+            Vec::with_capacity(self.rules.len() + self.media_rules.len() + self.supports_rules.len());
+        for (i, rule) in self.rules.iter().enumerate() {
+            items.push((i, 2, 0, CascadeItem::Rule(rule)));
+        }
+        for (i, m) in self.media_rules.iter().enumerate() {
+            items.push((
+                m.pos.rules_before,
+                0,
+                i,
+                CascadeItem::Media(MediaBody { query: &m.query, rules: &m.rules, outer: &m.outer }),
+            ));
+        }
+        for (i, s) in self.supports_rules.iter().enumerate() {
+            items.push((
+                s.pos.rules_before,
+                1,
+                i,
+                CascadeItem::Supports(SupportsBody { condition: &s.condition, rules: &s.rules, outer: &s.outer }),
+            ));
+        }
+        items.sort_by_key(|&(before, kind, at, _)| (before, kind, at));
+        items.into_iter().map(|(.., item)| item).collect()
     }
 
     /// Names of the fields the cascade reads that [`Self::changed_style_rules`] cannot
@@ -127,14 +168,50 @@ impl Stylesheet {
     }
 }
 
-/// A hash of a rule's content, only to bucket candidates — equality is re-checked on `==`.
+/// A hash of an item's content, only to bucket candidates — equality is re-checked on `==`.
+/// `Debug` goes into the hasher piece by piece: a block formats to its every rule, and the
+/// pieces are hashed as they are formatted instead of being collected into a `String`.
 fn fingerprint<T: Debug>(item: &T) -> u64 {
+    struct Sink<'a, H>(&'a mut H);
+    impl<H: Hasher> std::fmt::Write for Sink<'_, H> {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            self.0.write(s.as_bytes());
+            Ok(())
+        }
+    }
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    format!("{item:?}").hash(&mut hasher);
+    // The sink writes into the hasher and has nothing to fail on.
+    let _ = std::fmt::Write::write_fmt(&mut Sink(&mut hasher), format_args!("{item:?}"));
     hasher.finish()
 }
 
+/// One entry of a sheet's cascade order — see [`Stylesheet::cascade_items`].
+#[derive(Debug, PartialEq)]
+enum CascadeItem<'a> {
+    Rule(&'a Rule),
+    Media(MediaBody<'a>),
+    Supports(SupportsBody<'a>),
+}
+
+/// An `@media` block without its position.
+#[derive(Debug, PartialEq)]
+struct MediaBody<'a> {
+    query: &'a super::MediaQuery,
+    rules: &'a [Rule],
+    outer: &'a [super::LayerCondition],
+}
+
+/// An `@supports` block without its position.
+#[derive(Debug, PartialEq)]
+struct SupportsBody<'a> {
+    condition: &'a super::SupportsCondition,
+    rules: &'a [Rule],
+    outer: &'a [super::LayerCondition],
+}
+
 /// The items of `old` and `new` that were added, removed, or moved relative to the others.
+/// An item that only moved is named once, from `new`: its old self is equal to it and so
+/// selects whatever it selects.
 fn changed_items<'a, T: PartialEq + Debug>(old: &'a [T], new: &'a [T]) -> Vec<&'a T> {
     let limit = old.len().min(new.len());
     let prefix = (0..limit).take_while(|&i| old[i] == new[i]).count();

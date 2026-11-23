@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-11-19",
+ "generated": "2026-11-23",
  "counts": {
-  "open": 299,
-  "fixed": 1458,
+  "open": 300,
+  "fixed": 1466,
   "inprogress": 0,
   "wontfix": 8
  },
- "total_bugs": 1765,
+ "total_bugs": 1774,
  "phases": [
   {
    "id": "P0",
@@ -11861,24 +11861,10 @@
    "date": null,
    "debtor": true
   },
-  "BUG-1809": {
-   "status": "open",
-   "title": "`getComputedStyle().display` boxless-элементов = \"\" (вместо \"inline\"/\"contents\") — два детерминированных красных на чистом main `023241ed5` (соло и stash-прогон…",
-   "component": "driver (`bug1191_boxless_computed_style.rs:32`, `bug489_display_contents_computed_style.rs:32`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1810": {
    "status": "open",
    "title": "Own `opacity`/`mask-image`/`blend`/`transform` на replaced-боксах `Canvas`/`Video`/`Iframe`/`Audio` молча игнорируются — их нет в списке владельцев слоя краски…",
    "component": "layout/paint (`stacking.rs::box_can_own_stacking_context`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1819": {
-   "status": "open",
-   "title": "`object-fit` не хранит пару `[ contain \\",
-   "component": "layout (`style/values/flexgrid.rs::ObjectFit`, `style/apply/layout.rs:138`)",
    "date": null,
    "debtor": false
   },
@@ -11896,13 +11882,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1825": {
-   "status": "open",
-   "title": "`position: sticky` не зажат своим containing block (CSS Position 3 §2.2, sticky constraint rectangle = scrollport ∩ containing block): липкий бокс выходит за кр…",
-   "component": "layout/paint (`sticky_dy`/`sticky_dx` в `display_list/box_layer.rs`, `backends/femtovg_backend.rs`, `renderer/sticky_geom.rs`, `cpu_raster.rs`; геометрия — `sticky_snap.rs::sticky_correction`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1827": {
    "status": "open",
    "title": "Голый `cargo clippy -p lumen-js --all-targets -- -D warnings` (без `v8-backend`) красный на чистом main `e0f8aff95` уже в таргете `lib` — 85 ошибок never-used/u…",
@@ -11917,17 +11896,45 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1829": {
-   "status": "open",
-   "title": "Фингерпринт-дивергенты toString-пробы BUG-1826 срез 2: `SharedArrayBuffer` виден без `crossOriginIsolated` (Chrome прячет); `WebGLRenderingContext/WebGL2Renderi…",
-   "component": "js (`crates/js/src` — шимы/нативы: `SharedArrayBuffer`, WebGL, Crypto, RTCPeerConnection)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1830": {
    "status": "open",
    "title": "Скриншот-пайплайн (живое окно, WPT-рефтесты) не пиннит `position: fixed`: скобки `BeginFixedLayer` эмитит только walk-путь, порядковый список их не содержит, а…",
    "component": "paint/shell (`box_layer.rs` — порядковый сборщик; `automation.rs:render_current_page_to_png`, `cpu_raster.rs` — скриншот)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1831": {
+   "status": "open",
+   "title": "Дважды `STATUS_HEAP_CORRUPTION` (0xc0000374) в одной точке прогона — после `platform::audio_player::tests::probe_duration_mp3_is_finite`; `platform::` отдельно…",
+   "component": "shell test-binary (`cargo test -p lumen-shell --bin lumen`, 2589 тестов; краш после `platform::audio_player`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1834": {
+   "status": "open",
+   "title": "Дважды `STATUS_HEAP_CORRUPTION` (0xc0000374) в одной точке прогона — после `platform::audio_player::tests::probe_duration_mp3_is_finite`; `platform::` отдельно…",
+   "component": "shell test-binary (`cargo test -p lumen-shell --bin lumen`, 2589 тестов; краш после `platform::audio_player`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1835": {
+   "status": "open",
+   "title": "ozon.ru: `/abt/result` антибот-челленджа отвечает 403. Ветка `fix-ozon-ru`: TLS ClientHello≈Chrome 157, ранняя доставка performance.timing, Chrome-матрица загол…",
+   "component": "network/js/shell (фингерпринт: TLS, заголовки, navigator.*, RTC, mediaDevices)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1838": {
+   "status": "open",
+   "title": "Видео-сессии открываются синхронно в потоке браузера: кадры 9.8 / 6.9 / 2.6 с (`anim` 9400 / 6790 / 2641 мс) сразу после `video: загружен … (1920×1080)`; `lumen…",
+   "component": "shell (`video_tick.rs::tick_video_sessions` — шаг 2.6 обработчика кадра)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1839": {
+   "status": "open",
+   "title": "okko.tv: 82–87% кандидатов каскада приходится на корзину universal индекса правил — ~95 на пересчитанный элемент, 59–77 вызовов `matches_complex` на элемент (46…",
+   "component": "layout/style (`rule_index.rs` — корзина universal; `counters.rs` — `note_candidate_bucket`)",
    "date": null,
    "debtor": false
   },
@@ -22164,12 +22171,69 @@
    "component": "js (`crates/js/src/frame_bridge.rs` — фасады `winFacade`/`docFacade`/`location`, `wrapWinFacadeGlobals`; `crates/js/src/shim/native_tostring_shim.js` — хук `_lumen_tostring_mark`)",
    "date": "2026-11-19",
    "debtor": false
+  },
+  "BUG-1819": {
+   "status": "fixed",
+   "title": "`object-fit` не хранит пару `[ contain \\",
+   "component": "layout/paint (`crates/engine/layout/src/style/values/background.rs::ObjectFit`, `style/apply/layout.rs`, `selector_query.rs::computed_style_to_map`; `crates/engine/paint/src/display_list/geometry.rs` — `object_fit_name`/`fit_image_rect`)",
+   "date": "2026-11-19",
+   "debtor": false
+  },
+  "BUG-1809": {
+   "status": "fixed",
+   "title": "`getComputedStyle(<display:contents>).display` → \"\" (bug489; bug1191-форма к моменту взятия уже зелёная на main): трёхсвойственная запись `INLINE_SEGMENT_PROPER…",
+   "component": "layout (`crates/engine/layout/src/lib.rs::collect_computed_styles_parts`)",
+   "date": "2026-11-19",
+   "debtor": false
+  },
+  "BUG-1832": {
+   "status": "fixed",
+   "title": "Дефолтная идентичность `chrome_unbranded` → `chrome_lumen` по санкции ADR-034 §1 (амендмент 2026-11-19): A/B-матрица 2026-10-15 (533 сайта) дала 1 блокировку =…",
+   "component": "core/network/shell/update-manifest (`crates/core/src/identity.rs`, `crates/network/src/http/{headers,client_hints}.rs`, `crates/shell/src/config.rs`, `crates/update-manifest/assets/compat_pack.json`)",
+   "date": "2026-11-19",
+   "debtor": false
+  },
+  "BUG-1833": {
+   "status": "fixed",
+   "title": "Дефект теста, не рантайма: `shared_worker_shim_functions_print_as_native` вызывал `install_shared_worker_globals_v8` без `_lumen_native_sweep()`, который по диз…",
+   "component": "js (`crates/js/src/shared_worker.rs` — тест `tests_v8`)",
+   "date": "2026-11-20",
+   "debtor": false
+  },
+  "BUG-1829": {
+   "status": "fixed",
+   "title": "Четыре фингерпринт-дивергенции против Chrome 157: (1) `SharedArrayBuffer` теперь удаляется на не-`crossOriginIsolated` реалмах (page+workers) по флагу `_LUMEN_C…",
+   "component": "js (`crates/js/src` — `shim/sab_gate_shim.js`, `shim/crypto_shim.js`, `shim/web_api_shim_tail_mc.js`, `webgl_canvas.rs`, `dom.rs`)",
+   "date": "2026-11-20",
+   "debtor": false
+  },
+  "BUG-1825": {
+   "status": "fixed",
+   "title": "",
+   "component": "",
+   "date": "2026-11-19",
+   "debtor": false
+  },
+  "BUG-1836": {
+   "status": "fixed",
+   "title": "TLS ClientHello отличался от Chrome 157: в `cipher_list` стояли `ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES128-SHA` (`c009`,`c013`) вместо Chrome `c013`,`c014`, в `si…",
+   "component": "network (`http/chrome_manifest.rs` — `CHROME_157.tls`; `tls/boring.rs`)",
+   "date": "2026-11-23",
+   "debtor": false
+  },
+  "BUG-1837": {
+   "status": "fixed",
+   "title": "Каскад на okko.tv дороже Chrome в разы: индекс правил на каждый активный блок `@media`/`@supports` (39 запросов кандидатов на узел), диф листа сравнивал блоки п…",
+   "component": "layout/style (`style/cascade_index.rs`, `style/cascade.rs`, `style/share_safety.rs`, `style/rule_roots.rs`), css-parser (`parser/sheet_diff.rs`), js (`v8_runtime/style_flush.rs`), shell (`page_load.rs`)",
+   "date": "2026-11-23",
+   "debtor": false
   }
  },
  "unlinked": {
   "": [
    "BUG-1647",
-   "BUG-1816"
+   "BUG-1816",
+   "BUG-1825"
   ],
   "CI (`scripts/check_file_sizes.py`, job `file-size`, `docs/lint-policy.md` §5.1)": [
    "BUG-1002"
@@ -22227,6 +22291,9 @@
   ],
   "core (`crates/core/src/web_storage.rs:38`–`44` — `set_item` пишет в `HashMap` без проверки размера; слова `quota` в файле нет) + js (`crates/js/src/dom.rs:9921`)": [
    "BUG-870"
+  ],
+  "core/network/shell/update-manifest (`crates/core/src/identity.rs`, `crates/network/src/http/{headers,client_hints}.rs`, `crates/shell/src/config.rs`, `crates/update-manifest/assets/compat_pack.json`)": [
+   "BUG-1832"
   ],
   "css-parser": [
    "BUG-022",
@@ -22487,9 +22554,6 @@
    "BUG-061",
    "BUG-064",
    "BUG-112"
-  ],
-  "driver (`bug1191_boxless_computed_style.rs:32`, `bug489_display_contents_computed_style.rs:32`)": [
-   "BUG-1809"
   ],
   "driver (`crates/driver/src/session.rs:790` — `InProcessSession::navigate`, ветка `url.strip_prefix(\"file://\")`)": [
    "BUG-760"
@@ -22951,6 +23015,9 @@
   ],
   "js (`crates/js/src/shared_worker.rs` — `hub_v8`/`HUB_V8`; `crates/js/src/v8_runtime/runtime.rs::V8JsRuntime::drop`)": [
    "BUG-1000"
+  ],
+  "js (`crates/js/src/shared_worker.rs` — тест `tests_v8`)": [
+   "BUG-1833"
   ],
   "js (`crates/js/src/shared_worker.rs` — хвост `_lumen_sw_report_exception`, `run_shared_worker_thread_v8`; `crates/js/src/v8_runtime/eval.rs::eval_and_report_via`)": [
    "BUG-905"
@@ -23489,11 +23556,11 @@
   "js (`crates/js/src/xhr.rs` `deliver`: последнее `progress` при `readyState` 3 до `_setReadyState(4)`; было: после)": [
    "BUG-1141"
   ],
+  "js (`crates/js/src` — `shim/sab_gate_shim.js`, `shim/crypto_shim.js`, `shim/web_api_shim_tail_mc.js`, `webgl_canvas.rs`, `dom.rs`)": [
+   "BUG-1829"
+  ],
   "js (`crates/js/src` — хелперы, живущие только v8-глеймом: `compression.rs`, `noise_key.rs`, текстовые метрики `canvas2d.rs`, шимы/нативы `dom.rs`, `worker.rs`, `push_api.rs`, `offscreen_canvas`, `lib.rs`)": [
    "BUG-1827"
-  ],
-  "js (`crates/js/src` — шимы/нативы: `SharedArrayBuffer`, WebGL, Crypto, RTCPeerConnection)": [
-   "BUG-1829"
   ],
   "js (`crypto_shim.js` `encrypt`/`decrypt`/`sign`/`verify`/`deriveBits`; `subtle_crypto.rs` `aes_gcm_*`, `rsa_verify`, `aes_ctr_crypt`)": [
    "BUG-1739"
@@ -24338,6 +24405,9 @@
   "layout (`crates/engine/layout/src/lib.rs:1508`, `collect_scroll_containers_for_js_state`)": [
    "BUG-1389"
   ],
+  "layout (`crates/engine/layout/src/lib.rs::collect_computed_styles_parts`)": [
+   "BUG-1809"
+  ],
   "layout (`crates/engine/layout/src/lib.rs::collect_computed_styles` — снимок по `LayoutBox`-дереву), js (шим `getComputedStyle`)": [
    "BUG-1191"
   ],
@@ -24577,9 +24647,6 @@
   "layout (`style/values/box_model.rs::VerticalAlign`, `style/math_value.rs`, инлайн-раскладка)": [
    "BUG-1724"
   ],
-  "layout (`style/values/flexgrid.rs::ObjectFit`, `style/apply/layout.rs:138`)": [
-   "BUG-1819"
-  ],
   "layout (float positioning, CSS2.1 §9.5.1)": [
    "BUG-469"
   ],
@@ -24788,11 +24855,11 @@
   "layout/paint (`crates/engine/layout/src/style/parse/transform.rs:236` `parse_filter_fn` — `grayscale`/`sepia` не ограничены 1)": [
    "BUG-1544"
   ],
+  "layout/paint (`crates/engine/layout/src/style/values/background.rs::ObjectFit`, `style/apply/layout.rs`, `selector_query.rs::computed_style_to_map`; `crates/engine/paint/src/display_list/geometry.rs` — `object_fit_name`/`fit_image_rect`)": [
+   "BUG-1819"
+  ],
   "layout/paint (`stacking.rs::box_can_own_stacking_context`)": [
    "BUG-1810"
-  ],
-  "layout/paint (`sticky_dy`/`sticky_dx` в `display_list/box_layer.rs`, `backends/femtovg_backend.rs`, `renderer/sticky_geom.rs`, `cpu_raster.rs`; геометрия — `sticky_snap.rs::sticky_correction`)": [
-   "BUG-1825"
   ],
   "layout/paint (`style/apply/paint.rs`, `crates/engine/paint/src/display_list/walk.rs:49/87/138`, `style/values/color.rs::to_color_opt`)": [
    "BUG-1418"
@@ -24832,6 +24899,12 @@
   ],
   "layout/style (`border_image.rs:151,502`) vs js-тест": [
    "BUG-1785"
+  ],
+  "layout/style (`rule_index.rs` — корзина universal; `counters.rs` — `note_candidate_bucket`)": [
+   "BUG-1839"
+  ],
+  "layout/style (`style/cascade_index.rs`, `style/cascade.rs`, `style/share_safety.rs`, `style/rule_roots.rs`), css-parser (`parser/sheet_diff.rs`), js (`v8_runtime/style_flush.rs`), shell (`page_load.rs`)": [
+   "BUG-1837"
   ],
   "layout/text": [
    "BUG-120"
@@ -24941,6 +25014,9 @@
   "network (`filter/easylist.rs` + filter context в `lib.rs`)": [
    "BUG-292"
   ],
+  "network (`http/chrome_manifest.rs` — `CHROME_157.tls`; `tls/boring.rs`)": [
+   "BUG-1836"
+  ],
   "network (резолвер)": [
    "BUG-304"
   ],
@@ -24958,6 +25034,9 @@
   ],
   "network/js (`crates/network/src/sse.rs`)": [
    "BUG-1222"
+  ],
+  "network/js/shell (фингерпринт: TLS, заголовки, navigator.*, RTC, mediaDevices)": [
+   "BUG-1835"
   ],
   "network/shell (`crates/network/src/csp.rs:199` `effective_sources`; `crates/shell/src/csp_enforce.rs:479` `fire_script_src_violation`)": [
    "BUG-1183"
@@ -25509,6 +25588,9 @@
   "shell (`redraw_requested.rs`, `about_to_wait.rs`)": [
    "BUG-1637"
   ],
+  "shell (`video_tick.rs::tick_video_sessions` — шаг 2.6 обработчика кадра)": [
+   "BUG-1838"
+  ],
   "shell (`video_tick.rs`), js (`video_gif_store.rs`, `video_bindings.rs`, `v8_runtime/runtime.rs`)": [
    "BUG-1796"
   ],
@@ -25529,6 +25611,10 @@
   ],
   "shell / js / layout (задача из `about_to_wait.rs:290` — `tick_timers` и пампы; что именно крутится — не локализовано)": [
    "BUG-1778"
+  ],
+  "shell test-binary (`cargo test -p lumen-shell --bin lumen`, 2589 тестов; краш после `platform::audio_player`)": [
+   "BUG-1831",
+   "BUG-1834"
   ],
   "shell+font": [
    "BUG-170"

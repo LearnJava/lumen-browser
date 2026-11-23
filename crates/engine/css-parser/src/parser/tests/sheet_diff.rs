@@ -119,3 +119,69 @@ fn the_longest_in_order_run_is_what_stays_put() {
     assert_eq!(run.iter().map(|p| p.1).collect::<Vec<_>>(), [1, 2, 3, 4, 5]);
     assert!(longest_increasing_run(&[]).is_empty());
 }
+
+/// BUG-1837: where a block stands among the plain rules is not part of what it is. A rule
+/// inserted ahead of a block moves the block, and that alone changes nothing.
+#[test]
+fn a_block_whose_position_shifted_is_not_a_change() {
+    let old = parse(
+        "a { color: red } @media print { b { color: blue } } @supports (display: grid) { .s { margin: 0 } } c { color: green }",
+    );
+    let new = parse(
+        "a { color: red } .x { margin: 1px } @media print { b { color: blue } } @supports (display: grid) { .s { margin: 0 } } c { color: green }",
+    );
+    let changed = old.changed_style_rules(&new).expect("only a plain rule was inserted");
+    assert_eq!(texts(&changed), [".x"]);
+}
+
+#[test]
+fn an_edited_block_behind_a_moved_one_is_the_only_block_named() {
+    let old = parse(
+        "a { color: red } @media print { .p { margin: 1px } } b { color: blue } @media screen { .s { margin: 2px } }",
+    );
+    let new = parse(
+        "a { color: red } .x { margin: 1px } @media print { .p { margin: 1px } } b { color: blue } @media screen { .s { margin: 3px } }",
+    );
+    let changed = old.changed_style_rules(&new).expect("one rule inserted, one block edited");
+    let mut names = texts(&changed);
+    names.sort();
+    assert_eq!(names, [".s", ".s", ".x"]);
+}
+
+#[test]
+fn a_block_that_moved_against_the_plain_rules_is_named() {
+    let old = parse("a { color: red } b { color: blue } c { color: gray } @media print { .m { margin: 1px } }");
+    let new = parse("a { color: red } @media print { .m { margin: 1px } } b { color: blue } c { color: gray }");
+    let changed = old.changed_style_rules(&new).expect("only the block moved");
+    // Moved, not edited: named once (see `changed_items`).
+    assert_eq!(texts(&changed), [".m"]);
+}
+
+#[test]
+fn a_block_that_moved_against_another_block_is_named() {
+    let old = parse("@media print { .p { margin: 1px } } @media screen { .s { margin: 2px } }");
+    let new = parse("@media screen { .s { margin: 2px } } @media print { .p { margin: 1px } }");
+    let changed = old.changed_style_rules(&new).expect("the blocks swapped places");
+    // Whichever of the two the longest run keeps, the other is named.
+    let names = texts(&changed);
+    assert!(names == [".p"] || names == [".s"], "{names:?}");
+}
+
+#[test]
+fn a_rule_that_crossed_a_block_is_named() {
+    let old = parse("@media print { .m { margin: 1px } } a { color: red } b { color: blue }");
+    let new = parse("a { color: red } @media print { .m { margin: 1px } } b { color: blue }");
+    let changed = old.changed_style_rules(&new).expect("only the block moved");
+    assert_eq!(texts(&changed), ["a"]);
+}
+
+#[test]
+fn a_block_dropped_ahead_of_another_leaves_the_other_unchanged() {
+    let old = parse(
+        "@media print { .p { margin: 1px } } a { color: red } @media screen { .s { margin: 2px } } b { color: blue }",
+    );
+    let new = parse("a { color: red } @media screen { .s { margin: 2px } } b { color: blue }");
+    let changed = old.changed_style_rules(&new).expect("only a block was removed");
+    assert_eq!(texts(&changed), [".p"]);
+}
+

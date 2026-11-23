@@ -11,6 +11,11 @@
 //! rules for every node. Real-world stylesheets often put the bulk of their
 //! rules inside `@media` breakpoints, which made the un-indexed fallback the
 //! dominant cascade cost (observed: ~1.1ms/node, ~1.3s for a ~1100-node page).
+//!
+//! BUG-1837: the cache no longer holds one index per block. It holds three — the top
+//! level, every `@layer` block, every *active* `@media`/`@supports` block — built over
+//! the concatenated rules with [`RuleIndex::build_from_indexed`], because each index a
+//! node queries costs it a set of hash probes.
 
 use std::collections::HashMap;
 use lumen_css_parser::{CompoundSelector, PseudoClass, Rule, SimpleSelector, Stylesheet};
@@ -19,13 +24,14 @@ use lumen_dom::Attribute;
 /// Opaque index into `Stylesheet.rules`.
 type RuleIdx = usize;
 
-/// Subject-keyed rule index for the top-level `rules` vec of a stylesheet.
+/// Subject-keyed rule index for a group of rules — the top-level `rules` of a
+/// stylesheet, or the rules of several blocks concatenated
+/// ([`RuleIndex::build_from_indexed`]; `CascadeIndex` builds one per group).
 ///
-/// Rules in `sheet.layers`, `sheet.media_rules`, `sheet.scope_rules`,
-/// `sheet.supports_rules`, and `sheet.container_rules` are NOT indexed
-/// (Phase 1 scope) — they are still tested brute-force by the existing loops
-/// in `compute_style` / `apply_container_rules`, which is fine because they
-/// are typically a small fraction of total rules.
+/// Not indexed: `sheet.scope_rules`, which `compute_style` still tests in bulk
+/// (a rule applies only inside its scope root), and `sheet.container_rules`,
+/// which the cascade never reads — `apply_container_rules` walks them after
+/// layout.
 pub struct RuleIndex {
     by_id: HashMap<String, Vec<RuleIdx>>,
     by_class: HashMap<String, Vec<RuleIdx>>,
@@ -231,10 +237,10 @@ impl RuleIndex {
     /// `tag`, `id`, `class` list and attribute names (`attrs`). The full `matches_complex` check is
     /// still required for each candidate — this is only a pre-filter.
     ///
-    /// THREAD-4 срез 6: this is called once per node PER `@layer`/`@media`
-    /// block (`compute_style` builds one `RuleIndex` per block, BUG-284) —
-    /// on github.com that is ~3800 calls/node (3702 layers + ~110 media +
-    /// the main sheet). A `BTreeSet` used to collect the merge: correct, but
+    /// THREAD-4 срез 6: this used to be called once per node PER `@layer`/`@media`
+    /// block (one `RuleIndex` per block, BUG-284) — on github.com that was ~3800
+    /// calls/node (3702 layers + ~110 media + the main sheet). A `BTreeSet` used
+    /// to collect the merge: correct, but
     /// each insert is its own heap-allocated B-tree node, so a call whose
     /// buckets are empty or singleton (the overwhelming majority — most
     /// `@layer` blocks hold 1-2 rules) still paid a `BTreeSet` allocation.

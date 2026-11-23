@@ -274,29 +274,18 @@ pub(crate) fn dynamic_fingerprint(
         }
     }
 
-    let active_media = with_front_cascade_index(|idx| idx.active_media.clone());
-    for (media_i, media) in sheet.media_rules.iter().enumerate() {
-        if !active_media[media_i] {
-            continue;
-        }
-        let media_cands = with_front_cascade_index(|idx| {
-            idx.media[media_i].candidates(node_tag, node_id, class_attr.split_whitespace(), node_attrs)
-        });
-        for rule_idx in media_cands {
-            push_from(&media.rules[rule_idx]);
-        }
-    }
-
-    let active_supports = with_front_cascade_index(|idx| idx.active_supports.clone());
-    for (supports_i, supports) in sheet.supports_rules.iter().enumerate() {
-        if !active_supports[supports_i] {
-            continue;
-        }
-        let supports_cands = with_front_cascade_index(|idx| {
-            idx.supports[supports_i].candidates(node_tag, node_id, class_attr.split_whitespace(), node_attrs)
-        });
-        for rule_idx in supports_cands {
-            push_from(&supports.rules[rule_idx]);
+    // BUG-1837: one candidate query over every active `@media`/`@supports` block
+    // (`CascadeIndex::conditional`) — there used to be one per block.
+    let conditional = with_front_cascade_index(|idx| {
+        idx.conditional
+            .candidates(node_tag, node_id, class_attr.split_whitespace(), node_attrs)
+            .into_iter()
+            .map(|flat| idx.conditional_rules[flat])
+            .collect::<Vec<_>>()
+    });
+    for candidate in conditional {
+        if let Some(rule) = with_front_cascade_index(|idx| idx.conditional_rule(candidate, sheet)) {
+            push_from(rule);
         }
     }
 

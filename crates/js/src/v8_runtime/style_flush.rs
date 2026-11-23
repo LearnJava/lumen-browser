@@ -1445,8 +1445,8 @@ impl FlushHandles {
         }
         // BUG-935 срез 64: a different sheet no longer forces the full path by itself — the
         // style rules that were added, removed or moved name the elements to restyle (срез 93:
-        // `@media`/`@supports` blocks count too). A difference in anything else (`@layer`,
-        // `@property`, …) still does.
+        // `@media`/`@supports` blocks count too; BUG-1837: so do rules with a pseudo-element).
+        // A difference in anything else (`@layer`, `@property`, …) still does.
         let sheet_roots_scope = lumen_core::profile::scope("incr.sheet_delta");
         let sheet_delta_roots: std::collections::HashSet<lumen_dom::NodeId> =
             if basis.sheet_revision == sheet.revision() {
@@ -1454,23 +1454,29 @@ impl FlushHandles {
             } else {
                 let delta_off = sheet_delta_disabled() || self.sheet_delta_off.load(Ordering::Relaxed);
                 let changed = (!delta_off).then(|| basis.sheet.changed_style_rules(sheet)).flatten();
-                let roots = changed
-                    .as_ref()
-                    .and_then(|changed| lumen_layout::style::restyle_roots_for_rule_changes(doc, changed));
-                let Some(roots) = roots else {
+                let declined_sheet = |why: String| {
                     if lumen_paint::frame_log_enabled() {
-                        let why = if delta_off {
-                            "sheet delta switched off".to_owned()
-                        } else if let Some(changed) = &changed {
-                            format!("{} changed rules not expressible as restyle roots", changed.len())
-                        } else {
-                            format!("non-style-rule fields differ: {:?}", basis.sheet.fields_differing_from_style_rules(sheet))
-                        };
                         eprintln!("[engine] incr declined: stylesheet revision changed ({why})");
                     }
+                };
+                if delta_off {
+                    declined_sheet("sheet delta switched off".to_owned());
+                    return None;
+                }
+                let Some(changed) = &changed else {
+                    declined_sheet(format!(
+                        "non-style-rule fields differ: {:?}",
+                        basis.sheet.fields_differing_from_style_rules(sheet)
+                    ));
                     return None;
                 };
-                roots
+                match lumen_layout::style::restyle_roots_for_rule_changes(doc, changed) {
+                    Ok(roots) => roots,
+                    Err(why) => {
+                        declined_sheet(format!("{} changed rules: {why}", changed.len()));
+                        return None;
+                    }
+                }
             };
         drop(sheet_roots_scope);
         // BUG-1211: `touched.nodes`/`touched.touch_gen` are never drained by

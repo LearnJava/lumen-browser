@@ -958,25 +958,35 @@ pub(crate) fn compute_style_shareable(
         }
     }
 
-    // CSS Media Queries L4: rules внутри `@media`-блока, чей query
+    // CSS Media Queries L4: правила внутри `@media`-блока, чей query
     // совпадает с текущим MediaContext, добавляются в каскад. В Phase 0
     // упрощённый MediaContext: media_type="screen", width/height из
     // viewport. Порядок появления между обычными правилами и блоками
     // @media/@supports задаёт `RuleOrder` (BUG-1492): правило `r` блока
     // имеет ключ `media_base[i] + r`.
     //
-    // Perf: "active" per block precomputed once per (sheet, viewport,
-    // dark_mode) in `CascadeIndex::active_media` — see its doc comment.
-    // `media.query.matches(..)` used to run here on every node. Fetched once
-    // per node (not once per block) to avoid N thread-local accesses when
-    // the stylesheet has many `@media` blocks.
-    let active_media = with_front_cascade_index(|idx| idx.active_media.clone());
-    for (media_i, media) in sheet.media_rules.iter().enumerate() {
-        if !active_media[media_i] {
-            continue;
-        }
-        let media_base = with_front_cascade_index(|idx| idx.order.media_base[media_i]);
-        if let Some(restriction) = restriction {
+    // CSS Conditional Rules L3 §2 — `@supports`: условие проверяется по списку
+    // поддерживаемых Lumen свойств; правила блока входят в каскад, только пока
+    // оно истинно (порядок тот же, что у @media).
+    //
+    // Perf: "active" на блок считается один раз на (sheet, viewport, dark_mode)
+    // в `CascadeIndex::active_media`/`active_supports` — раньше
+    // `media.query.matches(..)` шёл здесь на каждый узел.
+    //
+    // Perf: блоки обходятся двумя путями. Ограниченный проход индекса не читает —
+    // он идёт по прошлому набору совпавших правил блок за блоком. Иначе —
+    // BUG-1837: ОДИН запрос кандидатов по всем активным блокам
+    // (`CascadeIndex::conditional`, построен как индекс `@layer` выше). Раньше на
+    // каждый блок был свой `RuleIndex`, а с ним — свой набор хеш-проб на каждый
+    // узел: okko.tv привозит 3 500 блоков `@media`, из них активны 33, то есть 39
+    // запросов на узел там, где нужно три.
+    if let Some(restriction) = restriction {
+        let active_media = with_front_cascade_index(|idx| idx.active_media.clone());
+        for (media_i, media) in sheet.media_rules.iter().enumerate() {
+            if !active_media[media_i] {
+                continue;
+            }
+            let media_base = with_front_cascade_index(|idx| idx.order.media_base[media_i]);
             restricted_block(
                 restriction,
                 RuleBlock::Media(media_i as u32),
@@ -988,48 +998,13 @@ pub(crate) fn compute_style_shareable(
                 &mut matched,
                 matched_rules,
             );
-            continue;
         }
-        // BUG-284: candidate pre-filter (see @layer above) — real-world
-        // stylesheets often put the bulk of their rules inside @media blocks.
-        // PERF-CAND-REUSE: shared scratch buffer, one alloc per worker.
-        with_front_cascade_index(|idx| {
-            MATCH_CAND_BUF.with(|cell| {
-                let mut buf = cell.borrow_mut();
-                idx.media[media_i].candidates_into(
-                    node_tag,
-                    node_id,
-                    class_attr.split_whitespace(),
-                    node_attrs,
-                    &mut buf,
-                );
-            });
-        });
-        MATCH_CAND_BUF.with(|cell| {
-            let buf = cell.borrow();
-            for &rule_idx in buf.iter() {
-                let rule = &media.rules[rule_idx];
-                shareable = shareable && rule.selectors.iter().all(selector_is_share_safe);
-                if let Some((spec, selector)) = best_match(rule, doc, node) {
-                    push_declarations(rule, spec, media_base + rule_idx, layer_n, 0, None, &mut matched);
-                    matched_rules.push(MatchedRule { block: RuleBlock::Media(media_i as u32), rule: rule_idx as u32, selector });
-                }
+        let active_supports = with_front_cascade_index(|idx| idx.active_supports.clone());
+        for (supports_i, supports) in sheet.supports_rules.iter().enumerate() {
+            if !active_supports[supports_i] {
+                continue;
             }
-        });
-    }
-    // CSS Conditional Rules L3 §2 — `@supports`: evaluate condition against
-    // Lumen's supported-properties list; include contained rules only when
-    // condition is true (same ordering semantics as @media).
-    //
-    // Perf: "active" precomputed once per sheet in `CascadeIndex::active_supports`
-    // (see doc comment) — `supports.condition.evaluate(..)` used to run per node.
-    let active_supports = with_front_cascade_index(|idx| idx.active_supports.clone());
-    for (supports_i, supports) in sheet.supports_rules.iter().enumerate() {
-        if !active_supports[supports_i] {
-            continue;
-        }
-        let supports_base = with_front_cascade_index(|idx| idx.order.supports_base[supports_i]);
-        if let Some(restriction) = restriction {
+            let supports_base = with_front_cascade_index(|idx| idx.order.supports_base[supports_i]);
             restricted_block(
                 restriction,
                 RuleBlock::Supports(supports_i as u32),
@@ -1041,32 +1016,32 @@ pub(crate) fn compute_style_shareable(
                 &mut matched,
                 matched_rules,
             );
-            continue;
         }
-        with_front_cascade_index(|idx| {
+    } else {
+        // PERF-CAND-REUSE: общий скретч-буфер плоских позиций, одна аллокация на воркер.
+        let candidates = with_front_cascade_index(|idx| {
             MATCH_CAND_BUF.with(|cell| {
                 let mut buf = cell.borrow_mut();
-                idx.supports[supports_i].candidates_into(
+                idx.conditional.candidates_into(
                     node_tag,
                     node_id,
                     class_attr.split_whitespace(),
                     node_attrs,
                     &mut buf,
                 );
-            });
+                buf.iter().map(|&flat| idx.conditional_rules[flat]).collect::<Vec<_>>()
+            })
         });
-        MATCH_CAND_BUF.with(|cell| {
-            let buf = cell.borrow();
-            for &rule_idx in buf.iter() {
-                let rule = &supports.rules[rule_idx];
-                shareable = shareable && rule.selectors.iter().all(selector_is_share_safe);
-                if let Some((spec, selector)) = best_match(rule, doc, node) {
-                    push_declarations(rule, spec, supports_base + rule_idx, layer_n, 0, None, &mut matched);
-                    matched_rules
-                        .push(MatchedRule { block: RuleBlock::Supports(supports_i as u32), rule: rule_idx as u32, selector });
-                }
+        for candidate in candidates {
+            let Some(rule) = with_front_cascade_index(|idx| idx.conditional_rule(candidate, sheet)) else {
+                continue;
+            };
+            shareable = shareable && rule.selectors.iter().all(selector_is_share_safe);
+            if let Some((spec, selector)) = best_match(rule, doc, node) {
+                push_declarations(rule, spec, candidate.key, layer_n, 0, None, &mut matched);
+                matched_rules.push(MatchedRule { block: candidate.block, rule: candidate.rule, selector });
             }
-        });
+        }
     }
     // Everything numbered after this point (`@scope`, shadow sheets, inline style) follows
     // all the plain rules and blocks.
