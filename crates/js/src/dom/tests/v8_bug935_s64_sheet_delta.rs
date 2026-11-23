@@ -139,12 +139,23 @@ const SCENARIOS: &[(&str, &str)] = &[
           function() { addStyle('* { box-sizing: border-box; }'); },
           function() { addStyle(':root { color: navy; }'); }]",
     ),
-    // A pseudo-element rule can change what is under an element whose own style stays equal
-    // (generated content, the first line): it goes the full way.
+    // BUG-1837: a changed pseudo-element rule is absorbed too — the element it originates
+    // from is the root. The generated boxes carry height, so a box tree carried over from
+    // before the change would move every rect below it.
     (
-        "pseudo_elements",
-        "[function() { addStyle('.c p::before { content: \"> \"; color: red; } .box::after { content: \"!\"; }'); },
-          function() { addStyle('.c p::first-line { color: blue; } ::selection { color: red; }'); }]",
+        "pseudo_element_rules",
+        "[function() { addStyle('.c p::before { content: \"x\"; display: block; height: 9px; } .box::after { content: \"y\"; display: block; height: 4px; }'); },
+          function() { window.p1 = addStyle('.c .box::before { content: \"z\"; display: block; height: 6px; } .a span::after { content: \"!\"; }'); },
+          function() { addStyle('.c:first-child p::before { height: 15px; } ::selection { color: red; } input::placeholder { color: blue; }'); },
+          function() { window.p1.parentNode.removeChild(window.p1); }]",
+    ),
+    // What a pseudo-element rule still cannot name goes the full way and must be right: a
+    // first line (its style lands in laid-out lines) and a quote the rule opens or closes.
+    (
+        "line_pseudo_and_quotes_fall_back",
+        "[function() { addStyle('.c p::first-line { color: blue; } ::selection { color: red; }'); },
+          function() { addStyle('p::before { content: open-quote; }'); },
+          function() { addStyle('.c p::first-letter { font-size: 20px; }'); }]",
     ),
     // A sheet change together with an ordinary DOM mutation in the same flush.
     (
@@ -182,7 +193,8 @@ const SCENARIOS: &[(&str, &str)] = &[
         "[function() { addStyle('@keyframes k { from { opacity: 0 } to { opacity: 1 } } .c b { color: green; }'); },
           function() { addStyle('@font-face { font-family: F; src: url(f.woff2) } .c i { font-family: F; }'); }]",
     ),
-    // Something the delta cannot express goes the full way and must still be right.
+    // Something the delta cannot express goes the full way and must still be right — the
+    // `@layer` step. The last step is absorbed (BUG-1837), and has to be right too.
     (
         "non_plain_rules_fall_back",
         "[function() { addStyle('.c b { color: green; }'); },
@@ -203,7 +215,10 @@ fn a_changed_stylesheet_publishes_what_the_full_cascade_publishes() {
         assert!(stale.is_empty(), "{name}: the stylesheet delta published something else\n{}", stale.join("\n"));
         if matches!(
             *name,
-            "media_and_supports_blocks" | "font_face_and_keyframes_ride_along" | "container_blocks"
+            "media_and_supports_blocks"
+                | "font_face_and_keyframes_ride_along"
+                | "container_blocks"
+                | "pseudo_element_rules"
         ) {
             assert!(used > 0, "{name}: the sheet change was not absorbed by the incremental flush (срез 93)");
         }

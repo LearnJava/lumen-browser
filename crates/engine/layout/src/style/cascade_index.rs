@@ -11,6 +11,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 use crate::rule_index::RuleIndex;
+use crate::style::RuleBlock;
 
 use lumen_core::geom::Size;
 use lumen_css_parser::{
@@ -22,11 +23,13 @@ use lumen_dom::NodeId;
 use crate::style::env::media_context_from_viewport;
 use crate::style::{device_pixel_ratio, forced_colors_active, print_media_active, pseudo_element_name};
 
-/// BUG-284: cascade-wide rule index — the top-level [`RuleIndex`] plus one
-/// per-block index for every `@layer`/`@media`/`@supports` block, in the same
-/// order as `Stylesheet.layers`/`media_rules`/`supports_rules`.
+/// BUG-284: cascade-wide rule index — the top-level [`RuleIndex`] and, since
+/// BUG-1837, one more for each of the three groups the `@layer`/`@media`/
+/// `@supports` loops of `compute_style` walk: [`Self::layers`],
+/// [`Self::conditional`]. (BUG-284 itself built one per block; THREAD-4 срез 7
+/// merged the `@layer` ones, BUG-1837 the `@media`/`@supports` ones.)
 ///
-/// Before this, only the top-level `rules` were indexed; the `@layer`/`@media`/
+/// Before BUG-284, only the top-level `rules` were indexed; the `@layer`/`@media`/
 /// `@supports` loops in `compute_style` brute-force scanned every rule in
 /// every block for every node. Real-world stylesheets often put the bulk of
 /// their rules inside `@media` breakpoints, which made that brute-force scan
@@ -53,8 +56,17 @@ pub(in crate::style) struct CascadeIndex {
     /// (a group nested inside `@layer`, [`lumen_css_parser::LayerRule::condition`])
     /// currently holds. Unconditional blocks are always `true`.
     pub(in crate::style) layer_active: Vec<bool>,
-    pub(in crate::style) media: Vec<RuleIndex>,
-    pub(in crate::style) supports: Vec<RuleIndex>,
+    /// BUG-1837: ONE index over the rules of every *active* `@media`/`@supports` block, the
+    /// way [`Self::layers`] covers the `@layer` blocks. A candidate is the rule's position in
+    /// the concatenation of the active blocks' rules, resolved through [`Self::conditional_rules`].
+    /// One index per block cost a set of hash probes per block per node, and okko.tv ships
+    /// 3 500 `@media` blocks with 33 of them active: 39 candidate queries per node where the
+    /// top level, the layers and this one are three. Only the active blocks are indexed — the
+    /// index lives under one (sheet revision, media key), so an inactive block's candidates
+    /// could only ever have been dropped again.
+    pub(in crate::style) conditional: RuleIndex,
+    /// Flat conditional position → the block and rule it names, with the rule's cascade key.
+    pub(in crate::style) conditional_rules: Vec<ConditionalRule>,
     /// Perf (docs/tasks/p3-cascade-perf.md Задача 1): whether each
     /// `sheet.media_rules[i]`/`sheet.supports_rules[i]` block is currently
     /// active, precomputed once per (sheet, viewport, dark_mode) instead of
@@ -138,6 +150,17 @@ pub(in crate::style) struct CascadeIndex {
     pub(in crate::style) pseudo_supports: Vec<PseudoBlockIndex>,
     /// Source-order numbering of the plain rules and the `@media`/`@supports` blocks.
     pub(in crate::style) order: RuleOrder,
+}
+
+/// One rule of an active `@media`/`@supports` block, as [`CascadeIndex::conditional`] reports it.
+#[derive(Clone, Copy)]
+pub(in crate::style) struct ConditionalRule {
+    /// The block the rule is in.
+    pub(in crate::style) block: RuleBlock,
+    /// The rule's position in that block.
+    pub(in crate::style) rule: u32,
+    /// The rule's key in the source-order numbering ([`RuleOrder`]).
+    pub(in crate::style) key: usize,
 }
 
 /// BUG-1492 — the one numbering of `sheet.rules` and the rules of every `@media`/`@supports`
@@ -262,6 +285,21 @@ fn block_pseudo_indexes(rules: &[Rule]) -> Vec<(Box<str>, RuleIndex)> {
 }
 
 impl CascadeIndex {
+    /// The rule `candidate` names, or `None` for a block the conditional index does not hold —
+    /// the top level and the `@layer` blocks have indexes of their own.
+    pub(in crate::style) fn conditional_rule<'a>(
+        &self,
+        candidate: ConditionalRule,
+        sheet: &'a Stylesheet,
+    ) -> Option<&'a Rule> {
+        let rules = match candidate.block {
+            RuleBlock::Media(i) => &sheet.media_rules[i as usize].rules,
+            RuleBlock::Supports(i) => &sheet.supports_rules[i as usize].rules,
+            _ => return None,
+        };
+        rules.get(candidate.rule as usize)
+    }
+
     fn empty() -> Self {
         Self {
             rules: RuleIndex::empty(),
@@ -269,8 +307,8 @@ impl CascadeIndex {
             layer_rules: Vec::new(),
             layer_order_pos: Vec::new(),
             layer_active: Vec::new(),
-            media: Vec::new(),
-            supports: Vec::new(),
+            conditional: RuleIndex::empty(),
+            conditional_rules: Vec::new(),
             active_media: Vec::new(),
             active_supports: Vec::new(),
             has_webkit_scrollbar_rules: false,
@@ -307,11 +345,7 @@ impl CascadeIndex {
             .iter()
             .map(|l| sheet.layer_order.iter().position(|n| n == &l.name).unwrap_or(0) as i32)
             .collect();
-        let media: Vec<RuleIndex> =
-            sheet.media_rules.iter().map(|m| RuleIndex::build_from_rules(&m.rules)).collect();
-        let supports: Vec<RuleIndex> =
-            sheet.supports_rules.iter().map(|s| RuleIndex::build_from_rules(&s.rules)).collect();
-        let blocks_ns = t.elapsed().as_nanos() as u64;
+        let mut blocks_ns = t.elapsed().as_nanos() as u64;
 
         let t = std::time::Instant::now();
         let active_media: Vec<bool> =
@@ -333,6 +367,37 @@ impl CascadeIndex {
             .map(|s| s.holds(media_ctx))
             .collect();
         let active_ns = t.elapsed().as_nanos() as u64;
+
+        // BUG-1837: the active `@media`/`@supports` blocks in one index — see
+        // [`CascadeIndex::conditional`]. Counted with the other block indexes.
+        let t = std::time::Instant::now();
+        let order = RuleOrder::build(sheet);
+        let mut conditional_rules = Vec::new();
+        let media = sheet
+            .media_rules
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| active_media[*i])
+            .map(|(i, m)| (RuleBlock::Media(i as u32), order.media_base[i], &m.rules));
+        let supports = sheet
+            .supports_rules
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| active_supports[*i])
+            .map(|(i, s)| (RuleBlock::Supports(i as u32), order.supports_base[i], &s.rules));
+        let conditional = RuleIndex::build_from_indexed(
+            media
+                .chain(supports)
+                .flat_map(|(block, base, block_rules)| {
+                    block_rules.iter().enumerate().map(move |(at, rule)| (block, base + at, at, rule))
+                })
+                .map(|(block, key, at, rule)| {
+                    let flat = conditional_rules.len();
+                    conditional_rules.push(ConditionalRule { block, rule: at as u32, key });
+                    (flat, rule)
+                }),
+        );
+        blocks_ns += t.elapsed().as_nanos() as u64;
 
         let t = std::time::Instant::now();
         let has_webkit_scrollbar_rules =
@@ -362,7 +427,6 @@ impl CascadeIndex {
                 (name.clone(), index)
             })
             .collect();
-        let order = RuleOrder::build(sheet);
         let mut pseudo_media = Vec::new();
         for (block, m) in sheet.media_rules.iter().enumerate() {
             if m.rules.iter().any(has_pseudo_subject) {
@@ -385,8 +449,8 @@ impl CascadeIndex {
             layer_rules,
             layer_order_pos,
             layer_active,
-            media,
-            supports,
+            conditional,
+            conditional_rules,
             active_media,
             active_supports,
             has_webkit_scrollbar_rules,
@@ -458,7 +522,7 @@ fn selector_pseudo_subjects(selector: &ComplexSelector) -> impl Iterator<Item = 
 /// property whose value becomes `ContentItem::OpenQuote`/`CloseQuote`, and a
 /// `var()` reaches it only through a `--*` declaration. A `quote` in any other
 /// value (`url(quote.svg)`, `font-family: Blockquote`) never gets there.
-fn declaration_can_yield_quote(decl: &lumen_css_parser::Declaration) -> bool {
+pub(in crate::style) fn declaration_can_yield_quote(decl: &lumen_css_parser::Declaration) -> bool {
     (decl.property.eq_ignore_ascii_case("content") || decl.property.starts_with("--"))
         && value_mentions_quote(&decl.value)
 }

@@ -1360,7 +1360,12 @@ pub fn precompute_counters(
     // re-applies declarations instead of scanning candidate rules (see `style::pre_match`).
     // Counted in `walk_ns`: it is part of the cascade stage now.
     let _pre_matched = crate::style::pre_match::install(doc, sheet, viewport, dark_mode, flat);
-    walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, None, false, doc.root(), false, false, None);
+    {
+        // The same scope the incremental walk reports under (BUG-1837): before it, the walk
+        // was the unlabelled rest of this stage.
+        let _prof = lumen_core::profile::scope("cascade_walk");
+        walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode, None, false, doc.root(), false, false, None);
+    }
     // PERF-PSEUDO-PRE: hand the workers' pseudo match records to the pass's
     // PseudoCache before the table drops — box build probes them afterwards.
     let pseudo_records = _pre_matched.pseudo_records();

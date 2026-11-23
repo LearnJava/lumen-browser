@@ -432,7 +432,7 @@ async def run_chrome(k: int, a, run_dir: Path, probe_js: str) -> dict:
             raise RuntimeError("CDP-порт chrome не поднялся")
         await cdp.connect(page["webSocketDebuggerUrl"])
         rec.update(spawn_s=round(time.monotonic() - t_spawn, 2), browser=ver.get("Browser"))
-        for dom in ("Page", "Network", "Runtime", "Log"):
+        for dom in ("Page", "Network", "Runtime", "Log", "Performance"):
             await cdp.send(f"{dom}.enable")
         await cdp.send("Page.addScriptToEvaluateOnNewDocument", {"source": CHROME_INIT_JS})
 

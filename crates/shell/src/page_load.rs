@@ -1241,7 +1241,7 @@ impl Lumen {
             } else {
                 self.stream_prev_sheet.as_ref().and_then(|prev_sheet| {
                     let changed = prev_sheet.changed_style_rules(&self.stream_sheet)?;
-                    lumen_layout::style::restyle_roots_for_rule_changes(doc, &changed)
+                    lumen_layout::style::restyle_roots_for_rule_changes(doc, &changed).ok()
                 })
             };
         let cascade_ready = self.stream_layout_seeded
