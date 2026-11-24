@@ -277,7 +277,11 @@ impl Lumen {
                     // CSS `:active` on press — the same write the real
                     // `MouseInput(Pressed)` branch does; `PointerUp` clears it.
                     // A `<label>` press resolves to its labeled control.
-                    let active_target = self.hovered_nid.map(|n| self.pointer_active_target(n));
+                    let press_nid = match (self.hovered_nid, self.status_hover_source) {
+                        (Some(_), Some(src)) => Some(src),
+                        (h, _) => h,
+                    };
+                    let active_target = press_nid.map(|n| self.pointer_active_target(n));
                     if self.active_nid != active_target {
                         self.active_nid = active_target;
                         self.active_from_keyboard = false;

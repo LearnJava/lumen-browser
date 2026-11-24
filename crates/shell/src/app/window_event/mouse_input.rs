@@ -107,7 +107,14 @@ impl Lumen {
             // CSS :active — set immediately on press so :active rules apply.
             // A `<label>` press resolves to its labeled control — the element
             // the press actually activates (WPT checkable-active-onblur-*).
-            let active_target = self.hovered_nid.map(|n| self.pointer_active_target(n));
+            // `status_hover_source` is the hit's `source_node` — for inline
+            // runs (label text) it reaches the `<label>` where `hovered_nid`
+            // only sees the block ancestor (WPT checkable-active-onblur-*).
+            let press_nid = match (self.hovered_nid, self.status_hover_source) {
+                (Some(_), Some(src)) => Some(src),
+                (h, _) => h,
+            };
+            let active_target = press_nid.map(|n| self.pointer_active_target(n));
             if self.active_nid != active_target {
                 self.active_nid = active_target;
                 self.active_from_keyboard = false;
