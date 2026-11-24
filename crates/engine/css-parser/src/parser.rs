@@ -179,6 +179,16 @@ pub struct Stylesheet {
     /// потому что это требует сетевой/файловой загрузки. Phase 0:
     /// парсер только извлекает список, fetch отложен.
     pub imports: Vec<ImportRule>,
+    /// Разрешённые embedder'ом `@import`-листы для CSSOM
+    /// (`CSSImportRule.styleSheet`), по одной записи на каждый ведущий
+    /// `@import` — в том же порядке, что [`Self::imports`], чтобы
+    /// порядковый номер `CSSImportRule` среди корневых `@import` узлов
+    /// дерева адресовал свою запись. Парсер сети не имеет: поле заполняет
+    /// shell при построении реестра листов; у сконструированного листа
+    /// (`new CSSStyleSheet`) оно пусто — `@import` там не загружается.
+    /// Провенанс, как `source`/`cssom`: в [`Stylesheet::merge_from`]
+    /// не участвует и в `PartialEq` не входит.
+    pub import_sheets: Vec<ImportSheet>,
     /// `@font-face` правила. CSS Fonts L4 §4. Parser извлекает family,
     /// src, weight, style, display, unicode-range; реальная загрузка
     /// и регистрация в font-matcher — задача shell.
@@ -375,6 +385,7 @@ impl Default for Stylesheet {
             properties: Vec::new(),
             media_rules: Vec::new(),
             imports: Vec::new(),
+            import_sheets: Vec::new(),
             font_faces: Vec::new(),
             layer_order: Vec::new(),
             layers: Vec::new(),
@@ -413,6 +424,7 @@ impl Clone for Stylesheet {
             properties: self.properties.clone(),
             media_rules: self.media_rules.clone(),
             imports: self.imports.clone(),
+            import_sheets: self.import_sheets.clone(),
             font_faces: self.font_faces.clone(),
             layer_order: self.layer_order.clone(),
             layers: self.layers.clone(),
@@ -440,7 +452,7 @@ impl PartialEq for Stylesheet {
     /// Content equality. The revision is identity, not content, and two sheets
     /// parsed from the same CSS must compare equal.
     ///
-    /// `source`/`top_level_spans` are deliberately **excluded** for the same
+    /// `source`/`top_level_spans`/`import_sheets` are deliberately **excluded** for the same
     /// reason: they are provenance. [`Stylesheet::insert_rule`] relies on this
     /// — it checks a freshly parsed one-rule sheet against
     /// [`Stylesheet::default`] to prove nothing else came out of the text, and
@@ -593,6 +605,7 @@ impl Stylesheet {
             properties,
             mut media_rules,
             imports,
+            import_sheets: _,
             font_faces,
             layer_order,
             layers,
@@ -1135,6 +1148,19 @@ impl Stylesheet {
     }
 }
 
+/// Один `@import` листа, разрешённый embedder'ом — содержимое
+/// [`Stylesheet::import_sheets`]. См. поле за деталями адресации.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportSheet {
+    /// URL из `@import` — как записан в тексте, без `url()`.
+    pub href: String,
+    /// Разобранный импортированный лист; его собственный `import_sheets`
+    /// заполнен рекурсивно тем же образом. `None` — импорт отсеян
+    /// media/supports/CSP, цель не загрузилась или сработал cycle/depth
+    /// guard: `CSSImportRule.styleSheet` для него возвращает `null`.
+    pub sheet: Option<std::sync::Arc<Stylesheet>>,
+}
+
 /// One `<style>`/`<link rel=stylesheet>` DOM node paired with its own parsed
 /// sheet — the per-element granularity `document.styleSheets`/`element.sheet`
 /// (CSSOM-1) need, as opposed to a page's single merged cascade [`Stylesheet`].
@@ -1513,6 +1539,7 @@ impl<'a> Parser<'a> {
             properties,
             media_rules,
             imports,
+            import_sheets: Vec::new(),
             font_faces,
             font_palette_values,
             layer_order: layer_state.order,

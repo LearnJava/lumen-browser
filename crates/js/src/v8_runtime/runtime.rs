@@ -1638,17 +1638,61 @@ impl V8JsRuntime {
         *nodes = entries
             .into_iter()
             .map(|e| match old.remove(&e.node) {
-                Some(prev) if prev.sheet.source() == e.sheet.source() => prev,
+                Some(prev) if prev.sheet.source() == e.sheet.source() => {
+                    // `SheetSync::sync` собирает `<style>`-записи голым
+                    // `parse` — без `import_sheets` (сетевых фетчей у JS-стороны
+                    // нет). Текст совпал ⇒ разрешение импортов то же, поэтому
+                    // записи шелла (`CSSImportRule.styleSheet`) можно донести
+                    // в прежний лист, не трогая его CSSOM-дерево/журнал.
+                    if prev.sheet.import_sheets.is_empty() && !e.sheet.import_sheets.is_empty() {
+                        let mut sheet = (*prev.sheet).clone();
+                        sheet.import_sheets = e.sheet.import_sheets.clone();
+                        lumen_css_parser::StylesheetNodeEntry {
+                            node: prev.node,
+                            sheet: std::sync::Arc::new(sheet),
+                            disabled: prev.disabled,
+                        }
+                    } else {
+                        prev
+                    }
+                }
                 _ => e,
             })
             .collect();
+        // JS-загрузчик `<link>` (`_lumen_link_prepare` → `_lumen_link_claim_load`)
+        // регистрирует лист через `register_loaded_link` — шелл его байты не
+        // видел, и пуши реестра шелла такой записи не содержат. Оставшиеся в
+        // `old` узлы, которые всё ещё живой подключённый `<link>`, сохраняем:
+        // иначе пуш по другому листу стирал бы `document.styleSheets`-запись
+        // claimed-линка. `sheet_synced` при этом не помечаем сверенным —
+        // следующий `SheetSync::sync` выстроит порядок по владельцам DOM.
+        let mut preserved = false;
+        if let Some(sync) = self
+            .sheet_sync
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            && let Ok(doc) = sync.doc.try_lock()
+        {
+            for entry in old.into_values() {
+                let id = lumen_dom::NodeId::from_raw(entry.node);
+                if doc.contains_id(id)
+                    && doc.is_connected(id)
+                    && doc.get(id).element_name().is_some_and(|n| n.local == "link")
+                {
+                    nodes.push(entry);
+                    preserved = true;
+                }
+            }
+        }
         drop(nodes);
         let dom_epoch = self
             .dom_touched
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .epoch;
-        *self.sheet_synced.lock().unwrap_or_else(|e| e.into_inner()) = Some(dom_epoch);
+        *self.sheet_synced.lock().unwrap_or_else(|e| e.into_inner()) =
+            if preserved { None } else { Some(dom_epoch) };
         self.shadow_sheet_owners
             .lock()
             .unwrap_or_else(|e| e.into_inner())

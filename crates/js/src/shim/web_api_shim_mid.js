@@ -11066,7 +11066,12 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // target's offset inside the container's unscrolled content, so
         // 'start' is correct at any starting scroll position, not just zero.
         scrollIntoView: function(arg) { var nid = this.__nid__;
-            var opts = _lumen_parse_scroll_into_view_opts(arg);
+            // Внутренний sentinel (фокус, HTML LS §6.6.3 «scroll into view»):
+            // центрирует элемент, только если он не виден целиком —
+            // «center if needed», иначе фокус сдвигал бы уже видимый элемент.
+            var opts = arg === _LUMEN_SIV_CENTER_IF_NEEDED
+                ? { block: 'centerIfNeeded', inline: 'centerIfNeeded', behavior: 'auto' }
+                : _lumen_parse_scroll_into_view_opts(arg);
             // Scroll the nearest ancestor scroll container to make this element visible.
             var r = _lumen_get_bounding_rect(nid);
             if (!r) return Promise.resolve();
@@ -14506,9 +14511,10 @@ _lumen_css_acc(CSSScopeRule.prototype, 'end', function() { return _lumen_css_sco
 
 // ── @import / @namespace ──
 function _lumen_css_import_parts(p) {
-    var out = { href: '', layerName: null, supportsText: null, media: '' };
+    var out = { href: '', urlToken: '', layerName: null, supportsText: null, media: '' };
     var m = /^(?:url\(\s*(?:"((?:[^"\\]|\\[\s\S])*)"|'((?:[^'\\]|\\[\s\S])*)'|([^)]*?))\s*\)|"((?:[^"\\]|\\[\s\S])*)"|'((?:[^'\\]|\\[\s\S])*)')\s*/.exec(p);
     if (!m) return out;
+    out.urlToken = m[0].replace(/\s+$/, '');
     var href = [m[1], m[2], m[3], m[4], m[5]].filter(function(x) { return x !== undefined; })[0] || '';
     try { href = new URL(href, document.baseURI).href; } catch (e) { /* keep as written */ }
     out.href = href;
@@ -14533,14 +14539,38 @@ function _lumen_css_import_parts(p) {
 _lumen_css_acc(CSSImportRule.prototype, 'href', function() { return _lumen_css_import_parts(_lumen_css_data(this).prelude).href; });
 _lumen_css_acc(CSSImportRule.prototype, 'layerName', function() { return _lumen_css_import_parts(_lumen_css_data(this).prelude).layerName; });
 _lumen_css_acc(CSSImportRule.prototype, 'supportsText', function() { return _lumen_css_import_parts(_lumen_css_data(this).prelude).supportsText; });
+// [PutForwards=mediaText] на `CSSImportRule.media`: mediaText — хвост
+// прекюдла `@import`; переписываем только его, url/layer/supports — как были.
+function _lumen_css_import_set_media(self, media) {
+    var p = _lumen_css_import_parts(_lumen_css_data(self).prelude);
+    var pre = p.urlToken;
+    if (p.layerName !== null) pre += p.layerName === '' ? ' layer' : ' layer(' + p.layerName + ')';
+    if (p.supportsText !== null) pre += ' supports(' + p.supportsText + ')';
+    media = String(media).trim();
+    if (media !== '') pre += ' ' + media;
+    _lumen_css_set_prelude(self, pre);
+}
 _lumen_css_acc(CSSImportRule.prototype, 'media', function() {
     var self = this;
     _lumen_css_data(self);
     var r = self._cssr;
     return r.media || (r.media = _lumen_css_media_list(self,
-        function() { return _lumen_css_import_parts(_lumen_css_data(self).prelude).media; }, null));
+        function() { return _lumen_css_import_parts(_lumen_css_data(self).prelude).media; },
+        function(v) { _lumen_css_import_set_media(self, v); }));
+}, function(v) {
+    var m = this.media;
+    m.mediaText = v === null ? '' : String(v);
 });
-_lumen_css_acc(CSSImportRule.prototype, 'styleSheet', function() { _lumen_css_data(this); return null; });
+_lumen_css_acc(CSSImportRule.prototype, 'styleSheet', function() {
+    var self = this;
+    _lumen_css_data(self);
+    var r = self._cssr;
+    if (r.importSheet !== undefined) return r.importSheet;
+    var i = r.be.idx();
+    var at = i < 0 ? -1 : _lumen_cssom_import_sheet(r.be.c, i, r.id);
+    r.importSheet = at < 0 ? null : _lumen_css_sheet_for(_lumen_css_backend(true, at));
+    return r.importSheet;
+});
 function _lumen_css_namespace_parts(p) {
     var prefix = '', rest = p;
     var m = /^([^\s"'(]+)\s+(?=url\(|["'])/.exec(p);
@@ -14745,8 +14775,19 @@ _lumen_css_acc(_lumen_css_sheet_proto, 'media', function() {
         var el = _lumen_css_owner(be);
         if (el) el.setAttribute('media', v); else be.mediaText = v;
     }));
+}, function(v) {
+    // [PutForwards=mediaText] (CSSOM §6.1): `sheet.media = "…"` ≡ mediaText=.
+    this.media.mediaText = v === null ? '' : String(v);
 });
-_lumen_css_acc(_lumen_css_sheet_proto, 'parentStyleSheet', function() { _lumen_css_be(this); return null; });
+_lumen_css_acc(_lumen_css_sheet_proto, 'parentStyleSheet', function() {
+    var be = _lumen_css_be(this);
+    // Импортированный лист живёт в реестре конструируемых; его родитель —
+    // лист с `@import`-правилом (CSSOM §5.4.1), пока правило не удалено.
+    if (!be.c) return null;
+    var p = _lumen_cssom_import_parent(be.key);
+    if (!p || !p.length) return null;
+    return _lumen_css_sheet_for(_lumen_css_backend(p[0] === 1, p[1]));
+});
 _lumen_css_acc(_lumen_css_sheet_proto, 'ownerRule', function() { _lumen_css_be(this); return null; });
 _lumen_css_acc(_lumen_css_sheet_proto, 'cssRules', function() {
     var be = _lumen_css_be(this);
@@ -17161,6 +17202,13 @@ function _lumen_link_prepare(nid) {
     // report this same link a second time (BUG-804).
     if (_lumen_link_sheet_done[nid] === 1) return;
     _lumen_link_sheet_done[nid] = 1;
+    // The JS side owns this fetch: tell the shell so its stylesheet passes skip
+    // this link (no second fetch / second resource-timing entry), and hold the
+    // window `load` event the same way external scripts do — the shell's
+    // late-stylesheet counter never saw this element.
+    if (typeof _lumen_link_claim_load === 'function') _lumen_link_claim_load(nid);
+    var loadJob = { delaysLoad: _doc_ready_state !== 'complete' };
+    if (loadJob.delaysLoad) _lumen_load_delay_count++;
     // Task hop for the same reason as the external <script> path: the
     // `link.onload = …` assignment almost always follows the appendChild.
     setTimeout(function() {
@@ -17169,19 +17217,29 @@ function _lumen_link_prepare(nid) {
         // reported here: whether the sheet applies — and its
         // `securitypolicyviolation` — belongs to the shell's `style-src`
         // gate for `<link>` (GAP-CSPENF срез 7), which a second event from
-        // this side would duplicate.
-        if (_lumen_element_src_blocked('style', url, nid)) {
+        // this side would duplicate. A claimed link never reaches that gate,
+        // so the violation is dispatched here instead.
+        var csp = _lumen_element_src_blocked('style', url, nid);
+        if (csp) {
+            if (typeof _lumen_dispatch_csp_violation === 'function') {
+                _lumen_dispatch_csp_violation(csp[0], csp[1], csp[2], 'enforce');
+            }
             _lumen_console_error('stylesheet load failed: ' + url + ': blocked by style-src');
             _lumen_resource_fire(nid, 'error');
+            _lumen_load_delay_done(loadJob);
             return;
         }
         // BUG-1554: a `data:` sheet carries its bytes in the URL — no request, so it also loads
         // where the page has no fetch provider (the headless screenshot path of a reftest).
         var inline = _lumen_link_data_url_text(url);
         if (inline !== null) {
-            if (!_lumen_resource_is_connected(nid)) return;
+            if (!_lumen_resource_is_connected(nid)) {
+                _lumen_load_delay_done(loadJob);
+                return;
+            }
             _lumen_stylesheet_register_link(nid, inline);
             _lumen_resource_fire(nid, 'load');
+            _lumen_load_delay_done(loadJob);
             return;
         }
         fetch(url, { _lumenInitiatorType: 'link' }).then(function(resp) {
@@ -17191,15 +17249,23 @@ function _lumen_link_prepare(nid) {
         }).then(function(text) {
             // A link taken out of the tree while its sheet was in flight reports nothing (HTML LS
             // §4.6.7: the fetch is cancelled with the element).
-            if (!_lumen_resource_is_connected(nid)) return;
+            if (!_lumen_resource_is_connected(nid)) {
+                _lumen_load_delay_done(loadJob);
+                return;
+            }
             // BUG-1554: a sheet the shell's cascade pass did not carry (inserted or enabled
             // after it) joins `document.styleSheets` and the cascade now.
             _lumen_stylesheet_register_link(nid, text);
             _lumen_resource_fire(nid, 'load');
+            _lumen_load_delay_done(loadJob);
         }).catch(function(e) {
-            if (!_lumen_resource_is_connected(nid)) return;
+            if (!_lumen_resource_is_connected(nid)) {
+                _lumen_load_delay_done(loadJob);
+                return;
+            }
             _lumen_console_error('stylesheet load failed: ' + url + ': ' + e);
             _lumen_resource_fire(nid, 'error');
+            _lumen_load_delay_done(loadJob);
         });
     }, 0);
 }

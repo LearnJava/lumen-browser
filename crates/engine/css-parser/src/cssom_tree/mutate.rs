@@ -216,6 +216,13 @@ pub(super) fn set_prelude(tree: &mut CssomTree, id: u32, text: &str) -> Result<b
             let t = collapse_ws(text);
             (!t.is_empty()).then_some(t)
         }
+        // `CSSImportRule.media` [PutForwards=mediaText]: JS-сторона собирает
+        // прекюдл заново (`url(…) layer(…) supports(…) <media>`), здесь —
+        // та же проверка, что у разбора: непустой текст без блока.
+        RuleKind::Import => {
+            let t = collapse_ws(text);
+            (!t.is_empty() && !t.contains('{') && !t.contains('}')).then_some(t)
+        }
         _ => None,
     };
     let Some(new) = new else { return Ok(false) };

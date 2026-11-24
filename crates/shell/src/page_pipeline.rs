@@ -868,6 +868,9 @@ fn build_page_cascade(
             // BUG-493: the first relayout after load compares against 0 and
             // lays in whatever CSSOM edits the page's scripts made by then.
             cssom_epoch: 0,
+            // `shadowRoot.adoptedStyleSheets` на момент первой сборки — JS
+            // ещё не выполнялся, adopted-листы появятся позже.
+            shadow_adopted_gen: doc.shadow_adopted_gen(),
             pristine: None,
         };
         (css, dyn_css, link_outcomes, blocked_by_style_src, blocked_inline_style_policies, blocked_style_attr_nodes, blocked_style_attr_policies)

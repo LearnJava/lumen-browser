@@ -216,12 +216,17 @@ impl Lumen {
             return false;
         };
         let fp = inline_style_fingerprint(&doc);
+        // `shadowRoot.adoptedStyleSheets` материализован в
+        // `Document::shadow_adopted_css` JS-нативами — теневые листы меняются
+        // без правок документного каскада, поэтому у них свой датчик.
+        let shadow_adopted_gen = doc.shadow_adopted_gen();
         // LOAD-4: `linked_dirty` — лист `<link>` доехал уже после первой сборки;
         // пересборка идёт тем же путём, что у позднего `<style>`, и порядок
         // листов восстанавливает `merge_sheet_chunks` по дереву документа.
         let linked_dirty = std::mem::take(&mut base.linked_dirty);
         let text_changed = fp != base.inline_fp || adopted_fp != base.adopted_fp || linked_dirty;
-        if !text_changed && cssom_epoch == base.cssom_epoch {
+        let shadow_changed = shadow_adopted_gen != base.shadow_adopted_gen;
+        if !text_changed && !shadow_changed && cssom_epoch == base.cssom_epoch {
             return false;
         }
         let pristine = if text_changed {
@@ -295,6 +300,7 @@ impl Lumen {
         base.inline_fp = fp;
         base.adopted_fp = adopted_fp;
         base.cssom_epoch = cssom_epoch;
+        base.shadow_adopted_gen = shadow_adopted_gen;
         // Инкрементальный рестайл (BUG-341 S7) переиспользует стили прошлого
         // прохода — против нового листа они недействительны.
         self.page_prev_cascade_styles = None;
@@ -376,15 +382,21 @@ impl Lumen {
                 }
                 crate::stylesheets::stylesheet_owner_index(&doc, node)
             };
+            // CSSOM-реестр получает текст ДО разворота `@import`
+            // (`registry_text`): `cssRules` показывает `CSSImportRule`, а
+            // импортированные листы — через `import_sheets`. `sheet.text`
+            // остаётся развёрнутым — его ест каскад (`dyn_css.linked`).
+            let mut registry_sheet = lumen_css_parser::parse(&sheet.registry_text);
+            registry_sheet.import_sheets = sheet.import_sheets.clone();
+            let entry = StylesheetNodeEntry {
+                node: sheet.node,
+                sheet: std::sync::Arc::new(registry_sheet),
+                disabled: false,
+            };
             // Условный лист (`<link media>` не матчил окружение при сборке):
             // регистрируется в `document.styleSheets`, но в каскад и на
             // relayout не влияет — HTML LS §4.2.4.
             if !sheet.apply {
-                let entry = StylesheetNodeEntry {
-                    node: sheet.node,
-                    sheet: std::sync::Arc::new(lumen_css_parser::parse(&sheet.text)),
-                    disabled: false,
-                };
                 let mut entries = (*src.stylesheet_nodes).clone();
                 entries.insert(insert_at.min(entries.len()), entry);
                 src.stylesheet_nodes = std::sync::Arc::new(entries.clone());
@@ -400,11 +412,6 @@ impl Lumen {
             dyn_css.linked_dirty = true;
             // CSSOM-1: `element.sheet`/`document.styleSheets` — запись на её
             // место в порядке дерева; сам реестр в JS заменяется целиком.
-            let entry = StylesheetNodeEntry {
-                node: sheet.node,
-                sheet: std::sync::Arc::new(lumen_css_parser::parse(&sheet.text)),
-                disabled: false,
-            };
             let mut entries = (*src.stylesheet_nodes).clone();
             entries.insert(insert_at.min(entries.len()), entry);
             src.stylesheet_nodes = std::sync::Arc::new(entries.clone());

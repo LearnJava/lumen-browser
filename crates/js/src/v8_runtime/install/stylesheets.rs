@@ -173,6 +173,21 @@ pub(crate) fn install_stylesheets(
             sync.register_loaded_link(nid, &text)
         });
     }
+    // Динамический `<link>`, чью загрузку ведёт JS-загрузчик шима
+    // (`_lumen_link_prepare`): claim, чтобы `load_linked_stylesheets` и
+    // `build_stylesheet_node_registry` шелла его не фетчили второй раз —
+    // иначе один лист давал две записи resource timing
+    // (`constructable-disallow-import.tentative.html`).
+    {
+        let sync = sync.clone();
+        reg!(scope, ctx, store, "_lumen_link_claim_load", move |nid: u32| {
+            let Ok(mut doc) = sync.doc.lock() else { return };
+            let id = lumen_dom::NodeId::from_raw(nid);
+            if doc.contains_id(id) {
+                doc.claim_link_load(id);
+            }
+        });
+    }
     // CSSOM-8, вложенные правила — nested-rule addressing into a top-level
     // `@mixin`'s `@result` tree (`mixin-invalidation.tentative.html`'s first
     // two subtests). `path` is a sequence of `.cssRules` indices, empty

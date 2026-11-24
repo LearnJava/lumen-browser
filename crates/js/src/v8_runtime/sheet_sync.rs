@@ -176,6 +176,18 @@ impl SheetSync {
         self.relayout.store(true, Ordering::Relaxed);
     }
 
+    /// Мутация конструируемого листа или `adoptedStyleSheets` (любой scope):
+    /// таких листов в реестре узлов нет, поэтому `state_touched`/`synced` не
+    /// трогаем — только «страница изменилась»: same-tick флаш, эпоха CSSOM
+    /// (сигнал `refresh_dynamic_css`) и relayout планировщика. Что именно
+    /// изменилось, решают фингерпринты —
+    /// `document_adopted_fingerprint` и `Document::shadow_adopted_gen`.
+    pub(crate) fn note_constructed_change(&self) {
+        self.dirty.store(true, Ordering::Relaxed);
+        self.epoch.fetch_add(1, Ordering::Relaxed);
+        self.relayout.store(true, Ordering::Relaxed);
+    }
+
     /// BUG-1554: состояние владельца листа `nid` изменилось (вердикт скрипта, догрузка `<link>`):
     /// реестр пересверяется, а каскад шелла и флаш — перестраиваются.
     pub(crate) fn note_state_change(&self, nid: u32) {

@@ -261,6 +261,14 @@ function _lumen_align_scroll(contentPos, targetSize, clientSize, curScroll, alig
             if (visStart >= 0 && visEnd <= clientSize) return curScroll;
             return visStart < 0 ? contentPos : contentPos + targetSize - clientSize;
         }
+        // Внутренний режим фокусного скролла (HTML LS §6.6.3): целиком
+        // видимая цель не двигается, иначе — центрируется, как 'center'.
+        case 'centerIfNeeded': {
+            var needStart = contentPos - curScroll;
+            var needEnd = needStart + targetSize;
+            if (needStart >= 0 && needEnd <= clientSize) return curScroll;
+            return contentPos + targetSize / 2 - clientSize / 2;
+        }
         case 'start':
         default: return contentPos;
     }
@@ -292,6 +300,11 @@ function _lumen_parse_scroll_into_view_opts(arg) {
     }
     return { block: block, inline: inline, behavior: behavior };
 }
+
+// Sentinel-аргумент `scrollIntoView` для внутреннего «center if needed»
+// скролла фокуса (HTML LS §6.6.3): публичный enum `ScrollLogicalPosition`
+// такого значения не имеет, поэтому идёт мимо `_lumen_parse_scroll_into_view_opts`.
+var _LUMEN_SIV_CENTER_IF_NEEDED = {};
 
 // BUG-391: DOM LS §4.2.6 / §4.9 — querySelector(All)/matches/closest must throw
 // a SyntaxError DOMException for a selector that is invalid or that the engine
