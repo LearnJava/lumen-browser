@@ -81,6 +81,7 @@ fn cycle(
     content.insert(node);
     let delta = RestyleDelta {
         invalidation,
+        attr_changed: None,
         prev_styles: prev.styles().clone(),
         dirty_roots: roots.deep,
         shallow_roots: roots.shallow,
@@ -206,4 +207,86 @@ fn an_id_change_stays_exact() {
     let prev = precompute_counters(&doc, &sheet, vp, &flat, false);
     set_attr(&mut doc, root, "id", "root2");
     cycle(&doc, &sheet, &prev, root, crate::style::NodeChange::AttrFrom { name: "id", old: "root" }, true);
+}
+
+/// PERF-FORCE-REUSE — a node carried into the recompute set only by an
+/// ancestor's `force` keeps its previous style when the fresh matched rules,
+/// the inherited input and the attribute-change set all prove it identical.
+/// The fixture needs ≥64 elements: below that `pre_match` installs no table
+/// and the proof cannot run (the node recomputes, as before).
+#[test]
+fn forced_reuse_skips_recompute_only_when_every_input_is_identical() {
+    use crate::counters::{
+        incremental_precompute_counters, precompute_counters, set_incremental_restyle, take_cascade_stats,
+        ContentDirty, RestyleDelta,
+    };
+    use lumen_core::id_hash::IdSet;
+
+    // Enough repeated blocks for `pre_match`'s MIN_ELEMENTS.
+    let mut big = String::from("<body><div class=\"wrap\" id=\"root\">");
+    for i in 0..20 {
+        big.push_str(&format!(
+            "<div class=\"b{i} item\"><div class=\"b{i}__row\"><span class=\"b{i}__cell\"><a class=\"link\" href=\"#\">x{i}</a></span><span class=\"b{i}__cell\">y</span></div></div>"
+        ));
+    }
+    big.push_str("<div class=\"other\"><span class=\"cell\">q</span></div></div></body>");
+    let mut doc = lumen_html_parser::parse(&big);
+    let sheet = lumen_css_parser::parse(CSS);
+    let vp = Size::new(800.0, 600.0);
+    let wrap = node_by_class(&doc, "wrap");
+    let other = node_by_class(&doc, "other");
+    let prev = {
+        let flat = lumen_dom::build_flat_tree(&doc);
+        precompute_counters(&doc, &sheet, vp, &flat, false)
+    };
+
+    // A child-list edit only: a fresh `<div>` appended inside `.other`. No
+    // attribute was written anywhere, so `attr_changed` is empty and the
+    // forced descendants of `wrap` may prove their reuse.
+    let fresh = doc.create_element(lumen_dom::QualName::html("div"));
+    doc.append_child(other, fresh);
+    let content: std::collections::HashSet<_> = [other].into_iter().collect();
+    let flat = lumen_dom::build_flat_tree(&doc);
+    let delta = RestyleDelta {
+        invalidation: None,
+        attr_changed: Some(IdSet::default()),
+        prev_styles: prev.styles().clone(),
+        dirty_roots: std::collections::HashSet::from([wrap]),
+        shallow_roots: Default::default(),
+        point_roots: Default::default(),
+        content_dirty: ContentDirty::Nodes(&content),
+    };
+    let _ = take_cascade_stats();
+    set_incremental_restyle(true);
+    let incr = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
+    set_incremental_restyle(false);
+    let stats = take_cascade_stats();
+    let full = precompute_counters(&doc, &sheet, vp, &flat, false);
+    assert_eq!(incr.styles(), full.styles(), "forced reuse must reproduce the full cascade");
+    assert!(
+        stats.forced_reused > 0,
+        "forced descendants with identical inputs must reuse: {stats:?}"
+    );
+
+    // Same basis, but the attribute-change set names `wrap`: every forced
+    // descendant has a written ancestor and must take the full cascade.
+    let mut attr_changed = IdSet::default();
+    attr_changed.insert(wrap);
+    let delta = RestyleDelta {
+        invalidation: None,
+        attr_changed: Some(attr_changed),
+        prev_styles: prev.styles().clone(),
+        dirty_roots: std::collections::HashSet::from([wrap]),
+        shallow_roots: Default::default(),
+        point_roots: Default::default(),
+        content_dirty: ContentDirty::Nodes(&content),
+    };
+    let _ = take_cascade_stats();
+    set_incremental_restyle(true);
+    let incr = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
+    set_incremental_restyle(false);
+    let stats = take_cascade_stats();
+    let full = precompute_counters(&doc, &sheet, vp, &flat, false);
+    assert_eq!(incr.styles(), full.styles());
+    assert_eq!(stats.forced_reused, 0, "a written ancestor must disable the licence: {stats:?}");
 }

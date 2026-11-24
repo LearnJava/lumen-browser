@@ -618,6 +618,20 @@ impl CascadeStyles {
         }
     }
 
+    /// PERF-FORCE-REUSE — restamp `id`'s carried entry for this pass and hand
+    /// back its style. The caller has already proven the reuse legitimate via
+    /// [`Self::peek_prev`] (previous pass's stamp, same parent) plus the
+    /// matched-rule and inherited-input comparisons `walk` performs — this is
+    /// [`Self::reuse`] without re-asking the stamp question, for a node the
+    /// delta *did* force into the recompute set.
+    fn reuse_stamped(&mut self, id: NodeId) -> Option<Arc<ComputedStyle>> {
+        let pass = self.pass;
+        let entry = self.entries.get_mut(&id)?;
+        entry.1 = pass;
+        self.visited += 1;
+        Some(Arc::clone(&entry.0))
+    }
+
     /// One hash lookup, where the pre-S24 shape needed three (`contains_key`
     /// for the decision, an index for the value, an insert into the fresh map).
     fn reuse(&mut self, id: NodeId) -> Option<Arc<ComputedStyle>> {
@@ -1453,6 +1467,27 @@ pub struct RestyleDelta<'a> {
     /// roots. `Some` lets a node recompute from its previous pass's matched set plus these
     /// rules — the same style, without re-matching the rest of the candidate list.
     pub invalidation: Option<InvalidatedRules>,
+    /// PERF-FORCE-REUSE — nodes whose own attributes were written this flush
+    /// ([`crate::style::NodeChange::Attr`]/`AttrFrom`) or whose change the
+    /// tracker could not name (`Unattributed`). The forced-reuse licence must
+    /// not fire on such a node or below it: procedural UA/quirks passes read
+    /// *ancestor* attributes that neither the matched-rule record nor the
+    /// inherited-style comparison can see — `<td>`/`<th>` padding resolves
+    /// the nearest ancestor `<table>`'s `cellpadding`, `<li>`'s implicit
+    /// counter reads its parent `<ol>`'s `reversed`. A `class`/`id`/`style`
+    /// write on a mid-level container would otherwise leave stale values
+    /// below it.
+    ///
+    /// `ChildList`/`ChildListEnds` are deliberately absent: helpers read
+    /// attributes and tags, not child lists — and where a child list does
+    /// feed a style (`<ol reversed>` counting its `<li>`s for `counter-reset`)
+    /// the change lands on the container's own `ComputedStyle`, which the
+    /// inherited-equality check already observes.
+    ///
+    /// `None` — the caller cannot enumerate this flush's attribute writes
+    /// (chrome-UI trackers, hand-built deltas): the forced-reuse licence
+    /// stays off entirely rather than guess.
+    pub attr_changed: Option<IdSet<NodeId>>,
 }
 
 impl RestyleDelta<'_> {
@@ -1618,7 +1653,7 @@ pub fn incremental_precompute_counters(
         // how many entries this one will hold — closer than `node_count`, which
         // counts text and comment nodes too. S24: and it *is* this pass's cache.
         let elements = delta.prev_styles.len();
-        let RestyleDelta { mut prev_styles, dirty_roots, shallow_roots, point_roots, content_dirty, invalidation } = delta;
+        let RestyleDelta { mut prev_styles, dirty_roots, shallow_roots, point_roots, content_dirty, invalidation, attr_changed } = delta;
         // BUG-341 S27: read off the carried cache before it is moved into the
         // map — it is the previous walking pass's report, and the licence to
         // skip depends on it.
@@ -1670,7 +1705,7 @@ pub fn incremental_precompute_counters(
             })
         };
         let map = CounterMap::continuing(prev_styles, elements);
-        (ctx, map, IncrRestyle { dirty_roots, shallow_roots, point_roots, content_dirty, spine, prev_counter_scopes, invalidation, prev_sheet }, pre_match_needed)
+        (ctx, map, IncrRestyle { dirty_roots, shallow_roots, point_roots, content_dirty, spine, prev_counter_scopes, invalidation, prev_sheet, attr_changed }, pre_match_needed)
     };
     // PERF-PRE-MATCH-SUBSET: the scoped walk recomputes exactly `needed` —
     // spine ancestors plus every descendant of the delta's roots (the forced
@@ -1770,6 +1805,9 @@ struct IncrRestyle<'a> {
     invalidation: Option<InvalidatedRules>,
     /// The stylesheet revision the carried matched-rule sets belong to.
     prev_sheet: Option<lumen_css_parser::StylesheetRevision>,
+    /// PERF-FORCE-REUSE — see [`RestyleDelta::attr_changed`]. `None` disables
+    /// the licence (caller cannot enumerate attribute writes).
+    attr_changed: Option<IdSet<NodeId>>,
 }
 
 /// BUG-341 S27 — the part of the document a pass with this delta can possibly
@@ -2024,6 +2062,12 @@ pub struct CascadeStats {
     /// equal what the previous pass had: the work a dependency-checked reuse of
     /// a deep root's subtree could save. Diagnostic only.
     pub forced_same: u32,
+    /// PERF-FORCE-REUSE — forced elements whose recompute was skipped because
+    /// the previous pass's matched rules, the inherited input and the
+    /// attribute-change set proved the style identical. Subset of what
+    /// `forced_same` counts after the fact — counted *before* `compute_style`
+    /// runs, which is where the saving is.
+    pub forced_reused: u32,
     /// BUG-935 срез 98 — elements whose style was the previous one with a parent's changed
     /// custom properties, with no cascade ([`crate::custom_flow`]).
     pub inherited: u32,
@@ -2096,6 +2140,7 @@ thread_local! {
             confirm_misses: 0,
             forced: 0,
             forced_same: 0,
+            forced_reused: 0,
             inherited: 0,
             candidates: 0,
             match_calls: 0,
@@ -2139,6 +2184,25 @@ fn note_forced(same: bool) {
         let mut v = s.get();
         v.forced += 1;
         v.forced_same += u32::from(same);
+        s.set(v);
+    });
+}
+
+/// PERF-FORCE-REUSE: `LUMEN_NO_FORCE_REUSE=1` — the way back if a page ever
+/// shows a stale style: forced nodes take the full `compute_style` again.
+/// Read once per process, like the other rollback switches of this track.
+fn force_reuse_disabled() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| std::env::var_os("LUMEN_NO_FORCE_REUSE").is_some_and(|v| v != "0"))
+}
+
+/// PERF-FORCE-REUSE — one forced element whose recompute the pre-compute
+/// proof skipped (matched rules + inherited input + attr-change set all
+/// identical to the previous pass).
+fn note_forced_reused() {
+    CASCADE_STATS.with(|s| {
+        let mut v = s.get();
+        v.forced_reused += 1;
         s.set(v);
     });
 }
@@ -2460,11 +2524,72 @@ fn walk(
     let deep = force || host_override || incr.is_some_and(|d| d.dirty_roots.contains(&id));
     let is_point_root = incr.is_some_and(|d| d.point_roots.contains(&id));
     let shallow = !deep && (shallow_child || is_shallow_root || is_point_root);
-    let reused = match incr {
+    let mut reused = match incr {
         None => None,
         Some(_) if deep || shallow => None,
         Some(_) => map.styles.reuse(id),
     };
+    // PERF-FORCE-REUSE: a node carried into the recompute set only by an
+    // ancestor's `force` — never named by the delta itself — keeps its style
+    // when every input `compute_style` reads is provably the previous pass's:
+    // the same matched rule set (fresh from `pre_match`, matched against the
+    // *current* DOM), the same inherited style (the node `inherited` came
+    // from produced a new style equal to its displaced one), and no attribute
+    // write on the node or any DOM ancestor (procedural UA/quirks passes read
+    // ancestor attributes no record covers — `RestyleDelta::attr_changed`).
+    // On habr ~96 % of forced recomputes come out byte-identical
+    // (`forced_same`); this moves that proof ahead of `compute_style` instead
+    // of paying the cascade and comparing after.
+    if reused.is_none()
+        && force
+        && !force_reuse_disabled()
+        && !shallow_child
+        && !is_point_root
+        && !host_override
+        && incr.is_some_and(|d| {
+            d.attr_changed.is_some()
+                && !d.dirty_roots.contains(&id)
+                && !d.shallow_roots.contains(&id)
+                && !d.point_roots.contains(&id)
+        })
+    {
+        let proven = (|| {
+            let d = incr?;
+            let prev_matched = map.styles.prev_matched(id, parent)?;
+            let (fresh, _) = crate::style::pre_match::lookup(id, sheet, viewport, dark_mode)?;
+            if fresh.as_ref() != prev_matched.as_ref() {
+                return None;
+            }
+            // `inherited` is the computed style of the node it was taken
+            // from — the composed parent, except a `dir=auto` slot that
+            // passes its own inherited style through. Identify the source by
+            // pointer against the current entries, then require its new
+            // style to equal what the previous pass recorded for it
+            // (`replaced_styles` holds last pass's styles for every node).
+            let source = [parent, flat.parent_of(doc, parent).unwrap_or(parent)]
+                .into_iter()
+                .find(|&s| map.styles.get(&s).is_some_and(|cur| std::ptr::eq(inherited, cur.as_ref())))?;
+            let prev_source = map.replaced_styles.get(&source)?;
+            if !std::ptr::eq(inherited, prev_source.as_ref()) && *inherited != **prev_source {
+                return None;
+            }
+            let attr_changed = d.attr_changed.as_ref()?;
+            let mut cur = Some(id);
+            while let Some(n) = cur {
+                if attr_changed.contains(&n) {
+                    return None;
+                }
+                cur = doc.get(n).parent;
+            }
+            Some(())
+        })();
+        if proven.is_some()
+            && let Some(style) = map.styles.reuse_stamped(id)
+        {
+            note_forced_reused();
+            reused = Some(style);
+        }
+    }
     let must_recompute = reused.is_none();
     note_cascade(must_recompute);
     // PERF-PSEUDO-CACHE: a recomputed element may see different pseudo-match
@@ -3749,7 +3874,7 @@ mod tests {
             let sheet = lumen_css_parser::parse(css);
             let flat = lumen_dom::build_flat_tree(&doc);
             let full = precompute_counters(&doc, &sheet, vp, &flat, false);
-            let delta = RestyleDelta { invalidation: None,
+            let delta = RestyleDelta { invalidation: None, attr_changed: None,
                 prev_styles: full.into_styles(),
                 dirty_roots: HashSet::new(),
                 content_dirty: ContentDirty::Nothing,
@@ -3835,7 +3960,7 @@ mod tests {
 
         let mut dirty_roots = HashSet::new();
         dirty_roots.insert(target);
-        let delta = RestyleDelta { invalidation: None,
+        let delta = RestyleDelta { invalidation: None, attr_changed: None,
             prev_styles: full.into_styles(),
             dirty_roots,
             content_dirty: ContentDirty::Nothing,
@@ -3870,7 +3995,7 @@ mod tests {
     ) -> (CascadeStats, CounterMap) {
         let vp = Size::new(800.0, 600.0);
         let flat = lumen_dom::build_flat_tree(doc);
-        let delta = RestyleDelta { invalidation: None,
+        let delta = RestyleDelta { invalidation: None, attr_changed: None,
             prev_styles: prev,
             dirty_roots,
             content_dirty: ContentDirty::Nodes(content),

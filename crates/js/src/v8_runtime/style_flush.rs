@@ -1681,7 +1681,25 @@ impl FlushHandles {
         };
         let content_tracked = matches!(content_dirty, lumen_layout::counters::ContentDirty::Nodes(_));
         let journal_len = content_journal.map(|j| j.len());
-        let delta = lumen_layout::counters::RestyleDelta { invalidation,
+        // PERF-FORCE-REUSE: nodes whose own attributes were written (or whose
+        // change is unattributed) — the forced-reuse licence in the cascade
+        // must not fire on them or below them: procedural UA/quirks passes
+        // read ancestor attributes (`<td>` padding ← `<table cellpadding>`)
+        // that neither the matched-rule record nor inherited equality sees.
+        // `ChildList*` stays out — helpers read attributes, not child lists.
+        let attr_changed: lumen_core::id_hash::IdSet<lumen_dom::NodeId> = changes
+            .iter()
+            .filter(|(_, c)| {
+                matches!(
+                    c,
+                    lumen_layout::style::NodeChange::Attr(_)
+                        | lumen_layout::style::NodeChange::AttrFrom { .. }
+                        | lumen_layout::style::NodeChange::Unattributed
+                )
+            })
+            .map(|(n, _)| *n)
+            .collect();
+        let delta = lumen_layout::counters::RestyleDelta { invalidation, attr_changed: Some(attr_changed),
             prev_styles: basis.cascade,
             dirty_roots,
             shallow_roots,

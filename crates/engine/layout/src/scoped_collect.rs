@@ -1259,7 +1259,7 @@ mod tests {
                 }
                 (HashSet::from([a1]), HashSet::new(), HashSet::from([a1]))
             };
-            let delta = RestyleDelta { invalidation: None,
+            let delta = RestyleDelta { invalidation: None, attr_changed: None,
                 prev_styles: prev_counters.into_styles(),
                 dirty_roots: dirty.clone(),
                 content_dirty: ContentDirty::Nodes(&content),
@@ -1338,7 +1338,7 @@ mod tests {
         }
         // The widening a child-list change gets: the parent is the root, everything below re-cascades.
         let content = HashSet::from([p]);
-        let delta = RestyleDelta { invalidation: None,
+        let delta = RestyleDelta { invalidation: None, attr_changed: None,
             prev_styles: prev_counters.into_styles(),
             dirty_roots: HashSet::from([p]),
             content_dirty: ContentDirty::Nodes(&content),
@@ -1405,7 +1405,7 @@ mod tests {
         }
         let journal = doc.take_content_journal().expect("recording was started");
         let delta = RestyleDelta {
-            invalidation: None,
+            invalidation: None, attr_changed: None,
             prev_styles: prev_counters.styles().clone(),
             dirty_roots: Default::default(),
             shallow_roots: HashSet::from([body]),
@@ -1523,7 +1523,7 @@ mod tests {
         }
         // The attribute mutation the DOM records for the br, with a dirty root above it.
         let content = HashSet::from([br]);
-        let delta = RestyleDelta { invalidation: None,
+        let delta = RestyleDelta { invalidation: None, attr_changed: None,
             prev_styles: prev_counters.into_styles(),
             dirty_roots: HashSet::from([body]),
             content_dirty: ContentDirty::Nodes(&content),
@@ -1561,7 +1561,7 @@ mod tests {
         mutate(&mut doc);
         let root = doc.find_by_id(dirty).unwrap();
         let content = HashSet::from([root]);
-        let delta = RestyleDelta { invalidation: None,
+        let delta = RestyleDelta { invalidation: None, attr_changed: None,
             prev_styles: prev_counters.into_styles(),
             dirty_roots: HashSet::from([root]),
             content_dirty: ContentDirty::Nodes(&content),
@@ -1655,7 +1655,7 @@ mod tests {
         let n = doc.create_element(lumen_dom::QualName::html("span"));
         doc.append_child(p, n);
         let content = HashSet::from([p, n]);
-        let delta = RestyleDelta { invalidation: None,
+        let delta = RestyleDelta { invalidation: None, attr_changed: None,
             prev_styles: prev_counters.into_styles(),
             dirty_roots: Default::default(),
             content_dirty: ContentDirty::Nodes(&content),

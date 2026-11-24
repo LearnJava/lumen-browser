@@ -106,7 +106,7 @@ fn run_incremental(
     } else {
         restyle_roots_for_node_changes(doc, changes, &node_index)
     };
-    let delta = RestyleDelta { invalidation: None,
+    let delta = RestyleDelta { invalidation: None, attr_changed: None,
         prev_styles: styles,
         dirty_roots: roots.deep,
         shallow_roots: roots.shallow,

@@ -76,7 +76,7 @@ fn drive(html: &str, css: &str, steps: Vec<Mutation>) -> Vec<(u32, usize)> {
             journal.iter().copied().map(|n| (n, NodeChange::ChildList)),
             &node_index,
         );
-        let delta = RestyleDelta { invalidation: None,
+        let delta = RestyleDelta { invalidation: None, attr_changed: None,
             prev_styles: prev_counters.styles().clone(),
             dirty_roots: roots.deep,
             shallow_roots: roots.shallow,

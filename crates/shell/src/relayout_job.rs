@@ -772,7 +772,7 @@ impl Lumen {
                     } else {
                         lumen_layout::counters::ContentDirty::Untracked
                     };
-                    let delta = lumen_layout::counters::RestyleDelta {
+                    let delta = lumen_layout::counters::RestyleDelta { attr_changed: None,
                         invalidation,
                         prev_styles,
                         dirty_roots,

@@ -767,9 +767,12 @@ pub(crate) mod call_stats {
     use std::collections::HashMap;
     use std::time::Instant;
 
+    /// One native's `name, calls, total_ns` row.
+    type CallRow = (String, u64, u128);
+
     thread_local! {
         /// `name, calls, total_ns` per registered native.
-        static CALLS: RefCell<Option<HashMap<usize, (String, u64, u128)>>> =
+        static CALLS: RefCell<Option<HashMap<usize, CallRow>>> =
             const { RefCell::new(None) };
     }
 

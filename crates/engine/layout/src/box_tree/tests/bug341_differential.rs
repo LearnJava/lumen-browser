@@ -341,7 +341,7 @@ fn incremental_restyle_does_not_readjust_a_reused_font_size_adjust_subtree() {
         let index = restyle_node_index(&doc, &sheet);
         let roots = restyle_root_set_for_node_change(&doc, [(hit, NodeChange::Attr("data-x"))], &index);
         let content: std::collections::HashSet<_> = [hit].into_iter().collect();
-        let delta = RestyleDelta { invalidation: None,
+        let delta = RestyleDelta { invalidation: None, attr_changed: None,
             prev_styles: counters.styles().clone(),
             dirty_roots: roots,
             content_dirty: ContentDirty::Nodes(&content),
@@ -538,7 +538,7 @@ fn box_build_hover_transition_matches_full_and_reuses_subset() {
     // Incremental: real transition, conservative root-set, box-build reuse on.
     let state_index = crate::style::restyle_state_index(&doc, &sheet);
     let dirty_roots = restyle_root_set_for_state_change(&doc, Some(a), Some(b), &state_index);
-    let delta = RestyleDelta { invalidation: None,
+    let delta = RestyleDelta { invalidation: None, attr_changed: None,
         prev_styles: baseline_counters.styles().clone(),
         dirty_roots,
         content_dirty: crate::counters::ContentDirty::Nothing,
@@ -645,7 +645,7 @@ fn box_build_node_change_disables_reuse_conservatively() {
     let node_index = restyle_node_index(&doc, &sheet);
     let dirty_roots =
         restyle_root_set_for_node_change(&doc, [(a, NodeChange::Attr("class"))], &node_index);
-    let delta = RestyleDelta { invalidation: None,
+    let delta = RestyleDelta { invalidation: None, attr_changed: None,
         prev_styles: baseline_counters.styles().clone(),
         dirty_roots,
         content_dirty: crate::counters::ContentDirty::Untracked,
@@ -914,7 +914,7 @@ fn box_build_text_mutation_reuses_everything_but_the_mutated_chain() {
     // A complete content report: exactly the mutated text node. No cascade
     // dirty root at all — text cannot change selector matching.
     let content = std::collections::HashSet::from([text_node]);
-    let delta = RestyleDelta { invalidation: None,
+    let delta = RestyleDelta { invalidation: None, attr_changed: None,
         prev_styles: baseline_counters.styles().clone(),
         dirty_roots: std::collections::HashSet::new(),
         content_dirty: ContentDirty::Nodes(&content),
@@ -1774,7 +1774,7 @@ fn box_build_driven_by_the_document_journal_matches_full_rebuild() {
                 .map(|n| (n, NodeChange::Unattributed)),
             &node_index,
         );
-        let delta = RestyleDelta { invalidation: None,
+        let delta = RestyleDelta { invalidation: None, attr_changed: None,
             prev_styles: prev_counters.styles().clone(),
             dirty_roots,
             content_dirty: ContentDirty::Nodes(&journal),
@@ -1851,7 +1851,7 @@ fn pseudo_cache_invalidates_when_ancestor_attr_flips_pseudo_match() {
         let index = restyle_node_index(&doc, &sheet);
         let roots = restyle_root_set_for_node_change(&doc, [(w, NodeChange::Attr("class"))], &index);
         let content: std::collections::HashSet<_> = [w].into_iter().collect();
-        let delta = RestyleDelta { invalidation: None,
+        let delta = RestyleDelta { invalidation: None, attr_changed: None,
             prev_styles: counters.styles().clone(),
             dirty_roots: roots,
             content_dirty: ContentDirty::Nodes(&content),

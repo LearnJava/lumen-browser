@@ -134,7 +134,7 @@ fn drive(html: &str, css: &str, steps: Vec<Mutation>) -> Vec<Step> {
         let node_index = restyle_node_index(&doc, &sheet);
         let roots = restyle_roots_for_node_changes(&doc, changes, &node_index);
         let (deep, shallow, point) = (roots.deep.len(), roots.shallow.len(), roots.point.len());
-        let delta = RestyleDelta { invalidation: None,
+        let delta = RestyleDelta { invalidation: None, attr_changed: None,
             prev_styles: prev_counters.styles().clone(),
             dirty_roots: roots.deep,
             shallow_roots: roots.shallow,
@@ -605,7 +605,7 @@ fn a_write_toggled_back_after_the_mark_is_covered_by_every_value_since_it() {
             olds.iter().map(|&old| (w, NodeChange::AttrFrom { name: "class", old })).collect();
         let node_index = restyle_node_index(&doc, &sheet);
         let roots = restyle_roots_for_node_changes(&doc, changes, &node_index);
-        let delta = RestyleDelta { invalidation: None,
+        let delta = RestyleDelta { invalidation: None, attr_changed: None,
             prev_styles: prev_counters.styles().clone(),
             dirty_roots: roots.deep,
             shallow_roots: roots.shallow,

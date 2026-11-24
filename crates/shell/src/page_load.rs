@@ -1284,7 +1284,7 @@ impl Lumen {
             } else {
                 lumen_layout::counters::ContentDirty::Nodes(&content_nodes)
             };
-            let delta = lumen_layout::counters::RestyleDelta {
+            let delta = lumen_layout::counters::RestyleDelta { attr_changed: None,
                 invalidation: None,
                 prev_styles,
                 dirty_roots,

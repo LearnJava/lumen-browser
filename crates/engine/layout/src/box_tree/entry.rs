@@ -532,7 +532,7 @@ pub fn layout_metrics_relayout(
         shallow_roots: std::collections::HashSet::new(),
         point_roots: std::collections::HashSet::new(),
         content_dirty: crate::counters::ContentDirty::Nothing,
-        invalidation: None,
+        invalidation: None, attr_changed: None,
     };
     crate::counters::set_incremental_restyle(true);
     let mut counters =

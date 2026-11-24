@@ -163,6 +163,7 @@ fn flush_walk_cost() {
             let content: std::collections::HashSet<lumen_dom::NodeId> = [block].into_iter().collect();
             let delta = RestyleDelta {
                 invalidation,
+                attr_changed: None,
                 prev_styles: map.styles().clone(),
                 dirty_roots: roots.deep,
                 shallow_roots: roots.shallow,
@@ -250,7 +251,7 @@ fn has_diff_flush_cost() {
             let roots = restyle_roots_for_node_changes(&doc, [(block, change)], &index);
             let content: std::collections::HashSet<lumen_dom::NodeId> = [block].into_iter().collect();
             let delta = RestyleDelta {
-                invalidation: None,
+                invalidation: None, attr_changed: None,
                 prev_styles: map.styles().clone(),
                 dirty_roots: roots.deep,
                 shallow_roots: roots.shallow,

@@ -114,7 +114,7 @@ impl Rig {
         let mut content = std::collections::HashSet::new();
         content.insert(node);
         let delta = RestyleDelta {
-            invalidation: None,
+            invalidation: None, attr_changed: None,
             prev_styles: prev.styles().clone(),
             dirty_roots: roots.deep.clone(),
             shallow_roots: roots.shallow.clone(),

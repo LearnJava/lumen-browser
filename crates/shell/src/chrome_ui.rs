@@ -204,7 +204,7 @@ impl Lumen {
                     chrome_node_changes(&touched),
                     node_index,
                 ));
-                let delta = lumen_layout::counters::RestyleDelta { invalidation: None,
+                let delta = lumen_layout::counters::RestyleDelta { invalidation: None, attr_changed: None,
                     prev_styles: std::mem::take(&mut self.chrome_prev_cascade_styles),
                     dirty_roots,
                     // BUG-341 S16: `bind_model_tracked` enumerates every node
