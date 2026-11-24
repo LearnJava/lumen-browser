@@ -1555,6 +1555,26 @@ pub(crate) fn install_frame_bridge_v8(
             }),
         )?;
     }
+    // Origin of an ancestor document for security checks (HTML LS
+    // `showPicker()`'s cross-origin `SecurityError`): deliberately NOT gated
+    // by `accessible` — an origin is exactly what a cross-origin caller is
+    // allowed to learn (postMessage targetOrigin matching needs it too).
+    // Serialization matches `_LUMEN_ORIGIN` (`origin_serialization_for_url`).
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_f_origin",
+            into_v8_fn1(move |bid: u32| -> String {
+                let reg = reg.lock().unwrap_or_else(|e| e.into_inner());
+                match resolve_slot(&reg, bid) {
+                    // `binding_origin` — то же правило, что у `event.origin`:
+                    // `about:`-наследование и нормализация через origin_for_url.
+                    Some(b) => binding_origin(&b.url, &reg.self_origin),
+                    None => String::new(),
+                }
+            }),
+        )?;
+    }
 
     // ── Срез 4: кросс-фреймовый postMessage ──────────────────────────────────
     // Валидация targetOrigin + постановка в глобальный ящик. Выполняется на

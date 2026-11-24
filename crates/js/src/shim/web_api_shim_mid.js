@@ -1959,6 +1959,38 @@ var _lumen_space_armed_nid = -2;
 // must see the suppression until the matching `keyup`.
 var _lumen_kb_active_blocked = false;
 
+// HTML LS §4.10.5.1.14: `showPicker()` throws `SecurityError` when the
+// element's document is cross-origin with the TOP-LEVEL document (native
+// pickers are chrome of the top-level page). `_LUMEN_ORIGIN` is this realm's
+// serialized origin; the top document's URL comes through the frame bridge's
+// pseudo-bids — TOP_BID (0xFFFFFFFE) for depth ≥ 2, PARENT_BID (0xFFFFFFFF)
+// for a first-level frame whose `top === parent`. Any lookup failure means
+// "no verdict" — the main page itself has neither slot.
+function _lumen_show_picker_cross_origin() {
+    try {
+        if (typeof _LUMEN_ORIGIN === 'undefined' || typeof _lumen_f_origin !== 'function') {
+            return false;
+        }
+        var self = String(_LUMEN_ORIGIN);
+        if (!self || self === 'null') return false;
+        // `_lumen_f_origin` answers the serialized origin even for
+        // cross-origin ancestors (`_lumen_f_url` is accessibility-gated and
+        // would return '' here — BUG origin-vs-url). TOP_BID first: a
+        // depth ≥ 2 frame's `top` differs from `parent`; a first-level
+        // frame has no TOP slot and falls through to PARENT_BID, whose
+        // document IS the top one.
+        var topOrigin = '';
+        try { topOrigin = String(_lumen_f_origin(0xFFFFFFFE) || ''); } catch (e) { /* no TOP slot */ }
+        if (!topOrigin) {
+            try { topOrigin = String(_lumen_f_origin(0xFFFFFFFF) || ''); } catch (e) { /* no PARENT slot */ }
+        }
+        if (!topOrigin || topOrigin === 'null') return false;
+        return self !== topOrigin;
+    } catch (e) {
+        return false;
+    }
+}
+
 function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location, mod, repeat, isComposing) {
     _lumen_note_activation_input(type, key);
     var ev = new KeyboardEvent(type, {
@@ -2041,6 +2073,41 @@ function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location
         if (stag === 'SELECT' && !_lumen_has_attr(start_nid, 'multiple')
             && !_lumen_has_attr(start_nid, 'disabled')) {
             _lumen_select_key_move(start_nid, key === 'ArrowDown' ? 1 : -1);
+        }
+    }
+    // HTML LS §4.10.5.1.13 radio-group keyboard interaction: ArrowDown/
+    // ArrowRight move to the NEXT group member, ArrowUp/ArrowLeft to the
+    // previous (wrapping), checking and focusing it. Disabled members are
+    // skipped; a group of one is a no-op.
+    if (type === 'keydown' && !isComposing && !ev.defaultPrevented
+        && (key === 'ArrowDown' || key === 'ArrowUp' || key === 'ArrowLeft' || key === 'ArrowRight')) {
+        var rtag = (_lumen_get_tag_name(start_nid) || '').toUpperCase();
+        var rtype = rtag === 'INPUT' ? _lumen_u2n(_lumen_get_attr(start_nid, 'type')) : null;
+        if (rtype !== null && String(rtype).toLowerCase() === 'radio'
+            && !_lumen_has_attr(start_nid, 'disabled')) {
+            var fwd = (key === 'ArrowDown' || key === 'ArrowRight') ? 1 : -1;
+            var grp = _lumen_radio_group(start_nid);
+            if (grp.length > 1) {
+                var idx = -1;
+                for (var _gi = 0; _gi < grp.length; _gi++) {
+                    if (grp[_gi] === start_nid) { idx = _gi; break; }
+                }
+                if (idx >= 0) {
+                    var steps = 0, target = -1;
+                    while (steps < grp.length) {
+                        idx = (idx + fwd + grp.length) % grp.length;
+                        steps++;
+                        if (!_lumen_has_attr(grp[idx], 'disabled')) { target = grp[idx]; break; }
+                    }
+                    if (target >= 0 && target !== start_nid) {
+                        _lumen_radio_select(target);
+                        _lumen_fire_input_and_change(target);
+                        if (typeof _lumen_request_focus === 'function') {
+                            _lumen_request_focus(target);
+                        }
+                    }
+                }
+            }
         }
     }
     // Keyboard activation behavior (HTML LS «activation behavior» reached
@@ -11333,6 +11400,13 @@ var _LUMEN_WRAPPER_MEMBERS = {
             };
             if (this.disabled || (this.readOnly && readonlyApplies[t] === 1)) {
                 throw new DOMException('showPicker() called on a non-mutable element', 'InvalidStateError');
+            }
+            // Cross-origin documents may not raise pickers — except `file`
+            // and `color`, whose pickers are allowed everywhere (WPT
+            // `show-picker-cross-origin-iframe`). Checked before transient
+            // activation, matching the spec's step order.
+            if (t !== 'file' && t !== 'color' && _lumen_show_picker_cross_origin()) {
+                throw new DOMException('showPicker() is not allowed in a cross-origin document', 'SecurityError');
             }
             // 3. transient activation — checked BEFORE consuming, and the
             // activation is consumed even when the type has no picker UI
