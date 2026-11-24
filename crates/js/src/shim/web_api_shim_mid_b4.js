@@ -207,6 +207,9 @@ function _lumen_mo_siblings(parentNid, nid) {
 
 function _mo_notify(nid, type, attrName, oldVal, addedNodeIds, removedNodeIds, prevSibNid, nextSibNid) {
     var hasObs = false;
+    // PERF: subtree checks used to walk `get_parent` per observation per level.
+    // One `_lumen_ancestor_chain` per record makes each check a JS indexOf.
+    var subtreeChain = null;
     for (var oi = 0; oi < _mo_observers.length; oi++) {
         var obs = _mo_observers[oi];
         for (var ei = 0; ei < obs._observations.length; ei++) {
@@ -218,7 +221,8 @@ function _mo_notify(nid, type, attrName, oldVal, addedNodeIds, removedNodeIds, p
             // target, or — with subtree:true — a descendant of it. Without the
             // ancestry test, subtree observers captured every document mutation.
             if (opts.subtree) {
-                if (!_lumen_mo_in_subtree(tnid, nid)) continue;
+                if (subtreeChain === null) subtreeChain = _lumen_ancestor_chain(nid);
+                if (subtreeChain.indexOf(tnid) < 0) continue;
             } else if (tnid !== nid) {
                 continue;
             }
