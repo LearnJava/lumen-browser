@@ -2105,6 +2105,13 @@ function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location
                         if (typeof _lumen_request_focus === 'function') {
                             _lumen_request_focus(target);
                         }
+                        // HTML LS §6.6.3 «scroll into view» on focus — an
+                        // offscreen group member must scroll in (WPT
+                        // `radio-focused-and-scrolled-into-view`).
+                        var tel = _lumen_make_element(target);
+                        if (tel && typeof tel.scrollIntoView === 'function') {
+                            try { tel.scrollIntoView(); } catch (e) {}
+                        }
                     }
                 }
             }
@@ -7342,7 +7349,10 @@ function _lumen_radio_group_any_checked(nid) {
         if (_lumen_form_owner(all[i]) !== owner) continue;
         if (_lumen_raw_checked(all[i])) return true;
     }
-    return false;
+    // `nid` itself is always a member of its own group — a detached
+    // singleton's descendant walk finds nobody, so check it directly
+    // (WPT radio-disconnected-group-owner «removed elements»).
+    return _lumen_raw_checked(nid);
 }
 
 // Computes ValidityState for a form control element (HTML LS §4.10.21.1).
@@ -10161,6 +10171,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                 ? _lumen_tt_get_compliant_html(v, 'Element innerHTML', true)
                 : String(v);
             _lumen_set_inner_html(nid, s);
+            _lumen_radio_group_post_insert(nid);
         },
         // DOM Parsing §2.6 'Extensions to the Element interface' — outerHTML
         // (BUG-351). Getter serializes this element itself; setter parses the
@@ -10569,11 +10580,13 @@ var _LUMEN_WRAPPER_MEMBERS = {
                     var kids = _lumen_get_children(c.__nid__).slice();
                     for (var _fi = 0; _fi < kids.length; _fi++) {
                         _lumen_append_child(nid, kids[_fi]);
+                        _lumen_radio_group_post_insert(kids[_fi]);
                         _lumen_ce_maybe_connected(_lumen_make_element(kids[_fi]));
                         _lumen_ce_connect_descendants(kids[_fi]);
                     }
                 } else {
                     _lumen_append_child(nid, c.__nid__);
+                    _lumen_radio_group_post_insert(c.__nid__);
                     _lumen_ce_maybe_connected(c);
                     _lumen_ce_connect_descendants(c.__nid__);
                 }
@@ -11476,11 +11489,13 @@ var _LUMEN_WRAPPER_MEMBERS = {
                     var kids = _lumen_get_children(newNode.__nid__).slice();
                     for (var _ib = 0; _ib < kids.length; _ib++) {
                         _lumen_insert_before(nid, kids[_ib], refNode.__nid__);
+                        _lumen_radio_group_post_insert(kids[_ib]);
                         _lumen_ce_maybe_connected(_lumen_make_element(kids[_ib]));
                         _lumen_ce_connect_descendants(kids[_ib]);
                     }
                 } else {
                     _lumen_insert_before(nid, newNode.__nid__, refNode.__nid__);
+                    _lumen_radio_group_post_insert(newNode.__nid__);
                     _lumen_ce_maybe_connected(newNode);
                     _lumen_ce_connect_descendants(newNode.__nid__);
                 }

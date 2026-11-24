@@ -4161,6 +4161,33 @@ function _lumen_radio_select(nid) {
     }
     _lumen_set_dirty_checked(nid, true);
 }
+// HTML LS §4.10.5.1.13 «checkedness» propagation on insertion: a checked
+// radio joining a group unchecks the others — but only for the spec's
+// «phenomena»: insertion into a Document, or gaining a FORM element as
+// form owner. A checked radio dropped into a detached non-form subtree
+// (plain div, unowned fragment) changes nothing — WPT
+// `radio-disconnected-group-owner` asserts both stay checked there.
+function _lumen_radio_group_post_insert(nid) {
+    var stack = [nid];
+    while (stack.length > 0) {
+        var cur = stack.pop();
+        if ((_lumen_get_tag_name(cur) || '').toUpperCase() === 'INPUT') {
+            var t = _lumen_u2n(_lumen_get_attr(cur, 'type'));
+            if (t !== null && String(t).toLowerCase() === 'radio' && _lumen_raw_checked(cur)) {
+                var root = _lumen_selection_tree_root_nid(cur);
+                var intoDocument = (root === _lumen_root_nid);
+                var owner = _lumen_form_owner(cur);
+                var ownerIsForm = owner !== -1 && owner !== null &&
+                    (_lumen_get_tag_name(owner) || '').toUpperCase() === 'FORM';
+                if (intoDocument || ownerIsForm) {
+                    _lumen_radio_select(cur);
+                }
+            }
+        }
+        var kids = _lumen_get_children(cur);
+        for (var i = 0; kids && i < kids.length; i++) stack.push(kids[i]);
+    }
+}
 function _lumen_fire_input_and_change(nid) {
     // UI Events: `input` is composed (crosses shadow boundaries), `change`
     // is not — WPT `input-change-event-properties` asserts exactly that.
