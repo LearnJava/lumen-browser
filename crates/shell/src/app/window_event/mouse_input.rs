@@ -105,8 +105,11 @@ impl Lumen {
             // Back / forward — ignore.
         } else if state == ElementState::Pressed {
             // CSS :active — set immediately on press so :active rules apply.
-            if self.active_nid != self.hovered_nid {
-                self.active_nid = self.hovered_nid;
+            // A `<label>` press resolves to its labeled control — the element
+            // the press actually activates (WPT checkable-active-onblur-*).
+            let active_target = self.hovered_nid.map(|n| self.pointer_active_target(n));
+            if self.active_nid != active_target {
+                self.active_nid = active_target;
                 self.active_from_keyboard = false;
                 self.sync_active_mirror();
                 // ADR-016 M2.2b-5: :active restyle is async-safe — the

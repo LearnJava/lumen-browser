@@ -540,6 +540,7 @@ fn run_window_mode_inner(
         click_proceed_inbox: Arc::new(std::sync::Mutex::new(Vec::new())),
         pending_clicks: Vec::new(),
         automation_hit_override: None,
+        automation_button_down: None,
         next_click_proceed_id: 0,
         pending_submits: Vec::new(),
         js_url_inbox: Arc::new(std::sync::Mutex::new(Vec::new())),

@@ -318,9 +318,20 @@ impl Lumen {
     pub(crate) fn sync_active_mirror(&self) {
         let nid = self.active_nid.map(|n| n.index() as u32);
         let keyboard = self.active_from_keyboard;
-        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+        // The `:active` mirror is a shared `Arc<Mutex>` — the notify only
+        // locks and writes it, no JS eval — so with the UI-side handle
+        // reachable the write can run synchronously. The queued `route_task_js`
+        // hop loses the same-task race: `querySelector(':active')` right after
+        // a synthetic press reads the pre-press mirror (WPT
+        // `checkable-active-onblur-with-click`). Engine-thread mode keeps the
+        // queued path — its handle lives on that thread.
+        if let Some(js) = self.js_ctx.as_ref() {
             js.notify_active_changed(nid, keyboard);
-        });
+        } else {
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+                js.notify_active_changed(nid, keyboard);
+            });
+        }
     }
 }
 

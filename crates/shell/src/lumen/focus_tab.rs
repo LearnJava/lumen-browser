@@ -39,6 +39,12 @@ impl Lumen {
     /// with no focusable elements, or one whose single focusable element was
     /// already focused.
     pub(crate) fn advance_page_focus(&mut self, forward: bool) -> bool {
+        // A queued `element.focus()` is OLDER than this Tab press — apply it
+        // before computing `current`, or the stale `focused_node` both picks
+        // the wrong successor AND gets overwritten back by the late drain
+        // inside `inject_key_events` (WPT radio-focus-navigation-checked).
+        #[cfg(feature = "v8")]
+        self.drain_js_focus_requests_for_input();
         let Some(src) = self.layout_source.as_ref() else {
             return false;
         };
@@ -122,6 +128,10 @@ impl Lumen {
     /// lands on exactly the page-level sibling before/after it, same as it
     /// always did for a frame with zero focusable fields.
     pub(crate) fn advance_frame_focus(&mut self, idx: usize, forward: bool) -> bool {
+        // Same stale-queue rule as `advance_page_focus`: a pending
+        // `element.focus()` predates this Tab press.
+        #[cfg(feature = "v8")]
+        self.drain_js_focus_requests_for_input();
         let Some(handle) = self.frames.get(idx) else {
             return false;
         };
