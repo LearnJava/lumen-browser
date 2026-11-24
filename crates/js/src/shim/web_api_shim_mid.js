@@ -1943,6 +1943,17 @@ function _lumen_keypress_charcode(key, mod) {
     return 0;
 }
 
+// Whether the JS side currently holds a keyboard-`:active` mirror entry —
+// guards the `keyup` clear so releasing Space cannot wipe a pointer-held
+// `:active` (or vice versa).
+var _lumen_kb_active_held = false;
+// Space's activation target armed by an uncancelled `keydown` (-2 = no
+// keydown seen). The `keyup` clicks only when it resolves to the SAME
+// target — a `preventDefault()`ed or mid-dispatch-disabled keydown disarms
+// it, and a focus move makes the keyup's target differ (WPT
+// `checkable-active-space-key-prevented-default`/`-being-disabled`).
+var _lumen_space_armed_nid = -2;
+
 function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location, mod, repeat, isComposing) {
     _lumen_note_activation_input(type, key);
     var ev = new KeyboardEvent(type, {
@@ -1954,7 +1965,45 @@ function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location
         altKey:   !!(mod & 4), metaKey:  !!(mod & 8),
         modifierCapsLock: !!(mod & 16)
     });
+    // CSS `:active` for a held Space/Enter — written synchronously so the
+    // state is already correct while this very event is being dispatched and
+    // for any `querySelector(':active')` the handlers run (the shell's
+    // post-dispatch notify loses that race; WPT checkable-active-*).
+    // Ctrl/Alt/Meta chords never activate; Shift is allowed, matching the
+    // shell's `sync_key_active` mask. Cleared on `keyup` and on any focus
+    // move (`_lumen_focus_update`).
+    var kat = -1;
+    var isSpaceKey = (key === ' ');
+    if ((mod & 13) === 0 && (key === ' ' || key === 'Enter') && !isComposing) {
+        if (type === 'keydown' && !repeat) {
+            kat = _lumen_key_active_target(start_nid, isSpaceKey);
+            _lumen_kb_active_held = (kat !== -1);
+            if (isSpaceKey) _lumen_space_armed_nid = kat;
+            if (typeof _lumen_set_active_mirror === 'function') {
+                _lumen_set_active_mirror(kat, true);
+            }
+        } else if (type === 'keyup' && _lumen_kb_active_held) {
+            _lumen_kb_active_held = false;
+            if (typeof _lumen_set_active_mirror === 'function') {
+                _lumen_set_active_mirror(-1, false);
+            }
+        }
+    }
     var notCancelled = _lumen_dispatch_rich(start_nid, ev);
+    // Post-dispatch correction: a `preventDefault()` or a listener that
+    // disabled the target mid-dispatch retracts the `:active` mirror and
+    // disarms Space activation — the pre-dispatch snapshot cannot see either.
+    if (type === 'keydown' && !repeat && (mod & 13) === 0 && !isComposing
+        && (key === ' ' || key === 'Enter')) {
+        var still = ev.defaultPrevented ? -1 : _lumen_key_active_target(start_nid, isSpaceKey);
+        if (isSpaceKey) _lumen_space_armed_nid = still;
+        if (still !== kat) {
+            _lumen_kb_active_held = (still !== -1);
+            if (typeof _lumen_set_active_mirror === 'function') {
+                _lumen_set_active_mirror(still, true);
+            }
+        }
+    }
     if (type === 'keydown' && !ev.defaultPrevented && !isComposing) {
         var pkc = _lumen_keypress_charcode(key, mod);
         if (pkc !== 0) {
@@ -1992,9 +2041,19 @@ function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location
     if (!repeat && !isComposing && !ev.defaultPrevented) {
         var isEnter = (type === 'keydown' && key === 'Enter');
         var isSpace = (type === 'keyup' && key === ' ');
-        if (isEnter || isSpace) {
-            _lumen_key_activate(start_nid, isSpace);
+        if (isEnter) {
+            _lumen_key_activate(start_nid, false);
+        } else if (isSpace) {
+            // Space activates on `keyup`, but only the target the `keydown`
+            // armed — resolving fresh would click whatever holds focus NOW.
+            var sat = _lumen_key_active_target(start_nid, true);
+            if (sat !== -1 && sat === _lumen_space_armed_nid) {
+                _lumen_perform_click(sat);
+            }
+            _lumen_space_armed_nid = -2;
         }
+    } else if (type === 'keyup' && key === ' ') {
+        _lumen_space_armed_nid = -2;
     }
     return notCancelled;
 }

@@ -257,7 +257,31 @@ impl Lumen {
     /// только следующим relayout-тиком. Расхождение отправляло клик мимо
     /// цели (WPT `focus-visible-018-2`). Реальный mouse-путь
     /// (`handle_click_at`) оверрайд не ставит и работает по-прежнему.
-    pub(crate) fn handle_click_at_automation(&mut self, x_css: f32, y_css: f32) {
+    /// CSS `:active` target for a pointer press landing on `nid`: a `<label>`
+    /// press activates its labeled control (HTML LS §4.10.4 forwards the
+    /// click), and browsers reflect that in `:active` — WPT
+    /// `checkable-active-onblur-with-click` expects `input:active` while the
+    /// label itself is held.
+    pub(crate) fn pointer_active_target(&self, nid: NodeId) -> NodeId {
+        let Some(src) = self.layout_source.as_ref() else {
+            return nid;
+        };
+        let doc = src.document.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(node) = doc.try_get(nid) else {
+            return nid;
+        };
+        if node.element_name().map(|q| q.local.as_str()) == Some("label")
+            && let Some(control) = crate::forms::labeled_control(&doc, nid)
+        {
+            return control;
+        }
+        nid
+    }
+
+    /// Fresh-layout hit-test override shared by the automation click and
+    /// release halves — `layout_box` may lag a same-turn flush behind what
+    /// the page sees.
+    fn set_automation_hit_override(&mut self, x_css: f32, y_css: f32) {
         let (page_x, page_y) = self.page_point(x_css, y_css);
         let script = format!("_lumen_hit_test_at_point({page_x}, {page_y})");
         let qr = route_query_js(
@@ -281,7 +305,20 @@ impl Lumen {
                 _ => None,
             });
         }
+    }
+
+    pub(crate) fn handle_click_at_automation(&mut self, x_css: f32, y_css: f32) {
+        self.set_automation_hit_override(x_css, y_css);
         self.handle_click_at_mode(x_css, y_css, true);
+    }
+
+    /// Release half of an automation `pointerDown`/`pointerUp` pair: the
+    /// press events already went out on `PointerDown`, so the click pipeline
+    /// runs with `press_events = false` — focus move, `click` dispatch and
+    /// activation only.
+    pub(crate) fn handle_release_at_automation(&mut self, x_css: f32, y_css: f32) {
+        self.set_automation_hit_override(x_css, y_css);
+        self.handle_click_at_mode(x_css, y_css, false);
     }
 
     fn handle_click_at_mode(&mut self, x_css: f32, y_css: f32, press_events: bool) {

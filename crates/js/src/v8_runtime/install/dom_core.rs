@@ -474,6 +474,18 @@ pub(crate) fn install_node_lookup(
     doc: Arc<Mutex<lumen_dom::Document>>,
     mirror: InteractiveMirror,
 ) -> JsResult<()> {
+    // CSS `:active` mirror write from the engine thread itself: the key
+    // dispatch shim (`_lumen_dispatch_key_event`) sets/clears it
+    // synchronously so `querySelector(':active')`/`matches()` in the same
+    // task sees the pressed state — the shell's `notify_active_changed`
+    // arrives as a queued task and loses that race (WPT checkable-active-*).
+    {
+        let act = Arc::clone(&mirror.active);
+        reg!(scope, ctx, store, "_lumen_set_active_mirror", move |nid: f64, keyboard: bool| {
+            let mut g = act.lock().unwrap_or_else(|e| e.into_inner());
+            *g = if nid < 0.0 { None } else { Some((nid as u32, keyboard)) };
+        });
+    }
     // ── node lookup ──────────────────────────────────────────────────────────
     {
         let d = Arc::clone(&doc);
