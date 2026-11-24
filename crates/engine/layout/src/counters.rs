@@ -2196,6 +2196,46 @@ fn force_reuse_disabled() -> bool {
     *OFF.get_or_init(|| std::env::var_os("LUMEN_NO_FORCE_REUSE").is_some_and(|v| v != "0"))
 }
 
+/// PERF-FORCE-REUSE — whether `compute_style` of `id` reads anything a
+/// `ChildList` mutation above it can change that neither the matched-rule
+/// set, the inherited style nor [`RestyleDelta::attr_changed`] describes.
+///
+/// The procedural UA/presentational passes walk ancestors and descendants for
+/// a handful of tags (`style::ua`, `style::presentational`):
+///
+/// - `ol`/`ul`/`menu`/`dir` count ancestor list containers for
+///   `list-style-type` and the nested-list margin collapse;
+/// - `dl` reads the same ancestor scan for its vertical margins;
+/// - `li` reads its parent's tag and `reversed` attribute;
+/// - `td`/`th` find the nearest ancestor `table` for `cellpadding`;
+/// - `rt` checks for an `rtc` parent (ruby font-size factor);
+/// - `bdi`/`slot` and any `dir=auto` element resolve direction from the
+///   first strong character *inside their own subtree* (and, for `slot`,
+///   from assigned light-DOM children).
+///
+/// - `html`/`body`: `overflow` propagation to the viewport reads the
+///   parent's computed `overflow`, which is not an inherited property.
+///
+/// A forced node of any other tag provably cannot see such an input change:
+/// every remaining ancestor read in `compute_style` is either selector
+/// matching (fresh via `pre_match`), the inherited chain (compared by value),
+/// or the node's own attributes (in `attr_changed`).
+fn force_reuse_structure_safe(doc: &Document, id: NodeId) -> bool {
+    let NodeData::Element { name, .. } = &doc.get(id).data else {
+        return true;
+    };
+    if matches!(
+        name.local.as_str(),
+        "ol" | "ul" | "menu" | "dir" | "dl" | "li" | "td" | "th" | "rt" | "bdi" | "slot" | "html" | "body"
+    ) {
+        return false;
+    }
+    !doc
+        .get(id)
+        .get_attr("dir")
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("auto"))
+}
+
 /// PERF-FORCE-REUSE — one forced element whose recompute the pre-compute
 /// proof skipped (matched rules + inherited input + attr-change set all
 /// identical to the previous pass).
@@ -2546,6 +2586,7 @@ fn walk(
         && !shallow_child
         && !is_point_root
         && !host_override
+        && force_reuse_structure_safe(doc, id)
         && incr.is_some_and(|d| {
             d.attr_changed.is_some()
                 && !d.dirty_roots.contains(&id)

@@ -290,3 +290,69 @@ fn forced_reuse_skips_recompute_only_when_every_input_is_identical() {
     assert_eq!(incr.styles(), full.styles());
     assert_eq!(stats.forced_reused, 0, "a written ancestor must disable the licence: {stats:?}");
 }
+
+/// PERF-FORCE-REUSE — the licence must never fire on elements whose
+/// `compute_style` reads ancestor *structure* or descendant content: a
+/// `ChildList` mutation writes no attribute, so `attr_changed` stays empty
+/// while e.g. a list's depth — and with it `list-style-type` — moved.
+#[test]
+fn forced_reuse_never_skips_structure_sensitive_tags() {
+    use crate::counters::{
+        incremental_precompute_counters, precompute_counters, set_incremental_restyle, take_cascade_stats,
+        ContentDirty, RestyleDelta,
+    };
+    use crate::style::ListStyleType;
+    use lumen_core::id_hash::IdSet;
+
+    let mut big = String::from("<body><div class=\"wrap\" id=\"root\">");
+    for i in 0..20 {
+        big.push_str(&format!("<div class=\"b{i}\"><span>x{i}</span></div>"));
+    }
+    big.push_str(
+        "<div class=\"listbox\"><ul class=\"outer\"><li class=\"slot\">i<ul class=\"inner\"><li>j</li></ul></li></ul></div></div></body>",
+    );
+    let mut doc = lumen_html_parser::parse(&big);
+    let sheet = lumen_css_parser::parse(CSS);
+    let vp = Size::new(800.0, 600.0);
+    let wrap = node_by_class(&doc, "wrap");
+    let slot = node_by_class(&doc, "slot");
+    let inner = node_by_class(&doc, "inner");
+    let prev = {
+        let flat = lumen_dom::build_flat_tree(&doc);
+        precompute_counters(&doc, &sheet, vp, &flat, false)
+    };
+    assert_eq!(
+        prev.styles().get(&inner).map(|s| s.list_style_type.clone()),
+        Some(ListStyleType::Circle),
+        "fixture: one ancestor list container ⇒ circle"
+    );
+
+    // Wrap the inner `ul` in a fresh `ul`: its ancestor list-container count
+    // goes 1 → 2, so `list-style-type` must become `square`. A child-list
+    // change names no attribute — `attr_changed` is empty.
+    let ul = doc.create_element(lumen_dom::QualName::html("ul"));
+    doc.append_child(ul, inner);
+    doc.append_child(slot, ul);
+    let content: std::collections::HashSet<_> = [slot].into_iter().collect();
+    let flat = lumen_dom::build_flat_tree(&doc);
+    let delta = RestyleDelta {
+        invalidation: None,
+        attr_changed: Some(IdSet::default()),
+        prev_styles: prev.styles().clone(),
+        dirty_roots: std::collections::HashSet::from([wrap]),
+        shallow_roots: Default::default(),
+        point_roots: Default::default(),
+        content_dirty: ContentDirty::Nodes(&content),
+    };
+    let _ = take_cascade_stats();
+    set_incremental_restyle(true);
+    let incr = incremental_precompute_counters(&doc, &sheet, vp, &flat, false, delta);
+    set_incremental_restyle(false);
+    let full = precompute_counters(&doc, &sheet, vp, &flat, false);
+    assert_eq!(incr.styles(), full.styles(), "structure-sensitive nodes must recompute");
+    assert_eq!(
+        incr.styles().get(&inner).map(|s| s.list_style_type.clone()),
+        Some(ListStyleType::Square),
+        "the new list depth must reach the inner ul"
+    );
+}
