@@ -668,6 +668,36 @@ pub(crate) fn install_node_lookup(
                 })
             }
         );
+        // PERF-NAV-O2: `el.closest(sel)` is the event-delegation primitive —
+        // the JS loop paid `_lumen_node_matches_selector` + `_lumen_get_parent`
+        // per ancestor (selector parse is already cached, the crossings were
+        // not). Same walk, same `matches_selector` per level, one crossing.
+        // DOM-parent chain only — closest() does not cross shadow boundaries,
+        // exactly like the JS `get_parent` loop it replaces.
+        let d = Arc::clone(&doc);
+        let fnid = mirror.clone();
+        reg!(scope, ctx, store,
+            "_lumen_closest",
+            move |node_id: u32, sel: String| -> Option<u32> {
+                with_focus_state(&fnid, || {
+                    let doc = d.lock().unwrap();
+                    let mut cur = NodeId::from_raw(node_id);
+                    for _ in 0..8192 {
+                        if doc.try_get(cur).is_none() {
+                            return None;
+                        }
+                        if matches_selector(&doc, cur, &sel) {
+                            return Some(cur.raw());
+                        }
+                        match doc.try_get(cur).and_then(|n| n.parent) {
+                            Some(p) => cur = p,
+                            None => return None,
+                        }
+                    }
+                    None
+                })
+            }
+        );
         // :dir() pseudo-class for shim's element.matches()
         let d = Arc::clone(&doc);
         let fnid = mirror.clone();
@@ -936,6 +966,32 @@ pub(crate) fn install_node_properties(
                 let doc = d.lock().unwrap();
                 let nid = NodeId::from_raw(node_id);
                 matches!(doc.try_get(nid).map(|n| &n.data), Some(NodeData::ProcessingInstruction { .. }))
+            }
+        );
+        // PERF-NAV-O2: `node.nodeType` used to cost up to four crossings
+        // (`_lumen_is_text_node` → `_lumen_is_cdata_section` /
+        // `_lumen_is_comment_node` → `_lumen_is_processing_instruction_node`)
+        // on EVERY read — tree walks and reconciler diffs read it per node.
+        // One native returns the DOM §4.2 nodeType directly; a stale id
+        // answers 1, exactly what the old chain produced for it.
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store,
+            "_lumen_get_node_type",
+            move |node_id: u32| -> u32 {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_raw(node_id);
+                let Some(node) = doc.try_get(nid) else { return 1; };
+                match &node.data {
+                    NodeData::Document => 9,
+                    NodeData::Doctype { .. } => 10,
+                    NodeData::ShadowRoot { .. } | NodeData::DocumentFragment => 11,
+                    NodeData::Element { .. } => 1,
+                    NodeData::Text(_) => {
+                        if doc.is_cdata_section(nid) { 4 } else { 3 }
+                    }
+                    NodeData::Comment(_) => 8,
+                    NodeData::ProcessingInstruction { .. } => 7,
+                }
             }
         );
         // BUG-321: DocumentType support (mirrors the rquickjs registration in
@@ -1627,6 +1683,133 @@ pub(crate) fn install_tree_navigation(
                 is_el_c(&doc, pid).then(|| pid.raw())
             }
         );
+        // PERF-NAV-O2: `getRootNode()` climbed the ancestor chain in JS —
+        // `_lumen_get_parent` per level, `_lumen_is_shadow_root` +
+        // `_lumen_get_shadow_root_host` + `_lumen_get_shadow_root_mode` at the
+        // top — O(depth) crossings per call. The climb runs Rust-side; the
+        // answer is `[top nid, is_shadow_root]` so the JS side pays the
+        // shadow-root wrap extras only when the answer actually is one.
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store,
+            "_lumen_root_node_nid",
+            move |nid_raw: u32, composed: bool| -> Vec<u32> {
+                let doc = d.lock().unwrap();
+                let mut cur = NodeId::from_raw(nid_raw);
+                for _ in 0..8192 {
+                    if doc.try_get(cur).is_none() {
+                        return vec![nid_raw, 0];
+                    }
+                    let node = doc.get(cur);
+                    match node.parent {
+                        Some(p) => cur = p,
+                        None => {
+                            if matches!(node.data, NodeData::ShadowRoot { .. }) {
+                                if composed
+                                    && let Some(host) = doc.shadow_host_of(cur)
+                                {
+                                    cur = host;
+                                    continue;
+                                }
+                                return vec![cur.raw(), 1];
+                            }
+                            return vec![cur.raw(), 0];
+                        }
+                    }
+                }
+                vec![cur.raw(), 0]
+            }
+        );
+        // PERF-NAV-O2: `_lumen_ancestor_nids` (compareDocumentPosition) built
+        // the [self..root] chain with one `_lumen_get_parent` crossing per
+        // level, twice per call. Same chain, one crossing.
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store,
+            "_lumen_ancestor_chain",
+            move |node_id: u32| -> Vec<u32> {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_raw(node_id);
+                let mut out = vec![nid.raw()];
+                let mut cur = nid;
+                for _ in 0..8192 {
+                    let Some(node) = doc.try_get(cur) else { break };
+                    match node.parent {
+                        Some(p) => {
+                            out.push(p.raw());
+                            cur = p;
+                        }
+                        None => break,
+                    }
+                }
+                out
+            }
+        );
+        // PERF-NAV-O2: `node.contains(other)` / the insertion-validity check
+        // (`_lumen_node_contains`) walked `other`'s ancestor chain in JS — one
+        // `_lumen_get_parent` crossing per level, per call, and DOM builders
+        // pay it on every append. Same DOM-parent walk (NOT shadow-inclusive,
+        // matching `Node.contains`), one crossing.
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store,
+            "_lumen_contains_nid",
+            move |anc: u32, node: u32| -> bool {
+                let doc = d.lock().unwrap();
+                let a = NodeId::from_raw(anc);
+                let mut cur = NodeId::from_raw(node);
+                // DOM trees are shallow; the bound only guards a corrupt arena.
+                for _ in 0..8192 {
+                    if cur == a {
+                        return true;
+                    }
+                    match doc.try_get(cur).and_then(|n| n.parent) {
+                        Some(p) => cur = p,
+                        None => return false,
+                    }
+                }
+                false
+            }
+        );
+        // PERF-NAV-O2: `_lumen_event_path` built the propagation path in JS —
+        // `_lumen_get_parent` per ancestor, `_lumen_is_shadow_root` +
+        // `_lumen_get_shadow_root_host` (itself an ancestor walk) at every
+        // shadow boundary — ~2-3 crossings PER LEVEL PER EVENT, and input
+        // events fire constantly. The identical walk runs Rust-side in one
+        // crossing: `[target, parent, …]` up to but excluding the document
+        // root, with `u32::MAX` appended as the "reached root" marker the JS
+        // side turns into the document/window sentinels. A stale mid-walk id
+        // simply ends the path, like the old `try_get`-degraded getters did.
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store,
+            "_lumen_event_ancestor_path",
+            move |node_id: u32, cross_shadow: bool| -> Vec<u32> {
+                let doc = d.lock().unwrap();
+                let root = doc.root();
+                let mut out = Vec::new();
+                let mut cur = NodeId::from_raw(node_id);
+                // Same 1024 bound the JS loop carried against arena cycles.
+                for _ in 0..1024 {
+                    if cur == root {
+                        out.push(u32::MAX);
+                        return out;
+                    }
+                    out.push(cur.raw());
+                    let Some(node) = doc.try_get(cur) else { return out; };
+                    match node.parent {
+                        Some(p) => cur = p,
+                        None => {
+                            if cross_shadow
+                                && matches!(node.data, NodeData::ShadowRoot { .. })
+                                && let Some(host) = doc.shadow_host_of(cur)
+                            {
+                                cur = host;
+                            } else {
+                                return out;
+                            }
+                        }
+                    }
+                }
+                out
+            }
+        );
     }
     Ok(())
 }
@@ -2108,6 +2291,46 @@ pub(crate) fn install_shadow_dom(
                 {
                     let p = node.parent?;
                     cur = p
+                }
+            }
+        });
+    }
+    // PERF-NAV-O2: `node.isConnected` used to walk the ancestor chain in JS —
+    // `_lumen_get_parent` per level plus `_lumen_get_shadow_root_host` (which
+    // itself walks to the shadow root) at every boundary — O(depth) crossings
+    // per call, and frameworks poll it inside render loops. The whole walk is
+    // one Rust-side loop now: same shadow-inclusive semantics — a node is
+    // connected when its ancestor chain (crossing ShadowRoot→host via
+    // `shadow_host_of`, exactly like the JS bridge) reaches the document
+    // element. Detached roots and foreign ids answer false, matching the old
+    // chain's fall-through.
+    {
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store, "_lumen_is_connected", move |nid_raw: u32| -> bool {
+            let doc = d.lock().unwrap();
+            let mut cur = NodeId::from_raw(nid_raw);
+            if doc.try_get(cur).is_none() {
+                return false;
+            }
+            let Some(html) = doc.document_element() else {
+                return false;
+            };
+            loop {
+                if cur == html {
+                    return true;
+                }
+                let node = doc.get(cur);
+                match node.parent {
+                    Some(p) => cur = p,
+                    None => {
+                        if matches!(node.data, NodeData::ShadowRoot { .. })
+                            && let Some(host) = doc.shadow_host_of(cur)
+                        {
+                            cur = host;
+                        } else {
+                            return false;
+                        }
+                    }
                 }
             }
         });

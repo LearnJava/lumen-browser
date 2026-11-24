@@ -1543,8 +1543,13 @@ var NodeFilter = {
 // `_lumen_make_element` alone would mint a bogus Element for all three.
 function _lumen_make_node_by_nid(nid) {
     if (nid === _lumen_root_nid) return document;
-    if (_lumen_is_doctype(nid)) return _lumen_make_doctype(nid);
-    if (_lumen_is_document_fragment(nid)) return _lumen_make_document_fragment(nid);
+    // PERF-NAV-O2: one nodeType crossing instead of the is_doctype +
+    // is_document_fragment pair. nt 11 covers DocumentFragment AND ShadowRoot;
+    // only the latter still falls through to `_lumen_make_element`, exactly
+    // like the old chain (which never matched ShadowRoot as a fragment).
+    var nt = _lumen_get_node_type(nid);
+    if (nt === 10) return _lumen_make_doctype(nid);
+    if (nt === 11 && !_lumen_is_shadow_root(nid)) return _lumen_make_document_fragment(nid);
     return _lumen_make_element(nid);
 }
 
@@ -1554,14 +1559,11 @@ function _nf_accepts(nid, whatToShow, filter) {
     // whatToShow bitmask check — DOM LS §4.3's full nodeType set, not just
     // element/text/comment/PI: `nid` can be `document` itself (root of a
     // document-rooted walker), a DocumentType or a DocumentFragment.
-    var nt;
-    if (nid === _lumen_root_nid) { nt = 9; }
-    else if (_lumen_is_doctype(nid)) { nt = 10; }
-    else if (_lumen_is_document_fragment(nid)) { nt = 11; }
-    else if (_lumen_is_text_node(nid)) { nt = _lumen_is_cdata_section(nid) ? 4 : 3; }
-    else if (_lumen_is_comment_node(nid)) { nt = 8; }
-    else if (_lumen_is_processing_instruction_node(nid)) { nt = 7; }
-    else { nt = 1; }
+    // PERF-NAV-O2: `_lumen_get_node_type` answers the whole DOM §4.2 mapping
+    // in one crossing — the is_doctype/is_fragment/is_text/is_cdata/is_comment/
+    // is_pi chain this replaces cost up to six per candidate node, and a
+    // TreeWalker/NodeIterator scan pays it for EVERY visited node.
+    var nt = (nid === _lumen_root_nid) ? 9 : _lumen_get_node_type(nid);
     var bit;
     switch (nt) {
         case 3:  bit = NodeFilter.SHOW_TEXT; break;
@@ -1619,15 +1621,14 @@ _TreeWalker.prototype._cur_nid = function() {
 // only bounds upward movement. `currentNode` may sit outside `root`'s subtree
 // (Lit points one walker over `document` at `template.content`).
 function _tw_parent(n) { return _lumen_u2n(_lumen_get_parent(n)); }
-function _tw_first(n) { var c = _lumen_get_children(n); return c.length ? c[0] : null; }
-function _tw_last(n) { var c = _lumen_get_children(n); return c.length ? c[c.length - 1] : null; }
+// PERF-NAV-O2: dedicated endpoint/sibling natives — these used to fetch the
+// whole child list into a JS array for one endpoint or one neighbour.
+function _tw_first(n) { return _lumen_u2n(_lumen_get_first_child(n)); }
+function _tw_last(n) { return _lumen_u2n(_lumen_get_last_child(n)); }
 function _tw_sib(n, next) {
-    var p = _tw_parent(n);
-    if (p === null) return null;
-    var c = _lumen_get_children(p), i = c.indexOf(n);
-    if (i < 0) return null;
-    i += next ? 1 : -1;
-    return i >= 0 && i < c.length ? c[i] : null;
+    var s = _lumen_get_siblings_of(n);
+    var v = next ? s[1] : s[0];
+    return v === 4294967295 ? null : v;
 }
 
 _TreeWalker.prototype._set = function(nid) {

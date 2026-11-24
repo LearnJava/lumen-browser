@@ -1025,9 +1025,16 @@ function _lumen_set_on_handler(nid, attrName, fn) {
 }
 
 function _lumen_get_on_handler(nid, attrName) {
-    var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
-    if ((tag === 'BODY' || tag === 'FRAMESET') && _LUMEN_BODY_FORWARDED_TO_WINDOW[attrName]) {
-        return window[attrName] || null;
+    // PERF-NAV-O2: the BODY/FRAMESET→window forwarding check used to cost a
+    // `_lumen_get_tag_name` crossing on EVERY path node of EVERY event —
+    // including the overwhelmingly common case of no handler at all. The tag
+    // lookup now runs only for event types that are actually forwarded; the
+    // forwarding still wins over an own handler exactly as before.
+    if (_LUMEN_BODY_FORWARDED_TO_WINDOW[attrName]) {
+        var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
+        if (tag === 'BODY' || tag === 'FRAMESET') {
+            return window[attrName] || null;
+        }
     }
     var key = String(nid) + ':' + attrName.slice(2);
     return _lumen_on_handlers[key] || null;
@@ -1223,23 +1230,16 @@ function _lumen_event_path(start_nid, crossShadow) {
     if (start_nid === _LUMEN_DOC_LISTENER_NID || start_nid === _lumen_root_nid) {
         return [_LUMEN_DOC_LISTENER_NID, _LUMEN_WIN_LISTENER_NID];
     }
-    var path = [];
-    var cur = start_nid;
+    // PERF-NAV-O2: the ancestor climb (parent links + shadow-boundary bridge)
+    // runs inside `_lumen_event_ancestor_path` — one crossing instead of
+    // ~2-3 per level (`get_parent` + `is_shadow_root` + `get_shadow_root_host`,
+    // the last itself an ancestor walk). The native appends u32::MAX when the
+    // walk reached the document root, which is the JS side's `connected` flag.
+    var path = _lumen_event_ancestor_path(start_nid, !!crossShadow);
     var connected = false;
-    // Bounded: a cycle in the arena's parent links would otherwise hang the tab.
-    for (var guard = 0; guard < 1024 && cur !== null && cur !== undefined; guard++) {
-        if (cur === _lumen_root_nid) { connected = true; break; }
-        path.push(cur);
-        var pid = _lumen_u2n(_lumen_get_parent(cur));
-        if (pid === null || pid === undefined) {
-            // DOM LS: only a composed event crosses the shadow boundary to the
-            // host — the same climb `_lumen_resource_is_connected` makes; a
-            // non-composed event stops at the shadow root (BUG-1777).
-            cur = (crossShadow && _lumen_is_shadow_root(cur))
-                ? _lumen_u2n(_lumen_get_shadow_root_host(cur)) : null;
-        } else {
-            cur = pid;
-        }
+    if (path.length > 0 && path[path.length - 1] === 4294967295) {
+        path.pop();
+        connected = true;
     }
     if (connected) {
         path.push(_LUMEN_DOC_LISTENER_NID);
@@ -5188,17 +5188,16 @@ function _lumen_shadow_root_init_from(init) {
 // itself the starting node.
 function _lumen_get_root_node(nid, options) {
     var composed = !!(options && options.composed);
-    var cur = nid;
-    while (true) {
-        var pid = _lumen_u2n(_lumen_get_parent(cur));
-        if (pid !== null) { cur = pid; continue; }
-        if (_lumen_is_shadow_root(cur)) {
-            var host_nid = _lumen_u2n(_lumen_get_shadow_root_host(cur));
-            if (composed && host_nid !== null) { cur = host_nid; continue; }
-            var mode = _lumen_get_shadow_root_mode(cur) || 'open';
-            return _lumen_make_shadow_root(cur, mode, host_nid);
-        }
-        break;
+    // PERF-NAV-O2: the ancestor climb (incl. the BUG-878 ShadowRoot→host
+    // bridge for composed:true) runs inside `_lumen_root_node_nid` — one
+    // crossing instead of `_lumen_get_parent` per level. The shadow-root
+    // wrap extras are fetched only when the answer actually is a shadow root.
+    var r = _lumen_root_node_nid(nid, composed);
+    var cur = r[0];
+    if (r[1] === 1) {
+        var mode = _lumen_get_shadow_root_mode(cur) || 'open';
+        var host_nid = _lumen_u2n(_lumen_get_shadow_root_host(cur));
+        return _lumen_make_shadow_root(cur, mode, host_nid);
     }
     // BUG-1161: the top of a detached document's tree is the document itself.
     if (cur !== _lumen_root_nid && _lumen_doc_edge[cur]) { return _lumen_doc_edge[cur]; }
@@ -5210,10 +5209,9 @@ function _lumen_get_root_node(nid, options) {
 // wrapper: cheap tree-scope identity check for `Selection.setBaseAndExtent`
 // (BUG-966), which only needs to compare two roots, not read either one.
 function _lumen_selection_tree_root_nid(nid) {
-    var cur = nid;
-    var pid;
-    while ((pid = _lumen_u2n(_lumen_get_parent(cur))) !== null) { cur = pid; }
-    return cur;
+    // Same climb as `_lumen_get_root_node` with composed:false — the native
+    // answers the top nid directly (PERF-NAV-O2).
+    return _lumen_root_node_nid(nid, false)[0];
 }
 
 // Whether `nid` takes part in the flattened tree of the document (BUG-1687): the climb
@@ -5636,14 +5634,9 @@ function _lumen_tree_nid(n) {
 }
 
 // [node, parent, ..., root] in arena ids.
+// PERF-NAV-O2: one crossing — was `_lumen_get_parent` per level.
 function _lumen_ancestor_nids(nid) {
-    var chain = [];
-    var cur = nid;
-    while (cur !== null && cur !== undefined) {
-        chain.push(cur);
-        cur = _lumen_u2n(_lumen_get_parent(cur));
-    }
-    return chain;
+    return _lumen_ancestor_chain(nid);
 }
 
 // Total order used only for the DISCONNECTED case, where the spec asks for a
@@ -5674,12 +5667,9 @@ function _lumen_node_contains(self, other) {
     var a = _lumen_tree_nid(self);
     var b = _lumen_tree_nid(other);
     if (a !== null && b !== null) {
-        var cur = b;
-        while (cur !== null) {
-            if (cur === a) return true;
-            cur = _lumen_u2n(_lumen_get_parent(cur));
-        }
-        return false;
+        // PERF-NAV-O2: the ancestor walk runs inside `_lumen_contains_nid` —
+        // one crossing instead of `_lumen_get_parent` per level.
+        return _lumen_contains_nid(a, b);
     }
     // At least one side is a detached JS-only node: no arena chain to walk, so
     // fall back to wrapper identity up the `parentNode` links those nodes do keep.
@@ -10091,7 +10081,9 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // what `'prefix' in el` feature checks look for, not absent (BUG-367).
         get localName()      { var nid = this.__nid__; return _lumen_u2n(_lumen_get_local_name(nid)); },
         get prefix()         { var nid = this.__nid__; return null; },
-        get nodeType()       { var nid = this.__nid__; return _lumen_is_text_node(nid) ? (_lumen_is_cdata_section(nid) ? 4 : 3) : (_lumen_is_comment_node(nid) ? 8 : (_lumen_is_processing_instruction_node(nid) ? 7 : 1)); },
+        // PERF-NAV-O2: one native instead of the is_text/is_cdata/is_comment/
+        // is_pi chain — up to four crossings per read.
+        get nodeType()       { var nid = this.__nid__; return _lumen_get_node_type(nid); },
         // DOM §4.4: `null` on every node kind that is not CharacterData/Attr,
         // i.e. Element and DocumentFragment (ShadowRoot inherits it); the
         // setter is a spec no-op, not a throw (BUG-1074).
@@ -10844,14 +10836,11 @@ var _LUMEN_WRAPPER_MEMBERS = {
             return notCancelled;
         },
         closest: function(sel) { var nid = this.__nid__;
+            // PERF-NAV-O2: ancestor walk + match in one crossing (was
+            // matches_selector + get_parent per level).
             var s = _lumen_sel(sel);
-            var cur = nid;
-            while (cur !== undefined && cur !== null) {
-                if (_lumen_node_matches_selector(cur, s)) return _lumen_make_element(cur);
-                var pid = _lumen_u2n(_lumen_get_parent(cur));
-                cur = pid !== null ? pid : null;
-            }
-            return null;
+            var hit = _lumen_u2n(_lumen_closest(nid, s));
+            return hit === null ? null : _lumen_make_element(hit);
         },
         // `init.customElements` — see `createElement` above; scopes the whole
         // shadow tree to that registry. The shadow root has no native parent,
@@ -11901,24 +11890,13 @@ _lumen_canvas_define_dim('height', 1, 150);
         enumerable: false, configurable: true,
     });
     // DOM §4.4 Node.isConnected (BUG-311): true when the node's shadow-inclusive
-    // root is the document. In the flat shim tree that means `documentElement`
-    // (<html>) is on the node's ancestor chain (or is the node itself) — a
-    // detached subtree never reaches it, so its topmost ancestor is some
-    // orphan node and `isConnected` is false.
+    // root is the document. PERF-NAV-O2: the whole ancestor walk (including the
+    // BUG-878 ShadowRoot→host bridge) runs inside `_lumen_is_connected` — the
+    // JS loop it replaces cost `_lumen_get_parent` per level plus a
+    // `_lumen_get_shadow_root_host` crossing at every shadow boundary.
     Object.defineProperty(_LUMEN_WRAPPER_MEMBERS, 'isConnected', {
         get: function() { var nid = this.__nid__;
-            var htmlId = _lumen_u2n(_lumen_get_html_element());
-            if (htmlId === null) return false;
-            var cur = nid;
-            while (cur !== null) {
-                if (cur === htmlId) return true;
-                // BUG-878: bridge the ShadowRoot -> host boundary the plain
-                // parent pointer doesn't cross — see `_lumen_resource_is_connected`.
-                var parent = _lumen_u2n(_lumen_get_parent(cur));
-                if (parent === null) parent = _lumen_u2n(_lumen_get_shadow_root_host(cur));
-                cur = parent;
-            }
-            return false;
+            return _lumen_is_connected(nid);
         },
         enumerable: false, configurable: true,
     });
