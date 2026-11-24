@@ -744,7 +744,7 @@ pub(crate) fn fetch_frame_subresources(
     // `<iframe>` не проверялся вовсе (та же граница, что срез 7 документирует
     // для внешнего `<link>` подфрейма до срез 8).
     let (inline, blocked_inline_style_policies) =
-        extract_style_chunks(doc, csp_gate.as_ref().map(|(p, _)| p.as_slice()));
+        extract_style_chunks(doc, csp_gate.as_ref().map(|(p, _)| p.as_slice()), None);
     // GAP-CSPENF срез 24: `style=""` attribute inside a frame — same one-shot
     // policy read as the inline `<style>` gate above, separate walk (the
     // attribute lives on arbitrary elements, not only `<style>` nodes); срез

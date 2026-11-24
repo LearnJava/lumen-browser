@@ -233,7 +233,7 @@ impl Lumen {
             let root = doc.root();
             let csp_policy = crate::csp_enforce::document_csp_policy(&doc, root);
             let (inline, blocked) =
-                extract_style_chunks(&doc, csp_policy.as_ref().map(|(p, _)| p.as_slice()));
+                extract_style_chunks(&doc, csp_policy.as_ref().map(|(p, _)| p.as_slice()), font_media_ctx.as_ref());
             // BUG-1413: листы идут в порядке документа, а не «`<style>` потом
             // `<link>`»; порядок считается по дереву, пока документ ещё под замком.
             // Импорты уже разрешены при загрузке — у нового `<style>` их нет.
@@ -376,6 +376,26 @@ impl Lumen {
                 }
                 crate::stylesheets::stylesheet_owner_index(&doc, node)
             };
+            // Условный лист (`<link media>` не матчил окружение при сборке):
+            // регистрируется в `document.styleSheets`, но в каскад и на
+            // relayout не влияет — HTML LS §4.2.4.
+            if !sheet.apply {
+                let entry = StylesheetNodeEntry {
+                    node: sheet.node,
+                    sheet: std::sync::Arc::new(lumen_css_parser::parse(&sheet.text)),
+                    disabled: false,
+                };
+                let mut entries = (*src.stylesheet_nodes).clone();
+                entries.insert(insert_at.min(entries.len()), entry);
+                src.stylesheet_nodes = std::sync::Arc::new(entries.clone());
+                #[cfg(feature = "v8")]
+                crate::engine_bridge::route_task_js(
+                    self.engine_thread.as_ref(),
+                    self.js_ctx.as_ref(),
+                    move |js| js.update_stylesheet_nodes(entries),
+                );
+                false
+            } else {
             dyn_css.linked.push((node, format!("{}\n", sheet.text)));
             dyn_css.linked_dirty = true;
             // CSSOM-1: `element.sheet`/`document.styleSheets` — запись на её
@@ -395,6 +415,7 @@ impl Lumen {
                 move |js| js.update_stylesheet_nodes(entries),
             );
             true
+            }
         };
         if needs_relayout {
             // Поздний лист идёт путём «parse+layout без сети» — против полного

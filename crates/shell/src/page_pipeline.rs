@@ -821,7 +821,7 @@ fn build_page_cascade(
         // документа (CSS-SPECS §@import). Внешние <link> резолвят собственные
         // `@import` внутри load_linked_stylesheets.
         let (inline, blocked_inline_style_policies) =
-            extract_style_chunks(doc, csp_policy.as_ref().map(|(p, _)| p.as_slice()));
+            extract_style_chunks(doc, csp_policy.as_ref().map(|(p, _)| p.as_slice()), Some(&link_media_ctx));
         // GAP-CSPENF срез 23: `style=""` attribute — same one-shot policy read
         // as above, separate walk (attributes live on arbitrary elements, not
         // only `<style>` nodes).
@@ -905,7 +905,17 @@ fn build_page_cascade(
     // PREFETCH_CACHE (см. doc-комментарий build_stylesheet_node_registry).
     let stylesheet_nodes = {
         let _s = lumen_core::trace::span("cssom-node-sheets", "parse");
-        build_stylesheet_node_registry(doc, base, sink, cookie_jar.clone(), late_css.is_some())
+        // Тот же media-контекст, что у каскада выше (`link_media_ctx` жил в
+        // его скоупе): реестр решает те же `<style media>`/`@import`, иначе
+        // `document.styleSheets` разойдётся с применённым каскадом.
+        let registry_media_ctx = if media_print {
+            print_media_context(viewport, dark_mode)
+        } else {
+            screen_media_context(viewport, dark_mode)
+        };
+        build_stylesheet_node_registry(
+            doc, base, sink, cookie_jar.clone(), late_css.is_some(), Some(&registry_media_ctx),
+        )
     };
 
     // PH3-19: @font-face загрузка разделена на два прохода.

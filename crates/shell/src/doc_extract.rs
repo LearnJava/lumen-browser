@@ -56,8 +56,9 @@ fn walk_title(doc: &Document, id: NodeId, out: &mut String) -> bool {
 pub(crate) fn extract_style_blocks(
     doc: &Document,
     csp_gate: Option<&[lumen_network::csp::CspPolicy]>,
+    media_ctx: Option<&lumen_css_parser::MediaContext>,
 ) -> (String, Vec<String>) {
-    let (chunks, blocked) = extract_style_chunks(doc, csp_gate);
+    let (chunks, blocked) = extract_style_chunks(doc, csp_gate, media_ctx);
     (concat_chunks(&chunks), blocked)
 }
 
@@ -68,11 +69,12 @@ pub(crate) fn extract_style_blocks(
 pub(crate) fn extract_style_chunks(
     doc: &Document,
     csp_gate: Option<&[lumen_network::csp::CspPolicy]>,
+    media_ctx: Option<&lumen_css_parser::MediaContext>,
 ) -> (Vec<(NodeId, String)>, Vec<String>) {
     let mut out = Vec::new();
     let mut blocked = Vec::new();
     let preferred = doc.preferred_sheet_set();
-    walk_style_blocks(doc, doc.root(), csp_gate, preferred.as_deref(), &mut out, &mut blocked);
+    walk_style_blocks(doc, doc.root(), csp_gate, preferred.as_deref(), media_ctx, &mut out, &mut blocked);
     (out, blocked)
 }
 
@@ -157,6 +159,12 @@ fn hash_style_blocks(doc: &Document, id: NodeId, preferred: Option<&str>, h: &mu
         }
         // BUG-1554: включение/выключение листа — тоже изменение каскада.
         h.write_u8(if doc.sheet_owner_enabled(id, preferred) { 0xff } else { 0xfe });
+        // Атрибут `media` участвует в гейте каскада — его правка тоже
+        // обязана пометить текст изменившимся.
+        if let Some(media) = node.get_attr("media") {
+            h.write_usize(media.len());
+            h.write(media.as_bytes());
+        }
         return;
     }
     for &child in &node.children {
@@ -268,6 +276,7 @@ fn walk_style_blocks(
     id: NodeId,
     csp_gate: Option<&[lumen_network::csp::CspPolicy]>,
     preferred: Option<&str>,
+    media_ctx: Option<&lumen_css_parser::MediaContext>,
     out: &mut Vec<(NodeId, String)>,
     blocked: &mut Vec<String>,
 ) {
@@ -278,6 +287,16 @@ fn walk_style_blocks(
         // BUG-1554: не из выбранного набора листов либо выключен скриптом — в каскад не входит.
         if !doc.sheet_owner_enabled(id, preferred) {
             return;
+        }
+        // HTML LS §4.2.3: `media` на `<style>` гейтит применение листа так же,
+        // как на `<link>` — не матчащий контекст не попадает в каскад вовсе
+        // (лист при этом остаётся в `document.styleSheets`, см.
+        // `build_stylesheet_node_registry`).
+        if let Some(ctx) = media_ctx {
+            let media = node.get_attr("media").unwrap_or("");
+            if !crate::stylesheets::link_media_matches(media, ctx) {
+                return;
+            }
         }
         let mut text = String::new();
         for &child in &node.children {
@@ -311,7 +330,7 @@ fn walk_style_blocks(
         return;
     }
     for &child in &node.children {
-        walk_style_blocks(doc, child, csp_gate, preferred, out, blocked);
+        walk_style_blocks(doc, child, csp_gate, preferred, media_ctx, out, blocked);
     }
 }
 
@@ -419,7 +438,7 @@ mod tests {
             "<style nonce=\"abc\">a{color:red}</style><style>b{color:blue}</style>",
         );
         let policy = lumen_network::csp::parse_csp_header("style-src 'nonce-abc'");
-        let (css, blocked) = extract_style_blocks(&doc, Some(std::slice::from_ref(&policy)));
+        let (css, blocked) = extract_style_blocks(&doc, Some(std::slice::from_ref(&policy)), None);
         assert!(css.contains("a{color:red}"));
         assert!(!css.contains("b{color:blue}"));
         assert_eq!(blocked, vec![policy.raw.clone()]);
@@ -430,7 +449,7 @@ mod tests {
     #[test]
     fn extract_style_blocks_closes_a_string_open_at_eof() {
         let doc = lumen_html_parser::parse("<style>p{color:var(--a, \"</style><style>b{x:\"y\"}</style>");
-        let (css, _) = extract_style_blocks(&doc, None);
+        let (css, _) = extract_style_blocks(&doc, None, None);
         assert!(css.starts_with("p{color:var(--a, \"\"\n"), "{css:?}");
         assert!(css.contains("b{x:\"y\"}\n"));
         assert_eq!(open_string_quote_at_end("a{b:'c\\'d"), Some('\''));
@@ -441,7 +460,7 @@ mod tests {
     #[test]
     fn extract_style_blocks_no_policy_keeps_everything() {
         let doc = lumen_html_parser::parse("<style>a{color:red}</style>");
-        let (css, blocked) = extract_style_blocks(&doc, None);
+        let (css, blocked) = extract_style_blocks(&doc, None, None);
         assert!(css.contains("a{color:red}"));
         assert!(blocked.is_empty());
     }

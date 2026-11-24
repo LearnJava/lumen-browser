@@ -908,7 +908,7 @@ fn late_linked_sheet_takes_its_document_position() {
         r#"<html><head><link rel="stylesheet" href="first.css"><style>.mid{}</style><link rel="stylesheet" href="late.css"><style>.after{}</style></head></html>"#,
     );
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
-    let (inline, _) = extract_style_chunks(&doc, None);
+    let (inline, _) = extract_style_chunks(&doc, None, None);
     let mut hrefs = Vec::new();
     collect_link_hrefs(&doc, doc.root(), &mut hrefs, &ctx);
     let (first_node, late_node) = (hrefs[0].0, hrefs[1].0);
@@ -941,7 +941,7 @@ fn page_sheets_follow_document_order() {
     );
     let base = ResourceBase::file_base(dir.join("page.html"));
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
-    let (inline, _) = extract_style_chunks(&doc, None);
+    let (inline, _) = extract_style_chunks(&doc, None, None);
     let (linked, _, _) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx, None);
     let css = merge_sheet_chunks(&doc, &inline, &linked);
     let first = css.find(".first").unwrap();
@@ -960,7 +960,7 @@ fn style_after_link_wins_at_equal_specificity() {
     );
     let base = ResourceBase::file_base(dir.join("page.html"));
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
-    let (inline, _) = extract_style_chunks(&doc, None);
+    let (inline, _) = extract_style_chunks(&doc, None, None);
     let (linked, _, _) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx, None);
     let sheet = lumen_css_parser::parse(&merge_sheet_chunks(&doc, &inline, &linked));
     let last_bg = sheet
@@ -985,7 +985,7 @@ fn inline_style_imports_stay_with_their_own_style() {
     );
     let base = ResourceBase::file_base(dir.join("page.html"));
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
-    let (inline, _) = extract_style_chunks(&doc, None);
+    let (inline, _) = extract_style_chunks(&doc, None, None);
     let (resolved, prefixes, _) = resolve_inline_style_imports(
         &inline, &base, &null_sink(), None, &ctx,
         lumen_encoding::Encoding::Utf8, None,
@@ -1375,7 +1375,7 @@ fn stylesheet_node_registry_preserves_document_order_across_tags() {
     let base = ResourceBase::file_base(dir.join("page.html"));
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
 
-    let entries = build_stylesheet_node_registry(&doc, &base, &sink, None, false);
+    let entries = build_stylesheet_node_registry(&doc, &base, &sink, None, false, None);
 
     assert_eq!(entries.len(), 3, "one entry per <style>/<link>, in document order");
     assert_eq!(entries[0].sheet.rules.len(), 1);
@@ -1405,7 +1405,7 @@ fn stylesheet_node_registry_drops_unfetchable_link() {
     let base = ResourceBase::file_base(PathBuf::from("samples/page.html"));
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
 
-    let entries = build_stylesheet_node_registry(&doc, &base, &sink, None, false);
+    let entries = build_stylesheet_node_registry(&doc, &base, &sink, None, false, None);
 
     assert_eq!(entries.len(), 1, "the missing link contributes no entry");
     assert_eq!(entries[0].sheet.rules[0].selector_text(), "a");
@@ -1427,7 +1427,7 @@ fn stylesheet_node_registry_skips_style_src_blocked_link() {
     );
     let base = ResourceBase::file_base(dir.join("page.html"));
 
-    let entries = build_stylesheet_node_registry(&doc, &base, &null_sink(), None, false);
+    let entries = build_stylesheet_node_registry(&doc, &base, &null_sink(), None, false, None);
 
     assert!(entries.is_empty(), "style-src 'none' must keep the link out of the registry");
 }

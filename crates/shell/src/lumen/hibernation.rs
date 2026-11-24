@@ -36,7 +36,7 @@ impl Lumen {
                     // was first loaded/relaid-out; re-gating here would need
                     // the original policy threaded through `HibernatedTab`,
                     // out of scope for this slice (see restore below).
-                    let (css, _blocked) = extract_style_blocks(&doc, None);
+                    let (css, _blocked) = extract_style_blocks(&doc, None, None);
                     (blob, css)
                 }
                 Err(_) => (vec![], String::new()),
@@ -162,7 +162,7 @@ impl Lumen {
         // GAP-CSPENF срез 21: same restore-path exception as the hibernate
         // side above — not gated.
         let css = if data.css_source.is_empty() {
-            extract_style_blocks(&doc, None).0
+            extract_style_blocks(&doc, None, None).0
         } else {
             data.css_source.clone()
         };
