@@ -68,6 +68,20 @@ pub enum QuoteSlot {
 /// cascade that has none to record. Never equal to a real parent, so it reads as "moved".
 const NO_PARENT: u32 = u32::MAX;
 
+/// PERF-CQ-SCOPE: RAII scope marking `doc` as the cascade owner for the
+/// duration of a `precompute_counters`/`incremental_precompute_counters`
+/// call, so `note_cq_unit` (deep inside length parsing) can attribute a
+/// parsed `cq*` unit to this document's own sticky flag.
+struct CqDocGuard(usize);
+impl Drop for CqDocGuard {
+    fn drop(&mut self) {
+        crate::style::cq_unscope_doc(self.0);
+    }
+}
+fn cq_doc_guard(doc: &Document) -> CqDocGuard {
+    CqDocGuard(crate::style::cq_scope_doc(doc))
+}
+
 /// BUG-341 S24 — the per-node cascade cache, carried from one pass to the next.
 ///
 /// Before this slice every pass built its own map: a hover flip reused all 828
@@ -1363,6 +1377,7 @@ pub fn precompute_counters(
     flat: &FlatTree,
     dark_mode: bool,
 ) -> CounterMap {
+    let _cq_scope = cq_doc_guard(doc);
     let root_style = ComputedStyle::root();
     let mut ctx = CounterCtx {
         pseudo_probe: crate::style::sheet_has_quote_content(sheet, viewport, dark_mode)
@@ -1603,6 +1618,7 @@ pub fn incremental_precompute_counters(
     dark_mode: bool,
     delta: RestyleDelta<'_>,
 ) -> CounterMap {
+    let _cq_scope = cq_doc_guard(doc);
     if !incremental_restyle_enabled() {
         // Flag off (the default): behave exactly like a full cascade so a
         // caller can wire this entry point in ahead of the flag ever being

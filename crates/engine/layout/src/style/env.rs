@@ -54,9 +54,55 @@ pub fn set_cq_axes(width: Option<f32>, height: Option<f32>) {
 /// sheet without any `@container` rule too. Monotone: a page that never parsed one never pays for it.
 static CQ_UNITS_SEEN: AtomicBool = AtomicBool::new(false);
 
+thread_local! {
+    /// PERF-CQ-SCOPE — the `Document` whose cascade is running on this thread
+    /// (0 = none: tests, one-off `compute_style` calls). The cascade walk is
+    /// sequential on the engine thread, so a thread-local scope is exact.
+    static CQ_CURRENT_DOC: Cell<usize> = const { Cell::new(0) };
+    /// `doc ptr → its own cascade produced a `cq*` unit`. Sticky per document:
+    /// once set it stays set for the document's lifetime (carried styles keep
+    /// their cq lengths even when the node is not recomputed). Keyed by the
+    /// `Document`'s address inside its `Arc` — stable while the doc lives; a
+    /// freed-and-reused address degrades to the old global-flag behaviour
+    /// (conservative: pays the pass, never skips it wrongly).
+    static CQ_DOC_FLAGS: RefCell<HashMap<usize, bool>> = RefCell::new(HashMap::new());
+}
+
+/// Marks `doc` as the cascade owner on this thread; returns the previous owner
+/// for [`cq_unscope_doc`]. Also seeds a `false` entry so "cascaded, no cq yet"
+/// is distinguishable from "never cascaded here".
+pub fn cq_scope_doc(doc: &Document) -> usize {
+    let p = doc as *const Document as usize;
+    CQ_DOC_FLAGS.with(|f| {
+        f.borrow_mut().entry(p).or_insert(false);
+    });
+    CQ_CURRENT_DOC.with(|c| c.replace(p))
+}
+
+/// Restores the owner saved by [`cq_scope_doc`].
+pub fn cq_unscope_doc(prev: usize) {
+    CQ_CURRENT_DOC.with(|c| c.set(prev));
+}
+
+/// Whether `doc`'s own cascade produced a `cq*` unit. Falls back to the
+/// process-global flag for documents this thread never cascaded (restored
+/// sessions, tests) — conservative, matches the pre-PERF-CQ-SCOPE behaviour.
+pub fn cq_units_used_by(doc: &Document) -> bool {
+    let p = doc as *const Document as usize;
+    CQ_DOC_FLAGS.with(|f| {
+        f.borrow().get(&p).copied().unwrap_or_else(|| CQ_UNITS_SEEN.load(Ordering::Relaxed))
+    })
+}
+
 /// Records that a `cq*` length was parsed.
 pub(crate) fn note_cq_unit() {
     CQ_UNITS_SEEN.store(true, Ordering::Relaxed);
+    let p = CQ_CURRENT_DOC.with(Cell::get);
+    if p != 0 {
+        CQ_DOC_FLAGS.with(|f| {
+            f.borrow_mut().insert(p, true);
+        });
+    }
 }
 
 /// Whether a `cq*` length was ever parsed ([`note_cq_unit`]).

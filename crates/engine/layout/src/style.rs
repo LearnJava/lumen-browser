@@ -350,7 +350,8 @@ use parse::font_size::{FontSizeBasis, apply_font_size};
 // по старому пути), поэтому реэкспорт обязателен даже там, где вызывателя
 // внутри `style.rs` нет (правило §2.1).
 pub use env::{
-    clear_animated_heights, clear_cq_context, clear_interactive_state, cq_axes, cq_context_active, cq_units_seen,
+    clear_animated_heights, clear_cq_context, clear_interactive_state, cq_axes, cq_context_active, cq_scope_doc,
+    cq_units_seen, cq_units_used_by, cq_unscope_doc,
     forced_colors_active, pop_ch_ex_context, pop_lh_context, pop_root_font_metrics, push_root_font_metrics, root_font_metrics, print_media_active, push_ch_ex_context, push_lh_context,
     restore_cq_axes,
     set_animated_heights, set_cq_axes, set_cq_context, set_forced_colors, set_interactive_state,

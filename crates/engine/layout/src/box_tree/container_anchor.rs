@@ -91,7 +91,10 @@ pub fn apply_container_styles(
 ) {
     // No container rules in this sheet and no `cq*` length anywhere → fast path. A `cq*` length
     // alone still needs the pass: it resolves against the container's size (BUG-1499).
-    if sheet.container_rules.is_empty() && !crate::style::cq_units_seen() {
+    // PERF-CQ-SCOPE: the flag is per-document now — the process-global one stayed
+    // true forever after the first `cq*` unit anywhere, disabling this fast path
+    // for every later page and flush.
+    if sheet.container_rules.is_empty() && !crate::style::cq_units_used_by(doc) {
         return;
     }
     let pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
