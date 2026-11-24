@@ -514,6 +514,7 @@ impl V8JsRuntime {
                     Arc::clone(&self.active_nid),
                     Arc::clone(&self.keyboard_focus),
                 ),
+                Arc::clone(&dom_touched),
             )?;
 
             install::install_node_properties(

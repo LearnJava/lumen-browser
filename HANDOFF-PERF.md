@@ -3,6 +3,64 @@
 > Временный файл для переноса задачи на другую машину/сессию. Можно удалить после закрытия эпика.
 > Дата: 2026-11-23. Ветка: `main`, remote `github.com:LearnJava/lumen-browser.git`.
 
+## Обновление: текущая сессия (после влития BUG-1837/okko.tv)
+
+Ниже — старые числа; актуальное состояние:
+
+**Запушено в этой сессии (habr, measured):**
+
+- `8a52ce69d` — JS-профилирование (`js.job/run/compile/call/ptask/module_*` скоупы).
+- `0be522a7d` — cq sweep change-detection (relayout только при реальных изменениях).
+- `74cecf135` — pseudo-store не перезаписывает snapshot-hit.
+- `a80a13fa7` — spine при quote/counter: walk ~5000→~700 узлов/flush.
+- `0bedd01d9`,`61a64a965` — census pre_match hit/miss.
+- `1016888a0` — pre_match full-table (subset промахивался по покрытию).
+- `ed9f1e2cc` — drain `pseudo_records` вместо клона (522→81ms).
+- `75201e632` — общий пустой `Arc` для ~90% pseudo-записей.
+- `4c85f605b` — фиксация отказа от size-порога subset (замерено: хуже).
+- `79eb6a516` — **QS-кэш**: querySelector/getElementById по эпохе DomTouched; `_lumen_query_selector` 2986→309ms native-time.
+- `766bd62c0` — PseudoCache IdMap (u32-ключи, IdHasher).
+- **`1b5c56734` — ключевой фикс**: `pre_match_needed` в `counters.rs` (~1647) — экспансия `needed` останавливалась на узлах spine, боковые поддеревья forced-рекомпутов не достигались → 99% `miss_norules`. Отдельный `expanded` set; теперь **100% pre_match hits на всех flush'ах**, subset-таблица. `pre_match` ~1.44→0.96s, `precompute_counters` ~5.5→~4.3s.
+- Влит чужой BUG-1837 (okko.tv): общий CascadeIndex для media/supports, точный диф листа, псевдо-селекторы в инкрементальном пути — на habr нейтрально, на okko load 9.2→5.0s.
+
+**Актуальная карта bottleneck (habr, LUMEN_PROFILE_TREE=1, валидный прогон):**
+
+```
+js.run              ~25s   ≈ js.job — V8 + ВСЕ native-колбэки (DOM, таймеры)
+maybe_flush         ~14s   ~93 реальных flush'а за загрузку, все по flush_stale
+  precompute         ~4.3s = cascade_walk ~3.0 + pre_match ~0.96 + pseudo_store ~0.7-0.9
+  post_layout        ~2.6s → cq.relayout ~2.2s (реальные промахи layout-cache)
+  build_box          ~2.0s
+  collectors         ~2.8s = computed_styles ~1.6 + pseudo_styles ~0.8 (уже scope-pruned)
+wall-clock (без профайлера, scripts/perf/wall_site.py): interactive ~10-16s
+```
+
+**Native-time (LUMEN_NATIVE_CALL_STATS=1):** style/rect-энтри — это стоимость flush'ов,
+приписанная вызывающим нэйтивам (не отдельный резерв). `_lumen_get_parent` ×200k —
+0.2-2мкс/вызов, потолок ~1-2s суммарно.
+
+**Остаток до Chrome (~2-3s):**
+
+1. **Forced-рекомпуты ~2400/flush** — habr мутирует `html`/`head` (инжект скриптов, атрибуты)
+   → deep roots → `child_force` пересчитывает всё поддерево, `forced_same ≈ 96%`.
+   Ранний выход уже доказанно небезопасен (14 тестов). Путь — расширение
+   invalidation-индекса (`style/invalidation.rs`, MatchRestriction) на deep-roots,
+   уровень BUG-935-срезов.
+2. `compute_style` остаток ~1.8s: cs_apply/cs_init на forced-идентичных узлах
+   (~10-25мкс/узел — честная стоимость ComputedStyle).
+3. `cq.relayout` ~2.2s — per-child lay_out в size-контейнерах; partial-skip чистых
+   детей требует translate + pixel-гейта (graphic_tests).
+4. `collect_computed_styles` ~1.6s — уже scope-pruned, StyleMap ленивый
+   (сериализация только при чтении JS) — остаток это `apply_used_geometry` + HashMap.
+5. Число flush'ей (~93/загрузку) — coalescing между layout-чтениями JS ограничен
+   семантикой синхронного layout.
+
+**Инструменты сессии:** `scripts/perf/wall_site.py` (wall-clock), `prof_site.py`,
+`agg_prof.py`, `site_ab.py`. Флаги: `LUMEN_PROFILE_TREE`, `LUMEN_PROFILE_DETAIL`,
+`LUMEN_NATIVE_CALL_STATS=1`, `LUMEN_V8_FLAGS` (BUG-1826), `LUMEN_V8_PROFILE` (V8 --prof → v8.log),
+`LUMEN_DUMP_RECOMPUTE=1`, `LUMEN_DUMP_BARE_RECOMPUTE`, `EXTRA_ENV` в perf_audit.py.
+
+
 ## Цель пользователя (дословно)
 
 - «Составь себе план и реализуй укорение сайтов, минимум скорость как у chrome, а лучше быстрее».
