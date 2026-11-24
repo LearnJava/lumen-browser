@@ -172,6 +172,9 @@ unsafe extern "C" fn interrupt_cb(isolate: v8::UnsafeRawIsolatePtr, data: *mut c
         for (name, count) in crate::v8_compat::call_stats::top(15) {
             out.push_str(&format!("\n[js-stall]   native {name} ×{count}"));
         }
+        for (name, count, ms) in crate::v8_compat::call_stats::top_by_time(15) {
+            out.push_str(&format!("\n[js-stall]   native-time {name} ×{count} {ms:.0}ms"));
+        }
     }
     for i in 0..trace.get_frame_count() {
         let Some(frame) = trace.get_frame(scope, i) else { continue };

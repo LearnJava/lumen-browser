@@ -17,6 +17,7 @@
 use lumen_core::{JsError, JsResult, JsValue};
 use std::ffi::c_void;
 use std::marker::PhantomData;
+use std::time::Instant;
 
 // ── JsValue ↔ Rust type bridges ────────────────────────────────────────────
 
@@ -764,9 +765,11 @@ impl Drop for OwnedNativeFnScoped {
 pub(crate) mod call_stats {
     use std::cell::RefCell;
     use std::collections::HashMap;
+    use std::time::Instant;
 
     thread_local! {
-        static CALLS: RefCell<Option<HashMap<usize, (String, u64)>>> =
+        /// `name, calls, total_ns` per registered native.
+        static CALLS: RefCell<Option<HashMap<usize, (String, u64, u128)>>> =
             const { RefCell::new(None) };
     }
 
@@ -783,7 +786,7 @@ pub(crate) mod call_stats {
         CALLS.with(|c| {
             c.borrow_mut()
                 .get_or_insert_with(HashMap::new)
-                .insert(ptr, (name.to_string(), 0));
+                .insert(ptr, (name.to_string(), 0, 0));
         });
     }
 
@@ -801,18 +804,69 @@ pub(crate) mod call_stats {
         });
     }
 
+    /// RAII timer for one native call — drop adds the elapsed time to the
+    /// native's total. `None`-timer when stats are off: one `Instant` check.
+    pub(crate) fn timer(ptr: usize) -> super::NativeTimer {
+        super::NativeTimer {
+            ptr,
+            start: enabled().then(Instant::now),
+        }
+    }
+
+    pub(crate) fn add_ns(ptr: usize, ns: u128) {
+        CALLS.with(|c| {
+            if let Some(map) = c.borrow_mut().as_mut()
+                && let Some(entry) = map.get_mut(&ptr)
+            {
+                entry.2 += ns;
+            }
+        });
+    }
+
     /// Top `limit` natives by call count, for the stall sampler's report.
     pub(crate) fn top(limit: usize) -> Vec<(String, u64)> {
         CALLS.with(|c| {
             let mut v: Vec<(String, u64)> = c
                 .borrow()
                 .as_ref()
-                .map(|m| m.values().map(|(n, c)| (n.clone(), *c)).collect())
+                .map(|m| m.values().map(|(n, calls, _)| (n.clone(), *calls)).collect())
                 .unwrap_or_default();
             v.sort_by_key(|e| std::cmp::Reverse(e.1));
             v.truncate(limit);
             v
         })
+    }
+
+    /// Top `limit` natives by cumulative call time (ms, desc).
+    pub(crate) fn top_by_time(limit: usize) -> Vec<(String, u64, f64)> {
+        CALLS.with(|c| {
+            let mut v: Vec<(String, u64, f64)> = c
+                .borrow()
+                .as_ref()
+                .map(|m| {
+                    m.values()
+                        .map(|(n, calls, ns)| (n.clone(), *calls, *ns as f64 / 1e6))
+                        .collect()
+                })
+                .unwrap_or_default();
+            v.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+            v.truncate(limit);
+            v
+        })
+    }
+}
+
+/// Guard returned by [`call_stats::timer`]; records elapsed ns on drop.
+pub(crate) struct NativeTimer {
+    ptr: usize,
+    start: Option<Instant>,
+}
+
+impl Drop for NativeTimer {
+    fn drop(&mut self) {
+        if let Some(t) = self.start.take() {
+            call_stats::add_ns(self.ptr, t.elapsed().as_nanos());
+        }
     }
 }
 
@@ -829,12 +883,14 @@ pub(crate) fn native_fn_trampoline_scoped(
         Ok(e) => e,
         Err(_) => return, // should never happen
     };
-    call_stats::bump(ext.value() as usize);
+    let ptr = ext.value() as usize;
+    call_stats::bump(ptr);
+    let _timer = call_stats::timer(ptr);
     // SAFETY: pointer was stored by `register_v8_native_scoped` from a
     // `Box::into_raw` call. It is kept alive in `V8Inner::native_fn_store_scoped`
     // for the lifetime of the isolate.
     let fn_ref: &dyn V8NativeFnScoped =
-        unsafe { &**(ext.value() as *const Box<dyn V8NativeFnScoped + Send>) };
+        unsafe { &**(ptr as *const Box<dyn V8NativeFnScoped + Send>) };
     fn_ref.call_scoped(scope, &args, &mut rv);
 }
 
@@ -1049,11 +1105,13 @@ pub(crate) fn native_fn_trampoline(
         Ok(e) => e,
         Err(_) => return, // should never happen
     };
-    call_stats::bump(ext.value() as usize);
+    let ptr = ext.value() as usize;
+    call_stats::bump(ptr);
+    let _timer = call_stats::timer(ptr);
     // SAFETY: pointer was stored by `register_v8_native` from a `Box::into_raw`
     // call.  It is kept alive in `V8Inner::native_fn_store` for the lifetime of
     // the isolate.
-    let fn_ref: &dyn V8NativeFn = unsafe { &**(ext.value() as *const Box<dyn V8NativeFn + Send>) };
+    let fn_ref: &dyn V8NativeFn = unsafe { &**(ptr as *const Box<dyn V8NativeFn + Send>) };
 
     // Convert V8 arguments to JsValue.
     let n = args.length() as usize;
