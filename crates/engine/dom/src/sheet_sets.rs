@@ -6,6 +6,7 @@
 //! runtime (`document.styleSheets`, `getComputedStyle`) and the shell (the cascade it paints).
 
 use crate::{Document, NodeData, NodeId};
+use std::collections::HashMap;
 
 /// What a script said about one owner, overriding the markup-derived default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -117,5 +118,39 @@ impl Document {
         let node = self.get(id);
         node.element_name().is_some_and(|n| n.local == "link")
             && node.get_attr("disabled").is_some()
+    }
+
+    /// JS-загрузчик `<link>` (`_lumen_link_prepare`) заявил этот элемент:
+    /// шелловские проходы его не фетчат — см. поле `link_load_claims`.
+    pub fn claim_link_load(&mut self, id: NodeId) {
+        self.link_load_claims.insert(id);
+    }
+
+    /// Заявлен ли `<link>` JS-загрузчиком. `NodeId` мог достаться другому
+    /// узлу после detach — claim действует, только пока узел остаётся
+    /// `<link>`.
+    pub fn link_load_claimed(&self, id: NodeId) -> bool {
+        self.link_load_claims.contains(&id)
+            && self.get(id).element_name().is_some_and(|n| n.local == "link")
+    }
+
+    /// Полностью заменяет карту `shadowRoot.adoptedStyleSheets` → CSS-текст
+    /// (материализация JS-реестра, см. поле `shadow_adopted_css`). Поколение
+    /// растёт только при реальном изменении карты.
+    pub fn set_shadow_adopted_css(&mut self, map: HashMap<NodeId, String>) {
+        if self.shadow_adopted_css != map {
+            self.shadow_adopted_css = map;
+            self.shadow_adopted_gen = self.shadow_adopted_gen.wrapping_add(1);
+        }
+    }
+
+    /// CSS-текст adopted-листов теневого корня `sr`, если они заданы.
+    pub fn shadow_adopted_css(&self, sr: NodeId) -> Option<&str> {
+        self.shadow_adopted_css.get(&sr).map(String::as_str)
+    }
+
+    /// Поколение карты `shadow_adopted_css` — для детекторов изменений.
+    pub fn shadow_adopted_gen(&self) -> u64 {
+        self.shadow_adopted_gen
     }
 }

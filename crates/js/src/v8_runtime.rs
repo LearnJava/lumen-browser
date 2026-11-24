@@ -691,13 +691,14 @@ impl V8JsRuntime {
                 store,
                 sheet_sync.clone(),
                 Arc::clone(&constructed_stylesheets),
+                Arc::clone(&adopted_stylesheets),
             )?;
 
             install::install_stylesheets(
                 scope,
                 ctx,
                 store,
-                sheet_sync,
+                sheet_sync.clone(),
                 Arc::clone(&viewport_size),
             )?;
 
@@ -707,6 +708,7 @@ impl V8JsRuntime {
                 store,
                 Arc::clone(&constructed_stylesheets),
                 Arc::clone(&adopted_stylesheets),
+                sheet_sync.clone(),
             )?;
 
             install::install_shadow_dom(

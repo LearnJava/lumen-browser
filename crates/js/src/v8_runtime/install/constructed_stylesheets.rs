@@ -53,6 +53,7 @@
 use super::reg;
 #[allow(unused_imports)]
 use super::super::*;
+use super::super::sheet_sync::SheetSync;
 
 /// One `new CSSStyleSheet()` instance (CSSOM §2.1). Indexed by position in
 /// [`ConstructedStylesheets`]; that index is the JS wrapper's identity.
@@ -63,11 +64,16 @@ pub(crate) struct ConstructedStylesheet {
     /// length === 0`).
     pub(crate) sheet: Arc<lumen_css_parser::Stylesheet>,
     pub(crate) disabled: bool,
+    /// `CSSImportRule.styleSheet` (CSSOM §5.4.1): этот лист — содержимое
+    /// `@import`-правила `(constructed, key)` с id узла `rule_node`. Хранится
+    /// для `StyleSheet.parentStyleSheet`; живость правила проверяется на
+    /// каждый доступ — после `deleteRule` родителя уже нет.
+    pub(crate) import_parent: Option<(bool, u32, u32)>,
 }
 
 impl ConstructedStylesheet {
     fn empty() -> Self {
-        Self { sheet: Arc::new(lumen_css_parser::parse("")), disabled: false }
+        Self { sheet: Arc::new(lumen_css_parser::parse("")), disabled: false, import_parent: None }
     }
 }
 
@@ -153,6 +159,45 @@ pub(crate) fn document_adopted_stylesheet(
     any.then_some(merged)
 }
 
+/// Пересобирает [`lumen_dom::Document::shadow_adopted_css`]: для каждого
+/// shadow-scope (кроме document-sentinel) — `cssom_source_text()` включённых
+/// листов списка. Вызывается после `_lumen_set_adopted_stylesheets` и после
+/// любой мутации конструируемого листа (`replaceSync`/`replace`,
+/// `insertRule`/`deleteRule`, `.style`, `disabled`), чтобы layout увидел
+/// свежий текст на следующем проходе `build_shadow_sheets`.
+pub(crate) fn sync_shadow_adopted_css(
+    doc: &std::sync::Arc<std::sync::Mutex<lumen_dom::Document>>,
+    sheets: &ConstructedStylesheets,
+    adopted: &AdoptedStylesheets,
+) {
+    let scopes = adopted.lock().unwrap_or_else(|e| e.into_inner());
+    let mut map = std::collections::HashMap::new();
+    {
+        let guard = sheets.lock().unwrap_or_else(|e| e.into_inner());
+        for (scope, ids) in scopes.iter() {
+            if *scope == DOCUMENT_ADOPTED_SCOPE {
+                continue;
+            }
+            let mut text = String::new();
+            for id in ids {
+                let Some(entry) = guard.get(*id as usize) else { continue };
+                if entry.disabled {
+                    continue;
+                }
+                text.push_str(&entry.sheet.cssom_source_text());
+                text.push('\n');
+            }
+            if !text.trim().is_empty() {
+                map.insert(lumen_dom::NodeId::from_raw(*scope), text);
+            }
+        }
+    }
+    drop(scopes);
+    if let Ok(mut d) = doc.lock() {
+        d.set_shadow_adopted_css(map);
+    }
+}
+
 /// `new CSSStyleSheet()`, `.replaceSync()`/`.replace()`, `.cssRules`,
 /// `document.adoptedStyleSheets`/`shadowRoot.adoptedStyleSheets` (CSSOM-5
 /// срез 1, BUG-897). See the module doc comment for what is and is not wired
@@ -163,6 +208,7 @@ pub(crate) fn install_constructed_stylesheets(
     store: &mut Vec<OwnedNativeFn>,
     sheets: ConstructedStylesheets,
     adopted: AdoptedStylesheets,
+    sync: SheetSync,
 ) -> JsResult<()> {
     {
         let s = Arc::clone(&sheets);
@@ -174,12 +220,16 @@ pub(crate) fn install_constructed_stylesheets(
     }
     {
         let s = Arc::clone(&sheets);
+        let a = Arc::clone(&adopted);
+        let sy = sync.clone();
         reg!(scope, ctx, store, "_lumen_constructed_replace_sync", move |idx: u32, text: String| {
             if let Some(entry) = s.lock().unwrap_or_else(|e| e.into_inner()).get_mut(idx as usize) {
                 let mut sheet = lumen_css_parser::parse(&text);
                 sheet.cssom_drop_imports();
                 entry.sheet = Arc::new(sheet);
             }
+            sync_shadow_adopted_css(&sy.doc, &s, &a);
+            sy.note_constructed_change();
         });
     }
     {
@@ -194,10 +244,14 @@ pub(crate) fn install_constructed_stylesheets(
     }
     {
         let s = Arc::clone(&sheets);
+        let a = Arc::clone(&adopted);
+        let sy = sync.clone();
         reg!(scope, ctx, store, "_lumen_constructed_set_disabled", move |idx: u32, val: bool| {
             if let Some(entry) = s.lock().unwrap_or_else(|e| e.into_inner()).get_mut(idx as usize) {
                 entry.disabled = val;
             }
+            sync_shadow_adopted_css(&sy.doc, &s, &a);
+            sy.note_constructed_change();
         });
     }
     // `document.adoptedStyleSheets`/`shadowRoot.adoptedStyleSheets` (CSSOM
@@ -210,10 +264,13 @@ pub(crate) fn install_constructed_stylesheets(
     {
         let sheets_for_set = Arc::clone(&sheets);
         let a = Arc::clone(&adopted);
+        let sy = sync.clone();
         reg!(scope, ctx, store, "_lumen_set_adopted_stylesheets", move |scope_id: u32, ids: Vec<u32>| {
             let len = sheets_for_set.lock().unwrap_or_else(|e| e.into_inner()).len();
             let valid: Vec<u32> = ids.into_iter().filter(|&id| (id as usize) < len).collect();
             a.lock().unwrap_or_else(|e| e.into_inner()).insert(scope_id, valid);
+            sync_shadow_adopted_css(&sy.doc, &sheets_for_set, &a);
+            sy.note_constructed_change();
         });
     }
     {

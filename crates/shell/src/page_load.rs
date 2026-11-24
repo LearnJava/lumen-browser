@@ -3003,6 +3003,14 @@ pub(crate) struct LateStylesheet {
     pub(crate) ok: bool,
     /// Текст листа с разрешёнными `@import` (пусто при `ok == false`).
     pub(crate) text: String,
+    /// Текст листа ДО подстановки `@import` — для записи реестра CSSOM:
+    /// `cssRules` обязан показывать `@import` одним правилом (CSSOM §6.4.3),
+    /// а импортированные листы лежат в `import_sheets`. `text` остаётся
+    /// развёрнутым — его ест каскад.
+    pub(crate) registry_text: String,
+    /// Разрешённые `@import`-листы для `CSSImportRule.styleSheet`
+    /// ([`lumen_css_parser::Stylesheet::import_sheets`]).
+    pub(crate) import_sheets: Vec<lumen_css_parser::ImportSheet>,
     /// `@import`-цели, запрещённые `style-src`: `(URL, тексты политик)` для
     /// `securitypolicyviolation`, как `blocked_by_style_src` синхронного пути.
     pub(crate) blocked_imports: Vec<(String, Vec<String>)>,

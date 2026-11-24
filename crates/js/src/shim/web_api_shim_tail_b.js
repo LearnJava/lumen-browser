@@ -1035,8 +1035,11 @@ HTMLElement.prototype.focus = function(options) {
     // the new target from the document (BUG-1451, `focus-within-removal.html`).
     _lumen_focus_drop_if_disconnected();
     // HTML LS §6.6.3 «scroll into view» step, unless the caller opted out.
+    // Фокус центрирует цель, только если она не видна целиком
+    // («center if needed») — WPT `focus-centers-element` сверяет с
+    // `scrollIntoView({block:'center', inline:'center'})`.
     if (!(options && options.preventScroll) && target && typeof target.scrollIntoView === 'function') {
-        try { target.scrollIntoView(); } catch (e) {}
+        try { target.scrollIntoView(_LUMEN_SIV_CENTER_IF_NEEDED); } catch (e) {}
     }
 };
 HTMLElement.prototype.blur = function() {
