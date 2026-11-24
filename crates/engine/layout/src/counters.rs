@@ -222,8 +222,9 @@ pub struct PseudoCache {
 struct PseudoCacheInner {
     /// Intern table: pseudo request string → dense index used in `by_node`.
     names: HashMap<String, u32>,
-    /// `node.index()` → per-node entries.
-    by_node: HashMap<usize, PseudoNodeCache>,
+    /// `node.index()` → per-node entries. Integer keys — [`IdMap`], not SipHash:
+    /// `store_matches_bulk` inserts tens of thousands of records per flush.
+    by_node: IdMap<usize, PseudoNodeCache>,
 }
 
 /// Pass-global inputs a pseudo style was computed under — pinned per node
@@ -261,7 +262,7 @@ pub(crate) fn pseudo_pass_key(
 /// `(node.index(), name intern)` → record.
 pub(crate) struct PseudoMatchSnapshot {
     pub(crate) names: HashMap<String, u32>,
-    pub(crate) entries: HashMap<(usize, u32), std::sync::Arc<[crate::style::pseudo::PseudoMatch]>>,
+    pub(crate) entries: IdMap<(usize, u32), std::sync::Arc<[crate::style::pseudo::PseudoMatch]>>,
 }
 
 impl PseudoMatchSnapshot {
@@ -283,14 +284,14 @@ impl PseudoMatchSnapshot {
 struct PseudoNodeCache {
     key: PseudoPassKey,
     /// pseudo-name index → computed style (`None` = "no pseudo", also cached).
-    styles: HashMap<u32, Option<Arc<ComputedStyle>>>,
+    styles: IdMap<u32, Option<Arc<ComputedStyle>>>,
     /// PERF-PSEUDO-PRE — pseudo-name index (bare name) → the cascade-sorted
     /// match record `pre_match` produced for this node. Consulted by
     /// `compute_pseudo_element_style_inner` when the pass table is already
     /// gone (box build runs after `pre_match`'s guard drops); invalidated by
     /// the same `pseudo_drop_node` as `styles` — a recomputed node's pseudo
     /// inputs may differ, an untouched node's provably cannot.
-    matches: HashMap<u32, Arc<[crate::style::pseudo::PseudoMatch]>>,
+    matches: IdMap<u32, Arc<[crate::style::pseudo::PseudoMatch]>>,
 }
 
 thread_local! {
@@ -356,8 +357,8 @@ impl PseudoCache {
         let name = *inner.names.entry(pseudo.to_owned()).or_insert(next);
         let entry = inner.by_node.entry(node.index()).or_insert_with(|| PseudoNodeCache {
             key,
-            styles: HashMap::new(),
-            matches: HashMap::new(),
+            styles: IdMap::default(),
+            matches: IdMap::default(),
         });
         if entry.key != key {
             entry.key = key;
@@ -391,7 +392,7 @@ impl PseudoCache {
     /// without contending on [`Self::inner`] per lookup.
     pub(crate) fn match_snapshot(&self, key: PseudoPassKey) -> PseudoMatchSnapshot {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let mut entries = HashMap::with_capacity(inner.by_node.len());
+        let mut entries = IdMap::with_capacity_and_hasher(inner.by_node.len(), Default::default());
         for (node_idx, entry) in &inner.by_node {
             if entry.key != key {
                 continue;
@@ -418,8 +419,8 @@ impl PseudoCache {
         let idx = *inner.names.entry(name.to_owned()).or_insert(next);
         let entry = inner.by_node.entry(node.index()).or_insert_with(|| PseudoNodeCache {
             key,
-            styles: HashMap::new(),
-            matches: HashMap::new(),
+            styles: IdMap::default(),
+            matches: IdMap::default(),
         });
         if entry.key != key {
             entry.key = key;
@@ -471,8 +472,8 @@ impl PseudoCache {
             }
             let entry = inner.by_node.entry(node_idx).or_insert_with(|| PseudoNodeCache {
                 key,
-                styles: HashMap::new(),
-                matches: HashMap::new(),
+                styles: IdMap::default(),
+                matches: IdMap::default(),
             });
             if entry.key != key {
                 entry.key = key;
