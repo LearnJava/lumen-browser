@@ -36,8 +36,36 @@ wall-clock (без профайлера, scripts/perf/wall_site.py): interactive
 ```
 
 **Native-time (LUMEN_NATIVE_CALL_STATS=1):** style/rect-энтри — это стоимость flush'ов,
-приписанная вызывающим нэйтивам (не отдельный резерв). `_lumen_get_parent` ×200k —
-0.2-2мкс/вызов, потолок ~1-2s суммарно.
+приписанная вызывающим нэйтивам (не отдельный резерв). Аномалии `_lumen_get_html_element`
+(~600-900мкс/вызов) и `_lumen_get_attr` — lock-wait на `Mutex<Document>` против
+engine-thread, не работа самого нэйтива.
+
+**Фронт JS↔DOM boundary (вторая сессия, запушено):**
+
+- `bd6dbb5f8` PERF-NAV-O1 — O(1)-нэйтивы дерева: `_lumen_get_siblings_of`,
+  `_lumen_get_first/last_child`, `_lumen_get_element_children`,
+  `_lumen_get_element_siblings_of`, `_lumen_get_parent_element`.
+  Было: `nextSibling` = get_parent + get_children(весь массив) + indexOf;
+  `children.length` = 1+3k переходов на k детей (is_element на каждого).
+- `e07ebd99e` PERF-NAV-O2 — `_lumen_get_node_type` (nodeType за 1 переход вместо
+  цепочки is_text/is_cdata/is_comment/is_pi), `_lumen_is_connected` (весь подъём
+  + shadow-мост в Rust), `_lumen_event_ancestor_path` (путь события целиком),
+  `_lumen_contains_nid`, `_lumen_closest`, `_lumen_ancestor_chain`
+  (compareDocumentPosition), `_lumen_root_node_nid` (getRootNode),
+  TreeWalker/NodeIterator на новых нэйтивах.
+- `ba112f321` — MutationObserver subtree-проверка: `_lumen_ancestor_chain`
+  один раз на запись вместо get_parent-обхода на каждое наблюдение.
+- `eb19d45e9` PERF-NAV-O3 — итерация DOMTokenList (forEach/values/entries/keys):
+  1 чтение class-атрибута на шаг вместо 2; живость сохранена.
+
+**Карта native-time после boundary-работы (habr):**
+`_lumen_get_parent` ×~187k (остаток — одиночные parentNode-чтения, пол),
+`_lumen_get_computed_style` ×~101k, `_lumen_query_selector` ×25k (кэш уже есть),
+`_lumen_get_node_type` ×15k, `_lumen_get_scroll_state` ×21k — все «тяжёлые»
+времена это maybe_flush/lock-wait, не crossings. Остаток резать:
+typed-trampoline (~1-3мкс → ~0.5мкс × ~500k переходов ≈ 0.5-1s),
+getComputedStyle-шим (`_wa_motion_*`/`_css_tr_prune` + entries на каждый вызов),
+аудит `_lumen_get_parent`-циклов в shim (79 сайтов, горячие не идентифицированы).
 
 **Остаток до Chrome (~2-3s):**
 
