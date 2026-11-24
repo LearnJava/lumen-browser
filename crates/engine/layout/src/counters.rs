@@ -2614,10 +2614,22 @@ fn walk(
             if !std::ptr::eq(inherited, prev_source.as_ref()) && *inherited != **prev_source {
                 return None;
             }
+            // The node's *own* attributes still gate: presentational hints,
+            // the `style` attribute's inline declarations and the UA passes'
+            // own-attr reads (`hidden`, `open`, `disabled`, `start`…) all feed
+            // `compute_style` without touching the matched-rule set. Ancestor
+            // attribute writes no longer do: every procedural ancestor read is
+            // either tag-gated by [`force_reuse_structure_safe`] or lives in
+            // the shadow tree (`exportparts` on a host, read only by nodes
+            // inside it — `style::cascade::part_scopes_of`), where the licence
+            // does not run at all.
             let attr_changed = d.attr_changed.as_ref()?;
-            let mut cur = Some(id);
+            if attr_changed.contains(&id) {
+                return None;
+            }
+            let mut cur = doc.get(id).parent;
             while let Some(n) = cur {
-                if attr_changed.contains(&n) {
+                if matches!(doc.get(n).data, NodeData::ShadowRoot { .. }) || doc.is_shadow_host(n) {
                     return None;
                 }
                 cur = doc.get(n).parent;

@@ -268,10 +268,15 @@ fn forced_reuse_skips_recompute_only_when_every_input_is_identical() {
         "forced descendants with identical inputs must reuse: {stats:?}"
     );
 
-    // Same basis, but the attribute-change set names `wrap`: every forced
-    // descendant has a written ancestor and must take the full cascade.
+    // Same basis, but the attribute-change set names every element: each
+    // forced node then has a *written attribute of its own* (presentational
+    // hints, the `style` attribute, UA own-attr reads) and must take the
+    // full cascade. Ancestor writes alone no longer gate — every procedural
+    // ancestor read is tag-gated by `force_reuse_structure_safe`.
     let mut attr_changed = IdSet::default();
-    attr_changed.insert(wrap);
+    for i in 0..doc.node_count() as u32 {
+        attr_changed.insert(lumen_dom::NodeId::from_index(i as usize));
+    }
     let delta = RestyleDelta {
         invalidation: None,
         attr_changed: Some(attr_changed),
