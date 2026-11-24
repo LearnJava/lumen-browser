@@ -248,20 +248,132 @@ impl Lumen {
                     self.flush_pointer_moves();
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
-                // WPT drag gestures (`selection-pointer.html`): a press arms
-                // the same selection drags a real mouse press arms; pointer
-                // moves between down/up extend them via `on_cursor_moved`.
+                // WPT press/release gestures (`checkable-active-onblur-with-click`,
+                // `selection-pointer.html`): `pointerDown` is the press half —
+                // `:active`, `pointerdown`/`mousedown`, drag arming — and the
+                // matching `pointerUp` dispatches `pointerup`/`mouseup`, then
+                // the click's focus+`click`+activation half. Collapsing the
+                // press into a whole click cleared `:active` before the page
+                // could observe it.
                 AutomationCommand::PointerDown { x, y } => {
                     // Same coordinate contract as `Click`/`PointerMove`:
                     // content-viewport CSS px → window CSS px via page_offset.
+                    let dpr = self
+                        .renderer
+                        .as_ref()
+                        .map_or(1.0_f64, |r| r.scale_factor())
+                        .max(1e-6);
                     let (ox, oy) = self.page_offset();
                     let (wx, wy) = (x + ox, y + oy);
-                    self.handle_click_at_automation(wx, wy);
+                    // A down without a preceding move still presses where the
+                    // pointer is: refresh hover/`:hover` first, exactly like a
+                    // real cursor arriving at the point.
+                    self.on_cursor_moved(winit::dpi::PhysicalPosition::new(
+                        f64::from(wx) * dpr,
+                        f64::from(wy) * dpr,
+                    ));
+                    #[cfg(feature = "v8")]
+                    self.flush_pointer_moves();
+                    // CSS `:active` on press — the same write the real
+                    // `MouseInput(Pressed)` branch does; `PointerUp` clears it.
+                    // A `<label>` press resolves to its labeled control.
+                    let press_nid = match (self.hovered_nid, self.status_hover_source) {
+                        (Some(_), Some(src)) => Some(src),
+                        (h, _) => h,
+                    };
+                    let active_target = press_nid.map(|n| self.pointer_active_target(n));
+                    if self.active_nid != active_target {
+                        self.active_nid = active_target;
+                        self.active_from_keyboard = false;
+                        self.sync_active_mirror();
+                        self.relayout_chrome();
+                        self.request_redraw();
+                    }
+                    if self.active_frame != self.hovered_frame {
+                        self.active_frame = self.hovered_frame;
+                        self.refresh_frames(None);
+                    }
+                    // `pointerdown`/`mousedown` on the hovered element — press
+                    // half only; the release pair and `click` wait for
+                    // `PointerUp` (UI Events §5.2 / Pointer Events §10).
+                    #[cfg(feature = "v8")]
+                    {
+                        if let Some(hov) = self.hovered_nid {
+                            let nid = hov.index() as u32;
+                            self.js_pointer_event(nid, "pointerdown", wx, wy, 0, 1);
+                            self.js_click_event(
+                                nid,
+                                "mousedown",
+                                (wx, wy),
+                                (0, 1),
+                                self.click_streak.count(),
+                            );
+                        }
+                        if let Some((f, n)) = self.hovered_frame {
+                            self.flush_pointer_moves();
+                            let at = self
+                                .pointer_target(wx, wy)
+                                .frame
+                                .map_or((0.0, 0.0), |t| (t.client.x, t.client.y));
+                            let nid = n.index() as u32;
+                            self.frame_pointer_event(f, nid, "pointerdown", at, (0, 1));
+                            self.frame_mouse_event(f, nid, "mousedown", at, (0, 1));
+                        }
+                    }
+                    self.automation_button_down = Some((wx, wy));
                     self.begin_text_drag_select(wx, wy);
                     self.begin_doc_select(wx, wy);
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
                 AutomationCommand::PointerUp => {
+                    let was_down = self.automation_button_down.take();
+                    // CSS `:active` clears on release — same as the real
+                    // `MouseInput(Released)` branch.
+                    if self.active_frame.is_some() {
+                        self.active_frame = None;
+                        self.refresh_frames(None);
+                    }
+                    if self.active_nid.is_some() {
+                        self.active_nid = None;
+                        self.active_from_keyboard = false;
+                        self.sync_active_mirror();
+                        self.relayout_chrome();
+                        self.request_redraw();
+                    }
+                    if was_down.is_some() {
+                        // Release coordinates: the live cursor position when a
+                        // move landed, else the press point.
+                        let dpr = self
+                            .renderer
+                            .as_ref()
+                            .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                            .max(1e-6);
+                        let (xu, yu) = self
+                            .cursor_position
+                            .map(|p| (p.x as f32 / dpr, p.y as f32 / dpr))
+                            .or(was_down)
+                            .unwrap_or((0.0, 0.0));
+                        #[cfg(feature = "v8")]
+                        {
+                            self.flush_pointer_moves();
+                            if let Some(hov) = self.hovered_nid {
+                                self.js_pointer_release(hov.index() as u32, xu, yu);
+                            }
+                            if let Some((f, n)) = self.hovered_frame {
+                                let at = self
+                                    .pointer_target(xu, yu)
+                                    .frame
+                                    .map_or((0.0, 0.0), |t| (t.client.x, t.client.y));
+                                let nid = n.index() as u32;
+                                self.frame_pointer_event(f, nid, "pointerup", at, (0, 0));
+                                self.frame_mouse_event(f, nid, "mouseup", at, (0, 0));
+                            }
+                        }
+                        // The click half — focus move, `click` dispatch,
+                        // activation — with the press pair already sent, so
+                        // `press_events = false`.
+                        self.handle_release_at_automation(xu, yu);
+                    }
                     self.doc_select = None;
                     self.text_drag = None;
                     let _ = reply_tx.send(AutomationReply::Ack);

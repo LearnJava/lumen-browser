@@ -727,6 +727,11 @@ pub(crate) struct Lumen {
     /// Заполняется в `handle_click_at_automation`, читается один раз в
     /// `handle_click_at_inner`.
     pub(crate) automation_hit_override: Option<Option<lumen_paint::HitTestResult>>,
+    /// Press point (window CSS px) of an armed automation `pointerDown`,
+    /// `None` between `PointerUp` and the next `PointerDown` — gates the
+    /// release half (`pointerup`/`mouseup`/`click`) so a bare `pointerUp`
+    /// cannot synthesize a click.
+    pub(crate) automation_button_down: Option<(f32, f32)>,
     pub(crate) next_click_proceed_id: u64,
     /// То же для `submit`-события формы: (`id`, форма, submitter, страница, момент).
     pub(crate) pending_submits: Vec<(u64, NodeId, Option<NodeId>, String, std::time::Instant)>,
@@ -1268,6 +1273,12 @@ pub(crate) struct Lumen {
     /// re-decode caps at ~30fps; audio must not skip a tick's worth of
     /// samples or it audibly stutters).
     pub(crate) video_last_audio_ms: HashMap<u32, u64>,
+    /// BUG-1838: брони на открытие медиа-сессии `<video>` в фоновом потоке —
+    /// `(вкладка, nid)` узлов, для которых [воркер](crate::video_open) уже
+    /// качает/открывает контейнер: повторный запрос того же узла второй поток
+    /// не запускает. Снимается по приходу `LoadEvent::VideoOpened` либо
+    /// очищается там же, где выбрасываются `video_sessions`.
+    pub(crate) pending_video_opens: Vec<crate::video_open::VideoOpenReservation>,
     /// COMPAT-MSE: узлы `<video>`, для которых уже заведён `playback` поверх `MediaSource`
     /// (`nid -> номер источника`); сверяется с `VideoGifStore::mse_attached` в
     /// `Lumen::tick_mse_sessions`. Сами сессии лежат в `video_sessions`.

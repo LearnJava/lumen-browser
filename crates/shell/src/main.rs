@@ -187,6 +187,7 @@ mod panels;
 mod platform;
 mod prefetch;
 mod reader_view;
+mod video_open;
 mod video_tick;
 mod relayout;
 mod relayout_job;

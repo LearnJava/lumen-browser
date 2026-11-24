@@ -24,7 +24,10 @@ pub fn find_link_href(doc: &Document, node_id: NodeId) -> Option<String> {
 /// значило бы позволить двум обходам разойтись и взять `target` у чужой ссылки.
 pub fn find_link(doc: &Document, mut node_id: NodeId) -> Option<(NodeId, String)> {
     loop {
-        let node = doc.get(node_id);
+        // The id can be stale — a hit-test/layout result captured before a
+        // same-turn document swap must degrade to «no link», not panic
+        // (BUG-986 arena guard fires inside `doc.get`).
+        let node = doc.try_get(node_id)?;
         if let NodeData::Element { name, attrs } = &node.data
             && name.local == "a"
         {

@@ -28,6 +28,10 @@ impl Lumen {
         // restored last left through this same method).
         self.video_audio_sinks.clear();
         self.video_last_audio_ms.clear();
+        // BUG-1838: открытия в полёте — работа вкладки, которая уходит в фон;
+        // брони не едут в снапшот, а результат (если придёт) сверится с
+        // generation/документом на принимающей стороне.
+        self.pending_video_opens.clear();
         let snap = PageSnapshot {
             display_list: std::mem::take(&mut self.display_list),
             title: self.title.take(),
@@ -214,6 +218,9 @@ impl Lumen {
         // Rebuild playback state from restored frames; JS re-queues loads on restore.
         self.video_gif_store.pending_loads.lock().unwrap().clear();
         self.video_gif_store.pending_container_loads.lock().unwrap().clear();
+        // BUG-1838: брони открытия принадлежали прежней активной вкладке; воркеру
+        // снимать их нечем, а восстановленная вкладка закажет загрузки заново.
+        self.pending_video_opens.clear();
         self.clear_mse_sessions();
         {
             let mut pb = self.video_gif_store.playback.lock().unwrap();

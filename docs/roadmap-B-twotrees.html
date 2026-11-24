@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-11-23",
+ "generated": "2026-11-24",
  "counts": {
   "open": 300,
-  "fixed": 1466,
+  "fixed": 1467,
   "inprogress": 0,
   "wontfix": 8
  },
- "total_bugs": 1774,
+ "total_bugs": 1775,
  "phases": [
   {
    "id": "P0",
@@ -11924,17 +11924,17 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1838": {
-   "status": "open",
-   "title": "Видео-сессии открываются синхронно в потоке браузера: кадры 9.8 / 6.9 / 2.6 с (`anim` 9400 / 6790 / 2641 мс) сразу после `video: загружен … (1920×1080)`; `lumen…",
-   "component": "shell (`video_tick.rs::tick_video_sessions` — шаг 2.6 обработчика кадра)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1839": {
    "status": "open",
    "title": "okko.tv: 82–87% кандидатов каскада приходится на корзину universal индекса правил — ~95 на пересчитанный элемент, 59–77 вызовов `matches_complex` на элемент (46…",
    "component": "layout/style (`rule_index.rs` — корзина universal; `counters.rs` — `note_candidate_bucket`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1840": {
+   "status": "open",
+   "title": "Открытие PCM-вывода (rodio `OutputStream`, WASAPI) на первом тике играющего `<video>` держит поток браузера ~630 мс (`anim` 628.69 мс в кадре) — после фикса BUG…",
+   "component": "shell (`video_tick.rs` — `VideoPcmAudioSink::new()` в цикле `due` шага 2.6; `platform/video_audio_sink.rs`)",
    "date": null,
    "debtor": false
   },
@@ -22227,6 +22227,13 @@
    "component": "layout/style (`style/cascade_index.rs`, `style/cascade.rs`, `style/share_safety.rs`, `style/rule_roots.rs`), css-parser (`parser/sheet_diff.rs`), js (`v8_runtime/style_flush.rs`), shell (`page_load.rs`)",
    "date": "2026-11-23",
    "debtor": false
+  },
+  "BUG-1838": {
+   "status": "fixed",
+   "title": "Видео-сессии открывались синхронно в обработчике кадра (fetch всего файла → `VideoDecoder::open` → кадр 0): кадры 3–11.9 с (`anim` до 11.5 с) сразу после `video…",
+   "component": "shell (`video_tick.rs` — `tick_video_sessions`/`start_video_open`/`on_video_opened`; `video_open.rs` — воркер открытия)",
+   "date": "2026-11-24",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -25588,7 +25595,10 @@
   "shell (`redraw_requested.rs`, `about_to_wait.rs`)": [
    "BUG-1637"
   ],
-  "shell (`video_tick.rs::tick_video_sessions` — шаг 2.6 обработчика кадра)": [
+  "shell (`video_tick.rs` — `VideoPcmAudioSink::new()` в цикле `due` шага 2.6; `platform/video_audio_sink.rs`)": [
+   "BUG-1840"
+  ],
+  "shell (`video_tick.rs` — `tick_video_sessions`/`start_video_open`/`on_video_opened`; `video_open.rs` — воркер открытия)": [
    "BUG-1838"
   ],
   "shell (`video_tick.rs`), js (`video_gif_store.rs`, `video_bindings.rs`, `v8_runtime/runtime.rs`)": [
