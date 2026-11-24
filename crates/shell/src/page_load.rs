@@ -764,9 +764,18 @@ impl Lumen {
                         js.update_client_rects(client_rects);
                         js.update_sticky_geoms(sticky_geoms);
                         js.update_hit_test_tree(hit_test_tree);
-                        js.update_computed_styles(styles);
-                        js.update_pseudo_computed_styles(pseudo_styles);
-                        js.update_custom_properties(customs);
+                        // Pipeline layout runs without interactive state — if a
+                        // script already moved focus/hover before this push
+                        // lands, the snapshot's `:focus-visible` entries are
+                        // stale; drop them and let the next flush recompute
+                        // (WPT `focus-visible-009`).
+                        if js.interactive_snapshot_stale((None, None, None, false, false)) {
+                            js.note_stale_interactive_snapshot();
+                        } else {
+                            js.update_computed_styles(styles);
+                            js.update_pseudo_computed_styles(pseudo_styles);
+                            js.update_custom_properties(customs);
+                        }
                         js.update_stylesheet(stylesheet);
                         js.update_viewport_size(vw, vh);
                     });
@@ -2300,9 +2309,16 @@ impl Lumen {
                 js.update_client_rects(client_rects);
                 js.update_sticky_geoms(sticky_geoms);
                 js.update_hit_test_tree(hit_test_tree);
-                js.update_computed_styles(styles);
-                js.update_pseudo_computed_styles(pseudo_styles);
-                js.update_custom_properties(customs);
+                // Same stale-interactive drop as the reload push above: this
+                // layout predates any focus/hover the page's scripts may have
+                // set since (WPT `focus-visible-009`).
+                if js.interactive_snapshot_stale((None, None, None, false, false)) {
+                    js.note_stale_interactive_snapshot();
+                } else {
+                    js.update_computed_styles(styles);
+                    js.update_pseudo_computed_styles(pseudo_styles);
+                    js.update_custom_properties(customs);
+                }
                 js.update_stylesheet(stylesheet);
                 js.update_viewport_size(vw, vh);
                 js.update_scroll_states(scroll_states);

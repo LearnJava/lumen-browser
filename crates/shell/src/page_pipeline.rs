@@ -1653,9 +1653,17 @@ pub(crate) fn parse_and_layout(
             js.update_layout_rects(snapshot.rects);
             js.update_client_rects(snapshot.client_rects);
             js.update_sticky_geoms(snapshot.sticky_geoms);
-            js.update_computed_styles(snapshot.styles);
-            js.update_pseudo_computed_styles(snapshot.pseudo_styles);
-            js.update_custom_properties(snapshot.customs);
+            // `layout_page` above runs without interactive state — a script
+            // that already moved focus/hover makes this snapshot's
+            // `:focus-visible` entries stale; drop them so the next same-tick
+            // flush recomputes against live state (WPT `focus-visible-009`).
+            if js.interactive_snapshot_stale((None, None, None, false, false)) {
+                js.note_stale_interactive_snapshot();
+            } else {
+                js.update_computed_styles(snapshot.styles);
+                js.update_pseudo_computed_styles(snapshot.pseudo_styles);
+                js.update_custom_properties(snapshot.customs);
+            }
             // CSSOM-7 (BUG-977): re-push alongside the snapshot above so a
             // `DOMContentLoaded` handler (about to fire right after this
             // block) has an up-to-date flush target too — covers the sheet

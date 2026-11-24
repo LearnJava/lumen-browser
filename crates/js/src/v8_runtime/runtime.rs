@@ -504,6 +504,16 @@ pub struct V8JsRuntime {
     pub(super) frame_docs: crate::frame_bridge::FrameDocRegistry,
 }
 
+/// Interactive-state signature a shell layout snapshot was computed under:
+/// `(hover, focus, active)` node indices plus the keyboard-modality flags for
+/// focus and active. Shell relayout jobs capture this at submission time; a
+/// `.focus()`/hover/modality change landing before the job's style-snapshot
+/// push makes its `:focus`/`:focus-visible`/`:hover`/`:active` entries stale —
+/// pushing them would overwrite a fresher same-tick flush's correct values,
+/// and `maybe_flush`'s early-return would keep serving the stale map (WPT
+/// `focus-visible-009`).
+pub type InteractiveStyleSnapshot = (Option<u32>, Option<u32>, Option<u32>, bool, bool);
+
 /// Разложить плоский `[name, value, name, value, …]` из JS в пары.
 ///
 /// Формат «плоский массив» выбран потому, что мост натива понимает
@@ -1494,6 +1504,51 @@ impl V8JsRuntime {
     /// ([`lumen_layout::StyleMap`]: a shared base plus the box's own overrides).
     pub fn update_style_maps(&self, styles: HashMap<u32, lumen_layout::StyleMap>) {
         *self.computed_styles.lock().unwrap_or_else(|e| e.into_inner()) = styles;
+    }
+
+    /// Whether `snapshot` disagrees with the live interactive mirrors — i.e.
+    /// the layout that produced a style-snapshot push ran before the latest
+    /// focus/hover/active/modality change.
+    pub fn interactive_snapshot_stale(&self, snapshot: InteractiveStyleSnapshot) -> bool {
+        let (hover, focus, active, kb_focus, kb_active) = snapshot;
+        // Зеркала хранят nid в том виде, в каком их pushed `_lumen_request_*`
+        // (raw) и `notify_*` (index) — нормализуем через `NodeId`, чтобы
+        // сравнение с index-снимком shell'а не давало ложных срабатываний
+        // на переиспользованных слотах арены.
+        let to_index = |v: u32| lumen_dom::NodeId::from_raw(v).index() as u32;
+        let cur_focus = (*self.focused_nid.lock().unwrap_or_else(|e| e.into_inner()))
+            .map(&to_index);
+        let cur_hover = (*self.hovered_nid.lock().unwrap_or_else(|e| e.into_inner()))
+            .map(&to_index);
+        let cur_active = (*self.active_nid.lock().unwrap_or_else(|e| e.into_inner()))
+            .map(|(n, k)| (to_index(n), k));
+        let cur_kb_focus = self.keyboard_focus.load(Ordering::Relaxed);
+        // Модальность фокуса влияет только на `:focus-visible` — при отсутствии
+        // фокуса с обеих сторон её расхождение стилей не меняет.
+        cur_focus != focus
+            || cur_hover != hover
+            || cur_active != active.map(|a| (a, kb_active))
+            || (focus.is_some() && cur_kb_focus != kb_focus)
+    }
+
+    /// Re-arm the style caches after a stale interactive snapshot was dropped:
+    /// the next `maybe_flush` must recompute against the live interactive
+    /// state instead of serving the rejected push's entries.
+    pub fn note_stale_interactive_snapshot(&self) {
+        for flag in [
+            &self.computed_styles_needed,
+            &self.pseudo_styles_needed,
+            &self.custom_props_needed,
+        ] {
+            flag.store(true, Ordering::Relaxed);
+        }
+        for flag in [
+            &self.computed_styles_collected,
+            &self.pseudo_styles_collected,
+            &self.custom_props_collected,
+        ] {
+            flag.store(false, Ordering::Relaxed);
+        }
     }
 
     /// Merge per-frame animated `opacity`/`transform` overrides into

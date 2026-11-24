@@ -1306,8 +1306,22 @@ fn layout_frame_document(
         js.update_client_rects(client_rects);
         js.update_sticky_geoms(sticky_geoms);
         js.update_hit_test_tree(Arc::new(frame_layout.clone()));
-        js.update_computed_styles(styles);
-        js.update_pseudo_computed_styles(pseudo_styles);
+        // The pass above ran under this frame's own `state` triple — if the
+        // child runtime's interactive mirrors moved since, its `:focus-visible`
+        // entries are stale; drop and let the next flush recompute.
+        let snap = (
+            state.hovered.map(|n| n.index() as u32),
+            state.focused.map(|n| n.index() as u32),
+            state.active.map(|n| n.index() as u32),
+            false,
+            false,
+        );
+        if js.interactive_snapshot_stale(snap) {
+            js.note_stale_interactive_snapshot();
+        } else {
+            js.update_computed_styles(styles);
+            js.update_pseudo_computed_styles(pseudo_styles);
+        }
         js.update_viewport_size(viewport.width, viewport.height);
     }
     frame_layout
