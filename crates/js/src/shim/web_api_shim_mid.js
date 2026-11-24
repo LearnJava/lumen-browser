@@ -2390,13 +2390,34 @@ DOMTokenList.prototype.item = function(i) {
 // looked up only at call time): `this` is the indexed Proxy, so every step
 // re-reads the attribute. `forEach` walks the same live view and passes the
 // list itself as the third callback argument, as WebIDL does.
+// PERF: one attribute read per step instead of two (`length` + `[i]` each
+// fetched and split the whole class attribute). Still live: every step
+// re-reads, so a callback mutating the list mid-iteration sees current state.
 DOMTokenList.prototype.forEach = function(fn, thisArg) {
     if (typeof fn !== 'function') throw new TypeError('callback is not a function');
-    for (var i = 0; i < this.length; i++) fn.call(thisArg, this[i], i, this);
+    for (var i = 0; ; i++) {
+        var arr = _lumen_token_list_arr(this);
+        if (i >= arr.length) break;
+        fn.call(thisArg, arr[i], i, this);
+    }
 };
-DOMTokenList.prototype.entries = function() { return _lumen_index_iterator(this, 'entries'); };
-DOMTokenList.prototype.keys    = function() { return _lumen_index_iterator(this, 'keys'); };
-DOMTokenList.prototype.values  = function() { return _lumen_index_iterator(this, 'values'); };
+function _lumen_token_list_iterator(tl, kind) {
+    var i = 0;
+    var it = {
+        next: function() {
+            var arr = _lumen_token_list_arr(tl);
+            if (i >= arr.length) return { value: undefined, done: true };
+            var idx = i++;
+            var value = kind === 'keys' ? idx : kind === 'entries' ? [idx, arr[idx]] : arr[idx];
+            return { value: value, done: false };
+        },
+    };
+    it[Symbol.iterator] = function() { return it; };
+    return it;
+}
+DOMTokenList.prototype.entries = function() { return _lumen_token_list_iterator(this, 'entries'); };
+DOMTokenList.prototype.keys    = function() { return _lumen_token_list_iterator(this, 'keys'); };
+DOMTokenList.prototype.values  = function() { return _lumen_token_list_iterator(this, 'values'); };
 Object.defineProperty(DOMTokenList.prototype, Symbol.iterator,
     { value: DOMTokenList.prototype.values, writable: true, enumerable: false, configurable: true });
 DOMTokenList.prototype.toString = function() { return _lumen_token_list_arr(this).join(' '); };
