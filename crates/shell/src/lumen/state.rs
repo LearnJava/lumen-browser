@@ -1268,6 +1268,12 @@ pub(crate) struct Lumen {
     /// re-decode caps at ~30fps; audio must not skip a tick's worth of
     /// samples or it audibly stutters).
     pub(crate) video_last_audio_ms: HashMap<u32, u64>,
+    /// BUG-1838: брони на открытие медиа-сессии `<video>` в фоновом потоке —
+    /// `(вкладка, nid)` узлов, для которых [воркер](crate::video_open) уже
+    /// качает/открывает контейнер: повторный запрос того же узла второй поток
+    /// не запускает. Снимается по приходу `LoadEvent::VideoOpened` либо
+    /// очищается там же, где выбрасываются `video_sessions`.
+    pub(crate) pending_video_opens: Vec<crate::video_open::VideoOpenReservation>,
     /// COMPAT-MSE: узлы `<video>`, для которых уже заведён `playback` поверх `MediaSource`
     /// (`nid -> номер источника`); сверяется с `VideoGifStore::mse_attached` в
     /// `Lumen::tick_mse_sessions`. Сами сессии лежат в `video_sessions`.

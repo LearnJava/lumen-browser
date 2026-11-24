@@ -5,6 +5,10 @@
 //! §5.1). Method bodies are unchanged; only module path and visibility differ.
 
 use crate::*;
+use crate::video_open::{
+    OpenedVideo, VideoOpenFailure, VideoOpenJob, VideoOpenMsg, release_video_open,
+    reserve_video_open, spawn_video_open,
+};
 
 /// Media time between two decoded frames of a container `<video>` (≈ 30 fps cap).
 const VIDEO_FRAME_MS: u64 = 33;
@@ -382,8 +386,243 @@ impl Lumen {
         self.page_anim_redraw_at = Some(self.page_anim_redraw_at.map_or(at, |t| t.min(at)));
     }
 
-    /// Advance media-container `<video>` playback: drain pending loads, open
-    /// decode sessions, register current frames, request redraws while playing.
+    /// BUG-1838: поставить открытие медиа-сессии `<video>` в фоновый поток.
+    ///
+    /// Всё, что требует живого `&Document`, снимается здесь: база документа-хозяина
+    /// ([`Lumen::video_load_domain`], BUG-1796), CSP-перезапись
+    /// `upgrade-insecure-requests` (BUG-692) и referrer-политика (GAP-REFERRER
+    /// срез 5). Сам документ в поток не едет — только `doc`/`frame` для записи
+    /// intrinsic-размеров по возвращению ([`Lumen::on_video_opened`]).
+    ///
+    /// Бронь `VideoOpenReservation` не даёт второму `load()` того же узла
+    /// запустить второй поток: первый всё равно перезапишет сессию.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    fn start_video_open(&mut self, req: lumen_js::video_gif_store::VideoLoadRequest) {
+        let (nid, src) = (req.nid, &req.src);
+        // A fresh load for this node supersedes any earlier failure — a
+        // `load()` retry after fixing `src` must not stay haunted by the
+        // previous attempt (GAP-MEDIADECODE срез 9).
+        self.video_gif_store.load_failures.lock().unwrap().remove(&nid);
+
+        // BUG-1796: nid — индекс арены документа, из чьего рантайма ушёл
+        // запрос: база, CSP и referrer — от документа-хозяина, а не всегда
+        // от верхнего.
+        let Some(domain) = self.video_load_domain(&req) else { return };
+        let base = domain.base;
+        // GAP-REFERRER срез 5: this producer's only point with a live
+        // `&Document`, same read as `fetch_and_register_lazy_images`.
+        let referrer_policy = domain.doc.as_ref().map_or_else(
+            lumen_network::ReferrerPolicy::default_policy,
+            |d| crate::resource_base::document_referrer_policy(&d.lock().unwrap()),
+        );
+        // BUG-692: контейнерный путь `<video src>` — та же перезапись схемы
+        // (`upgrade-insecure-requests`, Fetch §4.1 шаг 5), что у GIF-пути
+        // выше; ключ `load_failures`/лог остаются на сыром `src`.
+        let upgraded = domain.doc.as_ref().and_then(|d| {
+            let doc = d.lock().unwrap();
+            let root = doc.root();
+            let (policy, _) = crate::csp_enforce::document_csp_policy(&doc, root)?;
+            crate::csp_enforce::upgrade_insecure_url(&policy, &base.resolve_str(src))
+        });
+        let fetch_url = upgraded.unwrap_or_else(|| src.clone());
+
+        let Some(decoder) = lumen_js::video_gif_store::get_video_decoder() else {
+            let msg = "нет установленного VideoDecoder".to_string();
+            eprintln!("video: {msg}: {src}");
+            self.video_open_failed(nid, msg);
+            return;
+        };
+
+        let tab_id = self.active_tab_id().0 as usize;
+        if !reserve_video_open(&mut self.pending_video_opens, tab_id, nid) {
+            return;
+        }
+
+        let cookie_jar = Some(DocCookieJar::for_base(self.active_cookie_jar(), &base));
+        let job = VideoOpenJob {
+            nid,
+            src: src.clone(),
+            fetch_url,
+            base,
+            sink: Arc::clone(&self.event_sink),
+            cookie_jar,
+            referrer_policy,
+            decoder,
+        };
+        let proxy = self.load_proxy.clone();
+        let generation = self.load_generation;
+        let doc = domain.doc.clone();
+        let frame = domain.frame;
+        let spawned_at = std::time::Instant::now();
+        let spawned = spawn_video_open(job, move |msg| {
+            let _ = proxy.send_event(crate::page_load::LoadEvent::VideoOpened(Box::new(
+                crate::video_open::VideoOpenedEvent { tab_id, generation, doc, frame, spawned_at, msg },
+            )));
+        });
+        if let Err(e) = spawned {
+            release_video_open(&mut self.pending_video_opens, tab_id, nid);
+            eprintln!("video: не удалось запустить поток открытия {src}: {e}");
+            self.video_open_failed(nid, format!("поток открытия не запустился: {e}"));
+        }
+    }
+
+    /// Записать неудачу открытия в `load_failures` (её читает JS) и разбудить кадр.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    fn video_open_failed(&mut self, nid: u32, reason: String) {
+        self.video_gif_store.load_failures.lock().unwrap().insert(nid, reason);
+        self.request_redraw();
+    }
+
+    /// BUG-1838: документ-хозяин, заснятый при отправке воркера, всё ещё тот?
+    /// Фрейм сверяется по `Arc`-у своего хэндла, верхний путь — по `layout_source`:
+    /// за время фонового открытия страница могла навигировать (навигация фрейма
+    /// generation страницы не меняет), и писать intrinsic-размеры уже некуда.
+    fn video_doc_host_alive(
+        &self,
+        doc: &Arc<Mutex<lumen_dom::Document>>,
+        frame: Option<usize>,
+    ) -> bool {
+        match frame {
+            Some(idx) => self.frames.get(idx).is_some_and(|h| Arc::ptr_eq(&h.doc, doc)),
+            None => self.layout_source.as_ref().is_some_and(|ls| Arc::ptr_eq(&ls.document, doc)),
+        }
+    }
+
+    /// BUG-1838: применить результат фонового открытия на UI-потоке.
+    ///
+    /// Событие приходит из [`Lumen::start_video_open`]; `tab_id`/`generation`
+    /// сверяются как у прочих фоновых результатов (BUG-1214), документ-хозяин —
+    /// ещё раз по `Arc`-у. Устаревший результат молча выбрасывается: его nid уже
+    /// не адресует живой `<video>` этой страницы.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    pub(crate) fn on_video_opened(&mut self, ev: crate::video_open::VideoOpenedEvent) {
+        let crate::video_open::VideoOpenedEvent { tab_id, generation, doc, frame, spawned_at, msg } =
+            ev;
+        let nid = msg.nid();
+        release_video_open(&mut self.pending_video_opens, tab_id, nid);
+        if !self.is_active_tab(tab_id) || generation != self.load_generation {
+            return;
+        }
+        if let Some(doc) = doc.as_ref()
+            && !self.video_doc_host_alive(doc, frame)
+        {
+            return;
+        }
+        match msg {
+            VideoOpenMsg::Failed { src, reason, failure, os_codec, .. } => {
+                // Прежние строки лога — по шагу, на котором открытие встало:
+                // по ним искали виновника секунд в BUG-1838.
+                match failure {
+                    VideoOpenFailure::Fetch => eprintln!("video: пропуск {src}: {reason}"),
+                    VideoOpenFailure::Decoder => {
+                        eprintln!("video: ошибка декодирования {src}: {reason}");
+                    }
+                    VideoOpenFailure::FirstFrame => {
+                        eprintln!("video: не декодирован первый кадр {src}: {reason}");
+                    }
+                }
+                // COMPAT-MEDIA-OSDEC-WIN-BAR: H.264/HEVC без декодера ОС.
+                if let Some(what) = os_codec
+                    && self.media_bar.note_missing(what)
+                {
+                    self.relayout_chrome_host();
+                }
+                self.video_open_failed(nid, reason);
+            }
+            VideoOpenMsg::Opened(open) => self.apply_opened_video(open, doc.as_ref(), frame, spawned_at),
+        }
+    }
+
+    /// Дорегистрация открытой сессии: кадр 0, intrinsic-размеры, playback-состояние.
+    ///
+    /// Тело — прежний хвост [`Lumen::tick_video_sessions`] после `frame_at(0.0)`;
+    /// отличаются только источник байтов (воркер) и место вызова (приём события).
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    fn apply_opened_video(
+        &mut self,
+        open: OpenedVideo,
+        doc: Option<&Arc<Mutex<lumen_dom::Document>>>,
+        frame: Option<usize>,
+        spawned_at: std::time::Instant,
+    ) {
+        let OpenedVideo { nid, session, image, duration_ms, marks } = open;
+        let (width, height) = session.dimensions();
+        // HTML LS §4.8.11.7: with a `poster` the poster stays the
+        // "poster frame" until playback starts (or a seek), so the first
+        // decoded frame is held back. Marking position 0 as already shown
+        // keeps the paused tick below from registering it either; `play()`
+        // or a seek moves the position and the tick draws the real frame.
+        let has_poster = doc.is_some_and(|d| {
+            let doc = d.lock().unwrap();
+            doc.get(lumen_dom::NodeId::from_index(nid as usize))
+                .get_attr("poster")
+                .is_some_and(|p| !p.trim().is_empty())
+        });
+        let key = format!("video:{nid}");
+        let image = Arc::new(image);
+        if has_poster {
+            // Frame withheld — see above.
+        } else if let Some(r) = self.renderer.as_mut() {
+            if let Err(e) = r.register_image(key.clone(), Arc::clone(&image)) {
+                eprintln!("video: не зарегистрирован {key}: {e}");
+            }
+        } else {
+            self.pending_images.push((key.clone(), image));
+        }
+        if let Some(doc) = doc {
+            // BUG-1796: узел — из документа-хозяина nid; у фрейма и
+            // viewport-density, и релейаут — самого фрейма.
+            let viewport = match frame {
+                Some(idx) => {
+                    self.frames.get(idx).map_or_else(|| Size::new(0.0, 0.0), |h| h.viewport)
+                }
+                None => self.relayout_viewport().unwrap_or(Size::new(0.0, 0.0)),
+            };
+            let node_id = lumen_dom::NodeId::from_index(nid as usize);
+            let changed = {
+                let mut doc = doc.lock().unwrap();
+                apply_intrinsic_size(&mut doc, node_id, width, height, viewport)
+            };
+            if changed {
+                match frame {
+                    Some(idx) => self.refresh_frames(Some(idx)),
+                    None => self.note_shell_attr_writes(vec![nid]),
+                }
+            }
+        }
+        let total_ms = spawned_at.elapsed().as_millis() as u64;
+        eprintln!(
+            "video: загружен nid={nid} ({width}×{height}, {duration_ms}мс) — {total_ms}мс: {}",
+            marks.log_fields(total_ms)
+        );
+        self.video_gif_store.playback.lock().unwrap().insert(
+            nid,
+            lumen_js::video_gif_store::VideoPlaybackState {
+                paused: true,
+                position_ms: 0,
+                play_epoch_ms: None,
+                cycle_ms: duration_ms,
+                loop_count: 1,
+                width,
+                height,
+            },
+        );
+        self.video_sessions.insert(nid, session);
+        if has_poster {
+            self.video_last_ms.insert(nid, 0);
+        } else {
+            self.video_last_ms.remove(&nid);
+        }
+        // GAP-MEDIADECODE срез 14: a reload of the same node (e.g. a new
+        // `src`) must not keep feeding PCM decoded against the OLD
+        // session into a sink still open from the previous one.
+        self.video_audio_sinks.remove(&nid);
+        self.video_last_audio_ms.remove(&nid);
+        self.request_redraw();
+    }
+
+    /// Advance media-container `<video>` playback: queue pending loads for the
+    /// background opener, register current frames, request redraws while playing.
     ///
     /// GAP-MEDIADECODE срез 7 / UX-VIDEO-NATIVE — the container-backed
     /// counterpart of [`Lumen::tick_video_gifs`]. The container is opened
@@ -391,16 +630,20 @@ impl Lumen {
     /// (`lumen-native` in the standard build, FFmpeg under `ffmpeg-video`);
     /// with none installed `pending_container_loads` never receives an entry
     /// (`__lumen_video_container_load` is registered only alongside a decoder).
+    ///
+    /// BUG-1838: the open itself (whole-file fetch → `VideoDecoder::open` →
+    /// first frame) no longer happens here — [`Lumen::start_video_open`] hands
+    /// it to a worker thread and the result lands in
+    /// [`Lumen::on_video_opened`]. What stays on this path is playback: the
+    /// session is only inserted once the worker replies, so the tick loop below
+    /// simply skips nodes that are still being opened.
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn tick_video_sessions(&mut self, elapsed_ms: u64) {
-        let decoder = lumen_js::video_gif_store::get_video_decoder();
-
         // Drain pending load requests queued by JS `__lumen_video_container_load`.
-        // PERF-INPUT-1c: each load does a synchronous network fetch + decode
-        // right here on the UI thread — seconds per video during page load.
-        // Defer the whole drain until `window.load` settles; the requests
-        // stay queued in the store and playback of already-loaded sessions
-        // below is unaffected.
+        // PERF-INPUT-1c: the drain stays deferred until `window.load` so the
+        // open does not compete with the final pipeline for CPU/network — it is
+        // no longer deferred because it *blocks* the frame (BUG-1838 moved the
+        // work off this thread); requests wait in the store meanwhile.
         let loads: Vec<lumen_js::video_gif_store::VideoLoadRequest> = if self
             .pending_window_load
             .is_some()
@@ -415,159 +658,9 @@ impl Lumen {
                 .collect()
         };
 
-        let mut frames_relaid: Vec<usize> = Vec::new();
         for req in loads {
-            let (nid, src) = (req.nid, &req.src);
-            // A fresh load for this node supersedes any earlier failure — a
-            // `load()` retry after fixing `src` must not stay haunted by the
-            // previous attempt (GAP-MEDIADECODE срез 9).
-            self.video_gif_store.load_failures.lock().unwrap().remove(&nid);
-
-            // BUG-1796: nid — индекс арены документа, из чьего рантайма ушёл
-            // запрос: база, CSP и referrer — от документа-хозяина, а не всегда
-            // от верхнего.
-            let Some(domain) = self.video_load_domain(&req) else { continue };
-            let base = domain.base;
-            // GAP-REFERRER срез 5: this producer's only point with a live
-            // `&Document`, same read as `fetch_and_register_lazy_images`.
-            let referrer_policy = domain.doc.as_ref().map_or_else(
-                lumen_network::ReferrerPolicy::default_policy,
-                |d| crate::resource_base::document_referrer_policy(&d.lock().unwrap()),
-            );
-
-            // BUG-692: контейнерный путь `<video src>` — та же перезапись схемы
-            // (`upgrade-insecure-requests`, Fetch §4.1 шаг 5), что у GIF-пути
-            // выше; ключ `load_failures`/лог остаются на сыром `src`.
-            let upgraded = domain.doc.as_ref().and_then(|d| {
-                let doc = d.lock().unwrap();
-                let root = doc.root();
-                let (policy, _) = crate::csp_enforce::document_csp_policy(&doc, root)?;
-                crate::csp_enforce::upgrade_insecure_url(&policy, &base.resolve_str(src))
-            });
-            let fetch_url: &str = upgraded.as_deref().unwrap_or(src);
-
-            let bytes = match crate::subresources::fetch_video_bytes(
-                fetch_url,
-                &base,
-                &self.event_sink,
-                Some(DocCookieJar::for_base(self.active_cookie_jar(), &base)),
-                referrer_policy,
-            ) {
-                Ok(b) => b,
-                Err(e) => {
-                    eprintln!("video: пропуск {src}: {e}");
-                    self.video_gif_store.load_failures.lock().unwrap().insert(nid, e.to_string());
-                    self.request_redraw();
-                    continue;
-                }
-            };
-
-            let Some(decoder) = decoder.as_ref() else {
-                let msg = "нет установленного VideoDecoder".to_string();
-                eprintln!("video: {msg}: {src}");
-                self.video_gif_store.load_failures.lock().unwrap().insert(nid, msg);
-                self.request_redraw();
-                continue;
-            };
-            let mut session = match decoder.open(&bytes) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("video: ошибка декодирования {src}: {e}");
-                    // COMPAT-MEDIA-OSDEC-WIN-BAR: H.264/HEVC без декодера ОС.
-                    if let Some(what) = lumen_media_native::missing_os_codec(&bytes)
-                        && self.media_bar.note_missing(what)
-                    {
-                        self.relayout_chrome_host();
-                    }
-                    self.video_gif_store.load_failures.lock().unwrap().insert(nid, e.to_string());
-                    self.request_redraw();
-                    continue;
-                }
-            };
-
-            let (width, height) = session.dimensions();
-            let rgba = match session.frame_at(0.0) {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("video: не декодирован первый кадр {src}: {e}");
-                    self.video_gif_store.load_failures.lock().unwrap().insert(nid, e.to_string());
-                    self.request_redraw();
-                    continue;
-                }
-            };
-            let image = Arc::new(lumen_image::Image {
-                width,
-                height,
-                format: lumen_image::PixelFormat::Rgba8,
-                data: rgba,
-                icc_profile: None,
-                vector_source: None,
-            });
-            // HTML LS §4.8.11.7: with a `poster` the poster stays the
-            // "poster frame" until playback starts (or a seek), so the first
-            // decoded frame is held back. Marking position 0 as already shown
-            // keeps the paused tick below from registering it either; `play()`
-            // or a seek moves the position and the tick draws the real frame.
-            let has_poster = domain.doc.as_ref().is_some_and(|d| {
-                let doc = d.lock().unwrap();
-                doc.get(lumen_dom::NodeId::from_index(nid as usize))
-                    .get_attr("poster")
-                    .is_some_and(|p| !p.trim().is_empty())
-            });
-            let key = format!("video:{nid}");
-            if has_poster {
-                // Frame withheld — see above.
-            } else if let Some(r) = self.renderer.as_mut() {
-                if let Err(e) = r.register_image(key.clone(), Arc::clone(&image)) {
-                    eprintln!("video: не зарегистрирован {key}: {e}");
-                }
-            } else {
-                self.pending_images.push((key.clone(), image));
-            }
-            if let Some(doc) = domain.doc.as_ref() {
-                // BUG-1796: узел — из документа-хозяина nid; у фрейма и
-                // viewport-density, и релейаут — самого фрейма.
-                let viewport = match domain.frame {
-                    Some(idx) => self.frames[idx].viewport,
-                    None => self.relayout_viewport().unwrap_or(Size::new(0.0, 0.0)),
-                };
-                let mut doc = doc.lock().unwrap();
-                let node_id = lumen_dom::NodeId::from_index(nid as usize);
-                if apply_intrinsic_size(&mut doc, node_id, width, height, viewport) {
-                    match domain.frame {
-                        Some(idx) => frames_relaid.push(idx),
-                        None => self.note_shell_attr_writes(vec![nid]),
-                    }
-                }
-            }
-            let cycle_ms = session.duration_secs().map_or(0, |s| (s * 1000.0) as u64);
-            eprintln!("video: загружен nid={nid} ({width}×{height}, {cycle_ms}мс)");
-            self.video_gif_store.playback.lock().unwrap().insert(
-                nid,
-                lumen_js::video_gif_store::VideoPlaybackState {
-                    paused: true,
-                    position_ms: 0,
-                    play_epoch_ms: None,
-                    cycle_ms,
-                    loop_count: 1,
-                    width,
-                    height,
-                },
-            );
-            self.video_sessions.insert(nid, session);
-            if has_poster {
-                self.video_last_ms.insert(nid, 0);
-            } else {
-                self.video_last_ms.remove(&nid);
-            }
-            // GAP-MEDIADECODE срез 14: a reload of the same node (e.g. a new
-            // `src`) must not keep feeding PCM decoded against the OLD
-            // session into a sink still open from the previous one.
-            self.video_audio_sinks.remove(&nid);
-            self.video_last_audio_ms.remove(&nid);
-            self.request_redraw();
+            self.start_video_open(req);
         }
-        self.refresh_frames_with_intrinsic_writes(&frames_relaid);
 
         // COMPAT-MSE: сессии поверх `MediaSource` заводятся здесь же, до цикла выдачи кадров.
         self.tick_mse_sessions();

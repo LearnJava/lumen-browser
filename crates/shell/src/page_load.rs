@@ -2418,6 +2418,8 @@ impl Lumen {
         self.clear_mse_sessions();
         self.video_sessions.clear();
         self.video_last_ms.clear();
+        // BUG-1838: брони открытия — часть состояния видео прежней страницы.
+        self.pending_video_opens.clear();
         // GAP-MEDIADECODE срез 14: drop any open PCM audio sinks/timing from
         // the previous page's videos — a session-less sink playing on into
         // the new page would be audible with nothing on screen to match it.
@@ -3161,6 +3163,13 @@ pub(crate) enum LoadEvent {
         is_top: bool,
         handles: Vec<frames::FrameHandle>,
     },
+    /// BUG-1838: открытие медиа-сессии `<video>` (fetch контейнера →
+    /// `VideoDecoder::open` → первый кадр) выполнено фоновым потоком —
+    /// применяется на UI-потоке ([`Lumen::on_video_opened`]): регистрация
+    /// кадра, intrinsic-размеры, запись в `video_sessions`. До фикса эта
+    /// работа шла прямо в обработчике кадра и стоила на okko.tv 3–11 с на
+    /// каждое видео сразу после `window.load`.
+    VideoOpened(Box<crate::video_open::VideoOpenedEvent>),
 }
 
 /// Размер одного HTML-chunk при разбивке для инкрементального парсинга.

@@ -686,6 +686,7 @@ fn run_window_mode_inner(
         media_panel_hits: Vec::new(),
         media_panel_drag: None,
         video_last_audio_ms: HashMap::new(),
+        pending_video_opens: Vec::new(),
         mse_sessions: HashMap::new(),
         frames: Vec::new(),
         frame_env: None,

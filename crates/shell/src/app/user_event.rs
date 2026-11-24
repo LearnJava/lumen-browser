@@ -162,6 +162,9 @@ impl Lumen {
                 }
             }
             LoadEvent::AsyncScriptReady => self.drive_async_scripts(),
+            // BUG-1838: контейнер `<video>` открыт фоновым потоком — здесь
+            // только регистрация кадра, intrinsic-размеры и запись сессии.
+            LoadEvent::VideoOpened(ev) => self.on_video_opened(*ev),
             LoadEvent::ImageDecodeFailed { src } => {
                 // BUG-1048: streaming/dynamic decode gave up on `src` — record
                 // it the same way a successful decode records its size
