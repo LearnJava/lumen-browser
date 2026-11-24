@@ -2068,6 +2068,11 @@ pub struct CascadeStats {
     /// `forced_same` counts after the fact — counted *before* `compute_style`
     /// runs, which is where the saving is.
     pub forced_reused: u32,
+    /// PERF-FORCE-REUSE diagnostics — forced-reuse candidates the proof
+    /// rejected, per gate bit: 1 no prev_matched, 2 no pre_match row,
+    /// 4 matched set differs, 8 no inherited source, 16 no prev source style,
+    /// 32 inherited differs, 64 own attr written, 128 shadow-tree ancestor.
+    pub fr_miss: [u32; 8],
     /// BUG-935 срез 98 — elements whose style was the previous one with a parent's changed
     /// custom properties, with no cascade ([`crate::custom_flow`]).
     pub inherited: u32,
@@ -2141,6 +2146,7 @@ thread_local! {
             forced: 0,
             forced_same: 0,
             forced_reused: 0,
+            fr_miss: [0; 8],
             inherited: 0,
             candidates: 0,
             match_calls: 0,
@@ -2243,6 +2249,19 @@ fn note_forced_reused() {
     CASCADE_STATS.with(|s| {
         let mut v = s.get();
         v.forced_reused += 1;
+        s.set(v);
+    });
+}
+
+/// PERF-FORCE-REUSE diagnostics — one rejected candidate's gate bitmask.
+fn note_forced_reuse_miss(miss: u8) {
+    CASCADE_STATS.with(|s| {
+        let mut v = s.get();
+        for (i, bit) in [1u8, 2, 4, 8, 16, 32, 64, 128].iter().enumerate() {
+            if miss & bit != 0 {
+                v.fr_miss[i] += 1;
+            }
+        }
         s.set(v);
     });
 }
@@ -2594,11 +2613,20 @@ fn walk(
                 && !d.point_roots.contains(&id)
         })
     {
+        // Diagnostic: which proof gate rejected the candidate (bit per gate).
+        let mut miss = 0u8;
         let proven = (|| {
             let d = incr?;
-            let prev_matched = map.styles.prev_matched(id, parent)?;
-            let (fresh, _) = crate::style::pre_match::lookup(id, sheet, viewport, dark_mode)?;
+            let Some(prev_matched) = map.styles.prev_matched(id, parent) else {
+                miss |= 1;
+                return None;
+            };
+            let Some((fresh, _)) = crate::style::pre_match::lookup(id, sheet, viewport, dark_mode) else {
+                miss |= 2;
+                return None;
+            };
             if fresh.as_ref() != prev_matched.as_ref() {
+                miss |= 4;
                 return None;
             }
             // `inherited` is the computed style of the node it was taken
@@ -2607,11 +2635,19 @@ fn walk(
             // pointer against the current entries, then require its new
             // style to equal what the previous pass recorded for it
             // (`replaced_styles` holds last pass's styles for every node).
-            let source = [parent, flat.parent_of(doc, parent).unwrap_or(parent)]
+            let Some(source) = [parent, flat.parent_of(doc, parent).unwrap_or(parent)]
                 .into_iter()
-                .find(|&s| map.styles.get(&s).is_some_and(|cur| std::ptr::eq(inherited, cur.as_ref())))?;
-            let prev_source = map.replaced_styles.get(&source)?;
+                .find(|&s| map.styles.get(&s).is_some_and(|cur| std::ptr::eq(inherited, cur.as_ref())))
+            else {
+                miss |= 8;
+                return None;
+            };
+            let Some(prev_source) = map.replaced_styles.get(&source) else {
+                miss |= 16;
+                return None;
+            };
             if !std::ptr::eq(inherited, prev_source.as_ref()) && *inherited != **prev_source {
+                miss |= 32;
                 return None;
             }
             // The node's *own* attributes still gate: presentational hints,
@@ -2625,20 +2661,22 @@ fn walk(
             // does not run at all.
             let attr_changed = d.attr_changed.as_ref()?;
             if attr_changed.contains(&id) {
+                miss |= 64;
                 return None;
             }
             let mut cur = doc.get(id).parent;
             while let Some(n) = cur {
                 if matches!(doc.get(n).data, NodeData::ShadowRoot { .. }) || doc.is_shadow_host(n) {
+                    miss |= 128;
                     return None;
                 }
                 cur = doc.get(n).parent;
             }
             Some(())
         })();
-        if proven.is_some()
-            && let Some(style) = map.styles.reuse_stamped(id)
-        {
+        if proven.is_none() {
+            note_forced_reuse_miss(miss);
+        } else if let Some(style) = map.styles.reuse_stamped(id) {
             note_forced_reused();
             reused = Some(style);
         }
