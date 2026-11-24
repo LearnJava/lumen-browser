@@ -691,6 +691,7 @@ fn run_window_mode_inner(
         frames: Vec::new(),
         frame_env: None,
         frame_nav_requests: Vec::new(),
+        frame_nav_in_flight: Vec::new(),
         pending_new_frames: Vec::new(),
         pending_frame_load_dispatch: Vec::new(),
         frame_scan_retry: false,

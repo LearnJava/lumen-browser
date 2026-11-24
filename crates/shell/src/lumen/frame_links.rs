@@ -502,6 +502,7 @@ impl Lumen {
         let href = href.map(str::to_owned);
         let nav_base = nav_base.clone();
         let proxy = self.load_proxy.clone();
+        self.frame_nav_in_flight.push((Arc::clone(&host_doc), host));
         std::thread::spawn(move || {
             let old_doc = Arc::clone(&prep.old_doc);
             let handles =
@@ -529,6 +530,11 @@ impl Lumen {
         generation: u64,
         handles: Vec<frames::FrameHandle>,
     ) {
+        // Снимаем бронь ДО проверки generation: ответ мог быть отброшен как
+        // устаревший, но полёт навигации от этого не продолжается — иначе
+        // `changed`-скан запустил бы дубликат на следующем же тике.
+        self.frame_nav_in_flight
+            .retain(|(d, h)| !(*h == host && Arc::ptr_eq(d, host_doc)));
         if !frames::frame_nav_generation_current(&self.frame_nav_requests, host_doc, host, generation) {
             return;
         }

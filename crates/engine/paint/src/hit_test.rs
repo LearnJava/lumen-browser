@@ -355,7 +355,23 @@ fn find_inline_source(
         let end = frag.x + frag.width + frag.padding_right;
         if rel_x >= start && rel_x < end {
             let pe = Some(frag.style.effective_pointer_events());
-            let src = frag.source_node;
+            // A frag `wrap_inline_run` merged across same-style text nodes
+            // carries several DOM sources (`merged_sources`); `source_node`
+            // alone is only the FIRST one, so resolve the span under `rel_x`
+            // — clicking "abc " of `<label>abc <input></label>` must reach
+            // that label's text, not the preceding "jkl " of the previous
+            // label merged into the same frag (WPT checkable-active-onblur).
+            let mut src = frag.source_node;
+            if !frag.merged_sources.is_empty() {
+                for span in lumen_layout::text_geometry::frag_source_spans(frag) {
+                    let sx = frag.x + span.x;
+                    let ex = sx + span.width;
+                    if rel_x >= sx && rel_x < ex && span.source_node.index() != 0 {
+                        src = span.source_node;
+                        break;
+                    }
+                }
+            }
             let exact = exact_line.then_some(frag).filter(|f| f.source_node.index() != 0);
             if src.index() != 0 {
                 return (src, pe, exact);

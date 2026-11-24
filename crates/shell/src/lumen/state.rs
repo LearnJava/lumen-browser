@@ -1296,6 +1296,16 @@ pub(crate) struct Lumen {
     /// [`Lumen::on_frame_nav_done`]. Заменяется вместе с [`Self::frames`]:
     /// `host_doc` внутри слота адресует документ, которого больше не будет.
     pub(crate) frame_nav_requests: Vec<crate::frames::FrameNavRequest>,
+    /// Навигации фреймов `(host_doc, host)`, чья фоновая загрузка ещё летит
+    /// (`replace_frame_document` принял запрос, `FrameNavDone` не пришёл).
+    /// `poll_dynamic_frames`'s `changed`-ветка сверяет `src`-атрибут с
+    /// `host_src` каждый тик: пока ответ в полёте, хэндл ещё старый и скан
+    /// честно видит расхождение — без этой брони он запускал бы НОВУЮ
+    /// навигацию на каждый тик, generation-механизм ронял все ответы кроме
+    /// последнего, а тот тоже успевал устареть — живой цикл перезагрузок
+    /// (WPT show-picker-cross-origin-iframe: iframe2 грузился 4 раза и
+    /// слал `postMessage` на каждую копию).
+    pub(crate) frame_nav_in_flight: Vec<(Arc<Mutex<Document>>, NodeId)>,
     /// FRAME-8: host-элементы `(document, NodeId, начало загрузки)`, чья первичная
     /// загрузка (вставлена скриптом ПОСЛЕ первичного прохода) уже отправлена на
     /// фоновый поток, но ещё не получила `LoadEvent::FrameNewLoadDone`.
