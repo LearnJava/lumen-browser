@@ -9,6 +9,62 @@ use super::reg;
 #[allow(unused_imports)]
 use super::super::*;
 
+/// PERF-QS-CACHE: `querySelector(All)`/`getElementById` results keyed by the
+/// `DomTouched` epoch. A selector without `:` (no pseudo-class/element) is a
+/// pure function of the DOM tree — tag/class/id/attribute/structural
+/// combinators only — and every DOM mutation bumps the epoch, so an entry can
+/// never outlive the change that would have altered its answer. Selectors
+/// containing `:` bypass the cache entirely: pseudo-classes may read runtime
+/// state (`:hover`, `:checked`, `:placeholder-shown`, …) that no DOM touch
+/// records. The map is capped and cleared wholesale on overflow — distinct
+/// (epoch, query) pairs per page are few.
+#[derive(Default)]
+struct QueryCache {
+    inner: std::sync::Mutex<QueryCacheInner>,
+}
+
+#[derive(Default)]
+struct QueryCacheInner {
+    by_epoch: std::collections::HashMap<u64, std::collections::HashMap<String, QueryHit>>,
+}
+
+#[derive(Clone)]
+enum QueryHit {
+    One(Option<u32>),
+    All(Vec<u32>),
+}
+
+impl QueryCache {
+    fn lookup(&self, epoch: u64, key: &str) -> Option<QueryHit> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .by_epoch
+            .get(&epoch)
+            .and_then(|m| m.get(key))
+            .cloned()
+    }
+
+    fn store(&self, epoch: u64, key: String, hit: QueryHit) {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if inner.by_epoch.len() > 8 {
+            inner.by_epoch.clear();
+        }
+        let epoch_map = inner.by_epoch.entry(epoch).or_default();
+        if epoch_map.len() >= 2048 {
+            epoch_map.clear();
+        }
+        epoch_map.insert(key, hit);
+    }
+}
+
+/// Whether `sel` is safe to memoize — no `:` means no pseudo anything.
+/// (An attribute value containing `:` only costs a cache miss, never a wrong
+/// answer.)
+fn qs_cacheable(sel: &str) -> bool {
+    !sel.contains(':')
+}
+
 /// BUG-986: скрипт передал `NodeId`, которого нет в арене этого документа
 /// (устаревший идентификатор, переживший навигацию, или из чужой вкладки).
 /// Раньше такой вызов ронял процесс паникой `index out of bounds` в
@@ -473,7 +529,9 @@ pub(crate) fn install_node_lookup(
     store: &mut Vec<OwnedNativeFn>,
     doc: Arc<Mutex<lumen_dom::Document>>,
     mirror: InteractiveMirror,
+    dom_touched: Arc<Mutex<DomTouched>>,
 ) -> JsResult<()> {
+    let query_cache = Arc::new(QueryCache::default());
     // CSS `:active` mirror write from the engine thread itself: the key
     // dispatch shim (`_lumen_dispatch_key_event`) sets/clears it
     // synchronously so `querySelector(':active')`/`matches()` in the same
@@ -489,13 +547,22 @@ pub(crate) fn install_node_lookup(
     // ── node lookup ──────────────────────────────────────────────────────────
     {
         let d = Arc::clone(&doc);
+        let qc = Arc::clone(&query_cache);
+        let tch = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, "_lumen_get_element_by_id", move |id: String| -> Option<u32> {
+            let epoch = tch.lock().unwrap_or_else(|e| e.into_inner()).epoch();
+            let key = format!("i:{id}");
+            if let Some(QueryHit::One(hit)) = qc.lookup(epoch, &key) {
+                return hit;
+            }
             let doc = d.lock().unwrap();
-            find_first_matching(&doc, doc.root(), &|node| {
+            let hit = find_first_matching(&doc, doc.root(), &|node| {
                 matches!(&node.data, NodeData::Element { .. })
                     && node.get_attr("id") == Some(id.as_str())
             })
-            .map(|n| n.raw())
+            .map(|n| n.raw());
+            qc.store(epoch, key, QueryHit::One(hit));
+            hit
         });
         // BUG-391: DOM LS требует `SyntaxError` DOMException на невалидный или
         // неподдерживаемый селектор в `querySelector(All)`/`matches`/`closest`.
@@ -508,18 +575,47 @@ pub(crate) fn install_node_lookup(
         });
         let d = Arc::clone(&doc);
         let fnid = mirror.clone();
+        let qc = Arc::clone(&query_cache);
+        let tch = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, "_lumen_query_selector", move |sel: String| -> Option<u32> {
             with_focus_state(&fnid, || {
+                if qs_cacheable(&sel) {
+                    let epoch = tch.lock().unwrap_or_else(|e| e.into_inner()).epoch();
+                    let key = format!("d:{sel}");
+                    if let Some(QueryHit::One(hit)) = qc.lookup(epoch, &key) {
+                        return hit;
+                    }
+                    let doc = d.lock().unwrap();
+                    let hit = find_first_dom_node_by_selector(&doc, &sel).map(|n| n.raw());
+                    qc.store(epoch, key, QueryHit::One(hit));
+                    return hit;
+                }
                 let doc = d.lock().unwrap();
                 find_first_dom_node_by_selector(&doc, &sel).map(|n| n.raw())
             })
         });
         let d = Arc::clone(&doc);
         let fnid = mirror.clone();
+        let qc = Arc::clone(&query_cache);
+        let tch = Arc::clone(&dom_touched);
         reg!(scope, ctx, store,
             "_lumen_query_selector_all",
             move |sel: String| -> Vec<u32> {
                 with_focus_state(&fnid, || {
+                    if qs_cacheable(&sel) {
+                        let epoch = tch.lock().unwrap_or_else(|e| e.into_inner()).epoch();
+                        let key = format!("d:{sel}");
+                        if let Some(QueryHit::All(hit)) = qc.lookup(epoch, &key) {
+                            return hit;
+                        }
+                        let doc = d.lock().unwrap();
+                        let hit: Vec<u32> = query_all(&doc, &sel)
+                            .into_iter()
+                            .map(|n| n.raw())
+                            .collect();
+                        qc.store(epoch, key, QueryHit::All(hit.clone()));
+                        return hit;
+                    }
                     let doc = d.lock().unwrap();
                     query_all(&doc, &sel)
                         .into_iter()
@@ -593,10 +689,32 @@ pub(crate) fn install_node_lookup(
         // returned nothing).
         let d = Arc::clone(&doc);
         let fnid = mirror.clone();
+        let qc = Arc::clone(&query_cache);
+        let tch = Arc::clone(&dom_touched);
         reg!(scope, ctx, store,
             "_lumen_query_selector_scoped",
             move |node_id: u32, sel: String| -> Option<u32> {
                 with_focus_state(&fnid, || {
+                    if qs_cacheable(&sel) {
+                        let epoch = tch.lock().unwrap_or_else(|e| e.into_inner()).epoch();
+                        let key = format!("s{node_id}:{sel}");
+                        if let Some(QueryHit::One(hit)) = qc.lookup(epoch, &key) {
+                            return hit;
+                        }
+                        let doc = d.lock().unwrap();
+                        let nid = NodeId::from_raw(node_id);
+                        // BUG-919: `_lumen_subtree_has_details`'s insertion-hook
+                        // pre-filter (`web_api_shim_tail_b.js`) can reach this
+                        // with a stale/foreign id — same class of input as
+                        // BUG-986's `_lumen_append_child` guard.
+                        let hit = if doc.contains_id(nid) {
+                            find_first_within(&doc, nid, &sel).map(|n| n.raw())
+                        } else {
+                            None
+                        };
+                        qc.store(epoch, key, QueryHit::One(hit));
+                        return hit;
+                    }
                     let doc = d.lock().unwrap();
                     let nid = NodeId::from_raw(node_id);
                     // BUG-919: `_lumen_subtree_has_details`'s insertion-hook
@@ -612,10 +730,32 @@ pub(crate) fn install_node_lookup(
         );
         let d = Arc::clone(&doc);
         let fnid = mirror.clone();
+        let qc = Arc::clone(&query_cache);
+        let tch = Arc::clone(&dom_touched);
         reg!(scope, ctx, store,
             "_lumen_query_selector_all_scoped",
             move |node_id: u32, sel: String| -> Vec<u32> {
                 with_focus_state(&fnid, || {
+                    if qs_cacheable(&sel) {
+                        let epoch = tch.lock().unwrap_or_else(|e| e.into_inner()).epoch();
+                        let key = format!("s{node_id}:{sel}");
+                        if let Some(QueryHit::All(hit)) = qc.lookup(epoch, &key) {
+                            return hit;
+                        }
+                        let doc = d.lock().unwrap();
+                        let nid = NodeId::from_raw(node_id);
+                        // BUG-919: same stale-id guard as `_lumen_query_selector_scoped` above.
+                        let hit: Vec<u32> = if doc.contains_id(nid) {
+                            query_all_within(&doc, nid, &sel)
+                                .into_iter()
+                                .map(|n| n.raw())
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
+                        qc.store(epoch, key, QueryHit::All(hit.clone()));
+                        return hit;
+                    }
                     let doc = d.lock().unwrap();
                     let nid = NodeId::from_raw(node_id);
                     // BUG-919: same stale-id guard as `_lumen_query_selector_scoped` above.
