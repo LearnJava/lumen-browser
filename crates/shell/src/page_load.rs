@@ -679,6 +679,7 @@ impl Lumen {
                 self.frame_env = page.frame_env;
                 // FRAME-4 срез 3: см. тот же сброс в `apply_loaded_page`.
                 frames::clear_frame_nav_requests(&mut self.frame_nav_requests);
+                self.frame_nav_in_flight.clear();
                 // FRAME-8: см. тот же сброс в `apply_loaded_page`.
                 self.pending_new_frames.clear();
                 self.pending_frame_load_dispatch.clear();
@@ -2173,6 +2174,7 @@ impl Lumen {
         // всё ещё летит, и так уйдёт в `apply_frame_navigation`'s "old_doc
         // отсутствует" ветку; чистка здесь — только против утечки памяти.
         frames::clear_frame_nav_requests(&mut self.frame_nav_requests);
+        self.frame_nav_in_flight.clear();
         // FRAME-8: та же причина — брони старой страницы адресуют документы,
         // которых больше нет.
         self.pending_new_frames.clear();
