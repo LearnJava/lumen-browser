@@ -148,9 +148,13 @@ mod tests {
         let t0 = Instant::now();
         stream_css_pending_add_at(g, t0);
         stream_css_pending_add_at(g, t0 + Duration::from_millis(500));
-        assert!(stream_css_pending_at(g, t0 + Duration::from_millis(1999)));
+        // PERF-STREAM-2 сократил дедлайн 2 с → 600 мс, а проверка осталась на
+        // 1999 мс: кадры «до дедлайна» надо брать от самого дедлайна, иначе тест
+        // проверяет уже наступившее истечение.
+        let before = STREAM_CSS_DEADLINE - Duration::from_millis(1);
+        assert!(stream_css_pending_at(g, t0 + before));
         assert_eq!(stream_css_pending_deadline(g), Some(t0 + STREAM_CSS_DEADLINE));
-        assert!(!stream_css_pending_expired_at(g, t0 + Duration::from_millis(1999)));
+        assert!(!stream_css_pending_expired_at(g, t0 + before));
         // Дедлайн отсчитывается от первого add, а не от последнего.
         let late = t0 + STREAM_CSS_DEADLINE;
         assert!(!stream_css_pending_at(g, late), "после дедлайна кадры идут");
