@@ -39,6 +39,10 @@ pub(crate) struct EngineCommit {
     /// Интерактивное состояние (hover/focus/active), под которым посчитаны
     /// `cascade_styles` — парное `Lumen::page_prev_interactive`.
     pub(crate) interactive: (Option<lumen_dom::NodeId>, Option<lumen_dom::NodeId>, Option<lumen_dom::NodeId>),
+    /// Модальность ввода (focus-from-keyboard, active-from-keyboard) того же
+    /// снимка — `:focus-visible`/`:active` зависят и от неё; парное
+    /// `interactive` для отсева устаревших style-push'ей на JS-стороне.
+    pub(crate) interactive_kb: (bool, bool),
     /// BUG-935 S41: `apply_relayout_result`'s JS-geometry-collection block
     /// (`collect_computed_styles` и Co.), precomputed here on the engine
     /// thread — S37-S40 found it the dominant cost of every commit, already
@@ -59,6 +63,18 @@ pub(crate) struct EngineCommit {
     #[cfg(feature = "v8")]
     pub(crate) precollected: Option<crate::js_precollect::PrecollectedJsData>,
 }
+
+/// `(hover, focus, active)` + `(focus-from-keyboard, active-from-keyboard)` —
+/// интерактивный снимок, под которым off-thread задание посчитало layout и
+/// прилагаемые style-push'и; `apply_relayout_result` сверяет его с живым
+/// состоянием на момент применения (см. параметр `snapshot_interactive`).
+pub(crate) type SnapshotInteractive = (
+    Option<lumen_dom::NodeId>,
+    Option<lumen_dom::NodeId>,
+    Option<lumen_dom::NodeId>,
+    bool,
+    bool,
+);
 
 /// Ack-стиль колбэк водяного знака acked-читалки затронутых узлов
 /// (`EngineCommit::touched_ack`) — тип вынесен из-за `clippy::type_complexity`.

@@ -1048,6 +1048,25 @@ pub(crate) trait PersistentJs: Send + Sync {
     #[allow(dead_code)]
     fn notify_keyboard_focus(&self, _keyboard: bool) {}
 
+    /// Whether a style snapshot pushed by a relayout job was computed under a
+    /// different interactive state (hover/focus/active/modality) than this
+    /// runtime's live mirrors — see
+    /// `V8JsRuntime::interactive_snapshot_stale`. Default `false`: runtimes
+    /// without interactive mirrors never go stale.
+    #[allow(dead_code)]
+    fn interactive_snapshot_stale(
+        &self,
+        _snapshot: lumen_js::v8_runtime::InteractiveStyleSnapshot,
+    ) -> bool {
+        false
+    }
+
+    /// Re-arm the JS-side style caches after a stale interactive snapshot was
+    /// dropped — the next same-tick flush recomputes against the live state.
+    /// Default no-op.
+    #[allow(dead_code)]
+    fn note_stale_interactive_snapshot(&self) {}
+
     /// Return the node ID of the current pointer capture target, if any.
     ///
     /// Non-consuming: the capture stays active until `take_pointer_capture()`.
@@ -1793,6 +1812,15 @@ impl PersistentJs for V8PersistentJs {
     }
     fn notify_keyboard_focus(&self, keyboard: bool) {
         self.rt.set_keyboard_focus(keyboard);
+    }
+    fn interactive_snapshot_stale(
+        &self,
+        snapshot: lumen_js::v8_runtime::InteractiveStyleSnapshot,
+    ) -> bool {
+        self.rt.interactive_snapshot_stale(snapshot)
+    }
+    fn note_stale_interactive_snapshot(&self) {
+        self.rt.note_stale_interactive_snapshot();
     }
     fn pointer_capture_nid(&self) -> Option<u32> {
         self.rt.pointer_capture_nid()

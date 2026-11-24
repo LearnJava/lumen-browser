@@ -52,6 +52,14 @@ impl Lumen {
         viewport: Size,
         defer_js_push: bool,
         #[cfg(feature = "v8")] precollected: Option<PrecollectedJsData>,
+        // Интерактивное состояние (hover/focus/active + модальность), под
+        // которым посчитан `lb` и прилагаемый `precollected`-снимок стилей.
+        // `Some` — отложенное off-thread задание: между его созданием и этим
+        // применением фокус/ховер могли уехать, и push стилей с устаревшим
+        // `:focus-visible` перезапишет корректную same-tick карту JS-стороны
+        // (WPT `focus-visible-009`). `None` — синхронный `relayout()` на
+        // UI-потоке: снимок свеж по построению, проверка не нужна.
+        #[cfg(feature = "v8")] snapshot_interactive: Option<crate::engine_bridge::SnapshotInteractive>,
     ) {
         // BUG-1634: текст страницы мог измениться — отложенные поднаборы `unicode-range`
         // с появившимися символами уходят в загрузку.
@@ -263,6 +271,18 @@ impl Lumen {
             // deferred engine task below — see `DeferredJsCollect`. A blocking
             // push (`defer_js_push=false`) still collects inline: its caller
             // gets the result back synchronously anyway.
+            // Снимок стилей живёт под `snapshot_interactive` — переводим
+            // NodeId в индексы, которыми оперируют JS-зеркала (`notify_*`).
+            #[cfg(feature = "v8")]
+            let style_snapshot = snapshot_interactive.map(|(h, f, a, kf, ka)| {
+                (
+                    h.map(|n| n.index() as u32),
+                    f.map(|n| n.index() as u32),
+                    a.map(|n| n.index() as u32),
+                    kf,
+                    ka,
+                )
+            });
             let pending = if self.js_present {
                 match precollected {
                     Some(mut data) => {
@@ -407,14 +427,22 @@ impl Lumen {
                         // off this tick — skip the push entirely rather than
                         // replace a possibly-fresher cache with an empty map
                         // (see `PrecollectedJsData::styles` doc comment).
-                        if let Some(styles) = styles {
-                            timed_step!("update_computed_styles", js.update_computed_styles(styles));
-                        }
-                        if let Some(pseudo_styles) = pseudo_styles {
-                            timed_step!("update_pseudo_computed_styles", js.update_pseudo_computed_styles(pseudo_styles));
-                        }
-                        if let Some(customs) = customs {
-                            timed_step!("update_custom_properties", js.update_custom_properties(customs));
+                        // Устаревший под интерактив снимок отбрасываем целиком:
+                        // его `:focus-visible`-записи перезаписали бы
+                        // корректную same-tick карту, а `maybe_flush` потом
+                        // отдавал бы их по early-return (WPT focus-visible-009).
+                        if style_snapshot.is_some_and(|s| js.interactive_snapshot_stale(s)) {
+                            js.note_stale_interactive_snapshot();
+                        } else {
+                            if let Some(styles) = styles {
+                                timed_step!("update_computed_styles", js.update_computed_styles(styles));
+                            }
+                            if let Some(pseudo_styles) = pseudo_styles {
+                                timed_step!("update_pseudo_computed_styles", js.update_pseudo_computed_styles(pseudo_styles));
+                            }
+                            if let Some(customs) = customs {
+                                timed_step!("update_custom_properties", js.update_custom_properties(customs));
+                            }
                         }
                         timed_step!("update_stylesheet", js.update_stylesheet(stylesheet));
                         timed_step!("update_viewport_size", js.update_viewport_size(vw, vh));
@@ -466,14 +494,19 @@ impl Lumen {
                         js.update_hit_test_tree(hit_test_tree);
                         // BUG-935 S44: see the sibling `defer_js_push` branch
                         // above — skip rather than overwrite with an empty map.
-                        if let Some(styles) = styles {
-                            js.update_computed_styles(styles);
-                        }
-                        if let Some(pseudo_styles) = pseudo_styles {
-                            js.update_pseudo_computed_styles(pseudo_styles);
-                        }
-                        if let Some(customs) = customs {
-                            js.update_custom_properties(customs);
+                        // Same stale-interactive drop as the deferred branch.
+                        if style_snapshot.is_some_and(|s| js.interactive_snapshot_stale(s)) {
+                            js.note_stale_interactive_snapshot();
+                        } else {
+                            if let Some(styles) = styles {
+                                js.update_computed_styles(styles);
+                            }
+                            if let Some(pseudo_styles) = pseudo_styles {
+                                js.update_pseudo_computed_styles(pseudo_styles);
+                            }
+                            if let Some(customs) = customs {
+                                js.update_custom_properties(customs);
+                            }
                         }
                         js.update_stylesheet(stylesheet);
                         js.update_viewport_size(vw, vh);
@@ -571,6 +604,14 @@ impl Lumen {
         let hp = Arc::clone(&self.hyp_provider);
         let web_fonts = self.web_fonts.clone();
         let dark_mode = self.dark_mode;
+        // Same stale-focus hazard as `relayout()`: the job captures the
+        // interactive triple once, on this thread — a `.focus()` queued since
+        // the last `about_to_wait` drain must land in `focused_node` first,
+        // or the engine cascade computes `:focus`/`:focus-visible` against
+        // "nothing focused" and `update_computed_styles` publishes `auto`
+        // over the same-tick flush's correct entry (WPT `focus-visible-009`).
+        #[cfg(feature = "v8")]
+        self.drain_js_focus_requests();
         let hovered = self.hovered_nid;
         let focused = self.focused_node;
         let active = self.active_nid;
@@ -846,6 +887,7 @@ impl Lumen {
                 compute_ms,
                 cascade_styles,
                 interactive: (hovered, focused, active),
+                interactive_kb: (keyboard_focus, active_keyboard),
                 touched_ack,
                 basis_sig,
                 #[cfg(feature = "v8")]
@@ -939,7 +981,7 @@ impl Lumen {
         self.engine_applied_generation = self.engine_job_generation;
         #[cfg(feature = "v8")]
         let precollected = commit.precollected;
-        let EngineCommit { content, layout_box, viewport, compute_ms, touched_ack, basis_sig, .. } = commit;
+        let EngineCommit { content, layout_box, viewport, compute_ms, interactive, interactive_kb, touched_ack, basis_sig, .. } = commit;
         self.apply_relayout_result(
             content,
             layout_box,
@@ -947,6 +989,8 @@ impl Lumen {
             false,
             #[cfg(feature = "v8")]
             precollected,
+            #[cfg(feature = "v8")]
+            Some((interactive.0, interactive.1, interactive.2, interactive_kb.0, interactive_kb.1)),
         );
         // PERF-RELAYOUT-JOB: readback применён синхронно — подтверждаем
         // водяной знак сразу, как сделал бы poll-путь ниже.
@@ -989,7 +1033,7 @@ impl Lumen {
         self.engine_applied_generation = commit.generation;
         #[cfg(feature = "v8")]
         let precollected = commit.precollected;
-        let EngineCommit { content, layout_box, viewport, compute_ms, cascade_styles, interactive, touched_ack, basis_sig, .. } = commit;
+        let EngineCommit { content, layout_box, viewport, compute_ms, cascade_styles, interactive, interactive_kb, touched_ack, basis_sig, .. } = commit;
         // BUG-935 S27: `defer_js_push=true` — S23/S24 measured this call site
         // (the `poll_engine_commit` off-thread commit path) as the dominant
         // contributor to the `QUERY_TIMEOUT` tax on the UI thread (S24's
@@ -1008,6 +1052,8 @@ impl Lumen {
             defer_js_push_override().unwrap_or(true),
             #[cfg(feature = "v8")]
             precollected,
+            #[cfg(feature = "v8")]
+            Some((interactive.0, interactive.1, interactive.2, interactive_kb.0, interactive_kb.1)),
         );
         // BUG-935 S80: `apply_relayout_result` обнулил кэш каскада; коммит принёс
         // стили того же прохода, по которому построено `layout_box` — возвращаем

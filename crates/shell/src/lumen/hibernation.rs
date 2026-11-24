@@ -286,9 +286,16 @@ impl Lumen {
                 js.update_client_rects(client_rects);
                 js.update_sticky_geoms(sticky_geoms);
                 js.update_hit_test_tree(hit_test_tree);
-                js.update_computed_styles(styles);
-                js.update_pseudo_computed_styles(pseudo_styles);
-                js.update_custom_properties(customs);
+                // Restored layout predates any focus/hover the page may set
+                // before this push lands — same stale-interactive drop as the
+                // fresh-load seed (WPT `focus-visible-009`).
+                if js.interactive_snapshot_stale((None, None, None, false, false)) {
+                    js.note_stale_interactive_snapshot();
+                } else {
+                    js.update_computed_styles(styles);
+                    js.update_pseudo_computed_styles(pseudo_styles);
+                    js.update_custom_properties(customs);
+                }
                 js.update_viewport_size(vw, vh);
             });
         }
