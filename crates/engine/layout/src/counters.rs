@@ -1646,6 +1646,14 @@ pub fn incremental_precompute_counters(
         } else {
             spine.as_ref().map(|spine| {
                 let mut set = spine.clone();
+                // `expanded` dedups the traversal itself — NOT `set.insert`:
+                // a descendant that is also a spine member (ancestor of a
+                // deeper root) must still expand its children, or the sideways
+                // subtrees under it never reach `needed` and their forced
+                // recomputes miss the pre_match table (measured on habr:
+                // ~99 % `miss_norules` — the subset table was fine, the set
+                // under-approximated).
+                let mut expanded: HashSet<NodeId> = HashSet::new();
                 let mut stack: Vec<NodeId> = dirty_roots
                     .iter()
                     .chain(shallow_roots.iter())
@@ -1653,7 +1661,8 @@ pub fn incremental_precompute_counters(
                     .copied()
                     .collect();
                 while let Some(id) = stack.pop() {
-                    if set.insert(id) {
+                    set.insert(id);
+                    if expanded.insert(id) {
                         stack.extend(flat.children_of(doc, id).iter().copied());
                     }
                 }
@@ -1663,21 +1672,19 @@ pub fn incremental_precompute_counters(
         let map = CounterMap::continuing(prev_styles, elements);
         (ctx, map, IncrRestyle { dirty_roots, shallow_roots, point_roots, content_dirty, spine, prev_counter_scopes, invalidation, prev_sheet }, pre_match_needed)
     };
+    // PERF-PRE-MATCH-SUBSET: the scoped walk recomputes exactly `needed` —
+    // spine ancestors plus every descendant of the delta's roots (the forced
+    // chain included) — so matching only those elements in parallel beats the
+    // whole-document table once `needed` actually covers the recompute set.
+    // The 1016888a0 full-table switch looked necessary only because the set
+    // under-approximated: spine members swallowed the descendant expansion
+    // (`set.insert` doubling as the visited check), so ~99 % of lookups missed
+    // and the walk re-matched serially. With `expanded` tracking traversal
+    // separately, measured hits on habr are 100 % and the subset saves
+    // ~0.5–1 s of `pre_match`+`compute_style` per load. An under-approximation
+    // still degrades to serial matching — never to a wrong style.
     let _pre_matched = match &pre_match_needed {
-        // PERF-PRE-MATCH-FULL: the scoped walk's forced recomputes escape
-        // `needed` — they hang off spine ancestors and cache misses, not the
-        // delta's roots — so on real pages the subset table served ~1 % of
-        // lookups while the walk re-matched ~2400 nodes serially per flush
-        // (`forced_same` ≈ 96 %). Matching the whole document in parallel
-        // costs less than that serial tail: measured on habr, `cascade_walk`
-        // ~3.5-4.1 s → ~1.8 s, `compute_style` ~3.2 s → ~1.6 s, `pre_match`
-        // ~1.2 s → ~1.7 s — net ≈ −1.5 s per load. The empty-`needed` case
-        // (font-metrics relayout: nothing recomputes) keeps the cheap subset
-        // path, which exits before any matching. A size threshold was tried
-        // and rejected: `needed` stays small even on flushes whose forced
-        // recomputes reach thousands of nodes, so it cannot predict the
-        // serial re-match tail — measured regression on habr.
-        Some(needed) if needed.is_empty() => {
+        Some(needed) => {
             // pre_match workers may reuse pseudo match records from the
             // carried cache — drop exactly the set this walk will recompute
             // first, the same invalidation `pseudo_drop_node` applies
