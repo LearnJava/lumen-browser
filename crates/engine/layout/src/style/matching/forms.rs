@@ -594,9 +594,8 @@ fn matches_checked(doc: &Document, node: NodeId) -> bool {
 
 /// `:indeterminate` (CSS Selectors L4 §10.2, HTML5 §4.16.3 + §4.10.18.4).
 /// Применяется к:
-/// - `<input type=checkbox>` с DOM-флагом indeterminate (Phase 0: всегда
-///   `false` — флаг существует только через JS `.indeterminate = true`,
-///   которого пока нет);
+/// - `<input type=checkbox>` с DOM-флагом indeterminate (`input.indeterminate`,
+///   HTML LS §4.10.5.3.16 — document-side, без content-атрибута);
 /// - `<input type=radio>` в группе (одинаковый `name` внутри ближайшей
 ///   form-owner-области) без ни одного checked-радио. Если радио без `name`,
 ///   группа = только сам элемент — тогда indeterminate ≡ нет `checked`;
@@ -638,9 +637,9 @@ fn matches_indeterminate(doc: &Document, node: NodeId) -> bool {
                     doc.control_checked(n)
                 })
             } else {
-                // Phase 0: checkbox indeterminate выставляется только через
-                // JS — DOM не выражает этого. Всегда false.
-                false
+                // `input.indeterminate` — document-side flag (HTML LS
+                // §4.10.5.3.16), set only through JS.
+                doc.is_indeterminate(node)
             }
         }
         "progress" => node_ref.get_attr("value").is_none(),

@@ -1748,6 +1748,161 @@ function _lumen_float_repr(n) {
     // grammar accepts that shape already, so pass it through.
     return s;
 }
+
+// ── HTML LS §4.10.5.3.10 «value sanitization algorithm» ─────────────────────
+// Runs when `.value` is set by script, when the `value` content attribute is
+// read back through `.value` (the default value is sanitized the same way),
+// and on every `type` change — the new state's algorithm re-runs over the
+// current value. `number` keeps its own strict/user split above; every other
+// state sanitizes identically for script and user input.
+var _LUMEN_INPUT_TYPE_KEYS = {
+    button: 1, checkbox: 1, color: 1, date: 1, 'datetime-local': 1, email: 1,
+    file: 1, hidden: 1, image: 1, month: 1, number: 1, password: 1, radio: 1,
+    range: 1, reset: 1, search: 1, submit: 1, tel: 1, text: 1, time: 1,
+    url: 1, week: 1
+};
+function _lumen_input_canonical_type(nid) {
+    var t = _lumen_u2n(_lumen_get_attr(nid, 'type'));
+    if (t === null) return 'text';
+    t = String(t).toLowerCase();
+    return _LUMEN_INPUT_TYPE_KEYS[t] ? t : 'text';
+}
+function _lumen_days_in_month(y, m) {
+    if (m === 2) {
+        var leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+        return leap ? 29 : 28;
+    }
+    return (m === 4 || m === 6 || m === 9 || m === 11) ? 30 : 31;
+}
+function _lumen_parse_valid_date(s) {
+    var m = /^(\d{4,})-(\d{2})-(\d{2})$/.exec(s);
+    if (!m) return null;
+    var y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+    if (y < 1 || mo < 1 || mo > 12 || d < 1 || d > _lumen_days_in_month(y, mo)) return null;
+    return { y: y, m: mo, d: d };
+}
+function _lumen_parse_valid_month(s) {
+    var m = /^(\d{4,})-(\d{2})$/.exec(s);
+    if (!m) return null;
+    var y = Number(m[1]), mo = Number(m[2]);
+    if (y < 1 || mo < 1 || mo > 12) return null;
+    return { y: y, m: mo };
+}
+function _lumen_iso_weeks_in_year(y) {
+    // Proleptic Gregorian: 0001-01-01 was a Monday; a year has 53 ISO weeks
+    // iff it starts on Thursday, or is a leap year starting on Wednesday.
+    var days = 365 * (y - 1) + Math.floor((y - 1) / 4) - Math.floor((y - 1) / 100)
+        + Math.floor((y - 1) / 400);
+    var jan1 = days % 7; // 0 = Monday
+    var leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+    return (jan1 === 3 || (leap && jan1 === 2)) ? 53 : 52;
+}
+function _lumen_parse_valid_week(s) {
+    var m = /^(\d{4,})-W(\d{2})$/.exec(s);
+    if (!m) return null;
+    var y = Number(m[1]), w = Number(m[2]);
+    if (y < 1 || w < 1 || w > _lumen_iso_weeks_in_year(y)) return null;
+    return { y: y, w: w };
+}
+function _lumen_parse_valid_time(s) {
+    var m = /^(\d{2}):(\d{2})(?::(\d{2})(\.\d{1,3})?)?$/.exec(s);
+    if (!m) return null;
+    var h = Number(m[1]), mi = Number(m[2]), sec = m[3] === undefined ? 0 : Number(m[3]);
+    if (h > 23 || mi > 59 || sec > 59) return null;
+    return true;
+}
+// «Valid normalized» time: `hh:mm`, seconds only when nonzero, fraction only
+// with seconds and trailing zeros trimmed (HTML LS «valid normalized …
+// string» rules shared by `time` and `datetime-local`).
+function _lumen_normalize_hms(s) {
+    var m = /^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/.exec(s);
+    if (!m) return null;
+    var h = Number(m[1]), mi = Number(m[2]);
+    if (h > 23 || mi > 59) return null;
+    var sec = m[3] === undefined ? 0 : Number(m[3]);
+    if (sec > 59) return null;
+    var frac = m[4] || '';
+    if (frac) frac = frac.replace(/0+$/, '');
+    var base = m[1] + ':' + m[2];
+    if (sec === 0 && frac === '') return base;
+    return base + ':' + (m[3] || '00') + (frac ? '.' + frac : '');
+}
+function _lumen_parse_valid_local_dt(s) {
+    // «valid local date and time string»: date, 'T' or space, time —
+    // normalized to the 'T' form with a normalized time component.
+    var sep = s.indexOf('T') >= 0 ? 'T' : (s.indexOf(' ') >= 0 ? ' ' : null);
+    if (sep === null) return null;
+    var i = s.indexOf(sep);
+    var d = _lumen_parse_valid_date(s.slice(0, i));
+    var t = _lumen_normalize_hms(s.slice(i + 1));
+    if (d === null || t === null) return null;
+    return s.slice(0, i) + 'T' + t;
+}
+function _lumen_input_sanitize_value(nid, v) {
+    var s = String(v);
+    var t = _lumen_input_canonical_type(nid);
+    switch (t) {
+        // `hidden` has no value sanitization algorithm — newlines survive.
+        case 'text': case 'search': case 'tel': case 'password':
+            return s.replace(/[\r\n]/g, '');
+        case 'url': case 'email':
+            return s.replace(/[\r\n]/g, '').replace(/^[ \t\f\r ]+|[ \t\f\r ]+$/g, '');
+        case 'number':
+            return _lumen_number_sanitize_strict(s);
+        case 'range': {
+            // HTML LS §4.10.5.3.10: non-numeric → default value (midpoint of
+            // min/max, defaults 0/100); numeric → clamped into [min, max].
+            var minA = _lumen_u2n(_lumen_get_attr(nid, 'min'));
+            var maxA = _lumen_u2n(_lumen_get_attr(nid, 'max'));
+            var minN = (minA !== null && _lumen_is_valid_float(minA)) ? Number(minA) : 0;
+            var maxN = (maxA !== null && _lumen_is_valid_float(maxA)) ? Number(maxA) : 100;
+            if (minN > maxN) { var tmp = minN; minN = maxN; maxN = tmp; }
+            var n = _lumen_is_valid_float(s) ? Number(s) : NaN;
+            if (!isFinite(n)) n = minN + (maxN - minN) / 2;
+            if (n < minN) n = minN;
+            if (n > maxN) n = maxN;
+            return _lumen_float_repr(n);
+        }
+        case 'color': {
+            // «Valid simple color»: any <color> the engine parses (hex,
+            // keywords, rgb()/hsl()/color(), …) serializes to lowercase
+            // #rrggbb; anything else is #000000 (HTML LS §4.10.5.3.11).
+            var c = s.replace(/^[ \t\n\f\r]+|[ \t\n\f\r]+$/g, '');
+            var rgba = (typeof _wa_color_rgba === 'function') ? _wa_color_rgba(c) : null;
+            if (!rgba) return '#000000';
+            var hx = function(n) { var h = Math.max(0, Math.min(255, n | 0)).toString(16); return h.length < 2 ? '0' + h : h; };
+            return '#' + hx(rgba[0]) + hx(rgba[1]) + hx(rgba[2]);
+        }
+        case 'date':
+            return _lumen_parse_valid_date(s) !== null ? s : '';
+        case 'month':
+            return _lumen_parse_valid_month(s) !== null ? s : '';
+        case 'week':
+            return _lumen_parse_valid_week(s) !== null ? s : '';
+        case 'time':
+            // HTML LS: the sanitization algorithm only checks «valid time
+            // string» — it does not normalize (`12:00:00.000` survives).
+            return _lumen_parse_valid_time(s) ? s : '';
+        case 'datetime-local': {
+            var norm = _lumen_parse_valid_local_dt(s);
+            return norm !== null ? norm : '';
+        }
+        case 'file':
+            // The value of a file input is always the empty string from the
+            // page's side (script assignment throws before this is reached).
+            return '';
+        default:
+            // checkbox/radio/submit/image/reset/button: no sanitization.
+            return s;
+    }
+}
+// HTML LS §4.10.5.4: checkbox/radio `.value` defaults to "on" when the
+// `value` content attribute is absent.
+function _lumen_input_default_on(nid) {
+    var t = _lumen_input_canonical_type(nid);
+    return (t === 'checkbox' || t === 'radio')
+        && _lumen_u2n(_lumen_get_attr(nid, 'value')) === null;
+}
 function _lumen_set_field_value(nid, value) {
     var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
     if (tag === 'INPUT' || tag === 'TEXTAREA') {
@@ -7020,6 +7175,37 @@ function ValidityState(flags) {
               && !this.badInput       && !this.customError;
 }
 
+// Current checkedness of `nid` without minting a wrapper: the dirty flag
+// first, the `checked` content attribute as the default (BUG-444 shape).
+function _lumen_raw_checked(nid) {
+    var dc = _lumen_u2n(_lumen_get_dirty_checked(nid));
+    return dc !== null ? dc : _lumen_has_attr(nid, 'checked');
+}
+
+// Whether any member of `nid`'s radio button group (HTML LS §4.10.5.1.13:
+// same tree, same form owner, same non-empty `name`) is checked — the
+// «suffers from missing value» test for a required radio.
+function _lumen_radio_group_any_checked(nid) {
+    var name = _lumen_u2n(_lumen_get_attr(nid, 'name'));
+    if (name === null || String(name) === '') {
+        // Singleton group — only the element itself can satisfy it.
+        return _lumen_raw_checked(nid);
+    }
+    var owner = _lumen_form_owner(nid);
+    var scope = _lumen_selection_tree_root_nid(nid);
+    var all = _lumen_descendant_elements(scope, []);
+    for (var i = 0; i < all.length; i++) {
+        if ((_lumen_get_tag_name(all[i]) || '').toUpperCase() !== 'INPUT') continue;
+        var t = _lumen_u2n(_lumen_get_attr(all[i], 'type'));
+        if (t === null || String(t).toLowerCase() !== 'radio') continue;
+        var nm = _lumen_u2n(_lumen_get_attr(all[i], 'name'));
+        if (nm === null || String(nm) !== String(name)) continue;
+        if (_lumen_form_owner(all[i]) !== owner) continue;
+        if (_lumen_raw_checked(all[i])) return true;
+    }
+    return false;
+}
+
 // Computes ValidityState for a form control element (HTML LS §4.10.21.1).
 function _compute_validity(el) {
     var flags = {};
@@ -7028,9 +7214,17 @@ function _compute_validity(el) {
     var enid  = el.__nid__;
     var customMsg = (enid !== undefined && _validity_msg[enid]) ? _validity_msg[enid] : '';
 
-    // §4.10.21.1 #1: valueMissing — required + empty
-    if (el.hasAttribute && el.hasAttribute('required') && val.trim() === '') {
-        flags.valueMissing = true;
+    // §4.10.21.1 #1: valueMissing — required + empty. Checkbox/radio have
+    // their own rule: required + unchecked (for radio, «unchecked» means the
+    // whole group — any checked member satisfies every required member).
+    if (el.hasAttribute && el.hasAttribute('required')) {
+        if (type === 'checkbox' && enid !== undefined) {
+            if (!_lumen_raw_checked(enid)) flags.valueMissing = true;
+        } else if (type === 'radio' && enid !== undefined) {
+            if (!_lumen_radio_group_any_checked(enid)) flags.valueMissing = true;
+        } else if (val.trim() === '') {
+            flags.valueMissing = true;
+        }
     }
 
     // §4.10.21.1 #3: typeMismatch — email/url/number format
@@ -10905,21 +11099,25 @@ var _LUMEN_WRAPPER_MEMBERS = {
                         if (String(dit).toLowerCase() === 'number') {
                             return _lumen_number_sanitize_user(String(dv)).text;
                         }
+                        var dvres = String(dv);
+                        // §4.10.5.4: an empty checkbox/radio value reports "on".
+                        if (dvres === '' && _lumen_input_default_on(nid)) return 'on';
+                        return dvres;
                     }
                     return String(dv);
                 }
                 if (tag0 === 'TEXTAREA') return _lumen_get_text_content(nid);
                 var dav = _lumen_u2n(_lumen_get_attr(nid, 'value'));
-                if (dav === null) return '';
-                // The `value` content attribute goes through the same strict
-                // number sanitization as a script-set value.
-                if (tag0 === 'INPUT') {
-                    var itype = (_lumen_u2n(_lumen_get_attr(nid, 'type')) || 'text');
-                    if (String(itype).toLowerCase() === 'number') {
-                        return _lumen_number_sanitize_strict(String(dav));
-                    }
+                if (dav === null) {
+                    // §4.10.5.4: checkbox/radio default their value to "on".
+                    if (_lumen_input_default_on(nid)) return 'on';
+                    // Types with a non-empty default sanitize '' into it:
+                    // `color` → #000000, `range` → the min/max midpoint.
+                    return _lumen_input_sanitize_value(nid, '');
                 }
-                return String(dav);
+                // The `value` content attribute goes through the same value
+                // sanitization algorithm as a script-set value.
+                return _lumen_input_sanitize_value(nid, String(dav));
             }
             if (_input_values[nid] !== undefined) return _input_values[nid];
             var tag = tag0;
@@ -10949,17 +11147,33 @@ var _LUMEN_WRAPPER_MEMBERS = {
             // `value` content attribute is left alone on purpose — it is the
             // default value `defaultValue`/`form.reset()` restore.
             if (tag === 'INPUT' || tag === 'TEXTAREA') {
-                var sv = String(v);
+                // `[LegacyNullToEmptyString]` on the value IDL: `null`
+                // assigns the empty string, not "null" (valueMode.html).
+                var sv = (v === null) ? '' : String(v);
                 if (tag === 'INPUT') {
-                    var itype = (_lumen_u2n(_lumen_get_attr(nid, 'type')) || 'text');
-                    if (String(itype).toLowerCase() === 'number') {
-                        // Script-set sanitization is the strict one — never
-                        // badInput (that flag belongs to user edits only).
-                        sv = _lumen_number_sanitize_strict(sv);
-                        delete _bad_input_values[nid];
+                    var itype = _lumen_input_canonical_type(nid);
+                    if (itype === 'file' && sv !== '') {
+                        // HTML LS §4.10.5.3.10: only the UA may set a file
+                        // input's value; the empty string clears it.
+                        throw new DOMException(
+                            'This input element accepts a filename, which may only be programmatically set.',
+                            'InvalidStateError');
                     }
+                    // Script-set sanitization is the strict one — never
+                    // badInput (that flag belongs to user edits only).
+                    sv = _lumen_input_sanitize_value(nid, sv);
+                    if (itype === 'number') delete _bad_input_values[nid];
                 }
                 _lumen_set_dirty_value(nid, sv);
+                // HTML LS §4.10.5.4: replacing the value moves the text entry
+                // cursor to the end of the new value — silently, no `select`
+                // event (Blink/WebKit behaviour; required so a later
+                // `select()` sees a real selection change).
+                if (typeof _lumen_selection_applies === 'function'
+                    && _lumen_selection_applies(nid)
+                    && typeof _lumen_set_text_selection_native === 'function') {
+                    _lumen_set_text_selection_native(nid, sv.length, sv.length, 0);
+                }
                 return;
             }
             _input_values[nid] = String(v);
@@ -10972,7 +11186,16 @@ var _LUMEN_WRAPPER_MEMBERS = {
             return dc !== null ? dc : _lumen_has_attr(nid, 'checked');
         },
         set checked(v) { var nid = this.__nid__;
-            _lumen_set_dirty_checked(nid, !!v);
+            v = !!v;
+            // HTML LS §4.10.5.1.13: making a radio checked unchecks every
+            // other radio in its group — the same rule a click runs through
+            // `_lumen_radio_select`; a script write must not leave the group
+            // half-checked (WPT the-input-element/radio*.html, clone.html).
+            if (v && (_lumen_u2n(_lumen_get_attr(nid, 'type')) || '').toLowerCase() === 'radio') {
+                _lumen_radio_select(nid);
+            } else {
+                _lumen_set_dirty_checked(nid, v);
+            }
         },
         // ── Constraint Validation API (HTML LS §4.10.21) ─────────────────────────
         get validity() { var nid = this.__nid__; return _compute_validity(this); },
@@ -11026,10 +11249,35 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // NotSupportedError, as the spec allows.
         showPicker: function() { var nid = this.__nid__;
             var t = (this.type || 'text').toLowerCase();
+            // Spec order (HTML LS §4.10.5.1.14 «showPicker()»):
+            // 1. mutable — not disabled, and not `readonly` in a state where
+            //    the readonly content attribute applies (the text-entry,
+            //    number and date/time states; buttons/checkbox/color/file/
+            //    hidden/image/radio/range/reset/submit ignore it).
+            var readonlyApplies = {
+                'text': 1, 'search': 1, 'tel': 1, 'url': 1, 'email': 1,
+                'password': 1, 'date': 1, 'month': 1, 'week': 1, 'time': 1,
+                'datetime-local': 1, 'number': 1,
+            };
+            if (this.disabled || (this.readOnly && readonlyApplies[t] === 1)) {
+                throw new DOMException('showPicker() called on a non-mutable element', 'InvalidStateError');
+            }
+            // 3. transient activation — checked BEFORE consuming, and the
+            // activation is consumed even when the type has no picker UI
+            // («show the picker, if applicable» consumes first, then returns
+            // for unsupported types — a silent no-op, never NotSupportedError
+            // for input).
+            var act = (typeof navigator !== 'undefined') ? navigator.userActivation : null;
+            if (!act || act.isActive !== true) {
+                throw new DOMException('showPicker() requires transient user activation', 'NotAllowedError');
+            }
+            if (typeof _lumen_consume_user_activation === 'function') {
+                _lumen_consume_user_activation();
+            }
             // `file` stays unsupported: the OS dialog blocks the event loop,
-            // so `showPicker()` on it would hang the page. `text[list]`
-            // opens the datalist popup — tracked shell-side for `:open`
-            // (the popup UI itself is not implemented yet).
+            // so `showPicker()` on it would hang the page — treated as «no
+            // picker», the spec-permitted no-op. `text[list]` opens the
+            // datalist popup — tracked shell-side for `:open`.
             var pickerTypes = ['color', 'date', 'datetime-local', 'week', 'month', 'time'];
             var supported = false;
             for (var _pi = 0; _pi < pickerTypes.length; _pi++) {
@@ -11040,16 +11288,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                     this.hasAttribute('list')) {
                 supported = true;
             }
-            if (!supported) {
-                var err = new Error('showPicker() is not supported for type ' + t);
-                err.name = 'NotSupportedError';
-                throw err;
-            }
-            if (this.disabled) {
-                var err2 = new Error('showPicker() called on a disabled element');
-                err2.name = 'InvalidStateError';
-                throw err2;
-            }
+            if (!supported) return;
             // `:open` must match in the same script turn (WPT asserts right
             // after showPicker()), so the sentinel goes on synchronously via
             // the normal setAttribute path; the shell drain only opens the

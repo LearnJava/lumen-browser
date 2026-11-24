@@ -777,6 +777,12 @@ pub struct Document {
     /// stay that way across tab hibernation.
     #[serde(default)]
     dirty_checkedness: HashMap<NodeId, bool>,
+    /// `input.indeterminate` (HTML LS §4.10.5.3.16) — a flag with no content
+    /// attribute behind it, so it lives document-side like the dirty maps:
+    /// keyed by `NodeId`, membership means the flag is set. Cloning steps
+    /// copy it ([`Document::deep_clone`]), `form.reset()` does not touch it.
+    #[serde(default)]
+    indeterminate: HashSet<NodeId>,
     /// See [`ContentJournal`]. Not serialised.
     #[serde(skip)]
     content_journal: ContentJournal,
@@ -919,6 +925,7 @@ impl Document {
             dirty_values: HashMap::new(),
             text_selections: HashMap::new(),
             dirty_checkedness: HashMap::new(),
+            indeterminate: HashSet::new(),
             content_journal: ContentJournal::default(),
             design_mode: false,
             character_set: default_character_set(),
@@ -1238,6 +1245,28 @@ impl Document {
     pub fn clear_control_checked(&mut self, id: NodeId) {
         self.content_journal.note(id);
         self.dirty_checkedness.remove(&id);
+    }
+
+    /// Whether `input.indeterminate` is set for this node.
+    pub fn is_indeterminate(&self, id: NodeId) -> bool {
+        self.indeterminate.contains(&id)
+    }
+
+    /// Set or clear `input.indeterminate`. The flag has no content attribute
+    /// and is not reset by `form.reset()`.
+    pub fn set_indeterminate(&mut self, id: NodeId, on: bool) {
+        self.content_journal.note(id);
+        if on {
+            self.indeterminate.insert(id);
+        } else {
+            self.indeterminate.remove(&id);
+        }
+    }
+
+    /// The control's **current** indeterminate flag — a plain read for
+    /// `:indeterminate` matching and painting.
+    pub fn control_indeterminate(&self, id: NodeId) -> bool {
+        self.is_indeterminate(id)
     }
 
     /// Текущий target — id из URL fragment (без ведущего `#`), к которому
@@ -2046,6 +2075,19 @@ impl Document {
             _ => None,
         };
         let clone = self.alloc(data);
+        // HTML LS §4.10.x «cloning steps» for form controls: value, checkedness
+        // and indeterminateness are copied with their dirty flags — an entry in
+        // the dirty maps *is* the flag, so copying the entry copies both.
+        if let Some(v) = self.dirty_values.get(&node) {
+            let v = v.clone();
+            self.dirty_values.insert(clone, v);
+        }
+        if let Some(c) = self.dirty_checkedness.get(&node) {
+            self.dirty_checkedness.insert(clone, *c);
+        }
+        if self.indeterminate.contains(&node) {
+            self.indeterminate.insert(clone);
+        }
         // The clone is a new element of the same tag, so it gets the UA
         // shadow tree `create_element` would have given it.
         if let Some(kind) = ua_shadow {
