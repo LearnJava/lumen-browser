@@ -544,6 +544,15 @@ impl Lumen {
         // `PerformanceObserver` must see slow frames in ordinary live
         // browsing, not only when profiling is turned on.
         let frame_start = std::time::Instant::now();
+        // JS `.focus()`/`.blur()` queue `_lumen_request_focus` for the next
+        // `about_to_wait` drain — a relayout triggered between the script turn
+        // and that drain would capture a stale `focused_node` and publish
+        // `:focus`/`:focus-visible` styles computed without the new focus
+        // (WPT `focus-visible-009`: shell's `update_computed_styles` overwrote
+        // the same-tick flush's correct entry with `auto`). Drain first so the
+        // interactive snapshot below is the freshest the JS side has.
+        #[cfg(feature = "v8")]
+        self.drain_js_focus_requests();
         let Some(src) = self.layout_source.as_ref() else { return };
         // Set interactive hover/focus/active state for this layout pass so that
         // :hover / :focus / :active / :focus-within CSS rules evaluate correctly.
@@ -628,6 +637,8 @@ impl Lumen {
             lb,
             viewport,
             defer_js_push_override().unwrap_or(true),
+            #[cfg(feature = "v8")]
+            None,
             #[cfg(feature = "v8")]
             None,
         );
@@ -743,6 +754,11 @@ impl Lumen {
         // (та же причина, что гейт `animated_heights.is_empty()` в
         // `make_relayout_job`). Снимок пуст ⇒ `animated_empty` для сигнатуры
         // базиса ниже всегда `true` на этом пути.
+        // Same stale-focus hazard as `relayout()`: a `.focus()` queued since
+        // the last `about_to_wait` drain must land in `focused_node` before
+        // the interactive snapshot below (and the job's captured triple).
+        #[cfg(feature = "v8")]
+        self.drain_js_focus_requests();
         let animated_empty = self.animated_heights_snapshot().is_empty();
         if !animated_empty {
             return false;
@@ -1035,6 +1051,8 @@ impl Lumen {
             new_lb,
             viewport,
             true,
+            #[cfg(feature = "v8")]
+            None,
             #[cfg(feature = "v8")]
             None,
         );
