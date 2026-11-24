@@ -180,7 +180,7 @@ fn bug341_s17_keystroke_restyle_census() {
                         );
                     }
                 }
-                let delta = lumen_layout::counters::RestyleDelta { invalidation: None,
+                let delta = lumen_layout::counters::RestyleDelta { invalidation: None, attr_changed: None,
                     prev_styles: std::mem::take(&mut state.prev_cascade_styles),
                     dirty_roots,
                     content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
@@ -382,7 +382,7 @@ fn bug341_s18_keystroke_box_build_census() {
                     chrome_node_changes(&touched),
                     &node_index,
                 );
-                let delta = lumen_layout::counters::RestyleDelta { invalidation: None,
+                let delta = lumen_layout::counters::RestyleDelta { invalidation: None, attr_changed: None,
                     prev_styles: std::mem::take(&mut state.prev_cascade_styles),
                     dirty_roots,
                     content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
@@ -599,7 +599,7 @@ fn bug341_s19_copy_census() {
                         chrome_node_changes(&touched),
                         &node_index,
                     ));
-                    let delta = lumen_layout::counters::RestyleDelta { invalidation: None,
+                    let delta = lumen_layout::counters::RestyleDelta { invalidation: None, attr_changed: None,
                         prev_styles: std::mem::take(&mut state.prev_cascade_styles),
                         dirty_roots,
                         content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
@@ -737,7 +737,7 @@ fn bug341_s20_stage_census() {
                         chrome_node_changes(&touched),
                         &node_index,
                     ));
-                    let delta = lumen_layout::counters::RestyleDelta { invalidation: None,
+                    let delta = lumen_layout::counters::RestyleDelta { invalidation: None, attr_changed: None,
                         prev_styles: std::mem::take(&mut state.prev_cascade_styles),
                         dirty_roots,
                         content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
@@ -1041,7 +1041,7 @@ fn bug341_s21_cascade_index_census() {
                         chrome_node_changes(&touched),
                         &node_index,
                     ));
-                    let delta = lumen_layout::counters::RestyleDelta { invalidation: None,
+                    let delta = lumen_layout::counters::RestyleDelta { invalidation: None, attr_changed: None,
                         prev_styles: std::mem::take(&mut state.prev_cascade_styles),
                         dirty_roots,
                         content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),

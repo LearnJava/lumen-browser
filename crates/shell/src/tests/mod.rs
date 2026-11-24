@@ -273,7 +273,7 @@ fn cc12_bench_cycle(
                 let (state_index, node_index) = state.restyle_indexes.indexes(doc, sheet);
                 roots(state_index, node_index)
             };
-            let delta = lumen_layout::counters::RestyleDelta { invalidation: None,
+            let delta = lumen_layout::counters::RestyleDelta { invalidation: None, attr_changed: None,
                 prev_styles: std::mem::take(&mut state.prev_cascade_styles),
                 dirty_roots,
                 // BUG-341 S16 — mirrors `relayout_chrome_host` exactly, so

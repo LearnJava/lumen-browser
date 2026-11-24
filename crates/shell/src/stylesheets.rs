@@ -177,7 +177,7 @@ pub(crate) fn load_linked_stylesheets(
         {
             subscribe_late_stylesheet(
                 feed, *node, href, &gate_url, base, sink, cookie_jar.clone(), charset_attr.as_deref(),
-                doc_encoding, csp_gate.clone(), self_origin.clone(), referrer_policy, media_ctx,
+                doc_encoding, csp_gate.clone(), self_origin.clone(), referrer_policy, media_ctx, true,
             );
             return FetchedSheet::Pending;
         }
@@ -231,6 +231,41 @@ pub(crate) fn load_linked_stylesheets(
             FetchedSheet::Failed => outcomes.push((*node, false)),
             // LOAD-4: `load`/`error` придут вместе с байтами — от `Lumen`.
             FetchedSheet::Pending => {}
+        }
+    }
+
+    // HTML LS §4.2.4: `<link media>` с не матчащим окружением в каскад не
+    // входит (`collect_link_hrefs` его отфильтровал), но лист всё равно
+    // загружается и появляется в `document.styleSheets` — в живом окне это
+    // делает поздняя подписка с `apply = false`: байты доезжают тем же
+    // `PREFETCH_CACHE`-путём, а `apply_late_stylesheet` регистрирует запись
+    // реестра без входа в каскад. Скрипты её не ждут — в отличие от
+    // матчащих листов выше.
+    if let Some(feed) = late {
+        let mut mismatched = Vec::new();
+        let preferred = doc.preferred_sheet_set();
+        collect_mismatched_link_hrefs(doc, doc.root(), media_ctx, preferred.as_deref(), &mut mismatched);
+        for (node, href, charset_attr, referrer_policy_attr) in mismatched {
+            let referrer_policy = referrer_policy_attr
+                .as_deref()
+                .and_then(lumen_network::ReferrerPolicy::parse)
+                .unwrap_or(doc_referrer_policy);
+            let gate_url = stylesheet_gate_url(&href, base, gate_ref);
+            if let Some((policy, _)) = &csp_gate {
+                let nonce = doc.get(node).get_attr("nonce");
+                if crate::csp_enforce::style_link_blocked(policy, &gate_url, self_origin.as_ref(), nonce) {
+                    continue;
+                }
+            }
+            if matches!(base.resolve(&href), ResolvedResource::Url(_))
+                && crate::prefetch::PREFETCH_CACHE.try_fetch_current(&gate_url).is_none()
+            {
+                subscribe_late_stylesheet(
+                    feed, node, &href, &gate_url, base, sink, cookie_jar.clone(),
+                    charset_attr.as_deref(), doc_encoding, csp_gate.clone(), self_origin.clone(),
+                    referrer_policy, media_ctx, false,
+                );
+            }
         }
     }
     (css, outcomes, blocked_by_style_src)
@@ -308,6 +343,7 @@ fn subscribe_late_stylesheet(
     self_origin: Option<Origin>,
     referrer_policy: lumen_network::ReferrerPolicy,
     media_ctx: &lumen_css_parser::MediaContext,
+    apply: bool,
 ) {
     let proxy = feed.proxy.clone();
     let (tab_id, generation) = (feed.tab_id, feed.generation);
@@ -326,6 +362,7 @@ fn subscribe_late_stylesheet(
                 ok: false,
                 text: String::new(),
                 blocked_imports: Vec::new(),
+                apply,
             }),
             tab_id,
             generation,
@@ -395,13 +432,14 @@ fn subscribe_late_stylesheet(
                             .collect(),
                         None => Vec::new(),
                     };
-                    crate::page_load::LateStylesheet { node: node_raw, ok: true, text, blocked_imports: blocked }
+                    crate::page_load::LateStylesheet { node: node_raw, ok: true, text, blocked_imports: blocked, apply }
                 }
                 None => crate::page_load::LateStylesheet {
                     node: node_raw,
                     ok: false,
                     text: String::new(),
                     blocked_imports: Vec::new(),
+                    apply,
                 },
             };
             let _ = proxy.send_event(crate::page_load::LoadEvent::LateStylesheet(
@@ -833,6 +871,7 @@ pub(crate) fn build_stylesheet_node_registry(
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<DocCookieJar>,
     late: bool,
+    media_ctx: Option<&lumen_css_parser::MediaContext>,
 ) -> Vec<StylesheetNodeEntry> {
     let mut owners = Vec::new();
     collect_stylesheet_owners(doc, doc.root(), &mut owners);
@@ -861,9 +900,36 @@ pub(crate) fn build_stylesheet_node_registry(
         match owner {
             StylesheetOwner::Style(id) => {
                 let text = style_element_text(doc, id);
+                // CSSOM-1: `cssRules` листа `<style>` обязан показывать
+                // импортированные правила — каскад подставляет их текстом
+                // (`resolve_inline_style_imports`), реестр делает то же самое
+                // через тот же `inline_css_imports`; байты `@import` уже
+                // прогреты `PREFETCH_CACHE` каскадным проходом. Лист с
+                // не матчащим `media` регистрируется сырым текстом — его
+                // `@import` в этой ветке не разворачиваем.
+                let sheet_text = match media_ctx {
+                    Some(ctx)
+                        if link_media_matches(doc.get(id).get_attr("media").unwrap_or(""), ctx) =>
+                    {
+                        inline_css_imports(
+                            &text,
+                            base,
+                            sink,
+                            cookie_jar.clone(),
+                            ctx,
+                            &mut std::collections::HashSet::new(),
+                            0,
+                            doc_encoding,
+                            gate_ref,
+                            referrer_policy,
+                        )
+                        .0
+                    }
+                    _ => text,
+                };
                 out.push(StylesheetNodeEntry {
                     node: id.index() as u32,
-                    sheet: Arc::new(lumen_css_parser::parse(&text)),
+                    sheet: Arc::new(lumen_css_parser::parse(&sheet_text)),
                     disabled: !doc.sheet_owner_enabled(id, preferred.as_deref()),
                 });
             }
@@ -1121,5 +1187,60 @@ fn collect_link_hrefs_in(doc: &Document, id: NodeId, out: &mut Vec<(NodeId, Stri
     }
     for &child in &node.children {
         collect_link_hrefs_in(doc, child, out, media_ctx, preferred);
+    }
+}
+
+/// `<link rel=stylesheet>`, чей `media` НЕ матчит `media_ctx` — зеркало
+/// [`collect_link_hrefs_in`] без media-гейта: те же элементы, но только
+/// когда `link_media_matches` отвечает `false`. Для них каскадный список
+/// пуст, а байты нужны реестру `document.styleSheets` (условная загрузка,
+/// HTML LS §4.2.4).
+fn collect_mismatched_link_hrefs(
+    doc: &Document,
+    id: NodeId,
+    media_ctx: &lumen_css_parser::MediaContext,
+    preferred: Option<&str>,
+    out: &mut Vec<(NodeId, String, Option<String>, Option<String>)>,
+) {
+    let node = doc.get(id);
+    if let NodeData::Element { name, attrs } = &node.data
+        && name.local == "link"
+    {
+        let rel = attrs
+            .iter()
+            .find(|a| a.name.local == "rel")
+            .map(|a| a.value.as_str())
+            .unwrap_or("");
+        let href = attrs
+            .iter()
+            .find(|a| a.name.local == "href")
+            .map(|a| a.value.as_str())
+            .unwrap_or("");
+        let media = attrs
+            .iter()
+            .find(|a| a.name.local == "media")
+            .map(|a| a.value.as_str())
+            .unwrap_or("");
+        if rel.split_ascii_whitespace().any(|r| r.eq_ignore_ascii_case("stylesheet"))
+            && !href.is_empty()
+            && !link_media_matches(media, media_ctx)
+            && !doc.link_has_no_sheet(id)
+            && doc.sheet_owner_enabled(id, preferred)
+        {
+            let charset = attrs
+                .iter()
+                .find(|a| a.name.local == "charset")
+                .map(|a| a.value.clone());
+            let referrer_policy = attrs
+                .iter()
+                .find(|a| a.name.local == "referrerpolicy")
+                .map(|a| a.value.clone())
+                .filter(|s| !s.is_empty());
+            out.push((id, href.to_owned(), charset, referrer_policy));
+        }
+        return;
+    }
+    for &child in &node.children {
+        collect_mismatched_link_hrefs(doc, child, media_ctx, preferred, out);
     }
 }
