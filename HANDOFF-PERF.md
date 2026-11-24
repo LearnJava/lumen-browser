@@ -67,6 +67,34 @@ typed-trampoline (~1-3мкс → ~0.5мкс × ~500k переходов ≈ 0.5-
 getComputedStyle-шим (`_wa_motion_*`/`_css_tr_prune` + entries на каждый вызов),
 аудит `_lumen_get_parent`-циклов в shim (79 сайтов, горячие не идентифицированы).
 
+**Найдено, не сделано (аудит «лишней работы»):**
+
+- **`CQ_UNITS_SEEN` — process-global monotone флаг** (`style/env.rs:55`):
+  `note_cq_unit()` ставится при парсинге любого `cq*`-юнита (включая inline
+  `style="…cqw"`) и НИКОГДА не сбрасывается. `apply_container_styles`
+  (`box_tree/container_anchor.rs:94`) имеет fast-path
+  `container_rules.is_empty() && !cq_units_seen()` — после первого же
+  cq-юнита на ЛЮБОЙ странице процесса он мёртв для всех последующих
+  страниц и всех flush'ей. На habr `cq.inner` 1.9s + `cq.relayout` 1.7s —
+  возможно, платим за проход без единого cq-юнита в документе.
+  **Правильный фикс**: per-document флаг — `Arc<AtomicBool>` в
+  `StyleEnvSnapshot` (env.rs:352, capture/install уже фан-аутится на
+  воркеров pre_match/build), `note_cq_unit` пишет и в thread_local
+  «текущий снапшот», после каскада флаг складывается в `CounterMap`;
+  `apply_container_styles` читает `counters.cq_units()` вместо глобала.
+  Глобал оставить для мест без документа (тесты). Риск: compute_style
+  может быть параллельным — проверить, что все парсеры длины покрыты
+  снапшотом, иначе fast-path даст неверный layout.
+- **`apply_anchor_positions`** (`container_anchor.rs:343`): на каждый
+  flush `InlineAnchors::from_cascade(doc, counters.styles())` +
+  `collect_anchors_inline(root)` — два whole-tree/cascade обхода ДО
+  early-return по `registry.is_empty()`. На страницах без anchor
+  positioning — чистый налог ×~90 flush'ей. Дешёвый фикс: флаг
+  «в каскаде встречался anchor-positioned» по аналогии с cq.
+- `apply_first_line_pseudo_styles`/`split_first_line_boxes` — проверить
+  early-exit при отсутствии `::first-line` в sheet (в профиле не видно,
+  вероятно уже дёшево).
+
 **Остаток до Chrome (~2-3s):**
 
 1. **Forced-рекомпуты ~2400/flush** — habr мутирует `html`/`head` (инжект скриптов, атрибуты)
