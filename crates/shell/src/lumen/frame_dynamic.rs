@@ -130,7 +130,7 @@ impl Lumen {
                 None => {
                     self.frame_scan_retry = true;
                     for (idx, new_src) in delta.changed {
-                        self.navigate_frame_to(idx, &new_src, base, None);
+                        self.navigate_frame_changed(doc, idx, &new_src, base);
                     }
                     return;
                 }
@@ -154,7 +154,29 @@ impl Lumen {
             self.pending_frame_load_dispatch.push(PendingFrameLoad { prep, is_top });
         }
         for (idx, new_src) in delta.changed {
-            self.navigate_frame_to(idx, &new_src, base, None);
+            self.navigate_frame_changed(doc, idx, &new_src, base);
+        }
+    }
+
+    /// `changed`-навигация скана динамических фреймов: пропускает хост, чья
+    /// навигация уже летит (`frame_nav_in_flight`) — до ответа хэндл ещё
+    /// старый и `src`-расхождение сохраняется, поэтому без пропуска каждый
+    /// тик ставил бы новую навигацию, а generation-механизм ронял бы все
+    /// ответы по очереди (см. поле `frame_nav_in_flight`).
+    fn navigate_frame_changed(
+        &mut self,
+        doc: &Arc<Mutex<Document>>,
+        idx: usize,
+        new_src: &str,
+        base: &ResourceBase,
+    ) {
+        let in_flight = self.frames.get(idx).is_some_and(|h| {
+            self.frame_nav_in_flight
+                .iter()
+                .any(|(d, hn)| *hn == h.host && Arc::ptr_eq(d, doc))
+        });
+        if !in_flight {
+            self.navigate_frame_to(idx, new_src, base, None);
         }
     }
 
