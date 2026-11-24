@@ -1953,6 +1953,11 @@ var _lumen_kb_active_held = false;
 // it, and a focus move makes the keyup's target differ (WPT
 // `checkable-active-space-key-prevented-default`/`-being-disabled`).
 var _lumen_space_armed_nid = -2;
+// Set when the current Space/Enter `keydown` was `preventDefault()`ed — the
+// shell's post-dispatch `sync_key_active` queries `_lumen_key_active_target`
+// and would re-arm `:active` the shim just retracted, so the query itself
+// must see the suppression until the matching `keyup`.
+var _lumen_kb_active_blocked = false;
 
 function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location, mod, repeat, isComposing) {
     _lumen_note_activation_input(type, key);
@@ -1976,16 +1981,22 @@ function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location
     var isSpaceKey = (key === ' ');
     if ((mod & 13) === 0 && (key === ' ' || key === 'Enter') && !isComposing) {
         if (type === 'keydown' && !repeat) {
+            // A fresh keydown re-decides suppression — a stale flag from a
+            // prevented press whose `keyup` never arrived must not leak.
+            _lumen_kb_active_blocked = false;
             kat = _lumen_key_active_target(start_nid, isSpaceKey);
             _lumen_kb_active_held = (kat !== -1);
             if (isSpaceKey) _lumen_space_armed_nid = kat;
             if (typeof _lumen_set_active_mirror === 'function') {
                 _lumen_set_active_mirror(kat, true);
             }
-        } else if (type === 'keyup' && _lumen_kb_active_held) {
-            _lumen_kb_active_held = false;
-            if (typeof _lumen_set_active_mirror === 'function') {
-                _lumen_set_active_mirror(-1, false);
+        } else if (type === 'keyup') {
+            _lumen_kb_active_blocked = false;
+            if (_lumen_kb_active_held) {
+                _lumen_kb_active_held = false;
+                if (typeof _lumen_set_active_mirror === 'function') {
+                    _lumen_set_active_mirror(-1, false);
+                }
             }
         }
     }
@@ -1997,6 +2008,7 @@ function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location
         && (key === ' ' || key === 'Enter')) {
         var still = ev.defaultPrevented ? -1 : _lumen_key_active_target(start_nid, isSpaceKey);
         if (isSpaceKey) _lumen_space_armed_nid = still;
+        _lumen_kb_active_blocked = !!ev.defaultPrevented;
         if (still !== kat) {
             _lumen_kb_active_held = (still !== -1);
             if (typeof _lumen_set_active_mirror === 'function') {
@@ -2072,6 +2084,7 @@ function _lumen_key_activate(nid, isSpace) {
 // `_lumen_key_activate` clicks. The shell asks this synchronously to mirror
 // the pressed state into CSS `:active` (`page_keys.rs`/`text_input.rs`).
 function _lumen_key_active_target(nid, isSpace) {
+    if (_lumen_kb_active_blocked) return -1;
     var at = _lumen_activation_target(nid);
     if (at === -1) return -1;
     var tag = (_lumen_get_tag_name(at) || '').toUpperCase();

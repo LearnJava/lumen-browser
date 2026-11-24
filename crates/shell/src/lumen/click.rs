@@ -267,15 +267,30 @@ impl Lumen {
             return nid;
         };
         let doc = src.document.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(node) = doc.try_get(nid) else {
+        // `nid` may be a text node (the hit's `source_node` for inline runs) —
+        // `:active` lives on elements, so climb to the nearest element ancestor.
+        let mut cur = nid;
+        for _ in 0..64 {
+            let Some(node) = doc.try_get(cur) else {
+                return nid;
+            };
+            if node.element_name().is_some() {
+                break;
+            }
+            let Some(p) = node.parent else {
+                return nid;
+            };
+            cur = p;
+        }
+        let Some(node) = doc.try_get(cur) else {
             return nid;
         };
         if node.element_name().map(|q| q.local.as_str()) == Some("label")
-            && let Some(control) = crate::forms::labeled_control(&doc, nid)
+            && let Some(control) = crate::forms::labeled_control(&doc, cur)
         {
             return control;
         }
-        nid
+        cur
     }
 
     /// Fresh-layout hit-test override shared by the automation click and
