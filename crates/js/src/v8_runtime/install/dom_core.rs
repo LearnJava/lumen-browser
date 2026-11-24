@@ -1520,6 +1520,113 @@ pub(crate) fn install_tree_navigation(
                 vec![prev, next]
             }
         );
+        // PERF-NAV-O1: the shim's `nextSibling`/`previousSibling`/`firstChild`/
+        // `lastChild`/`parentElement`/`nextElementSibling` getters each used to
+        // fetch the parent's WHOLE child list (`_lumen_get_children`, a
+        // u32-per-child JS array) plus `_lumen_get_parent`, then `indexOf`-scan
+        // it in JS — and the element variants ran `_lumen_is_element_nid`
+        // (three more crossings) PER CHILD. A `firstChild → nextSibling` walk
+        // over k siblings cost 2k crossings and O(k²) JS. These natives answer
+        // the same questions in ONE crossing with a Rust-side walk; the
+        // `[prev, next]`/`Option` shapes and the `u32::MAX` sentinel match
+        // `_lumen_get_siblings` above.
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store,
+            "_lumen_get_siblings_of",
+            move |node_id: u32| -> Vec<u32> {
+                let doc = d.lock().unwrap();
+                let none = vec![u32::MAX, u32::MAX];
+                let nid = NodeId::from_raw(node_id);
+                let Some(node) = doc.try_get(nid) else { return none; };
+                let Some(pid) = node.parent else { return none; };
+                let Some(parent) = doc.try_get(pid) else { return none; };
+                let Some(idx) = parent.children.iter().position(|c| *c == nid) else {
+                    return none;
+                };
+                let prev = idx.checked_sub(1).map_or(u32::MAX, |i| parent.children[i].raw());
+                let next = parent.children.get(idx + 1).map_or(u32::MAX, |c| c.raw());
+                vec![prev, next]
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store,
+            "_lumen_get_first_child",
+            move |node_id: u32| -> Option<u32> {
+                let doc = d.lock().unwrap();
+                doc.try_get(NodeId::from_raw(node_id))
+                    .and_then(|n| n.children.first())
+                    .map(|c| c.raw())
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store,
+            "_lumen_get_last_child",
+            move |node_id: u32| -> Option<u32> {
+                let doc = d.lock().unwrap();
+                doc.try_get(NodeId::from_raw(node_id))
+                    .and_then(|n| n.children.last())
+                    .map(|c| c.raw())
+            }
+        );
+        // Element-only variants. `NodeData::Element` is the authoritative
+        // element check — the JS-side `_lumen_is_element_nid` heuristic
+        // (tag name not `#`-prefixed) exists only because no such native did.
+        let is_el = |doc: &lumen_dom::Document, id: NodeId| -> bool {
+            matches!(doc.try_get(id).map(|n| &n.data), Some(lumen_dom::NodeData::Element { .. }))
+        };
+        let d = Arc::clone(&doc);
+        let is_el_c = is_el.clone();
+        reg!(scope, ctx, store,
+            "_lumen_get_element_children",
+            move |node_id: u32| -> Vec<u32> {
+                let doc = d.lock().unwrap();
+                let Some(node) = doc.try_get(NodeId::from_raw(node_id)) else {
+                    return Vec::new();
+                };
+                node.children
+                    .iter()
+                    .filter(|c| is_el_c(&doc, **c))
+                    .map(|c| c.raw())
+                    .collect()
+            }
+        );
+        let d = Arc::clone(&doc);
+        let is_el_c = is_el.clone();
+        reg!(scope, ctx, store,
+            "_lumen_get_element_siblings_of",
+            move |node_id: u32| -> Vec<u32> {
+                let doc = d.lock().unwrap();
+                let none = vec![u32::MAX, u32::MAX];
+                let nid = NodeId::from_raw(node_id);
+                let Some(node) = doc.try_get(nid) else { return none; };
+                let Some(pid) = node.parent else { return none; };
+                let Some(parent) = doc.try_get(pid) else { return none; };
+                let Some(idx) = parent.children.iter().position(|c| *c == nid) else {
+                    return none;
+                };
+                let prev = parent.children[..idx]
+                    .iter()
+                    .rev()
+                    .find(|c| is_el_c(&doc, **c))
+                    .map_or(u32::MAX, |c| c.raw());
+                let next = parent.children[idx + 1..]
+                    .iter()
+                    .find(|c| is_el_c(&doc, **c))
+                    .map_or(u32::MAX, |c| c.raw());
+                vec![prev, next]
+            }
+        );
+        let d = Arc::clone(&doc);
+        let is_el_c = is_el.clone();
+        reg!(scope, ctx, store,
+            "_lumen_get_parent_element",
+            move |node_id: u32| -> Option<u32> {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_raw(node_id);
+                let pid = doc.try_get(nid).and_then(|n| n.parent)?;
+                is_el_c(&doc, pid).then(|| pid.raw())
+            }
+        );
     }
     Ok(())
 }

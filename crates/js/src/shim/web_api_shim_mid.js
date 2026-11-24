@@ -8749,13 +8749,12 @@ function _lumen_is_element_nid(id) {
 }
 
 // Element children of `nid`, in tree order, as raw node ids.
+// PERF-NAV-O1: the native filters by `NodeData::Element` in ONE crossing —
+// the JS loop this replaced ran `_lumen_is_element_nid` (three native calls)
+// per child on top of `_lumen_get_children`, i.e. 1 + 3·k crossings for k
+// children, and every indexed read of a live `children` collection paid it.
 function _lumen_element_child_nids(nid) {
-    var all = _lumen_get_children(nid);
-    var out = [];
-    for (var i = 0; i < all.length; i++) {
-        if (_lumen_is_element_nid(all[i])) out.push(all[i]);
-    }
-    return out;
+    return _lumen_get_element_children(nid);
 }
 
 // HTMLCollection marker prototype (DOM Standard §4.2.10.2) so `children` can
@@ -11871,22 +11870,15 @@ _lumen_canvas_define_dim('height', 1, 150);
     });
     Object.defineProperty(_LUMEN_WRAPPER_MEMBERS, 'parentElement', {
         get: function() { var nid = this.__nid__;
-            var pid = _lumen_u2n(_lumen_get_parent(nid));
-            if (pid === null) return null;
             // DOM §4.4: `parentElement` is the parent *if it is an element* —
             // for the root element the parent is the document, so the answer is
-            // null (BUG-557). Until now it was a wrapper for the document root
-            // node, which reported `nodeType === 9` from an accessor named
-            // "element" and gave every `while (el) el = el.parentElement` walk
-            // one extra, meaningless iteration.
-            if (pid === _lumen_root_nid) return null;
-            // DOM §4.4: a tree-root node's parent is the shadow root or the
-            // document fragment — a node, not an element, so `parentElement` is
-            // null there (Cloudflare Turnstile walked the widget's shadow tree
-            // with `while (el.parentElement)` and called `getBoundingClientRect`
-            // on the ShadowRoot it got back, BUG-1790).
-            if (_lumen_is_shadow_root(pid) || _lumen_is_document_fragment(pid)) return null;
-            return _lumen_make_element(pid);
+            // null (BUG-557); a shadow root / document-fragment parent is a
+            // node, not an element, so null there too (BUG-1790). The native
+            // resolves parent AND applies the `NodeData::Element` check in one
+            // crossing — the guards this replaces cost up to four.
+            // PERF-NAV-O1.
+            var pid = _lumen_u2n(_lumen_get_parent_element(nid));
+            return pid === null ? null : _lumen_make_element(pid);
         },
         enumerable: false, configurable: true,
     });
@@ -11948,17 +11940,19 @@ _lumen_canvas_define_dim('height', 1, 150);
         },
         enumerable: false, configurable: true,
     });
+    // PERF-NAV-O1: dedicated O(1) natives — these used to pull the parent's
+    // whole child list into a JS array for a single endpoint.
     Object.defineProperty(_LUMEN_WRAPPER_MEMBERS, 'firstChild', {
         get: function() { var nid = this.__nid__;
-            var ch = _lumen_get_children(nid);
-            return ch.length > 0 ? _lumen_make_element(ch[0]) : null;
+            var c = _lumen_u2n(_lumen_get_first_child(nid));
+            return c === null ? null : _lumen_make_element(c);
         },
         enumerable: false, configurable: true,
     });
     Object.defineProperty(_LUMEN_WRAPPER_MEMBERS, 'lastChild', {
         get: function() { var nid = this.__nid__;
-            var ch = _lumen_get_children(nid);
-            return ch.length > 0 ? _lumen_make_element(ch[ch.length - 1]) : null;
+            var c = _lumen_u2n(_lumen_get_last_child(nid));
+            return c === null ? null : _lumen_make_element(c);
         },
         enumerable: false, configurable: true,
     });
@@ -12027,62 +12021,66 @@ _lumen_canvas_define_dim('height', 1, 150);
     // только `nextElementSibling`/`previousElementSibling`, и обход
     // `firstChild` → `nextSibling` (компилированные шаблоны Solid/lit, обход
     // смешанного содержимого) упирался в `undefined`.
+    // PERF-NAV-O1: `_lumen_get_siblings_of` resolves parent + position +
+    // neighbours in ONE crossing (was `_lumen_get_parent` +
+    // `_lumen_get_children` + `indexOf` — two crossings and an O(k) JS scan
+    // per step). `[MAX, MAX]` means "no parent" only when `_lumen_get_parent`
+    // also comes back empty — that is the detached-document case
+    // `_lumen_doc_sibling` still owns; an only child simply gets null.
     Object.defineProperty(_LUMEN_WRAPPER_MEMBERS, 'nextSibling', {
         get: function() { var nid = this.__nid__;
-            var pid = _lumen_u2n(_lumen_get_parent(nid));
-            if (pid === null) return _lumen_doc_sibling(this, nid, 1);
-            var sibs = _lumen_get_children(pid);
-            var idx = sibs.indexOf(nid);
-            return (idx >= 0 && idx + 1 < sibs.length) ? _lumen_make_element(sibs[idx + 1]) : null;
+            var s = _lumen_get_siblings_of(nid);
+            if (s[1] !== 4294967295) return _lumen_make_element(s[1]);
+            if (s[0] !== 4294967295) return null;
+            return _lumen_u2n(_lumen_get_parent(nid)) === null
+                ? _lumen_doc_sibling(this, nid, 1) : null;
         },
         enumerable: false, configurable: true,
     });
     Object.defineProperty(_LUMEN_WRAPPER_MEMBERS, 'previousSibling', {
         get: function() { var nid = this.__nid__;
-            var pid = _lumen_u2n(_lumen_get_parent(nid));
-            if (pid === null) return _lumen_doc_sibling(this, nid, -1);
-            var sibs = _lumen_get_children(pid);
-            var idx = sibs.indexOf(nid);
-            return (idx > 0) ? _lumen_make_element(sibs[idx - 1]) : null;
+            var s = _lumen_get_siblings_of(nid);
+            if (s[0] !== 4294967295) return _lumen_make_element(s[0]);
+            if (s[1] !== 4294967295) return null;
+            return _lumen_u2n(_lumen_get_parent(nid)) === null
+                ? _lumen_doc_sibling(this, nid, -1) : null;
         },
         enumerable: false, configurable: true,
     });
     // DOM §4.2.6/§4.2.7 ParentNode/NonDocumentTypeChildNode element traversal (BUG-310).
+    // PERF-NAV-O1: `_lumen_get_element_children`/`_lumen_get_element_siblings_of`
+    // do the parent walk, position lookup and element filtering in Rust —
+    // one crossing where the JS version spent 1 + 3·k (or 2 + 3·k) crossings
+    // and an O(k) `indexOf` scan per access.
     Object.defineProperty(_LUMEN_WRAPPER_MEMBERS, 'childElementCount', {
-        get: function() { var nid = this.__nid__; return _lumen_element_child_nids(nid).length; },
+        get: function() { var nid = this.__nid__; return _lumen_get_element_children(nid).length; },
         enumerable: false, configurable: true,
     });
     Object.defineProperty(_LUMEN_WRAPPER_MEMBERS, 'firstElementChild', {
         get: function() { var nid = this.__nid__;
-            var ch = _lumen_element_child_nids(nid);
+            var ch = _lumen_get_element_children(nid);
             return ch.length > 0 ? _lumen_make_element(ch[0]) : null;
         },
         enumerable: false, configurable: true,
     });
     Object.defineProperty(_LUMEN_WRAPPER_MEMBERS, 'lastElementChild', {
         get: function() { var nid = this.__nid__;
-            var ch = _lumen_element_child_nids(nid);
+            var ch = _lumen_get_element_children(nid);
             return ch.length > 0 ? _lumen_make_element(ch[ch.length - 1]) : null;
         },
         enumerable: false, configurable: true,
     });
     Object.defineProperty(_LUMEN_WRAPPER_MEMBERS, 'nextElementSibling', {
         get: function() { var nid = this.__nid__;
-            var pid = _lumen_u2n(_lumen_get_parent(nid));
-            if (pid === null) return null;
-            var sibs = _lumen_element_child_nids(pid);
-            var idx = sibs.indexOf(nid);
-            return (idx >= 0 && idx + 1 < sibs.length) ? _lumen_make_element(sibs[idx + 1]) : null;
+            var s = _lumen_get_element_siblings_of(nid);
+            return s[1] !== 4294967295 ? _lumen_make_element(s[1]) : null;
         },
         enumerable: false, configurable: true,
     });
     Object.defineProperty(_LUMEN_WRAPPER_MEMBERS, 'previousElementSibling', {
         get: function() { var nid = this.__nid__;
-            var pid = _lumen_u2n(_lumen_get_parent(nid));
-            if (pid === null) return null;
-            var sibs = _lumen_element_child_nids(pid);
-            var idx = sibs.indexOf(nid);
-            return (idx > 0) ? _lumen_make_element(sibs[idx - 1]) : null;
+            var s = _lumen_get_element_siblings_of(nid);
+            return s[0] !== 4294967295 ? _lumen_make_element(s[0]) : null;
         },
         enumerable: false, configurable: true,
     });
