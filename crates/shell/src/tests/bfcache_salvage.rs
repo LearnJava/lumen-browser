@@ -180,7 +180,7 @@ fn s22_pipeline_cycles(restore: bool) -> (u32, u32, u64) {
                     )
                     .into_iter()
                     .collect();
-                let delta = lumen_layout::counters::RestyleDelta { invalidation: None,
+                let delta = lumen_layout::counters::RestyleDelta { invalidation: None, attr_changed: None,
                     prev_styles: std::mem::take(&mut prev_cascade_styles),
                     dirty_roots,
                     content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),

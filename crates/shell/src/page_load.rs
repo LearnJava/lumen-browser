@@ -2990,6 +2990,10 @@ pub(crate) struct LateStylesheet {
     /// `@import`-цели, запрещённые `style-src`: `(URL, тексты политик)` для
     /// `securitypolicyviolation`, как `blocked_by_style_src` синхронного пути.
     pub(crate) blocked_imports: Vec<(String, Vec<String>)>,
+    /// `false` — лист `<link>` с не матчащим `media`: регистрируется в
+    /// `document.styleSheets` и получает `load`, но в каскад не входит
+    /// (HTML LS §4.2.4 — условная загрузка).
+    pub(crate) apply: bool,
 }
 
 /// Событие от background-потока загрузки страницы в event loop.
