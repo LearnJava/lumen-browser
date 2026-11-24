@@ -123,7 +123,7 @@ impl Lumen {
     /// implicit submission — bounded by `QUERY_TIMEOUT` and the
     /// dialog/script-stall guards inside `route_query_js`.
     #[cfg(feature = "v8")]
-    fn drain_js_focus_requests_for_input(&mut self) {
+    pub(crate) fn drain_js_focus_requests_for_input(&mut self) {
         self.drain_js_focus_requests_mode(true);
     }
 

@@ -898,6 +898,13 @@ function _lumen_focus_update(newNid) {
     if (oldNid === null || oldNid === undefined) oldNid = -1;
     if (oldNid === newNid) return;
     _lumen_last_focused_nid = newNid;
+    // A focus move ends keyboard-held `:active` — the pressed Space/Enter
+    // lost its activation target (WPT checkable-active-onblur*). Also
+    // disarms the keyup clear so it cannot wipe a later pointer `:active`.
+    _lumen_kb_active_held = false;
+    if (typeof _lumen_set_active_mirror === 'function') {
+        _lumen_set_active_mirror(-1, false);
+    }
     var oldEl = (oldNid !== -1) ? _lumen_make_element(oldNid) : null;
     var newEl = (newNid !== -1) ? _lumen_make_element(newNid) : null;
     if (oldEl !== null) {
