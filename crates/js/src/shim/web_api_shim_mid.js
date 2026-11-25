@@ -6351,25 +6351,34 @@ Object.defineProperty(ShadowRoot.prototype, 'children', {
 ShadowRoot.prototype.append = function() {
     var nid = this.__nid__;
     var ins = _lumen_expand_insert_nids(arguments);
-    for (var i = 0; i < ins.length; i++) _lumen_append_child(nid, ins[i]);
+    _lumen_ce_push_element_queue();
+    try {
+        for (var i = 0; i < ins.length; i++) _lumen_append_child(nid, ins[i]);
+    } finally { _lumen_ce_pop_current_element_queue(); }
 };
 ShadowRoot.prototype.prepend = function() {
     var nid = this.__nid__;
     var ch = _lumen_get_children(nid);
     var firstChild = ch.length > 0 ? ch[0] : null;
     var ins = _lumen_expand_insert_nids(arguments);
-    for (var i = 0; i < ins.length; i++) {
-        var childNid = ins[i];
-        if (firstChild !== null) { _lumen_insert_before(nid, childNid, firstChild); }
-        else { _lumen_append_child(nid, childNid); }
-    }
+    _lumen_ce_push_element_queue();
+    try {
+        for (var i = 0; i < ins.length; i++) {
+            var childNid = ins[i];
+            if (firstChild !== null) { _lumen_insert_before(nid, childNid, firstChild); }
+            else { _lumen_append_child(nid, childNid); }
+        }
+    } finally { _lumen_ce_pop_current_element_queue(); }
 };
 ShadowRoot.prototype.replaceChildren = function() {
     var nid = this.__nid__;
     var ins = _lumen_expand_insert_nids(arguments);
     var old = _lumen_get_children(nid).slice();
-    for (var i = 0; i < old.length; i++) { _lumen_remove_child(nid, old[i]); }
-    for (var j = 0; j < ins.length; j++) _lumen_append_child(nid, ins[j]);
+    _lumen_ce_push_element_queue();
+    try {
+        for (var i = 0; i < old.length; i++) { _lumen_remove_child(nid, old[i]); }
+        for (var j = 0; j < ins.length; j++) _lumen_append_child(nid, ins[j]);
+    } finally { _lumen_ce_pop_current_element_queue(); }
 };
 // Scoped to this shadow tree's descendants — see BUG-291.
 ShadowRoot.prototype.querySelector = function(sel) {
@@ -10648,10 +10657,13 @@ var _LUMEN_WRAPPER_MEMBERS = {
             var pid = _lumen_u2n(_lumen_get_parent(nid));
             if (pid === null) return;
             var _bins = _lumen_expand_insert_nids(arguments);
-            for (var _bi = 0; _bi < _bins.length; _bi++) {
-                _lumen_insert_before(pid, _bins[_bi], nid);
-            }
-            _lumen_fire_slotchange(pid);
+            _lumen_ce_push_element_queue();
+            try {
+                for (var _bi = 0; _bi < _bins.length; _bi++) {
+                    _lumen_insert_before(pid, _bins[_bi], nid);
+                }
+                _lumen_fire_slotchange(pid);
+            } finally { _lumen_ce_pop_current_element_queue(); }
         },
         // Inserts nodes immediately after this element.
         after: function() { var nid = this.__nid__;
@@ -10661,11 +10673,14 @@ var _LUMEN_WRAPPER_MEMBERS = {
             var idx = ch.indexOf(nid);
             var nextSib = (idx >= 0 && idx + 1 < ch.length) ? ch[idx + 1] : null;
             var _ains = _lumen_expand_insert_nids(arguments);
-            for (var _ai = 0; _ai < _ains.length; _ai++) {
-                if (nextSib !== null) { _lumen_insert_before(pid, _ains[_ai], nextSib); }
-                else { _lumen_append_child(pid, _ains[_ai]); }
-            }
-            _lumen_fire_slotchange(pid);
+            _lumen_ce_push_element_queue();
+            try {
+                for (var _ai = 0; _ai < _ains.length; _ai++) {
+                    if (nextSib !== null) { _lumen_insert_before(pid, _ains[_ai], nextSib); }
+                    else { _lumen_append_child(pid, _ains[_ai]); }
+                }
+                _lumen_fire_slotchange(pid);
+            } finally { _lumen_ce_pop_current_element_queue(); }
         },
         // Replaces this element with the given nodes/strings.
         replaceWith: function() { var nid = this.__nid__;
@@ -10692,19 +10707,25 @@ var _LUMEN_WRAPPER_MEMBERS = {
             var ch = _lumen_get_children(nid);
             var firstChild = ch.length > 0 ? ch[0] : null;
             var _pins = _lumen_expand_insert_nids(arguments);
-            for (var _pi = 0; _pi < _pins.length; _pi++) {
-                if (firstChild !== null) { _lumen_insert_before(nid, _pins[_pi], firstChild); }
-                else { _lumen_append_child(nid, _pins[_pi]); }
-            }
-            _lumen_fire_slotchange(nid);
+            _lumen_ce_push_element_queue();
+            try {
+                for (var _pi = 0; _pi < _pins.length; _pi++) {
+                    if (firstChild !== null) { _lumen_insert_before(nid, _pins[_pi], firstChild); }
+                    else { _lumen_append_child(nid, _pins[_pi]); }
+                }
+                _lumen_fire_slotchange(nid);
+            } finally { _lumen_ce_pop_current_element_queue(); }
         },
         // ParentNode.append (DOM LS §4.2.5): appends nodes/strings as the last children.
         append: function() { var nid = this.__nid__;
             var _ains = _lumen_expand_insert_nids(arguments);
-            for (var _ai = 0; _ai < _ains.length; _ai++) {
-                _lumen_append_child(nid, _ains[_ai]);
-            }
-            _lumen_fire_slotchange(nid);
+            _lumen_ce_push_element_queue();
+            try {
+                for (var _ai = 0; _ai < _ains.length; _ai++) {
+                    _lumen_append_child(nid, _ains[_ai]);
+                }
+                _lumen_fire_slotchange(nid);
+            } finally { _lumen_ce_pop_current_element_queue(); }
         },
         // HTML LS 4.9.2 (old-fashioned but conforming markup) — insertAdjacent{Text,Element}.
         // Delegates to the before/after/prepend/append methods above (same silent
@@ -10777,12 +10798,15 @@ var _LUMEN_WRAPPER_MEMBERS = {
         replaceChildren: function() { var nid = this.__nid__;
             var _rcins = _lumen_expand_insert_nids(arguments);
             var old = _lumen_get_children(nid).slice();
-            for (var _rci = 0; _rci < old.length; _rci++) {
-                _lumen_remove_child(nid, old[_rci]);
-            }
-            for (var _rni = 0; _rni < _rcins.length; _rni++) {
-                _lumen_append_child(nid, _rcins[_rni]);
-            }
+            _lumen_ce_push_element_queue();
+            try {
+                for (var _rci = 0; _rci < old.length; _rci++) {
+                    _lumen_remove_child(nid, old[_rci]);
+                }
+                for (var _rni = 0; _rni < _rcins.length; _rni++) {
+                    _lumen_append_child(nid, _rcins[_rni]);
+                }
+            } finally { _lumen_ce_pop_current_element_queue(); }
         },
         // DOM LS §4.4: cloneNode(deep) — shallow or deep copy of this element.
         cloneNode:       function(deep) { var nid = this.__nid__;
@@ -17890,6 +17914,16 @@ function _lumen_resource_try_prepare(nid) {
     // retryable for a later retype + reinsertion, so the pending entry is
     // only dropped once that flag is actually set.
     if (kind === 'script') {
+        // insertion-removing-steps-script: внутри [CEReactions]-операции
+        // (appendChild/append/… над DocumentFragment'ом) prepare откладывается
+        // до конца всего батча вставок — иначе первый <script> фрагмента
+        // исполняется до вставки второго и видит неполный document.scripts.
+        if (_lumen_ce_reactions_stack.length > 0) {
+            if (_lumen_pending_script_exec.indexOf(nid) < 0) {
+                _lumen_pending_script_exec.push(nid);
+            }
+            return;
+        }
         _lumen_script_prepare(nid);
         if (_lumen_script_started[nid] === 1) {
             delete _lumen_resource_pending[nid];
@@ -18079,8 +18113,32 @@ function _lumen_ce_invoke_element_queue(elementQueue) {
 function _lumen_ce_push_element_queue() {
     _lumen_ce_reactions_stack.push([]);
 }
+// nid'ы <script>, чей prepare отложен до конца внешней [CEReactions]
+// операции — см. `_lumen_resource_try_prepare`. Сбрасывается при опустении
+// стека (внешний pop), до invoke element queue: исполнение скрипта — часть
+// insertion steps узла, а connectedCallback'и реакций идут после всей
+// [CEReactions]-операции.
+var _lumen_pending_script_exec = [];
+function _lumen_script_flush_pending_exec() {
+    if (_lumen_pending_script_exec.length === 0) return;
+    var q = _lumen_pending_script_exec;
+    _lumen_pending_script_exec = [];
+    for (var i = 0; i < q.length; i++) {
+        var nid = q[i];
+        if (_lumen_resource_pending[nid] !== 'script') continue;
+        // Вынули из документа до конца батча — prepare ждёт следующего
+        // подключения, как и обычный pending-элемент.
+        if (!_lumen_resource_is_connected(nid)) continue;
+        _lumen_script_prepare(nid);
+        if (_lumen_script_started[nid] === 1) {
+            delete _lumen_resource_pending[nid];
+            _lumen_resource_pending_count--;
+        }
+    }
+}
 function _lumen_ce_pop_current_element_queue() {
     var q = _lumen_ce_reactions_stack.pop();
+    if (_lumen_ce_reactions_stack.length === 0) _lumen_script_flush_pending_exec();
     _lumen_ce_invoke_element_queue(q);
 }
 

@@ -137,6 +137,14 @@ EventTarget.prototype.dispatchEvent = function(event) {
     var type = String(event.type);
     event.target = event.target || this;
     event.currentTarget = this;
+    // DOM §2.2/§2.9 — a constructed EventTarget is a one-entry path: the
+    // target itself. `_path` backs `composedPath()` (event_shim.js resolves
+    // non-nid entries verbatim); `eventPhase` is AT_TARGET for the whole
+    // dispatch since there is no capture/bubble hop on a bare target.
+    var prevPath = event._path;
+    var prevPhase = event.eventPhase;
+    event._path = [event.target || this];
+    event.eventPhase = 2;
     // LONGTASK-1 срез 3: descriptor for `PerformanceScriptTiming.invoker`,
     // best-effort ("Ctor.type", e.g. "XMLHttpRequest.load") since this base
     // class has no element/tag-name info of its own — DOM-node dispatch goes
@@ -166,5 +174,7 @@ EventTarget.prototype.dispatchEvent = function(event) {
         _lumen_record_script_timing(_t1, invoker, 'event-listener', this[onprop]);
     }
     event.currentTarget = null;
+    event._path = prevPath;
+    event.eventPhase = prevPhase;
     return !event.defaultPrevented;
 };
