@@ -377,6 +377,25 @@ impl Lumen {
                 next_wakeup = Some(wakeup);
             }
         }
+        // Когда чтение `take_timer_wakeup` выше отложено (движковый поток занят,
+        // rAF-ход в полёте или неприменённое relayout-задание), JS-побудка —
+        // например, 2-мс re-arm помпы `fetch()` — остаётся непрочитанной в слоте.
+        // Без короткого retry-дедлайна цикл паркуется на чужом far-дедлайне
+        // (нативный тик ~3 с) и голодает весь JS-таймерный контур: WPT
+        // execution-timing/122 ловил это как нарушение порядка скриптов —
+        // in-order скрипт исполнялся раньше asap, потому что его fetch
+        // «догнал» оба ответа одним помп-тиком после ~3-секундного сна.
+        if self.js_present
+            && (self.raf_turn_inflight()
+                || self.engine_job_generation != self.engine_applied_generation
+                || self
+                    .engine_thread
+                    .as_ref()
+                    .is_some_and(|e| e.busy().is_some()))
+        {
+            let retry = std::time::Instant::now() + std::time::Duration::from_millis(2);
+            next_wakeup = Some(next_wakeup.map_or(retry, |t| t.min(retry)));
+        }
         // GAP-MEDIADECODE срез 10: a `<video>` resource-selection algorithm
         // (queued as a JS task, drained by `tick_timers()` above) enqueues a
         // GIF- or container-backed load into `pending_loads`/`pending_container_loads`

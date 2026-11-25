@@ -2103,6 +2103,29 @@ _lumen_install_reflection(HTMLScriptElement.prototype, [
     ['htmlFor',        'for',            'string'],
 ]);
 
+// HTML LS §4.12.1: IDL `async` — не простая рефлексия: геттер отдаёт true при
+// force async (список `_lumen_script_force_async`, mid.js) ИЛИ при атрибуте;
+// setter сбрасывает force async в false и лишь потом отражает атрибут —
+// `script.async = false` переводит внешний скрипт в «in order» очередь
+// (execution-timing/122 «Reinserted script async IDL attribute»).
+(function() {
+    var proto = HTMLScriptElement.prototype;
+    var desc = Object.getOwnPropertyDescriptor(proto, 'async');
+    if (!desc || typeof desc.get !== 'function') return;
+    Object.defineProperty(proto, 'async', {
+        get: function() {
+            var nid = this && this.__nid__;
+            if (nid !== undefined && _lumen_script_force_async[nid] === 1) return true;
+            return desc.get.call(this);
+        },
+        set: function(v) {
+            if (this && this.__nid__ !== undefined) _lumen_script_force_async[this.__nid__] = 0;
+            desc.set.call(this, v);
+        },
+        enumerable: desc.enumerable, configurable: true,
+    });
+})();
+
 _lumen_install_reflection(HTMLLinkElement.prototype, [
     ['href',           'href',           'url'],
     ['rel',            'rel',            'string'],
@@ -4710,12 +4733,12 @@ _lumen_remove_attr = function(nid, name) {
 var _orig_set_attr_script = _lumen_set_attr;
 _lumen_set_attr = function(nid, name, value) {
     _orig_set_attr_script(nid, name, value);
-    _lumen_script_attr_changed(nid, String(name));
+    _lumen_script_attr_changed(nid, String(name), true);
 };
 var _orig_remove_attr_script = _lumen_remove_attr;
 _lumen_remove_attr = function(nid, name) {
     _orig_remove_attr_script(nid, name);
-    _lumen_script_attr_changed(nid, String(name));
+    _lumen_script_attr_changed(nid, String(name), false);
 };
 
 // The parser's half, called when parsing ends (`_lumen_apply_ready_state`), for

@@ -6991,6 +6991,52 @@ function _lumen_build_detached_document(proto, contentType) {
         return oldChild;
     };
     doc.hasChildNodes = function() { return _children.length > 0; };
+    // HTML LS §8.4.4 document.write()/writeln()/open()/close() on a document
+    // with no browsing context (createHTMLDocument, DOMParser text/html).
+    // Scripting is disabled there, so the markup lands in <body> as inert
+    // DOM; the spec's prepare steps mark written scripts already-started
+    // when they bail at the scripting-disabled check, and mirroring that
+    // flag keeps an adopted written script from ever running
+    // (execution-timing/120). XML documents reject the calls with
+    // InvalidStateError, as the live document's write steps do.
+    function _detached_write(args, newline) {
+        if (contentType !== 'text/html') {
+            throw new DOMException('document.write is not supported on this document', 'InvalidStateError');
+        }
+        var text = '';
+        for (var i = 0; i < args.length; i++) { text += String(args[i]); }
+        if (newline) { text += '\n'; }
+        var body = doc.body;
+        if (body === null) { return; }
+        var ids = _lumen_parse_html_fragment(text);
+        for (var j = 0; j < ids.length; j++) {
+            var nid = ids[j];
+            if (_lumen_is_script_element(nid)) { _lumen_script_started[nid] = 1; }
+            var inner = _lumen_query_selector_all_scoped(nid, 'script');
+            for (var k = 0; k < inner.length; k++) { _lumen_script_started[inner[k]] = 1; }
+            body.appendChild(_lumen_make_node(nid));
+        }
+    }
+    doc.write = function() { _detached_write(arguments, false); };
+    doc.writeln = function() { _detached_write(arguments, true); };
+    doc.open = function() {
+        if (contentType !== 'text/html') {
+            throw new DOMException('document.open is not supported on this document', 'InvalidStateError');
+        }
+        // Spec open() erases the document; the approximation clears the
+        // document element and rebuilds the html>head,body skeleton a
+        // createHTMLDocument result starts with.
+        var root = doc.documentElement;
+        if (root && root.__nid__ !== undefined) {
+            var rnid = root.__nid__;
+            var kids = _lumen_get_children(rnid);
+            for (var i = kids.length - 1; i >= 0; i--) { _lumen_remove_child(rnid, kids[i]); }
+            _lumen_append_child(rnid, _lumen_create_element('head'));
+            _lumen_append_child(rnid, _lumen_create_element('body'));
+        }
+        return doc;
+    };
+    doc.close = function() { /* no parser to unblock on a detached document */ };
     // DOM §4.4: a document has no parent and no siblings, and its text content
     // is null — the inherited accessors read `undefined` for a JS-only node.
     ['parentNode', 'parentElement', 'previousSibling', 'nextSibling', 'textContent'].forEach(function(k) {
@@ -16610,7 +16656,16 @@ function _lumen_script_load_external(nid, src, isModule) {
     // state: 0 = fetching, 1 = body ready, 2 = failed.
     var job = { state: 0, run: null, delaysLoad: _doc_ready_state !== 'complete' };
     if (job.delaysLoad) _lumen_load_delay_count++;
-    _lumen_script_exec_queue.push(job);
+    // HTML LS §4.12.1 шаг 38: «async» content attribute или force async →
+    // «as soon as possible» — тело исполняется по готовности fetch'а, не
+    // дожидаясь in-order предшественников; иначе — «in order» очередь.
+    var _asap = _lumen_u2n(_lumen_get_attr(nid, 'async')) !== null
+        || _lumen_script_force_async[nid] === 1;
+    if (!_asap) _lumen_script_exec_queue.push(job);
+    var _kick = function() {
+        if (_asap) { if (job.run !== null) job.run(); }
+        else { _lumen_script_exec_drain(); }
+    };
     setTimeout(function() {
         var url;
         try {
@@ -16623,7 +16678,7 @@ function _lumen_script_load_external(nid, src, isModule) {
                 _lumen_resource_fire(nid, 'error');
                 _lumen_load_delay_done(job);
             };
-            _lumen_script_exec_drain();
+            _kick();
             return;
         }
         // BUG-1175: `script-src` refuses the request before a byte is sent.
@@ -16640,7 +16695,7 @@ function _lumen_script_load_external(nid, src, isModule) {
                 _lumen_resource_fire(nid, 'error');
                 _lumen_load_delay_done(job);
             };
-            _lumen_script_exec_drain();
+            _kick();
             return;
         }
         fetch(url, { _lumenInitiatorType: 'script', _lumenModule: !!isModule }).then(function(resp) {
@@ -16672,7 +16727,7 @@ function _lumen_script_load_external(nid, src, isModule) {
                     _lumen_load_delay_done(job);
                 });
             };
-            _lumen_script_exec_drain();
+            _kick();
         }).catch(function(e) {
             job.state = 2;
             job.run = function() {
@@ -16680,7 +16735,7 @@ function _lumen_script_load_external(nid, src, isModule) {
                 _lumen_resource_fire(nid, 'error');
                 _lumen_load_delay_done(job);
             };
-            _lumen_script_exec_drain();
+            _kick();
         });
     }, 0);
 }
@@ -16767,6 +16822,15 @@ function _lumen_script_child_text(nid) {
 // entry is deleted by `_lumen_resource_try_prepare` only once this is set.
 var _lumen_script_started = {};
 
+// HTML LS §4.12.1 «force async»: изначально true у каждого <script>; парсер
+// сбрасывает его при вставке, prepare возвращает true для parser-inserted без
+// async, а неудачный prepare (data-блок) оставляет true навсегда — поэтому
+// переinserted data-блок идёт в «as soon as possible» очередь и его
+// `script.async` отдаёт true (execution-timing/122). `undefined` в карте =
+// флаг ещё не трогали (парсерный скрипт, доехавший до prepare) — геттер
+// `async` в таком случае читает только атрибут, как обычная рефлексия.
+var _lumen_script_force_async = {};
+
 // HTML LS §4.12.1 steps 1-32, minus the parser-only branches (every caller
 // here is the "script becomes connected" hook, never the initial parse).
 function _lumen_script_prepare(nid) {
@@ -16798,6 +16862,9 @@ function _lumen_script_prepare(nid) {
     if (!isModule && !isImportmap && !isClassic) return;
     // Step 12.
     _lumen_script_started[nid] = 1;
+    // Force async: spec initial value is true; the only JS-reachable reset is
+    // the `async` IDL setter (async=false) — don't clobber an explicit false.
+    if (_lumen_script_force_async[nid] === undefined) _lumen_script_force_async[nid] = 1;
     // Import maps are data, consumed elsewhere (not by this function); the
     // flag above is all BUG-882's test cares about here.
     if (isImportmap) return;
@@ -16844,8 +16911,14 @@ function _lumen_is_script_element(nid) {
 // that flag has to be cleared here first, or a script whose earlier prepare
 // already ran (the common "swap the bundle" case this bug is about) would
 // see step 1 bounce this call back out as a no-op.
-function _lumen_script_attr_changed(nid, attrName) {
-    if (attrName !== 'src' && attrName !== 'type') return;
+function _lumen_script_attr_changed(nid, attrName, isSet) {
+    // HTML LS §4.12.1 attribute change steps: повторный prepare запускает
+    // только запись `src` (value !== null), connected-элемент. Смены `type`
+    // там нет — дата-блок, у которого убрали type, НЕ исполняется (WPT
+    // execution-timing/121: removeAttribute('type') не должен запускать
+    // отложенный classic); перезапуск data→code идёт через post-connection
+    // steps при повторной вставке или children-changed steps.
+    if (attrName !== 'src' || !isSet) return;
     if (!_lumen_is_script_element(nid)) return;
     if (!_lumen_resource_is_connected(nid)) return;
     delete _lumen_script_started[nid];
@@ -17860,6 +17933,49 @@ function _lumen_style_children_changed(parent) {
     _lumen_style_update_block(parent, false);
 }
 
+// HTML LS §4.12.1 «children changed steps»: вставка текста/узлов в подключённый
+// <script> — это post-connection steps → «prepare the script element». Так
+// data-блок, у которого позже убрали type и дописали тело (execution-timing/
+// 124), доисполняется; у уже запущенного скрипта `_lumen_script_prepare`
+// отсекает шагом «already started», у data-блока — проверкой типа.
+function _lumen_script_children_changed(parent) {
+    if (!_lumen_is_script_element(parent)) return;
+    if (!_lumen_resource_is_connected(parent)) return;
+    _lumen_script_prepare(parent);
+}
+
+// HTML LS §4.12.1 post-connection steps для <script>: подключение (включая
+// повторную вставку parser-элемента, у которого prepare на парсе оборвался
+// на проверке типа — parser document к тому моменту уже обнулён, и элемент
+// для spec больше не parser-inserted) запускает «prepare the script
+// element». Внутри [CEReactions]-операции prepare откладывается до конца
+// батча, как и для pending-скриптов (`_lumen_pending_script_exec`).
+function _lumen_script_post_connect(nid) {
+    if (_lumen_script_started[nid] === 1) return;
+    if (_lumen_ce_reactions_stack.length > 0) {
+        if (_lumen_pending_script_exec.indexOf(nid) < 0) {
+            _lumen_pending_script_exec.push(nid);
+        }
+        return;
+    }
+    if (!_lumen_resource_is_connected(nid)) return;
+    _lumen_script_prepare(nid);
+}
+
+// Post-connection steps идут по всем вставленным узлам, не только по
+// верхнему: скрипт, приехавший внутри отсоединённого поддерева
+// (`div.appendChild(script)` → `body.appendChild(div)`), подключается
+// вместе с ним. Обход итеративный — глубина дерева не ограничена.
+function _lumen_script_post_connect_tree(nid) {
+    var stack = [nid];
+    while (stack.length > 0) {
+        var n = stack.pop();
+        if (_lumen_is_script_element(n)) { _lumen_script_post_connect(n); continue; }
+        var kids = _lumen_get_children(n);
+        for (var i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
+    }
+}
+
 // The parser's half, run once the document is parsed — same shape and same
 // reason as `_lumen_link_hints_scan`: a `<style>` written by the parser never
 // passes through the insertion hook. Elements the hook already handled carry
@@ -17949,16 +18065,23 @@ function _lumen_resource_try_prepare(nid) {
 // (one property read), which is every page that never calls
 // createElement('script') and every insertion after the last one has run.
 function _lumen_resource_after_insert(childNid) {
-    if (_lumen_resource_pending_count === 0) return;
-    if (_lumen_resource_pending[childNid] !== undefined) {
-        _lumen_resource_try_prepare(childNid);
-        return;
+    if (_lumen_resource_pending_count !== 0) {
+        if (_lumen_resource_pending[childNid] !== undefined) {
+            _lumen_resource_try_prepare(childNid);
+        } else {
+            // The inserted node may be an *ancestor* of a tracked element that
+            // was built detached (`div.appendChild(script)` before
+            // `body.appendChild(div)`) and only becomes connected now.
+            // Deleting the current key inside for-in is well-defined, and the
+            // map holds only not-yet-prepared elements.
+            for (var k in _lumen_resource_pending) _lumen_resource_try_prepare(+k);
+        }
     }
-    // The inserted node may be an *ancestor* of a tracked element that was built
-    // detached (`div.appendChild(script)` before `body.appendChild(div)`) and
-    // only becomes connected now. Deleting the current key inside for-in is
-    // well-defined, and the map holds only not-yet-prepared elements.
-    for (var k in _lumen_resource_pending) _lumen_resource_try_prepare(+k);
+    // <script> вне pending-карты (parser-inserted, уже готовившийся) тоже
+    // получает post-connection steps — см. `_lumen_script_post_connect`.
+    if (_lumen_resource_pending[childNid] === undefined) {
+        _lumen_script_post_connect_tree(childNid);
+    }
 }
 
 // Route every tree insertion through the hook by wrapping the two natives that
@@ -17977,11 +18100,13 @@ _lumen_append_child = function(parent, child) {
     _lumen_native_append_child(parent, child);
     _lumen_resource_after_insert(child);
     _lumen_style_children_changed(parent);
+    _lumen_script_children_changed(parent);
 };
 _lumen_insert_before = function(parent, child, reference) {
     _lumen_native_insert_before(parent, child, reference);
     _lumen_resource_after_insert(child);
     _lumen_style_children_changed(parent);
+    _lumen_script_children_changed(parent);
 };
 
 // `textContent =` / `innerHTML =` replace a style block's children wholesale,
@@ -17995,10 +18120,12 @@ var _lumen_native_set_inner_html   = _lumen_set_inner_html;
 _lumen_set_text_content = function(nid, text) {
     _lumen_native_set_text_content(nid, text);
     _lumen_style_children_changed(nid);
+    _lumen_script_children_changed(nid);
 };
 _lumen_set_inner_html = function(nid, html) {
     _lumen_native_set_inner_html(nid, html);
     _lumen_style_children_changed(nid);
+    _lumen_script_children_changed(nid);
     // GAP-CEREG срез 3 (BUG-890): the fragment parser behind `innerHTML` never
     // ran custom-element upgrade reactions at all, so even a *globally*
     // defined custom element sitting in markup assigned this way stayed inert
@@ -18125,12 +18252,12 @@ function _lumen_script_flush_pending_exec() {
     _lumen_pending_script_exec = [];
     for (var i = 0; i < q.length; i++) {
         var nid = q[i];
-        if (_lumen_resource_pending[nid] !== 'script') continue;
-        // Вынули из документа до конца батча — prepare ждёт следующего
-        // подключения, как и обычный pending-элемент.
         if (!_lumen_resource_is_connected(nid)) continue;
+        // В очереди бывают и не-pending скрипты (post-connection steps для
+        // parser-элементов) — для них prepare идёт без учёта pending-флага.
+        var pendingScript = _lumen_resource_pending[nid] === 'script';
         _lumen_script_prepare(nid);
-        if (_lumen_script_started[nid] === 1) {
+        if (pendingScript && _lumen_script_started[nid] === 1) {
             delete _lumen_resource_pending[nid];
             _lumen_resource_pending_count--;
         }
