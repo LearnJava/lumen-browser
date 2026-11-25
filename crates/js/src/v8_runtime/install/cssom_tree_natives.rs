@@ -40,6 +40,7 @@ fn parent_of(id: u32) -> Option<u32> {
 struct Sheets {
     sync: SheetSync,
     constructed: ConstructedStylesheets,
+    adopted: super::constructed_stylesheets::AdoptedStylesheets,
 }
 
 impl Sheets {
@@ -64,7 +65,18 @@ impl Sheets {
         if constructed {
             let mut guard = self.constructed.lock().unwrap_or_else(|e| e.into_inner());
             let entry = guard.get_mut(idx as usize)?;
-            Some(f(std::sync::Arc::make_mut(&mut entry.sheet)))
+            let result = f(std::sync::Arc::make_mut(&mut entry.sheet));
+            drop(guard);
+            // Конструируемый лист мог быть adopted в теневой корень —
+            // материализованный CSS-текст в `Document::shadow_adopted_css`
+            // надо обновить, иначе `build_shadow_sheets` увидит старое.
+            super::constructed_stylesheets::sync_shadow_adopted_css(
+                &self.sync.doc,
+                &self.constructed,
+                &self.adopted,
+            );
+            self.sync.note_constructed_change();
+            Some(result)
         } else {
             let (node, result) = {
                 let mut guard = self.sync.nodes.lock().unwrap_or_else(|e| e.into_inner());
@@ -109,8 +121,9 @@ pub(crate) fn install_cssom_tree_natives(
     store: &mut Vec<OwnedNativeFn>,
     sync: SheetSync,
     constructed: ConstructedStylesheets,
+    adopted: super::constructed_stylesheets::AdoptedStylesheets,
 ) -> JsResult<()> {
-    let sheets = Sheets { sync, constructed };
+    let sheets = Sheets { sync, constructed, adopted };
     // Видимые дети правила `parent` (`0` — корень листа).
     {
         let sh = sheets.clone();
@@ -184,6 +197,87 @@ pub(crate) fn install_cssom_tree_natives(
             }
         });
     }
+    // `CSSImportRule.styleSheet` (CSSOM §5.4.1): импортированный лист
+    // адресуется как конструируемый — shell разрешил его при построении
+    // реестра (`Stylesheet::import_sheets`, по порядку ведущих `@import`).
+    // Возвращает индекс в реестре конструируемых или `-1` (импорт отсеян
+    // media/supports/CSP, не загрузился, лист собран без реестра).
+    {
+        let sh = sheets.clone();
+        reg!(scope, ctx, store, "_lumen_cssom_import_sheet", move |c: bool, idx: u32, node: u32| -> i32 {
+            let sheet = sh
+                .read(c, idx, |s| {
+                    let tree = s.cssom_tree();
+                    let n = tree.get(node)?;
+                    if n.kind != RuleKind::Import {
+                        return None;
+                    }
+                    // Порядковый номер среди видимых корневых `@import` —
+                    // индекс в `import_sheets` (тот же порядок, что у
+                    // `Stylesheet::imports`).
+                    let ordinal = tree
+                        .visible_children_of(None)?
+                        .iter()
+                        .filter(|r| r.kind == RuleKind::Import)
+                        .position(|r| r.id == node)?;
+                    s.import_sheets.get(ordinal)?.sheet.clone()
+                })
+                .flatten();
+            match sheet {
+                Some(sheet) => {
+                    // Родитель импортированного листа — `(c, idx)` листа,
+                    // в котором стоит `@import`: для владельческого — nid
+                    // узла-владельца (`sync.nodes[idx].node`, он стабилен при
+                    // сдвигах реестра), для конструируемого — его индекс.
+                    let parent = if c {
+                        Some((true, idx, node))
+                    } else {
+                        sh.sync
+                            .nodes
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .get(idx as usize)
+                            .map(|e| (false, e.node, node))
+                    };
+                    let mut guard = sh.constructed.lock().unwrap_or_else(|e| e.into_inner());
+                    guard.push(super::constructed_stylesheets::ConstructedStylesheet {
+                        sheet,
+                        disabled: false,
+                        import_parent: parent,
+                    });
+                    (guard.len() - 1) as i32
+                }
+                None => -1,
+            }
+        });
+    }
+    // `StyleSheet.parentStyleSheet` импортированного листа (CSSOM §5.4.1):
+    // `[constructed, key]` родителя, пока `@import`-правило живо в его
+    // дереве; пустой Vec — лист никто не импортирует (или правило удалено).
+    {
+        let sh = sheets.clone();
+        reg!(scope, ctx, store, "_lumen_cssom_import_parent", move |idx: u32| -> Vec<u32> {
+            let guard = sh.constructed.lock().unwrap_or_else(|e| e.into_inner());
+            let Some((pc, pkey, rule)) = guard.get(idx as usize).and_then(|e| e.import_parent) else {
+                return Vec::new();
+            };
+            let alive = if pc {
+                guard
+                    .get(pkey as usize)
+                    .is_some_and(|e| e.sheet.cssom_tree().get(rule).is_some_and(|n| n.kind == RuleKind::Import))
+            } else {
+                drop(guard);
+                sh.sync
+                    .nodes
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .iter()
+                    .find(|e| e.node == pkey)
+                    .is_some_and(|e| e.sheet.cssom_tree().get(rule).is_some_and(|n| n.kind == RuleKind::Import))
+            };
+            if alive { vec![pc as u32, pkey] } else { Vec::new() }
+        });
+    }
     // BUG-1439: лист узла, вышедшего из дерева, переезжает в реестр
     // конструируемых и дальше адресуется как `(true, idx)`: правила остаются
     // доступными (CSSOM §6.2). `-1` — отложенного листа у узла нет.
@@ -196,7 +290,11 @@ pub(crate) fn install_cssom_tree_natives(
                 detached.remove(at).1
             };
             let mut guard = sh.constructed.lock().unwrap_or_else(|e| e.into_inner());
-            guard.push(super::constructed_stylesheets::ConstructedStylesheet { sheet, disabled: false });
+            guard.push(super::constructed_stylesheets::ConstructedStylesheet {
+                sheet,
+                disabled: false,
+                import_parent: None,
+            });
             (guard.len() - 1) as i32
         });
     }

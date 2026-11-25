@@ -83,7 +83,7 @@ pub struct InvalidatedRules {
 
 struct InvalidatedBlock {
     block: RuleBlock,
-    rules: Vec<u32>,
+    rule_ids: Vec<u32>,
     index: crate::rule_index::RuleIndex,
 }
 
@@ -91,7 +91,7 @@ impl InvalidatedRules {
     /// The invalidated rules of `block`, ascending. Empty when the block has none.
     pub fn rules_in(&self, block: RuleBlock) -> &[u32] {
         match self.blocks.binary_search_by(|b| b.block.cmp(&block)) {
-            Ok(i) => &self.blocks[i].rules,
+            Ok(i) => &self.blocks[i].rule_ids,
             Err(_) => &[],
         }
     }
@@ -134,10 +134,10 @@ impl InvalidatedRules {
         let mut blocks: Vec<InvalidatedBlock> = Vec::new();
         for r in refs {
             match blocks.last_mut() {
-                Some(b) if b.block == r.block => b.rules.push(r.rule),
+                Some(b) if b.block == r.block => b.rule_ids.push(r.rule),
                 _ => blocks.push(InvalidatedBlock {
                     block: r.block,
-                    rules: vec![r.rule],
+                    rule_ids: vec![r.rule],
                     index: crate::rule_index::RuleIndex::empty(),
                 }),
             }
@@ -160,10 +160,10 @@ impl InvalidatedRules {
                 }
             };
             b.index = crate::rule_index::RuleIndex::build_from_indexed(
-                b.rules.iter().filter_map(|&rule| rule_at(rule).map(|r| (rule as usize, r))),
+                b.rule_ids.iter().filter_map(|&rule| rule_at(rule).map(|r| (rule as usize, r))),
             );
         }
-        let count = blocks.iter().map(|b| b.rules.len() as u32).sum();
+        let count = blocks.iter().map(|b| b.rule_ids.len() as u32).sum();
         Self { blocks, count }
     }
 }

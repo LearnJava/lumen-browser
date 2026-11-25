@@ -207,3 +207,8 @@ WebSocket.CONNECTING = 0; WebSocket.OPEN = 1;
 WebSocket.CLOSING = 2;    WebSocket.CLOSED = 3;
 WebSocket.prototype.CONNECTING = 0; WebSocket.prototype.OPEN = 1;
 WebSocket.prototype.CLOSING = 2;    WebSocket.prototype.CLOSED = 3;
+// WebIDL §3.7.3 interface tag: без него `String(ws)`/`{}.toString.call(ws)`
+// давали "[object Object]" — неотличимо от plain object (WPT websockets/send/010
+// строит имена сабтестов через String() и ловит duplicate test name).
+Object.defineProperty(WebSocket.prototype, Symbol.toStringTag,
+    { value: 'WebSocket', writable: false, enumerable: false, configurable: true });

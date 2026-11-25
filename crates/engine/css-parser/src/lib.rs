@@ -26,7 +26,7 @@ pub use parser::{
     ColorProfileRule, Combinator, CompoundSelector, ComplexSelector, ContainerRule, CounterStyleRule, Declaration,
     decl_content_flags, DeclKeyword, DECL_F_HAS_ATTR, DECL_F_HAS_DASHDASH, DECL_F_HAS_ENV_MAYBE, DECL_F_HAS_VAR,
     DECL_KW_MASK, DECL_KW_SHIFT,
-    DirArg, FontFaceRule, FontFaceSource, FontFaceSourceKind, FontPaletteValuesRule, FunctionBodyItem, FunctionParameter, FunctionRule, ImportLayer, ImportRule, Keyframe, KeyframesRule,
+    DirArg, FontFaceRule, FontFaceSource, FontFaceSourceKind, FontPaletteValuesRule, FunctionBodyItem, FunctionParameter, FunctionRule, ImportLayer, ImportRule, ImportSheet, Keyframe, KeyframesRule,
     LayerCondition, LayerRule, MediaCondition, MediaContext, MediaContrast, MediaFeature, MediaHover, MediaInvertedColors, MediaOrientation, MediaPointer, MediaQuery,
     MediaReducedData, MediaReducedTransparency, MediaScripting,
     MediaQueryClause, MediaRule, MixinParameter, MixinResultItem, MixinResultNodeInfo, MixinRule, MIXIN_APPLY_MARKER, NthSpec, PageRule, PropertyRule, PseudoClass, PseudoElementKind, RelativeSelector,

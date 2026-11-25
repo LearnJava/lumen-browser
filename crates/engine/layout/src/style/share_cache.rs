@@ -172,16 +172,33 @@ fn sheet_has_position_dependent_subject(sheet: &Stylesheet) -> bool {
         c.tail.last().map(|(_, comp)| comp).unwrap_or(&c.head)
     }
     fn subject_has_position_pseudo(c: &lumen_css_parser::ComplexSelector) -> bool {
-        subject(c).parts.iter().any(|p| {
-            matches!(
-                p,
+        // `compound_is_share_safe` recurses into `:not()`/`:is()`/`:where()`
+        // arguments with the SAME `describes_key_node` flag — those
+        // pseudo-classes match the element their compound belongs to, so a
+        // `:first-child` one level down (`div:not(:first-child)`) is exactly
+        // as position-dependent as a bare one and needs the same key fields.
+        // Checking only the top-level parts let such rules share a style
+        // computed for a different sibling position (WPT css-flexbox gap-*).
+        fn compound_needs_position(compound: &lumen_css_parser::CompoundSelector) -> bool {
+            compound.parts.iter().any(|p| match p {
                 lumen_css_parser::SimpleSelector::PseudoClass(
                     lumen_css_parser::PseudoClass::FirstChild
                         | lumen_css_parser::PseudoClass::LastChild
-                        | lumen_css_parser::PseudoClass::OnlyChild
-                )
-            )
-        })
+                        | lumen_css_parser::PseudoClass::OnlyChild,
+                ) => true,
+                lumen_css_parser::SimpleSelector::PseudoClass(
+                    lumen_css_parser::PseudoClass::Not(list)
+                        | lumen_css_parser::PseudoClass::Is(list)
+                        | lumen_css_parser::PseudoClass::Where(list),
+                ) => list.iter().any(complex_needs_position),
+                _ => false,
+            })
+        }
+        fn complex_needs_position(c: &lumen_css_parser::ComplexSelector) -> bool {
+            compound_needs_position(subject(c))
+                || subject_preceded_by_bare_universal_sibling(c)
+        }
+        complex_needs_position(c)
     }
     // BUG-1112 срез 11: `* + subject` needs the same `is_first_child` field —
     // see `share_safety::compound_is_bare_universal`'s doc comment.
@@ -495,6 +512,18 @@ pub(crate) fn share_key_eligible(doc: &Document, node: NodeId) -> bool {
     let NodeData::Element { name, .. } = &doc.get(node).data else {
         return false;
     };
+    // dir-auto-dynamic-*: `[dir=auto]` and `<bdi>` without an explicit
+    // `ltr`/`rtl` resolve `direction`/`unicode-bidi` from the subtree's
+    // first strong character (`apply_dir_presentational_hint` →
+    // `first_strong_direction`/`slot_assigned_directionality`) — content
+    // no `ShareKey` field captures, in any namespace. Two siblings equal
+    // on every key field but holding different text must not share.
+    let dir_attr = doc.get(node).get_attr("dir").map(|v| v.trim().to_ascii_lowercase());
+    if matches!(dir_attr.as_deref(), Some("auto"))
+        || (name.local == "bdi" && !matches!(dir_attr.as_deref(), Some("ltr") | Some("rtl")))
+    {
+        return false;
+    }
     if super::presentational::is_svg_presentational_element(name.local.as_ref()) {
         return true;
     }

@@ -39,10 +39,16 @@ Event.prototype.stopImmediatePropagation = function() { this._stopImmediate = tr
 // modelled yet, so a path crossing a shadow boundary lists the real nodes.
 Event.prototype.composedPath = function() {
     var p = this._path;
-    if (!p || typeof _lumen_path_target !== 'function') return [];
+    if (!p) return [];
     var out = [];
     for (var i = 0; i < p.length; i++) {
-        var o = _lumen_path_target(p[i]);
+        var entry = p[i];
+        // `_lumen_propagate` stores arena nids / the -1/-2 sentinels, which
+        // only the page shim can resolve; the pure-JS EventTarget dispatch
+        // (`event_target_shim.js`) stores the target object itself.
+        var o = (typeof entry === 'number' && typeof _lumen_path_target === 'function')
+            ? _lumen_path_target(entry)
+            : entry;
         if (o) out.push(o);
     }
     return out;

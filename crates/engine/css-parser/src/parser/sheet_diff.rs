@@ -122,6 +122,7 @@ impl Stylesheet {
             properties,
             media_rules: _,
             imports,
+            import_sheets: _,
             font_faces: _,
             layer_order,
             layers,

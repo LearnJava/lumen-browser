@@ -263,6 +263,10 @@ pub(crate) struct DynamicCssBase {
     /// журнала CSSOM-правок (`insertRule`/`deleteRule`/`.style`). Отличие —
     /// сигнал наложить правки на каскад, по которому рисует шелл.
     pub(crate) cssom_epoch: u64,
+    /// Поколение `Document::shadow_adopted_css` на момент последней сверки —
+    /// `shadowRoot.adoptedStyleSheets` меняет теневые листы, не трогая
+    /// документный каскад, поэтому нужен свой датчик рядом с `adopted_fp`.
+    pub(crate) shadow_adopted_gen: u64,
     /// BUG-493: лист до наложения CSSOM-правок, когда текущий `stylesheet` в
     /// `LayoutSource` — уже результат `PersistentJs::patch_cascade`. Правки
     /// всегда накладываются на него, а не на прошлый результат — иначе

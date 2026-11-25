@@ -377,6 +377,25 @@ impl Lumen {
                 next_wakeup = Some(wakeup);
             }
         }
+        // Когда чтение `take_timer_wakeup` выше отложено (движковый поток занят,
+        // rAF-ход в полёте или неприменённое relayout-задание), JS-побудка —
+        // например, 2-мс re-arm помпы `fetch()` — остаётся непрочитанной в слоте.
+        // Без короткого retry-дедлайна цикл паркуется на чужом far-дедлайне
+        // (нативный тик ~3 с) и голодает весь JS-таймерный контур: WPT
+        // execution-timing/122 ловил это как нарушение порядка скриптов —
+        // in-order скрипт исполнялся раньше asap, потому что его fetch
+        // «догнал» оба ответа одним помп-тиком после ~3-секундного сна.
+        if self.js_present
+            && (self.raf_turn_inflight()
+                || self.engine_job_generation != self.engine_applied_generation
+                || self
+                    .engine_thread
+                    .as_ref()
+                    .is_some_and(|e| e.busy().is_some()))
+        {
+            let retry = std::time::Instant::now() + std::time::Duration::from_millis(2);
+            next_wakeup = Some(next_wakeup.map_or(retry, |t| t.min(retry)));
+        }
         // GAP-MEDIADECODE срез 10: a `<video>` resource-selection algorithm
         // (queued as a JS task, drained by `tick_timers()` above) enqueues a
         // GIF- or container-backed load into `pending_loads`/`pending_container_loads`
@@ -437,6 +456,12 @@ impl Lumen {
             let poll = std::time::Instant::now() + std::time::Duration::from_millis(2);
             next_wakeup = Some(next_wakeup.map_or(poll, |t| t.min(poll)));
         }
+        // Скроллы, заказанные скриптом ранее в этом тике (таймеры, события,
+        // promise-цепочки), обязаны лечь в layout ДО rAF-колбэков — те читают
+        // scrollTop/scrollLeft через maybe_flush → collect по layout_box.
+        // Запросы, поставленные самими rAF-колбэками, добирает второй вызов
+        // на прежнем месте тика.
+        self.drain_element_scroll_requests();
         // BUG-271: rAF pump — fire pending requestAnimationFrame batches from
         // the parked event loop WITHOUT forcing a repaint. A page that keeps an
         // rAF loop alive without touching DOM/canvas used to drive an
@@ -1684,73 +1709,7 @@ impl Lumen {
         // write-back-`task` встаёт в очередь **после** него (read-after-write порядок
         // сохранён); без флага (по умолчанию) — прежние синхронные `js.<method>()`,
         // байт-идентично.
-        #[cfg(feature = "v8")]
-        {
-            let scroll_reqs = self.drain_query_js(|j| j.take_scroll_requests()).unwrap_or_default();
-            // Вьюпорт — до мутабельного заимствования `layout_box` ниже: им
-            // позиционируются `background-attachment: fixed` слои (§3.6).
-            let fixed_bg_vp = self.relayout_viewport();
-            let mut cmd_ids: Vec<u32> = Vec::new();
-            if !scroll_reqs.is_empty()
-                && let Some(lb) = self.layout_box.as_mut()
-            {
-                let mut changed = false;
-                let mut scrolled_nids: Vec<u32> = Vec::new();
-                for (nid, x, y) in scroll_reqs {
-                    if set_scroll_position(lb, NodeId::from_index(nid as usize), x, y) {
-                        changed = true;
-                        scrolled_nids.push(nid);
-                    }
-                }
-                if changed {
-                    // Rebuild display list with the updated scroll offsets.
-                    let mut new_dl = match fixed_bg_vp {
-                        Some(vp) => crate::display_list_metrics::paint_ordered_in(lb, vp),
-                        None => paint_ordered(lb),
-                    };
-                    // BUG-480 срез 14: paint_ordered пересобирает список из
-                    // layout и о фреймах не знает — без вклейки содержимое
-                    // фрейма исчезло бы на первом же скролле контейнера.
-                    crate::frames::splice_frame_content(&mut new_dl, &self.frames);
-                    let root_id = lb.node.index() as u32;
-                    self.tile_grid.update_from_diff(&self.display_list, &new_dl);
-                    // Cache directly — lb mutably borrows self.layout_box; only self.display_list_cache is touched here.
-                    let dl_hash = lumen_paint::hash_commands(&new_dl);
-                    self.display_list_cache.insert(root_id, new_dl.clone(), dl_hash, None);
-                    // Прямая запись полей: `layout_box` здесь заимствован
-                    // мутабельно, `&mut self` целиком взять нельзя.
-                    self.display_list = new_dl;
-                    self.display_list_epoch = next_dl_epoch(self.display_list_epoch);
-                    // Sync JS cache so scrollTop/scrollLeft reads are accurate, then fire
-                    // non-bubbling scroll events on each scrolled container.
-                    let states: HashMap<u32, [f32; 4]> = collect_scroll_containers_for_js_state(lb)
-                        .iter()
-                        .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
-                        .collect();
-                    let scrolled_nids_copy = scrolled_nids.clone();
-                    route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-                        j.update_scroll_states(states);
-                        for nid in scrolled_nids {
-                            j.fire_element_scroll(nid);
-                            // BUG-822: a programmatic container scroll is
-                            // applied in full right here — there is no
-                            // per-container animation to wait for — so the
-                            // sequence has already ended and `scrollend`
-                            // follows `scroll` in the same frame.
-                            j.fire_element_scrollend(nid);
-                        }
-                    });
-                    if let Some(w) = self.window.as_ref() {
-                        w.request_redraw();
-                    }
-                    cmd_ids = scrolled_nids_copy;
-                }
-            }
-            if !cmd_ids.is_empty() {
-                self.restyle_scroll_state_queries();
-                self.issue_container_scroll_command(&cmd_ids);
-            }
-        }
+        self.drain_element_scroll_requests();
 
         // Page-level scroll requests from JS window.scrollTo / window.scrollBy.
         // Smooth requests go through the rAF-based animation; instant ones set
@@ -2050,5 +2009,81 @@ impl Lumen {
         });
         eprintln!("window.open: navigation to {resolved} blocked by CSP navigate-to");
         None
+    }
+
+    /// Дренаж element-скроллов, запрошенных из JS (`scrollTo`/`scrollBy`/
+    /// `scrollIntoView`/`scrollLeft=`). Вызывается ДВАЖДЫ за `about_to_wait`:
+    /// до rAF-помпы и на прежнем месте в конце тика. Скролл, заказанный
+    /// скриптом, обязан попасть в `layout_box` до того, как rAF-колбэки того
+    /// же кадра прочитают `scrollTop`/`scrollLeft` — иначе same-tick чтение
+    /// видит layout без смещения (WPT focus/focus-centers-element).
+    /// Второй вызов добирает запросы, поставленные самими rAF-колбэками.
+    /// Тело — бывший inline-блок дренажа (ADR-016 M2.2d).
+    #[cfg(feature = "v8")]
+    fn drain_element_scroll_requests(&mut self) {
+        let scroll_reqs = self.drain_query_js(|j| j.take_scroll_requests()).unwrap_or_default();
+        // Вьюпорт — до мутабельного заимствования `layout_box` ниже: им
+        // позиционируются `background-attachment: fixed` слои (§3.6).
+        let fixed_bg_vp = self.relayout_viewport();
+        let mut cmd_ids: Vec<u32> = Vec::new();
+        if !scroll_reqs.is_empty()
+            && let Some(lb) = self.layout_box.as_mut()
+        {
+            let mut changed = false;
+            let mut scrolled_nids: Vec<u32> = Vec::new();
+            for (nid, x, y) in scroll_reqs {
+                if set_scroll_position(lb, NodeId::from_index(nid as usize), x, y) {
+                    changed = true;
+                    scrolled_nids.push(nid);
+                }
+            }
+            if changed {
+                // Rebuild display list with the updated scroll offsets.
+                let mut new_dl = match fixed_bg_vp {
+                    Some(vp) => crate::display_list_metrics::paint_ordered_in(lb, vp),
+                    None => paint_ordered(lb),
+                };
+                // BUG-480 срез 14: paint_ordered пересобирает список из
+                // layout и о фреймах не знает — без вклейки содержимое
+                // фрейма исчезло бы на первом же скролле контейнера.
+                crate::frames::splice_frame_content(&mut new_dl, &self.frames);
+                let root_id = lb.node.index() as u32;
+                self.tile_grid.update_from_diff(&self.display_list, &new_dl);
+                // Cache directly — lb mutably borrows self.layout_box; only self.display_list_cache is touched here.
+                let dl_hash = lumen_paint::hash_commands(&new_dl);
+                self.display_list_cache.insert(root_id, new_dl.clone(), dl_hash, None);
+                // Прямая запись полей: `layout_box` здесь заимствован
+                // мутабельно, `&mut self` целиком взять нельзя.
+                self.display_list = new_dl;
+                self.display_list_epoch = next_dl_epoch(self.display_list_epoch);
+                // Sync JS cache so scrollTop/scrollLeft reads are accurate, then fire
+                // non-bubbling scroll events on each scrolled container.
+                let states: HashMap<u32, [f32; 4]> = collect_scroll_containers_for_js_state(lb)
+                    .iter()
+                    .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
+                    .collect();
+                let scrolled_nids_copy = scrolled_nids.clone();
+                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                    j.update_scroll_states(states);
+                    for nid in scrolled_nids {
+                        j.fire_element_scroll(nid);
+                        // BUG-822: a programmatic container scroll is
+                        // applied in full right here — there is no
+                        // per-container animation to wait for — so the
+                        // sequence has already ended and `scrollend`
+                        // follows `scroll` in the same frame.
+                        j.fire_element_scrollend(nid);
+                    }
+                });
+                if let Some(w) = self.window.as_ref() {
+                    w.request_redraw();
+                }
+                cmd_ids = scrolled_nids_copy;
+            }
+        }
+        if !cmd_ids.is_empty() {
+            self.restyle_scroll_state_queries();
+            self.issue_container_scroll_command(&cmd_ids);
+        }
     }
 }

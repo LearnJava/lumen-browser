@@ -6351,25 +6351,34 @@ Object.defineProperty(ShadowRoot.prototype, 'children', {
 ShadowRoot.prototype.append = function() {
     var nid = this.__nid__;
     var ins = _lumen_expand_insert_nids(arguments);
-    for (var i = 0; i < ins.length; i++) _lumen_append_child(nid, ins[i]);
+    _lumen_ce_push_element_queue();
+    try {
+        for (var i = 0; i < ins.length; i++) _lumen_append_child(nid, ins[i]);
+    } finally { _lumen_ce_pop_current_element_queue(); }
 };
 ShadowRoot.prototype.prepend = function() {
     var nid = this.__nid__;
     var ch = _lumen_get_children(nid);
     var firstChild = ch.length > 0 ? ch[0] : null;
     var ins = _lumen_expand_insert_nids(arguments);
-    for (var i = 0; i < ins.length; i++) {
-        var childNid = ins[i];
-        if (firstChild !== null) { _lumen_insert_before(nid, childNid, firstChild); }
-        else { _lumen_append_child(nid, childNid); }
-    }
+    _lumen_ce_push_element_queue();
+    try {
+        for (var i = 0; i < ins.length; i++) {
+            var childNid = ins[i];
+            if (firstChild !== null) { _lumen_insert_before(nid, childNid, firstChild); }
+            else { _lumen_append_child(nid, childNid); }
+        }
+    } finally { _lumen_ce_pop_current_element_queue(); }
 };
 ShadowRoot.prototype.replaceChildren = function() {
     var nid = this.__nid__;
     var ins = _lumen_expand_insert_nids(arguments);
     var old = _lumen_get_children(nid).slice();
-    for (var i = 0; i < old.length; i++) { _lumen_remove_child(nid, old[i]); }
-    for (var j = 0; j < ins.length; j++) _lumen_append_child(nid, ins[j]);
+    _lumen_ce_push_element_queue();
+    try {
+        for (var i = 0; i < old.length; i++) { _lumen_remove_child(nid, old[i]); }
+        for (var j = 0; j < ins.length; j++) _lumen_append_child(nid, ins[j]);
+    } finally { _lumen_ce_pop_current_element_queue(); }
 };
 // Scoped to this shadow tree's descendants — see BUG-291.
 ShadowRoot.prototype.querySelector = function(sel) {
@@ -6982,6 +6991,52 @@ function _lumen_build_detached_document(proto, contentType) {
         return oldChild;
     };
     doc.hasChildNodes = function() { return _children.length > 0; };
+    // HTML LS §8.4.4 document.write()/writeln()/open()/close() on a document
+    // with no browsing context (createHTMLDocument, DOMParser text/html).
+    // Scripting is disabled there, so the markup lands in <body> as inert
+    // DOM; the spec's prepare steps mark written scripts already-started
+    // when they bail at the scripting-disabled check, and mirroring that
+    // flag keeps an adopted written script from ever running
+    // (execution-timing/120). XML documents reject the calls with
+    // InvalidStateError, as the live document's write steps do.
+    function _detached_write(args, newline) {
+        if (contentType !== 'text/html') {
+            throw new DOMException('document.write is not supported on this document', 'InvalidStateError');
+        }
+        var text = '';
+        for (var i = 0; i < args.length; i++) { text += String(args[i]); }
+        if (newline) { text += '\n'; }
+        var body = doc.body;
+        if (body === null) { return; }
+        var ids = _lumen_parse_html_fragment(text);
+        for (var j = 0; j < ids.length; j++) {
+            var nid = ids[j];
+            if (_lumen_is_script_element(nid)) { _lumen_script_started[nid] = 1; }
+            var inner = _lumen_query_selector_all_scoped(nid, 'script');
+            for (var k = 0; k < inner.length; k++) { _lumen_script_started[inner[k]] = 1; }
+            body.appendChild(_lumen_make_node(nid));
+        }
+    }
+    doc.write = function() { _detached_write(arguments, false); };
+    doc.writeln = function() { _detached_write(arguments, true); };
+    doc.open = function() {
+        if (contentType !== 'text/html') {
+            throw new DOMException('document.open is not supported on this document', 'InvalidStateError');
+        }
+        // Spec open() erases the document; the approximation clears the
+        // document element and rebuilds the html>head,body skeleton a
+        // createHTMLDocument result starts with.
+        var root = doc.documentElement;
+        if (root && root.__nid__ !== undefined) {
+            var rnid = root.__nid__;
+            var kids = _lumen_get_children(rnid);
+            for (var i = kids.length - 1; i >= 0; i--) { _lumen_remove_child(rnid, kids[i]); }
+            _lumen_append_child(rnid, _lumen_create_element('head'));
+            _lumen_append_child(rnid, _lumen_create_element('body'));
+        }
+        return doc;
+    };
+    doc.close = function() { /* no parser to unblock on a detached document */ };
     // DOM §4.4: a document has no parent and no siblings, and its text content
     // is null — the inherited accessors read `undefined` for a JS-only node.
     ['parentNode', 'parentElement', 'previousSibling', 'nextSibling', 'textContent'].forEach(function(k) {
@@ -10648,10 +10703,13 @@ var _LUMEN_WRAPPER_MEMBERS = {
             var pid = _lumen_u2n(_lumen_get_parent(nid));
             if (pid === null) return;
             var _bins = _lumen_expand_insert_nids(arguments);
-            for (var _bi = 0; _bi < _bins.length; _bi++) {
-                _lumen_insert_before(pid, _bins[_bi], nid);
-            }
-            _lumen_fire_slotchange(pid);
+            _lumen_ce_push_element_queue();
+            try {
+                for (var _bi = 0; _bi < _bins.length; _bi++) {
+                    _lumen_insert_before(pid, _bins[_bi], nid);
+                }
+                _lumen_fire_slotchange(pid);
+            } finally { _lumen_ce_pop_current_element_queue(); }
         },
         // Inserts nodes immediately after this element.
         after: function() { var nid = this.__nid__;
@@ -10661,11 +10719,14 @@ var _LUMEN_WRAPPER_MEMBERS = {
             var idx = ch.indexOf(nid);
             var nextSib = (idx >= 0 && idx + 1 < ch.length) ? ch[idx + 1] : null;
             var _ains = _lumen_expand_insert_nids(arguments);
-            for (var _ai = 0; _ai < _ains.length; _ai++) {
-                if (nextSib !== null) { _lumen_insert_before(pid, _ains[_ai], nextSib); }
-                else { _lumen_append_child(pid, _ains[_ai]); }
-            }
-            _lumen_fire_slotchange(pid);
+            _lumen_ce_push_element_queue();
+            try {
+                for (var _ai = 0; _ai < _ains.length; _ai++) {
+                    if (nextSib !== null) { _lumen_insert_before(pid, _ains[_ai], nextSib); }
+                    else { _lumen_append_child(pid, _ains[_ai]); }
+                }
+                _lumen_fire_slotchange(pid);
+            } finally { _lumen_ce_pop_current_element_queue(); }
         },
         // Replaces this element with the given nodes/strings.
         replaceWith: function() { var nid = this.__nid__;
@@ -10692,19 +10753,25 @@ var _LUMEN_WRAPPER_MEMBERS = {
             var ch = _lumen_get_children(nid);
             var firstChild = ch.length > 0 ? ch[0] : null;
             var _pins = _lumen_expand_insert_nids(arguments);
-            for (var _pi = 0; _pi < _pins.length; _pi++) {
-                if (firstChild !== null) { _lumen_insert_before(nid, _pins[_pi], firstChild); }
-                else { _lumen_append_child(nid, _pins[_pi]); }
-            }
-            _lumen_fire_slotchange(nid);
+            _lumen_ce_push_element_queue();
+            try {
+                for (var _pi = 0; _pi < _pins.length; _pi++) {
+                    if (firstChild !== null) { _lumen_insert_before(nid, _pins[_pi], firstChild); }
+                    else { _lumen_append_child(nid, _pins[_pi]); }
+                }
+                _lumen_fire_slotchange(nid);
+            } finally { _lumen_ce_pop_current_element_queue(); }
         },
         // ParentNode.append (DOM LS §4.2.5): appends nodes/strings as the last children.
         append: function() { var nid = this.__nid__;
             var _ains = _lumen_expand_insert_nids(arguments);
-            for (var _ai = 0; _ai < _ains.length; _ai++) {
-                _lumen_append_child(nid, _ains[_ai]);
-            }
-            _lumen_fire_slotchange(nid);
+            _lumen_ce_push_element_queue();
+            try {
+                for (var _ai = 0; _ai < _ains.length; _ai++) {
+                    _lumen_append_child(nid, _ains[_ai]);
+                }
+                _lumen_fire_slotchange(nid);
+            } finally { _lumen_ce_pop_current_element_queue(); }
         },
         // HTML LS 4.9.2 (old-fashioned but conforming markup) — insertAdjacent{Text,Element}.
         // Delegates to the before/after/prepend/append methods above (same silent
@@ -10777,12 +10844,15 @@ var _LUMEN_WRAPPER_MEMBERS = {
         replaceChildren: function() { var nid = this.__nid__;
             var _rcins = _lumen_expand_insert_nids(arguments);
             var old = _lumen_get_children(nid).slice();
-            for (var _rci = 0; _rci < old.length; _rci++) {
-                _lumen_remove_child(nid, old[_rci]);
-            }
-            for (var _rni = 0; _rni < _rcins.length; _rni++) {
-                _lumen_append_child(nid, _rcins[_rni]);
-            }
+            _lumen_ce_push_element_queue();
+            try {
+                for (var _rci = 0; _rci < old.length; _rci++) {
+                    _lumen_remove_child(nid, old[_rci]);
+                }
+                for (var _rni = 0; _rni < _rcins.length; _rni++) {
+                    _lumen_append_child(nid, _rcins[_rni]);
+                }
+            } finally { _lumen_ce_pop_current_element_queue(); }
         },
         // DOM LS §4.4: cloneNode(deep) — shallow or deep copy of this element.
         cloneNode:       function(deep) { var nid = this.__nid__;
@@ -11075,7 +11145,12 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // target's offset inside the container's unscrolled content, so
         // 'start' is correct at any starting scroll position, not just zero.
         scrollIntoView: function(arg) { var nid = this.__nid__;
-            var opts = _lumen_parse_scroll_into_view_opts(arg);
+            // Внутренний sentinel (фокус, HTML LS §6.6.3 «scroll into view»):
+            // центрирует элемент, только если он не виден целиком —
+            // «center if needed», иначе фокус сдвигал бы уже видимый элемент.
+            var opts = arg === _LUMEN_SIV_CENTER_IF_NEEDED
+                ? { block: 'centerIfNeeded', inline: 'centerIfNeeded', behavior: 'auto' }
+                : _lumen_parse_scroll_into_view_opts(arg);
             // Scroll the nearest ancestor scroll container to make this element visible.
             var r = _lumen_get_bounding_rect(nid);
             if (!r) return Promise.resolve();
@@ -14503,9 +14578,10 @@ _lumen_css_acc(CSSScopeRule.prototype, 'end', function() { return _lumen_css_sco
 
 // ── @import / @namespace ──
 function _lumen_css_import_parts(p) {
-    var out = { href: '', layerName: null, supportsText: null, media: '' };
+    var out = { href: '', urlToken: '', layerName: null, supportsText: null, media: '' };
     var m = /^(?:url\(\s*(?:"((?:[^"\\]|\\[\s\S])*)"|'((?:[^'\\]|\\[\s\S])*)'|([^)]*?))\s*\)|"((?:[^"\\]|\\[\s\S])*)"|'((?:[^'\\]|\\[\s\S])*)')\s*/.exec(p);
     if (!m) return out;
+    out.urlToken = m[0].replace(/\s+$/, '');
     var href = [m[1], m[2], m[3], m[4], m[5]].filter(function(x) { return x !== undefined; })[0] || '';
     try { href = new URL(href, document.baseURI).href; } catch (e) { /* keep as written */ }
     out.href = href;
@@ -14530,14 +14606,38 @@ function _lumen_css_import_parts(p) {
 _lumen_css_acc(CSSImportRule.prototype, 'href', function() { return _lumen_css_import_parts(_lumen_css_data(this).prelude).href; });
 _lumen_css_acc(CSSImportRule.prototype, 'layerName', function() { return _lumen_css_import_parts(_lumen_css_data(this).prelude).layerName; });
 _lumen_css_acc(CSSImportRule.prototype, 'supportsText', function() { return _lumen_css_import_parts(_lumen_css_data(this).prelude).supportsText; });
+// [PutForwards=mediaText] на `CSSImportRule.media`: mediaText — хвост
+// прекюдла `@import`; переписываем только его, url/layer/supports — как были.
+function _lumen_css_import_set_media(self, media) {
+    var p = _lumen_css_import_parts(_lumen_css_data(self).prelude);
+    var pre = p.urlToken;
+    if (p.layerName !== null) pre += p.layerName === '' ? ' layer' : ' layer(' + p.layerName + ')';
+    if (p.supportsText !== null) pre += ' supports(' + p.supportsText + ')';
+    media = String(media).trim();
+    if (media !== '') pre += ' ' + media;
+    _lumen_css_set_prelude(self, pre);
+}
 _lumen_css_acc(CSSImportRule.prototype, 'media', function() {
     var self = this;
     _lumen_css_data(self);
     var r = self._cssr;
     return r.media || (r.media = _lumen_css_media_list(self,
-        function() { return _lumen_css_import_parts(_lumen_css_data(self).prelude).media; }, null));
+        function() { return _lumen_css_import_parts(_lumen_css_data(self).prelude).media; },
+        function(v) { _lumen_css_import_set_media(self, v); }));
+}, function(v) {
+    var m = this.media;
+    m.mediaText = v === null ? '' : String(v);
 });
-_lumen_css_acc(CSSImportRule.prototype, 'styleSheet', function() { _lumen_css_data(this); return null; });
+_lumen_css_acc(CSSImportRule.prototype, 'styleSheet', function() {
+    var self = this;
+    _lumen_css_data(self);
+    var r = self._cssr;
+    if (r.importSheet !== undefined) return r.importSheet;
+    var i = r.be.idx();
+    var at = i < 0 ? -1 : _lumen_cssom_import_sheet(r.be.c, i, r.id);
+    r.importSheet = at < 0 ? null : _lumen_css_sheet_for(_lumen_css_backend(true, at));
+    return r.importSheet;
+});
 function _lumen_css_namespace_parts(p) {
     var prefix = '', rest = p;
     var m = /^([^\s"'(]+)\s+(?=url\(|["'])/.exec(p);
@@ -14742,8 +14842,19 @@ _lumen_css_acc(_lumen_css_sheet_proto, 'media', function() {
         var el = _lumen_css_owner(be);
         if (el) el.setAttribute('media', v); else be.mediaText = v;
     }));
+}, function(v) {
+    // [PutForwards=mediaText] (CSSOM §6.1): `sheet.media = "…"` ≡ mediaText=.
+    this.media.mediaText = v === null ? '' : String(v);
 });
-_lumen_css_acc(_lumen_css_sheet_proto, 'parentStyleSheet', function() { _lumen_css_be(this); return null; });
+_lumen_css_acc(_lumen_css_sheet_proto, 'parentStyleSheet', function() {
+    var be = _lumen_css_be(this);
+    // Импортированный лист живёт в реестре конструируемых; его родитель —
+    // лист с `@import`-правилом (CSSOM §5.4.1), пока правило не удалено.
+    if (!be.c) return null;
+    var p = _lumen_cssom_import_parent(be.key);
+    if (!p || !p.length) return null;
+    return _lumen_css_sheet_for(_lumen_css_backend(p[0] === 1, p[1]));
+});
 _lumen_css_acc(_lumen_css_sheet_proto, 'ownerRule', function() { _lumen_css_be(this); return null; });
 _lumen_css_acc(_lumen_css_sheet_proto, 'cssRules', function() {
     var be = _lumen_css_be(this);
@@ -16545,7 +16656,16 @@ function _lumen_script_load_external(nid, src, isModule) {
     // state: 0 = fetching, 1 = body ready, 2 = failed.
     var job = { state: 0, run: null, delaysLoad: _doc_ready_state !== 'complete' };
     if (job.delaysLoad) _lumen_load_delay_count++;
-    _lumen_script_exec_queue.push(job);
+    // HTML LS §4.12.1 шаг 38: «async» content attribute или force async →
+    // «as soon as possible» — тело исполняется по готовности fetch'а, не
+    // дожидаясь in-order предшественников; иначе — «in order» очередь.
+    var _asap = _lumen_u2n(_lumen_get_attr(nid, 'async')) !== null
+        || _lumen_script_force_async[nid] === 1;
+    if (!_asap) _lumen_script_exec_queue.push(job);
+    var _kick = function() {
+        if (_asap) { if (job.run !== null) job.run(); }
+        else { _lumen_script_exec_drain(); }
+    };
     setTimeout(function() {
         var url;
         try {
@@ -16558,7 +16678,7 @@ function _lumen_script_load_external(nid, src, isModule) {
                 _lumen_resource_fire(nid, 'error');
                 _lumen_load_delay_done(job);
             };
-            _lumen_script_exec_drain();
+            _kick();
             return;
         }
         // BUG-1175: `script-src` refuses the request before a byte is sent.
@@ -16575,7 +16695,7 @@ function _lumen_script_load_external(nid, src, isModule) {
                 _lumen_resource_fire(nid, 'error');
                 _lumen_load_delay_done(job);
             };
-            _lumen_script_exec_drain();
+            _kick();
             return;
         }
         fetch(url, { _lumenInitiatorType: 'script', _lumenModule: !!isModule }).then(function(resp) {
@@ -16607,7 +16727,7 @@ function _lumen_script_load_external(nid, src, isModule) {
                     _lumen_load_delay_done(job);
                 });
             };
-            _lumen_script_exec_drain();
+            _kick();
         }).catch(function(e) {
             job.state = 2;
             job.run = function() {
@@ -16615,7 +16735,7 @@ function _lumen_script_load_external(nid, src, isModule) {
                 _lumen_resource_fire(nid, 'error');
                 _lumen_load_delay_done(job);
             };
-            _lumen_script_exec_drain();
+            _kick();
         });
     }, 0);
 }
@@ -16702,6 +16822,15 @@ function _lumen_script_child_text(nid) {
 // entry is deleted by `_lumen_resource_try_prepare` only once this is set.
 var _lumen_script_started = {};
 
+// HTML LS §4.12.1 «force async»: изначально true у каждого <script>; парсер
+// сбрасывает его при вставке, prepare возвращает true для parser-inserted без
+// async, а неудачный prepare (data-блок) оставляет true навсегда — поэтому
+// переinserted data-блок идёт в «as soon as possible» очередь и его
+// `script.async` отдаёт true (execution-timing/122). `undefined` в карте =
+// флаг ещё не трогали (парсерный скрипт, доехавший до prepare) — геттер
+// `async` в таком случае читает только атрибут, как обычная рефлексия.
+var _lumen_script_force_async = {};
+
 // HTML LS §4.12.1 steps 1-32, minus the parser-only branches (every caller
 // here is the "script becomes connected" hook, never the initial parse).
 function _lumen_script_prepare(nid) {
@@ -16733,6 +16862,9 @@ function _lumen_script_prepare(nid) {
     if (!isModule && !isImportmap && !isClassic) return;
     // Step 12.
     _lumen_script_started[nid] = 1;
+    // Force async: spec initial value is true; the only JS-reachable reset is
+    // the `async` IDL setter (async=false) — don't clobber an explicit false.
+    if (_lumen_script_force_async[nid] === undefined) _lumen_script_force_async[nid] = 1;
     // Import maps are data, consumed elsewhere (not by this function); the
     // flag above is all BUG-882's test cares about here.
     if (isImportmap) return;
@@ -16779,8 +16911,14 @@ function _lumen_is_script_element(nid) {
 // that flag has to be cleared here first, or a script whose earlier prepare
 // already ran (the common "swap the bundle" case this bug is about) would
 // see step 1 bounce this call back out as a no-op.
-function _lumen_script_attr_changed(nid, attrName) {
-    if (attrName !== 'src' && attrName !== 'type') return;
+function _lumen_script_attr_changed(nid, attrName, isSet) {
+    // HTML LS §4.12.1 attribute change steps: повторный prepare запускает
+    // только запись `src` (value !== null), connected-элемент. Смены `type`
+    // там нет — дата-блок, у которого убрали type, НЕ исполняется (WPT
+    // execution-timing/121: removeAttribute('type') не должен запускать
+    // отложенный classic); перезапуск data→code идёт через post-connection
+    // steps при повторной вставке или children-changed steps.
+    if (attrName !== 'src' || !isSet) return;
     if (!_lumen_is_script_element(nid)) return;
     if (!_lumen_resource_is_connected(nid)) return;
     delete _lumen_script_started[nid];
@@ -17158,6 +17296,13 @@ function _lumen_link_prepare(nid) {
     // report this same link a second time (BUG-804).
     if (_lumen_link_sheet_done[nid] === 1) return;
     _lumen_link_sheet_done[nid] = 1;
+    // The JS side owns this fetch: tell the shell so its stylesheet passes skip
+    // this link (no second fetch / second resource-timing entry), and hold the
+    // window `load` event the same way external scripts do — the shell's
+    // late-stylesheet counter never saw this element.
+    if (typeof _lumen_link_claim_load === 'function') _lumen_link_claim_load(nid);
+    var loadJob = { delaysLoad: _doc_ready_state !== 'complete' };
+    if (loadJob.delaysLoad) _lumen_load_delay_count++;
     // Task hop for the same reason as the external <script> path: the
     // `link.onload = …` assignment almost always follows the appendChild.
     setTimeout(function() {
@@ -17166,19 +17311,29 @@ function _lumen_link_prepare(nid) {
         // reported here: whether the sheet applies — and its
         // `securitypolicyviolation` — belongs to the shell's `style-src`
         // gate for `<link>` (GAP-CSPENF срез 7), which a second event from
-        // this side would duplicate.
-        if (_lumen_element_src_blocked('style', url, nid)) {
+        // this side would duplicate. A claimed link never reaches that gate,
+        // so the violation is dispatched here instead.
+        var csp = _lumen_element_src_blocked('style', url, nid);
+        if (csp) {
+            if (typeof _lumen_dispatch_csp_violation === 'function') {
+                _lumen_dispatch_csp_violation(csp[0], csp[1], csp[2], 'enforce');
+            }
             _lumen_console_error('stylesheet load failed: ' + url + ': blocked by style-src');
             _lumen_resource_fire(nid, 'error');
+            _lumen_load_delay_done(loadJob);
             return;
         }
         // BUG-1554: a `data:` sheet carries its bytes in the URL — no request, so it also loads
         // where the page has no fetch provider (the headless screenshot path of a reftest).
         var inline = _lumen_link_data_url_text(url);
         if (inline !== null) {
-            if (!_lumen_resource_is_connected(nid)) return;
+            if (!_lumen_resource_is_connected(nid)) {
+                _lumen_load_delay_done(loadJob);
+                return;
+            }
             _lumen_stylesheet_register_link(nid, inline);
             _lumen_resource_fire(nid, 'load');
+            _lumen_load_delay_done(loadJob);
             return;
         }
         fetch(url, { _lumenInitiatorType: 'link' }).then(function(resp) {
@@ -17188,15 +17343,23 @@ function _lumen_link_prepare(nid) {
         }).then(function(text) {
             // A link taken out of the tree while its sheet was in flight reports nothing (HTML LS
             // §4.6.7: the fetch is cancelled with the element).
-            if (!_lumen_resource_is_connected(nid)) return;
+            if (!_lumen_resource_is_connected(nid)) {
+                _lumen_load_delay_done(loadJob);
+                return;
+            }
             // BUG-1554: a sheet the shell's cascade pass did not carry (inserted or enabled
             // after it) joins `document.styleSheets` and the cascade now.
             _lumen_stylesheet_register_link(nid, text);
             _lumen_resource_fire(nid, 'load');
+            _lumen_load_delay_done(loadJob);
         }).catch(function(e) {
-            if (!_lumen_resource_is_connected(nid)) return;
+            if (!_lumen_resource_is_connected(nid)) {
+                _lumen_load_delay_done(loadJob);
+                return;
+            }
             _lumen_console_error('stylesheet load failed: ' + url + ': ' + e);
             _lumen_resource_fire(nid, 'error');
+            _lumen_load_delay_done(loadJob);
         });
     }, 0);
 }
@@ -17770,6 +17933,49 @@ function _lumen_style_children_changed(parent) {
     _lumen_style_update_block(parent, false);
 }
 
+// HTML LS §4.12.1 «children changed steps»: вставка текста/узлов в подключённый
+// <script> — это post-connection steps → «prepare the script element». Так
+// data-блок, у которого позже убрали type и дописали тело (execution-timing/
+// 124), доисполняется; у уже запущенного скрипта `_lumen_script_prepare`
+// отсекает шагом «already started», у data-блока — проверкой типа.
+function _lumen_script_children_changed(parent) {
+    if (!_lumen_is_script_element(parent)) return;
+    if (!_lumen_resource_is_connected(parent)) return;
+    _lumen_script_prepare(parent);
+}
+
+// HTML LS §4.12.1 post-connection steps для <script>: подключение (включая
+// повторную вставку parser-элемента, у которого prepare на парсе оборвался
+// на проверке типа — parser document к тому моменту уже обнулён, и элемент
+// для spec больше не parser-inserted) запускает «prepare the script
+// element». Внутри [CEReactions]-операции prepare откладывается до конца
+// батча, как и для pending-скриптов (`_lumen_pending_script_exec`).
+function _lumen_script_post_connect(nid) {
+    if (_lumen_script_started[nid] === 1) return;
+    if (_lumen_ce_reactions_stack.length > 0) {
+        if (_lumen_pending_script_exec.indexOf(nid) < 0) {
+            _lumen_pending_script_exec.push(nid);
+        }
+        return;
+    }
+    if (!_lumen_resource_is_connected(nid)) return;
+    _lumen_script_prepare(nid);
+}
+
+// Post-connection steps идут по всем вставленным узлам, не только по
+// верхнему: скрипт, приехавший внутри отсоединённого поддерева
+// (`div.appendChild(script)` → `body.appendChild(div)`), подключается
+// вместе с ним. Обход итеративный — глубина дерева не ограничена.
+function _lumen_script_post_connect_tree(nid) {
+    var stack = [nid];
+    while (stack.length > 0) {
+        var n = stack.pop();
+        if (_lumen_is_script_element(n)) { _lumen_script_post_connect(n); continue; }
+        var kids = _lumen_get_children(n);
+        for (var i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
+    }
+}
+
 // The parser's half, run once the document is parsed — same shape and same
 // reason as `_lumen_link_hints_scan`: a `<style>` written by the parser never
 // passes through the insertion hook. Elements the hook already handled carry
@@ -17824,6 +18030,16 @@ function _lumen_resource_try_prepare(nid) {
     // retryable for a later retype + reinsertion, so the pending entry is
     // only dropped once that flag is actually set.
     if (kind === 'script') {
+        // insertion-removing-steps-script: внутри [CEReactions]-операции
+        // (appendChild/append/… над DocumentFragment'ом) prepare откладывается
+        // до конца всего батча вставок — иначе первый <script> фрагмента
+        // исполняется до вставки второго и видит неполный document.scripts.
+        if (_lumen_ce_reactions_stack.length > 0) {
+            if (_lumen_pending_script_exec.indexOf(nid) < 0) {
+                _lumen_pending_script_exec.push(nid);
+            }
+            return;
+        }
         _lumen_script_prepare(nid);
         if (_lumen_script_started[nid] === 1) {
             delete _lumen_resource_pending[nid];
@@ -17849,16 +18065,23 @@ function _lumen_resource_try_prepare(nid) {
 // (one property read), which is every page that never calls
 // createElement('script') and every insertion after the last one has run.
 function _lumen_resource_after_insert(childNid) {
-    if (_lumen_resource_pending_count === 0) return;
-    if (_lumen_resource_pending[childNid] !== undefined) {
-        _lumen_resource_try_prepare(childNid);
-        return;
+    if (_lumen_resource_pending_count !== 0) {
+        if (_lumen_resource_pending[childNid] !== undefined) {
+            _lumen_resource_try_prepare(childNid);
+        } else {
+            // The inserted node may be an *ancestor* of a tracked element that
+            // was built detached (`div.appendChild(script)` before
+            // `body.appendChild(div)`) and only becomes connected now.
+            // Deleting the current key inside for-in is well-defined, and the
+            // map holds only not-yet-prepared elements.
+            for (var k in _lumen_resource_pending) _lumen_resource_try_prepare(+k);
+        }
     }
-    // The inserted node may be an *ancestor* of a tracked element that was built
-    // detached (`div.appendChild(script)` before `body.appendChild(div)`) and
-    // only becomes connected now. Deleting the current key inside for-in is
-    // well-defined, and the map holds only not-yet-prepared elements.
-    for (var k in _lumen_resource_pending) _lumen_resource_try_prepare(+k);
+    // <script> вне pending-карты (parser-inserted, уже готовившийся) тоже
+    // получает post-connection steps — см. `_lumen_script_post_connect`.
+    if (_lumen_resource_pending[childNid] === undefined) {
+        _lumen_script_post_connect_tree(childNid);
+    }
 }
 
 // Route every tree insertion through the hook by wrapping the two natives that
@@ -17877,11 +18100,13 @@ _lumen_append_child = function(parent, child) {
     _lumen_native_append_child(parent, child);
     _lumen_resource_after_insert(child);
     _lumen_style_children_changed(parent);
+    _lumen_script_children_changed(parent);
 };
 _lumen_insert_before = function(parent, child, reference) {
     _lumen_native_insert_before(parent, child, reference);
     _lumen_resource_after_insert(child);
     _lumen_style_children_changed(parent);
+    _lumen_script_children_changed(parent);
 };
 
 // `textContent =` / `innerHTML =` replace a style block's children wholesale,
@@ -17895,10 +18120,12 @@ var _lumen_native_set_inner_html   = _lumen_set_inner_html;
 _lumen_set_text_content = function(nid, text) {
     _lumen_native_set_text_content(nid, text);
     _lumen_style_children_changed(nid);
+    _lumen_script_children_changed(nid);
 };
 _lumen_set_inner_html = function(nid, html) {
     _lumen_native_set_inner_html(nid, html);
     _lumen_style_children_changed(nid);
+    _lumen_script_children_changed(nid);
     // GAP-CEREG срез 3 (BUG-890): the fragment parser behind `innerHTML` never
     // ran custom-element upgrade reactions at all, so even a *globally*
     // defined custom element sitting in markup assigned this way stayed inert
@@ -18013,8 +18240,32 @@ function _lumen_ce_invoke_element_queue(elementQueue) {
 function _lumen_ce_push_element_queue() {
     _lumen_ce_reactions_stack.push([]);
 }
+// nid'ы <script>, чей prepare отложен до конца внешней [CEReactions]
+// операции — см. `_lumen_resource_try_prepare`. Сбрасывается при опустении
+// стека (внешний pop), до invoke element queue: исполнение скрипта — часть
+// insertion steps узла, а connectedCallback'и реакций идут после всей
+// [CEReactions]-операции.
+var _lumen_pending_script_exec = [];
+function _lumen_script_flush_pending_exec() {
+    if (_lumen_pending_script_exec.length === 0) return;
+    var q = _lumen_pending_script_exec;
+    _lumen_pending_script_exec = [];
+    for (var i = 0; i < q.length; i++) {
+        var nid = q[i];
+        if (!_lumen_resource_is_connected(nid)) continue;
+        // В очереди бывают и не-pending скрипты (post-connection steps для
+        // parser-элементов) — для них prepare идёт без учёта pending-флага.
+        var pendingScript = _lumen_resource_pending[nid] === 'script';
+        _lumen_script_prepare(nid);
+        if (pendingScript && _lumen_script_started[nid] === 1) {
+            delete _lumen_resource_pending[nid];
+            _lumen_resource_pending_count--;
+        }
+    }
+}
 function _lumen_ce_pop_current_element_queue() {
     var q = _lumen_ce_reactions_stack.pop();
+    if (_lumen_ce_reactions_stack.length === 0) _lumen_script_flush_pending_exec();
     _lumen_ce_invoke_element_queue(q);
 }
 

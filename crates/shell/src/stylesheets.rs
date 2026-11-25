@@ -361,6 +361,8 @@ fn subscribe_late_stylesheet(
                 node: node_raw,
                 ok: false,
                 text: String::new(),
+                registry_text: String::new(),
+                import_sheets: Vec::new(),
                 blocked_imports: Vec::new(),
                 apply,
             }),
@@ -396,6 +398,22 @@ fn subscribe_late_stylesheet(
                 referrer_policy,
             ) {
                 Some((text, sheet_base, encoding)) => {
+                    // CSSOM-реестр получает текст до разворота `@import` и
+                    // сами импортированные листы — `cssRules` показывает
+                    // `CSSImportRule`, а не плоский список правил.
+                    let registry_text = text.clone();
+                    let import_sheets = resolve_import_sheets(
+                        &text,
+                        &sheet_base,
+                        &sink,
+                        import_jar.clone(),
+                        &media_ctx,
+                        &mut std::collections::HashSet::new(),
+                        0,
+                        encoding,
+                        gate_ref,
+                        referrer_policy,
+                    );
                     let (text, blocked) = inline_css_imports(
                         &text,
                         &sheet_base,
@@ -432,12 +450,22 @@ fn subscribe_late_stylesheet(
                             .collect(),
                         None => Vec::new(),
                     };
-                    crate::page_load::LateStylesheet { node: node_raw, ok: true, text, blocked_imports: blocked, apply }
+                    crate::page_load::LateStylesheet {
+                        node: node_raw,
+                        ok: true,
+                        text,
+                        registry_text,
+                        import_sheets,
+                        blocked_imports: blocked,
+                        apply,
+                    }
                 }
                 None => crate::page_load::LateStylesheet {
                     node: node_raw,
                     ok: false,
                     text: String::new(),
+                    registry_text: String::new(),
+                    import_sheets: Vec::new(),
                     blocked_imports: Vec::new(),
                     apply,
                 },
@@ -816,6 +844,107 @@ pub(crate) fn inline_css_imports(
     (prefix, blocked)
 }
 
+/// Разрешает `@import` листа в записи [`lumen_css_parser::ImportSheet`] для
+/// CSSOM (`CSSImportRule.styleSheet`) — тот же набор гейтов и фетчей, что у
+/// [`inline_css_imports`], но результат не склеивается в текст, а остаётся
+/// деревом листов: `cssRules` импортирующего листа обязан показывать сам
+/// `@import`, а не развёрнутые правила (CSSOM §6.4.3, `insertRule` ordering).
+///
+/// Возвращает по одной записи на КАЖДЫЙ ведущий `@import` исходного текста —
+/// включая отсеянные (`sheet: None`), потому что `CssomTree` показывает все
+/// `@import` правила, а `import_sheets` адресуется их порядковым номером.
+/// Рекурсия повторяет структуру самих импортов: у каждого разрешённого листа
+/// своё `import_sheets`.
+#[allow(clippy::too_many_arguments)] // fetch context threaded through, same shape as `inline_css_imports`
+pub(crate) fn resolve_import_sheets(
+    css_text: &str,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<DocCookieJar>,
+    media_ctx: &lumen_css_parser::MediaContext,
+    seen: &mut std::collections::HashSet<String>,
+    depth: u32,
+    referring_encoding: lumen_encoding::Encoding,
+    csp_gate: Option<(&[CspPolicy], Option<&Origin>)>,
+    referrer_policy: lumen_network::ReferrerPolicy,
+) -> Vec<lumen_css_parser::ImportSheet> {
+    let parsed = lumen_css_parser::parse(css_text);
+    let imports = parsed.imports;
+    if imports.is_empty() {
+        return Vec::new();
+    }
+    let failed = |imp: &lumen_css_parser::ImportRule| lumen_css_parser::ImportSheet {
+        href: imp.url.clone(),
+        sheet: None,
+    };
+    if depth >= MAX_CSS_IMPORT_DEPTH
+        || !contains_ignore_ascii_case(css_text.as_bytes(), b"@import")
+    {
+        return imports.iter().map(failed).collect();
+    }
+    let mut out = Vec::with_capacity(imports.len());
+    for imp in &imports {
+        // Те же гейты, что `inline_css_imports`: не матчащий media/supports
+        // и CSP-отказ дают `styleSheet === null`.
+        let gated = !imp.media.matches(media_ctx)
+            || imp
+                .supports
+                .as_ref()
+                .is_some_and(|cond| !cond.evaluate(lumen_css_parser::SUPPORTED_PROPERTIES));
+        if gated {
+            out.push(failed(imp));
+            continue;
+        }
+        let key = base.resolve_str(&imp.url);
+        if !seen.insert(key.clone()) {
+            out.push(failed(imp));
+            continue;
+        }
+        if let Some((policy, self_origin)) = csp_gate {
+            let upgraded = crate::csp_enforce::upgrade_insecure_url(policy, &key);
+            let gate_url = upgraded.as_deref().unwrap_or(&key);
+            if crate::csp_enforce::style_src_blocked(policy, gate_url, self_origin) {
+                out.push(failed(imp));
+                continue;
+            }
+        }
+        // Сырой текст, как у реестра `<link>` (`fetch_stylesheet_text`, без
+        // `url()`-ребейза `fetch_stylesheet_for_cascade`): `cssText`
+        // импортированного листа сохраняет запись автора.
+        let Some((text, imp_base, imp_encoding)) = fetch_stylesheet_text(
+            &imp.url,
+            base,
+            sink,
+            cookie_jar.clone(),
+            None,
+            referring_encoding,
+            csp_gate,
+            referrer_policy,
+        ) else {
+            out.push(failed(imp));
+            continue;
+        };
+        let mut child = lumen_css_parser::parse(&text);
+        child.import_sheets = resolve_import_sheets(
+            &text,
+            &imp_base,
+            sink,
+            cookie_jar.clone(),
+            media_ctx,
+            seen,
+            depth + 1,
+            imp_encoding,
+            csp_gate,
+            referrer_policy,
+        );
+        out.push(lumen_css_parser::ImportSheet {
+            href: imp.url.clone(),
+            sheet: Some(Arc::new(child)),
+        });
+    }
+    out
+}
+
 /// ASCII-case-insensitive поиск подстроки `needle` в `haystack` без аллокаций.
 pub(crate) fn contains_ignore_ascii_case(haystack: &[u8], needle: &[u8]) -> bool {
     if needle.is_empty() || haystack.len() < needle.len() {
@@ -900,41 +1029,41 @@ pub(crate) fn build_stylesheet_node_registry(
         match owner {
             StylesheetOwner::Style(id) => {
                 let text = style_element_text(doc, id);
-                // CSSOM-1: `cssRules` листа `<style>` обязан показывать
-                // импортированные правила — каскад подставляет их текстом
-                // (`resolve_inline_style_imports`), реестр делает то же самое
-                // через тот же `inline_css_imports`; байты `@import` уже
-                // прогреты `PREFETCH_CACHE` каскадным проходом. Лист с
-                // не матчащим `media` регистрируется сырым текстом — его
-                // `@import` в этой ветке не разворачиваем.
-                let sheet_text = match media_ctx {
-                    Some(ctx)
-                        if link_media_matches(doc.get(id).get_attr("media").unwrap_or(""), ctx) =>
-                    {
-                        inline_css_imports(
-                            &text,
-                            base,
-                            sink,
-                            cookie_jar.clone(),
-                            ctx,
-                            &mut std::collections::HashSet::new(),
-                            0,
-                            doc_encoding,
-                            gate_ref,
-                            referrer_policy,
-                        )
-                        .0
-                    }
-                    _ => text,
-                };
+                // CSSOM-1: `cssRules` листа `<style>` отражает исходный текст
+                // — `@import` остаётся одним `CSSImportRule`, а импортированные
+                // правила доступны через `CSSImportRule.styleSheet` (shell
+                // разрешает их в `Stylesheet::import_sheets` тем же
+                // `inline_css_imports`-набором гейтов, что и каскад; байты
+                // `@import` уже прогреты `PREFETCH_CACHE` каскадным проходом).
+                // Разворачивать текст здесь нельзя: `CssomTree` строится из
+                // `source`, и плоский список импорта ломал бы `cssRules` и
+                // `insertRule` (порядок `@import` — CSSOM §6.4.3).
+                let mut sheet = lumen_css_parser::parse(&text);
+                if let Some(ctx) = media_ctx {
+                    sheet.import_sheets = resolve_import_sheets(
+                        &text,
+                        base,
+                        sink,
+                        cookie_jar.clone(),
+                        ctx,
+                        &mut std::collections::HashSet::new(),
+                        0,
+                        doc_encoding,
+                        gate_ref,
+                        referrer_policy,
+                    );
+                }
                 out.push(StylesheetNodeEntry {
                     node: id.index() as u32,
-                    sheet: Arc::new(lumen_css_parser::parse(&sheet_text)),
+                    sheet: Arc::new(sheet),
                     disabled: !doc.sheet_owner_enabled(id, preferred.as_deref()),
                 });
             }
             // BUG-1554: `<link disabled>` — не лист вовсе (HTML LS §4.6.7).
-            StylesheetOwner::Link(id, ..) if doc.link_has_no_sheet(id) => {}
+            // `link_load_claimed`: динамический `<link>`, чью загрузку ведёт
+            // JS-загрузчик шима, — шелл его не фетчит (см. `link_load_claims`),
+            // иначе один лист получал бы два фетча и две записи resource timing.
+            StylesheetOwner::Link(id, ..) if doc.link_has_no_sheet(id) || doc.link_load_claimed(id) => {}
             StylesheetOwner::Link(id, href, charset_attr) => {
                 // BUG-1180: тот же гейт `style-src`, что `load_linked_stylesheets`
                 // ставит каскаду, — иначе вставленный скриптом `<link>` под
@@ -958,7 +1087,7 @@ pub(crate) fn build_stylesheet_node_registry(
                 {
                     continue;
                 }
-                if let Some((text, _, _)) = fetch_stylesheet_text(
+                if let Some((text, sheet_base, sheet_encoding)) = fetch_stylesheet_text(
                     &href,
                     base,
                     sink,
@@ -968,9 +1097,30 @@ pub(crate) fn build_stylesheet_node_registry(
                     gate_ref,
                     referrer_policy,
                 ) {
+                    // `CSSImportRule.styleSheet` — тот же набор разрешённых
+                    // импортов, что `inline_css_imports` даёт каскаду, но
+                    // раздельными листами (см. `Stylesheet::import_sheets`).
+                    let import_sheets = media_ctx
+                        .map(|ctx| {
+                            resolve_import_sheets(
+                                &text,
+                                &sheet_base,
+                                sink,
+                                cookie_jar.clone(),
+                                ctx,
+                                &mut std::collections::HashSet::new(),
+                                0,
+                                sheet_encoding,
+                                gate_ref,
+                                referrer_policy,
+                            )
+                        })
+                        .unwrap_or_default();
+                    let mut sheet = lumen_css_parser::parse(&text);
+                    sheet.import_sheets = import_sheets;
                     out.push(StylesheetNodeEntry {
                         node: id.index() as u32,
-                        sheet: Arc::new(lumen_css_parser::parse(&text)),
+                        sheet: Arc::new(sheet),
                         disabled: !doc.sheet_owner_enabled(id, preferred.as_deref()),
                     });
                 }
@@ -1168,6 +1318,7 @@ fn collect_link_hrefs_in(doc: &Document, id: NodeId, out: &mut Vec<(NodeId, Stri
             && link_media_matches(media, media_ctx)
             // BUG-1554: `<link disabled>`, alternate и лист не из выбранного набора каскаду не нужны.
             && !doc.link_has_no_sheet(id)
+            && !doc.link_load_claimed(id)
             && doc.sheet_owner_enabled(id, preferred)
         {
             let charset = attrs
@@ -1225,6 +1376,7 @@ fn collect_mismatched_link_hrefs(
             && !href.is_empty()
             && !link_media_matches(media, media_ctx)
             && !doc.link_has_no_sheet(id)
+            && !doc.link_load_claimed(id)
             && doc.sheet_owner_enabled(id, preferred)
         {
             let charset = attrs

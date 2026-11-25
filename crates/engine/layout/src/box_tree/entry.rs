@@ -13,6 +13,14 @@ pub(super) fn build_shadow_sheets(doc: &Document) -> std::collections::HashMap<N
     for (host, sr) in doc.shadow_hosts() {
         let mut css = String::new();
         collect_shadow_style_css(doc, sr, &mut css);
+        // `shadowRoot.adoptedStyleSheets` материализованы JS-нативами в
+        // `Document::shadow_adopted_css` (у layout нет доступа к V8-реестру
+        // конструируемых листов). По CSS Scoping adopted-листы идут после
+        // `<style>`-элементов того же теневого корня.
+        if let Some(adopted) = doc.shadow_adopted_css(sr) {
+            css.push_str(adopted);
+            css.push('\n');
+        }
         if !css.trim().is_empty() {
             map.insert(host, lumen_css_parser::parse(&css));
         }

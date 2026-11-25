@@ -610,6 +610,28 @@ pub struct Document {
     /// (`sheet.disabled`, `link.disabled`) — see [`SheetOverride`].
     #[serde(default)]
     sheet_overrides: HashMap<NodeId, SheetOverride>,
+    /// Динамический `<link rel=stylesheet>`, чью загрузку забрал себе
+    /// JS-загрузчик шима (`_lumen_link_prepare` → `_lumen_link_claim_load`).
+    /// Шелловские проходы (`load_linked_stylesheets`,
+    /// `build_stylesheet_node_registry`) такой лист не трогают: иначе один
+    /// `<link>` получал бы два фетча и две записи resource timing. Ключ —
+    /// `NodeId`, как у `sheet_overrides`: не чистится при detach, а
+    /// `link_load_claimed` перепроверяет, что узел всё ещё `<link>`.
+    #[serde(default)]
+    link_load_claims: HashSet<NodeId>,
+    /// CSS-текст `shadowRoot.adoptedStyleSheets` по `NodeId` теневого корня.
+    /// JS-реестр конструируемых листов живёт в V8, до которого у layout нет
+    /// доступа, поэтому нативы `_lumen_set_adopted_stylesheets`/
+    /// `_lumen_constructed_*` материализуют сюда сериализованный текст;
+    /// `build_shadow_sheets` (lumen-layout) подмешивает его к `<style>`-
+    /// тексту теневого дерева (CSS Scoping: adopted-листы идут после
+    /// `<style>` того же корня).
+    #[serde(default)]
+    shadow_adopted_css: HashMap<NodeId, String>,
+    /// Счётчик изменений `shadow_adopted_css` — дешёвый датчик для
+    /// `refresh_dynamic_css`/incremental-флаша (см. поле выше).
+    #[serde(default)]
+    shadow_adopted_gen: u64,
     /// Maps each `<template>` element `NodeId` to its content `DocumentFragment` `NodeId`.
     ///
     /// The fragment is stored in the arena but is not a DOM child of the
@@ -906,6 +928,9 @@ impl Document {
             shadow_roots: HashMap::new(),
             ua_shadow_roots: HashMap::new(),
             sheet_overrides: HashMap::new(),
+            link_load_claims: HashSet::new(),
+            shadow_adopted_css: HashMap::new(),
+            shadow_adopted_gen: 0,
             template_contents: HashMap::new(),
             selection: Selection::default(),
             composition: None,

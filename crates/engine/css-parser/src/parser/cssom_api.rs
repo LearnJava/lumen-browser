@@ -18,6 +18,8 @@ impl Stylesheet {
     fn rebuild_from_tree(&mut self, tree: CssomTree) {
         let mut fresh = parse(&tree.to_source());
         fresh.source = self.source.take();
+        // `import_sheets` — провенанс embedder'а, из текста не выводится.
+        fresh.import_sheets = std::mem::take(&mut self.import_sheets);
         fresh.cssom = CssomCell::filled(tree);
         *self = fresh;
     }

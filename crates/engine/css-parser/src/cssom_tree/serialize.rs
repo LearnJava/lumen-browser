@@ -53,22 +53,88 @@ fn decls_line(decls: &[Declaration]) -> String {
     decls.iter().map(Declaration::to_css_text).collect::<Vec<_>>().join(" ")
 }
 
-/// `"x"` / `'x'` → `url("x")`; прочее — как есть. Для `@namespace` строка
-/// может идти после префикса.
-fn normalize_url(prelude: &str) -> String {
-    let (prefix, rest) = match prelude.find(['"', '\'']) {
-        Some(i) if prelude[..i].chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == ' ') => {
-            (&prelude[..i], &prelude[i..])
+/// `"…"` внутри `rest` (первый символ — кавычка): `(содержимое, хвост после
+/// закрывающей кавычки)`. `None` — строка не закрыта.
+fn css_quoted(rest: &str) -> Option<(String, &str)> {
+    let q = rest.chars().next()?;
+    if q != '"' && q != '\'' {
+        return None;
+    }
+    let mut inner = String::new();
+    let mut it = rest[1..].char_indices().peekable();
+    while let Some((i, c)) = it.next() {
+        if c == '\\' {
+            match it.next() {
+                Some((_, n)) if n != '\n' && n != '\r' && n != '\x0C' => inner.push(n),
+                Some((j, _)) => inner.push_str(&rest[1 + j..1 + j + 1]),
+                None => inner.push('\\'),
+            }
+            continue;
         }
-        _ => return prelude.to_string(),
-    };
-    let q = rest.chars().next().unwrap_or('"');
-    let Some(close) = rest[1..].find(q) else {
-        return prelude.to_string();
-    };
-    let inner = &rest[1..1 + close];
-    let tail = &rest[close + 2..];
-    format!("{prefix}url(\"{}\"){tail}", inner.replace('"', "\\\""))
+        if c == q {
+            return Some((inner, &rest[1 + i + 1..]));
+        }
+        inner.push(c);
+    }
+    None
+}
+
+/// Префикс перед `url(`/строкой — только `@namespace`-вид (`svg `):
+/// иденс/пробелы, без скобок и кавычек.
+fn is_url_prefix(prefix: &str) -> bool {
+    !prefix.is_empty()
+        && prefix
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' || c == '\t')
+}
+
+/// `"x"` / `'x'` / `url("x")` / `url('x')` → `url("x")`; `url(x)` без
+/// кавычек и прочее — как есть. Для `@namespace` перед url может стоять
+/// префикс (`svg url(…)`). Экранирование — CSSOM «serialize a string»: `\` и `"`.
+fn normalize_url(prelude: &str) -> String {
+    let s = prelude.trim_start();
+    // `url(...)`-форма: `url(` с валидным (возможно пустым для @import)
+    // префиксом — граница слова перед ним.
+    let lower = s.to_ascii_lowercase();
+    for (off, _) in lower.match_indices("url(") {
+        let boundary = off == 0 || s.as_bytes()[off - 1].is_ascii_whitespace();
+        if !boundary {
+            continue;
+        }
+        let prefix = &s[..off];
+        if !(prefix.is_empty() || is_url_prefix(prefix)) {
+            continue;
+        }
+        let body = s[off + 4..].trim_start();
+        match css_quoted(body) {
+            Some((inner, tail)) if tail.trim_start().starts_with(')') => {
+                let esc = inner.replace('\\', "\\\\").replace('"', "\\\"");
+                return format!("{prefix}url(\"{esc}\"){}", &tail.trim_start()[1..]);
+            }
+            _ => match body.find(')') {
+                // `url(x)` без кавычек — verbatim: `cssText` сохраняет
+                // unquoted-форму (`@import url(x.css)` round-trip).
+                Some(close) => {
+                    let raw = body[..close].trim();
+                    return format!("{prefix}url({raw}){}", &body[close + 1..]);
+                }
+                None => return prelude.to_string(),
+            },
+        }
+    }
+    // Голая строка (`@import "x.css"`, `@namespace url "x"` — префикс может
+    // кончаться пробелом).
+    for (i, _) in s.match_indices(['"', '\'']) {
+        let prefix = &s[..i];
+        if prefix.is_empty() || is_url_prefix(prefix) {
+            if let Some((inner, tail)) = css_quoted(&s[i..]) {
+                let esc = inner.replace('\\', "\\\\").replace('"', "\\\"");
+                return format!("{prefix}url(\"{esc}\"){tail}");
+            }
+            break;
+        }
+    }
+    prelude.to_string()
 }
 
 /// `style.cssText` узла: собственные декларации одной строкой (`@apply` — как вызов).

@@ -357,6 +357,11 @@ pub(crate) struct IncrFlushBasis {
     /// parents' scrollable-overflow extent — read against `layout` only (see
     /// [`lumen_layout::ScopedCollection::scroll_containers_cached`]).
     pub(crate) scroll_rollups: lumen_layout::RollupCache,
+    /// `Document::shadow_adopted_gen` на момент базиса — `shadowRoot.
+    /// adoptedStyleSheets` меняет теневые листы внутри `build_shadow_sheets`,
+    /// не трогая документный `sheet`, поэтому incremental-ветка обязана
+    /// увидеть его сама.
+    pub(crate) shadow_adopted_gen: u64,
 }
 
 /// Recorded CSSOM writes awaiting replay onto the cascade sheet, each paired
@@ -1185,6 +1190,7 @@ impl FlushHandles {
             keyboard_focus: current_keyboard,
             touch_epoch: touched.epoch,
             scroll_rollups: next_rollups,
+            shadow_adopted_gen: doc_guard.shadow_adopted_gen(),
         });
         drop(basis_scope);
         self.hit_tree_stale.store(true, Ordering::Relaxed);
@@ -1433,6 +1439,14 @@ impl FlushHandles {
         // of the page down the full path.
         if touched.unattributed_since(basis.touch_epoch) {
             declined("unattributed mutation");
+            return None;
+        }
+        // `shadowRoot.adoptedStyleSheets` меняет теневые листы, которые
+        // incremental-ветка не перечитывает (они собираются в
+        // `build_shadow_sheets` только полным проходом) — её собственный
+        // датчик, как у `sheet_revision` для документного листа.
+        if basis.shadow_adopted_gen != doc.shadow_adopted_gen() {
+            declined("shadow adopted stylesheets changed");
             return None;
         }
         if basis.viewport != [viewport.width, viewport.height] {
