@@ -167,6 +167,17 @@ pub(crate) fn render_source_to_png(
     // guarantee no stale cross-page reuse. No streaming path here, so this pass
     // just decodes each image once.
     crate::image_cache::IMAGE_CACHE.reset_new();
+    // `canPlayType`/MediaCapabilities должны отвечать как в живом окне:
+    // контейнерный декодер ставится до создания JS-контекстов этой страницы
+    // (set_video_decoder идемпотентен — слот процесс-глобальный).
+    #[cfg(all(feature = "v8", not(feature = "ffmpeg-video")))]
+    lumen_js::set_video_decoder(std::sync::Arc::new(
+        lumen_media_native::NativeVideoDecoder::default(),
+    ));
+    #[cfg(all(feature = "v8", feature = "ffmpeg-video"))]
+    lumen_js::set_video_decoder(std::sync::Arc::new(
+        lumen_media_ffmpeg::FfmpegVideoDecoder,
+    ));
     // PERF-1: `--trace-nav` records this headless load as a timeline. Each
     // `trace::span` is a no-op unless the tracer is enabled, so instrumenting
     // this shared path costs nothing for `--screenshot`/`--ipc-server`.

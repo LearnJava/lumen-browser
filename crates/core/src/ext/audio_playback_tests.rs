@@ -47,7 +47,10 @@ fn default_can_play_type_ogg() {
 #[test]
 fn default_can_play_type_wav() {
     let p = NullAudioPlaybackProvider;
-    assert_eq!(p.can_play_type("audio/wav"), "probably");
+    // HTML LS §4.8.11.7: "probably" без codecs не возвращают — wav его
+    // допускает, поэтому голый MIME — "maybe" (как в Chrome).
+    assert_eq!(p.can_play_type("audio/wav"), "maybe");
+    assert_eq!(p.can_play_type("audio/wav; codecs=\"1\""), "probably");
 }
 
 #[test]

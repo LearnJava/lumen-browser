@@ -4607,8 +4607,10 @@ pub fn audio_can_play_type(mime: &str) -> &'static str {
     }
     let (known, bare): (&[&str], &'static str) = match base {
         "audio/mpeg" | "audio/mp3" => (&["mp3"], "probably"),
-        "audio/wav" | "audio/wave" | "audio/x-wav" | "audio/vnd.wave" => (&["1"], "probably"),
-        "audio/flac" | "audio/x-flac" => (&["flac"], "probably"),
+        // HTML LS §4.8.11.7: "probably" без параметра codecs не возвращают —
+        // wav/flac его допускают, поэтому голый MIME — "maybe".
+        "audio/wav" | "audio/wave" | "audio/x-wav" | "audio/vnd.wave" => (&["1"], "maybe"),
+        "audio/flac" | "audio/x-flac" => (&["flac"], "maybe"),
         "audio/ogg" => (&["vorbis"], "maybe"),
         _ => return "",
     };
