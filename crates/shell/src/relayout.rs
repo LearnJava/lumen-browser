@@ -613,14 +613,14 @@ impl Lumen {
             doc_key,
             sheet_key,
         );
-        // CQ-SCROLL-STATE-2: a sheet with `scroll-state()` queries is restyled by a full pass that
-        // starts every scroller at offset 0, so the pass is told the current offsets and puts
-        // them back before the display list is built.
-        let keep_scroll = self
-            .layout_box
-            .as_ref()
-            .filter(|_| lumen_layout::sheet_has_scroll_state_queries(&src.stylesheet))
-            .map(lumen_layout::scroll_offsets);
+        // BUG-1573: EVERY relayout rebuilds the tree from scratch, so every
+        // scroll container starts at offset 0 — the offsets must be restored
+        // before the display list is built and before `scroll_states` is
+        // collected for JS, or a style mutation silently resets `scrollTop`
+        // (and un-scrolls the painted content) ~one relayout later. This used
+        // to run only for sheets with `scroll-state()` queries; the scroll
+        // hints that path also installs are inert without such queries.
+        let keep_scroll = self.layout_box.as_ref().map(lumen_layout::scroll_offsets);
         let (new_dl, lb) = match keep_scroll {
             Some(offsets) => {
                 relayout_page_keeping_scroll(
@@ -2003,10 +2003,16 @@ pub(crate) fn compute_layout_incremental(
     let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
     let measurer = page_measurer(&font, web_fonts);
     let doc = document.lock().unwrap();
-    let (layout, counters) = lumen_layout::layout_mutation_incremental_with_counters(
+    // BUG-1573: a rebuilt scroll container starts at offset 0 — the graft only
+    // carries offsets through fully-reused subtrees. Restore every offset the
+    // previous tree held before painting and before `scroll_states` is
+    // collected for JS (same rule as the full path's `relayout_page_keeping_scroll`).
+    let scroll_offsets = lumen_layout::scroll_offsets(prev);
+    let (mut layout, counters) = lumen_layout::layout_mutation_incremental_with_counters(
         &doc, stylesheet, viewport, &measurer, hp, dark_mode, prev,
     );
     drop(doc);
+    lumen_layout::restore_scroll_positions(&mut layout, &scroll_offsets);
     let dl = crate::display_list_metrics::paint_ordered_in(&layout, viewport);
     (dl, layout, counters)
 }
@@ -2072,10 +2078,14 @@ pub(crate) fn compute_layout_incremental_restyle(
     let lock2_t0 = lumen_paint::frame_log_enabled().then(std::time::Instant::now);
     let doc = document.lock().unwrap();
     let lock2_wait_ms = lock2_t0.map(|t| t.elapsed().as_secs_f32() * 1000.0);
-    let (layout, counters) = lumen_layout::box_tree::layout_mutation_incremental_restyle(
+    let scroll_offsets = lumen_layout::scroll_offsets(&prev);
+    let (mut layout, counters) = lumen_layout::box_tree::layout_mutation_incremental_restyle(
         &doc, stylesheet, viewport, &measurer, hp, dark_mode, prev, delta,
     );
     drop(doc);
+    // BUG-1573: same restore as `compute_layout_incremental` — a rebuilt
+    // scroller must not publish offset 0 to the display list or JS.
+    lumen_layout::restore_scroll_positions(&mut layout, &scroll_offsets);
     let paint_t0 = lumen_paint::frame_log_enabled().then(std::time::Instant::now);
     let dl = crate::display_list_metrics::paint_ordered_in(&layout, viewport);
     if let Some(t0) = log_t0 {

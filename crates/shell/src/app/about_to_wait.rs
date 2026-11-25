@@ -2060,7 +2060,9 @@ impl Lumen {
                 // non-bubbling scroll events on each scrolled container.
                 let states: HashMap<u32, [f32; 4]> = collect_scroll_containers_for_js_state(lb)
                     .iter()
-                    .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
+                    // BUG-1573: `raw()`, не `index()` — ключ должен совпадать
+                    // с `__nid__`/key-space `style_flush.rs` (raw).
+                    .map(|c| (c.node.raw(), [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
                     .collect();
                 let scrolled_nids_copy = scrolled_nids.clone();
                 route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {

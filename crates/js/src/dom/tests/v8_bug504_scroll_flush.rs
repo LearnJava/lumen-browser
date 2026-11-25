@@ -144,3 +144,27 @@ fn scroll_offsets_survive_a_chain_of_incremental_flushes() {
         lumen_core::JsValue::String("15,12,15,12,15,12,15,12,15,12".into())
     );
 }
+
+/// BUG-1573: the trigger the chain test misses — an inline-style write on the
+/// SCROLLER ITSELF (or an ancestor) rebuilds its own box; the fresh box starts
+/// at scroll 0 and the scoped scroll-state collect must not publish that 0.
+#[test]
+fn scroll_offsets_survive_scroller_own_style_mutation() {
+    let (doc, main_nid) = make_scroll_doc();
+    let rt = v8_runtime_with_scroll_flush(doc, main_nid);
+    let r = rt
+        .eval(
+            "(function() {
+                var main = document.getElementById('main');
+                main.style.color = 'red';
+                var a = main.scrollTop;
+                main.style.background = '#eee';
+                var b = main.scrollTop;
+                document.body.style.margin = '3px';
+                var c = main.scrollTop;
+                return a + ',' + b + ',' + c;
+            })()",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("12,12,12".into()));
+}

@@ -683,9 +683,7 @@ pub(crate) fn install_node_lookup(
                     let doc = d.lock().unwrap();
                     let mut cur = NodeId::from_raw(node_id);
                     for _ in 0..8192 {
-                        if doc.try_get(cur).is_none() {
-                            return None;
-                        }
+                        doc.try_get(cur)?;
                         if matches_selector(&doc, cur, &sel) {
                             return Some(cur.raw());
                         }
@@ -1631,7 +1629,6 @@ pub(crate) fn install_tree_navigation(
             matches!(doc.try_get(id).map(|n| &n.data), Some(lumen_dom::NodeData::Element { .. }))
         };
         let d = Arc::clone(&doc);
-        let is_el_c = is_el.clone();
         reg!(scope, ctx, store,
             "_lumen_get_element_children",
             move |node_id: u32| -> Vec<u32> {
@@ -1641,13 +1638,12 @@ pub(crate) fn install_tree_navigation(
                 };
                 node.children
                     .iter()
-                    .filter(|c| is_el_c(&doc, **c))
+                    .filter(|c| is_el(&doc, **c))
                     .map(|c| c.raw())
                     .collect()
             }
         );
         let d = Arc::clone(&doc);
-        let is_el_c = is_el.clone();
         reg!(scope, ctx, store,
             "_lumen_get_element_siblings_of",
             move |node_id: u32| -> Vec<u32> {
@@ -1663,24 +1659,23 @@ pub(crate) fn install_tree_navigation(
                 let prev = parent.children[..idx]
                     .iter()
                     .rev()
-                    .find(|c| is_el_c(&doc, **c))
+                    .find(|c| is_el(&doc, **c))
                     .map_or(u32::MAX, |c| c.raw());
                 let next = parent.children[idx + 1..]
                     .iter()
-                    .find(|c| is_el_c(&doc, **c))
+                    .find(|c| is_el(&doc, **c))
                     .map_or(u32::MAX, |c| c.raw());
                 vec![prev, next]
             }
         );
         let d = Arc::clone(&doc);
-        let is_el_c = is_el.clone();
         reg!(scope, ctx, store,
             "_lumen_get_parent_element",
             move |node_id: u32| -> Option<u32> {
                 let doc = d.lock().unwrap();
                 let nid = NodeId::from_raw(node_id);
                 let pid = doc.try_get(nid).and_then(|n| n.parent)?;
-                is_el_c(&doc, pid).then(|| pid.raw())
+                is_el(&doc, pid).then(|| pid.raw())
             }
         );
         // PERF-NAV-O2: `getRootNode()` climbed the ancestor chain in JS —

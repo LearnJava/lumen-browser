@@ -1260,6 +1260,14 @@ impl Lumen {
             && sheet_roots.is_some()
             && !doc.has_author_shadow_roots()
             && std::env::var_os("LUMEN_NO_STREAM_CASCADE").is_none();
+        // BUG-1573: стриминговый релэйаут тоже пересобирает дерево — все
+        // скролл-контейнеры стартуют с offset 0, поэтому смещения предыдущего
+        // дерева снимаем заранее и возвращаем в свежее до paint/precollect.
+        let scroll_offsets = self
+            .layout_box
+            .as_ref()
+            .map(lumen_layout::scroll_offsets)
+            .unwrap_or_default();
         // `cascade_ready` уже проверил все `is_some`; match — защита от
         // рассинхрона, а не рабочий путь (clippy запрещает `expect`).
         let delta_inputs = if cascade_ready {
@@ -1318,6 +1326,8 @@ impl Lumen {
                 _ => lumen_layout::layout_measured_with_counters(doc, &self.stream_sheet, viewport, &measurer),
             }
         };
+        let mut layout = layout;
+        lumen_layout::restore_scroll_positions(&mut layout, &scroll_offsets);
         let dl = crate::display_list_metrics::paint_ordered_in(&layout, viewport);
         #[cfg(feature = "v8")]
         if std::env::var("LUMEN_FRAME_LOG").is_ok_and(|v| v != "0") {
@@ -2302,7 +2312,9 @@ impl Lumen {
             let stylesheet = Arc::clone(&src.stylesheet);
             let scroll_states: HashMap<u32, [f32; 4]> = collect_scroll_containers_for_js_state(lb_ref)
                 .iter()
-                .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
+                // BUG-1573: `raw()`, не `index()` — ключ должен совпадать
+                // с `__nid__`/key-space `style_flush.rs` (raw).
+                .map(|c| (c.node.raw(), [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
                 .collect();
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                 js.update_layout_rects(rects);
