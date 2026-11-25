@@ -1,8 +1,9 @@
 # BUG-1573 — `el.style.<свойство> = …` на скроллере (или его потомке, или предке) молча сбрасывает `scrollTop` в 0
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-11-25
 **Заведён:** 2026-10-09 (P2, WPT-RUN-14 срез 26, `css/css-page` + `css-animations` + `css-transitions` + `css-shadow` + `css-borders` + `css-scroll-snap`)
 **Область:** layout/shell (повторная раскладка после мутации стиля теряет смещение прокрутки вложенного контейнера; точное место не изолировано)
+**Закрыт:** 2026-11-25 — оба пути пересборки дерева теперь восстанавливают смещения прокрутки (см. «Разбор» ниже).
 
 ## Симптом
 
@@ -37,3 +38,14 @@ WPT-RUN-14 срез 26: `css/css-scroll-snap/snap-after-relayout/*` и `resnap-o
 ## Как проверить
 
 Проба выше; затем `run_corpus.py --prefixes css/css-scroll-snap/snap-after-relayout`.
+
+## Разбор и фикс (2026-11-25)
+
+Корень — два независимых пути пересборки `LayoutBox`, оба обнуляли `scroll_x/scroll_y` пересобранных скролл-контейнеров, а восстановление существовало только на одном из них и только для страниц с `@container scroll-state()`:
+
+1. **Полный relayout** (`relayout_page` → `compute_layout`): дерево строится с нуля, все скроллеры стартуют с offset 0. `restore_scroll_positions` вызывался только когда `sheet_has_scroll_state_queries` — для всех остальных страниц смещения терялись, а `update_scroll_states` публиковал нули в JS. Фикс: `keep_scroll` берётся из `prev layout_box` безусловно (`crates/shell/src/relayout.rs`); scroll-hints, которые ставил scroll-state путь, без `scroll-state()` запросов инертны.
+2. **Инкрементальные relayout** (`compute_layout_incremental`, `compute_layout_incremental_restyle`): graft копирует `scroll_x/y` из prev только для полностью переиспользованных чистых поддеревьев (`incremental.rs`); пересобранный скроллер (свой стиль dirty или dirty-потомок) стартовал с 0, и `restore_scroll_positions` в этих путях не вызывался вовсе. Фикс: `scroll_offsets(prev)` → `restore_scroll_positions(&mut layout, …)` до `paint_ordered_in` в обоих функциях — то же правило, что у полного пути.
+
+Регресс-тест: `scroll_offsets_survive_scroller_own_style_mutation` в `crates/js/src/dom/tests/v8_bug504_scroll_flush.rs` (JS-рантайм-путь; shell-путь покрывается тем же `restore_scroll_positions`).
+
+JS-сторона `style_flush.rs` (`restore_scroll_positions` после layout + scoped re-collect) проверена и не является источником сброса — она восстанавливает offsets из `scroll_states` map; обнуление происходило раньше, на engine-thread, в `relayout_job`.
