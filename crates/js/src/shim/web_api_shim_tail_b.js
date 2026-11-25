@@ -8965,7 +8965,22 @@ function _css_tr_prune(nid) {
 }
 
 // Every element with CSS animations, for `document.getAnimations()`.
+// Style-epoch gate for `_css_an_update_all`: the whole-document scan below is
+// ~1 computed-style read per element (plus ~9 more on elements that name an
+// animation), and its answer can only change when a flush publishes a new style
+// snapshot — `animation-*`, `display`, the `@keyframes` registry and the DOM all
+// derive from it. A page polling `document.getAnimations()` between mutations
+// would otherwise pay the full scan on every call. The pending flush is forced
+// first (one `display` read on the root) so the epoch compared is the fresh one.
+var _css_an_all_epoch = -1;
 function _css_an_update_all() {
+    var rootNid = document.documentElement && document.documentElement.__nid__;
+    if (rootNid != null && typeof _lumen_get_computed_style === 'function') {
+        _lumen_get_computed_style(rootNid, 'display');
+    }
+    var epoch = typeof _lumen_style_epoch === 'function' ? _lumen_style_epoch() : 0;
+    if (epoch !== 0 && _css_an_all_epoch === epoch) return;
+    _css_an_all_epoch = epoch;
     for (var key in _css_an_by_key) {
         var at = key.indexOf(':');
         _css_an_update(+key.slice(0, at), key.slice(at + 1) || null);
