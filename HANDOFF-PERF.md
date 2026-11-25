@@ -22,6 +22,17 @@
 - `766bd62c0` — PseudoCache IdMap (u32-ключи, IdHasher).
 - **`1b5c56734` — ключевой фикс**: `pre_match_needed` в `counters.rs` (~1647) — экспансия `needed` останавливалась на узлах spine, боковые поддеревья forced-рекомпутов не достигались → 99% `miss_norules`. Отдельный `expanded` set; теперь **100% pre_match hits на всех flush'ах**, subset-таблица. `pre_match` ~1.44→0.96s, `precompute_counters` ~5.5→~4.3s.
 - Влит чужой BUG-1837 (okko.tv): общий CascadeIndex для media/supports, точный диф листа, псевдо-селекторы в инкрементальном пути — на habr нейтрально, на okko load 9.2→5.0s.
+- **`d84bf2f9e`** — `_css_tr_prune` O(1): индекс `_css_tr_nids` (nid→число переходов)
+  вместо `for…in`-скана всей `_css_tr_by_key` на каждый `getComputedStyle`.
+- **`088a2123f`** — `_css_an_update_all` гейт по `_lumen_style_epoch`: раньше
+  `document.getAnimations()` делал `querySelectorAll('*')` + ~1-9 computed-чтений
+  на КАЖДЫЙ элемент (~700мс habr) на каждый вызов. Живой замер (motion_probe3):
+  anUpdateAll=691мс, trSyncAll=89мс/epoch, getAnim 0.8-3.4с → теперь ~0 в стабильном epoch.
+- **BUG-1573 FIXED** (`a527742c8`,`058082133`,`a0666c356`,`8d289d643`): scroll offsets
+  терялись на всех relayout-путях (keep_scroll был загейтован на scroll-state()
+  queries; incremental/engine-job/streaming пути не восстанавливали вообще) +
+  scroll_states ключевались по `NodeId::index()` вместо `raw()` (slot reuse).
+  Скролл больше не сбрасывается при style/DOM-мутациях и «во время загрузки».
 
 **Актуальная карта bottleneck (habr, LUMEN_PROFILE_TREE=1, валидный прогон):**
 
@@ -64,8 +75,19 @@ engine-thread, не работа самого нэйтива.
 `_lumen_get_node_type` ×15k, `_lumen_get_scroll_state` ×21k — все «тяжёлые»
 времена это maybe_flush/lock-wait, не crossings. Остаток резать:
 typed-trampoline (~1-3мкс → ~0.5мкс × ~500k переходов ≈ 0.5-1s),
-getComputedStyle-шим (`_wa_motion_*`/`_css_tr_prune` + entries на каждый вызов),
+`_wa_motion_tr_sync` sweep — ~89мс/epoch на 44 seeded nid × ~284 prop
+(батч-снапшот одним нэйтивом срезал бы ~12.5k crossings до 1),
+`_css_an_update_all` ~700мс/epoch на habr (гейт `088a2123f` убрал повторы
+в стабильном epoch; первый вызов после style-change всё ещё платит
+полный скан — кандидат: Rust-side индекс «у кого animation-name≠none»),
 аудит `_lumen_get_parent`-циклов в shim (79 сайтов, горячие не идентифицированы).
+
+**Методика JS-стороны:** shim-глобалы (`_wa_motion_by_nid`, `_css_an_by_key`,
+`_wa_animations`, `_wa_gap_tr`) видны из MCP `eval` как bare identifiers
+(`window.*` — НЕТ). Пробники `.tmp/motion_probe*.py` (LiveBrowser +
+eval-замеры performance.now). `document.getAnimations()` на habr был
+≈0.3-3.4с/вызов до гейта — если сайт поллит его в rAF/interval, это был
+главный скрытый налог js.run.
 
 **Найдено, не сделано (аудит «лишней работы»):**
 
