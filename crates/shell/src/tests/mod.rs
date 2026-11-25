@@ -9,6 +9,7 @@ use super::*;
 
 mod automation_eval;
 mod automation_hit;
+mod bug1573_scroll_restore;
 mod bfcache_salvage;
 mod bug341_census;
 mod bug341_census_b;
