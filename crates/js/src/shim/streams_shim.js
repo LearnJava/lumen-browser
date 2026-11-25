@@ -1321,3 +1321,28 @@ function CountQueuingStrategy(init) {
 }
 CountQueuingStrategy.prototype.size = function() { return 1; };
 
+
+// WebIDL §3.7.3: теги интерфейсов — без них `String(stream)` давал
+// "[object Object]" и WPT-имена сабтестов через интерполяцию объектов
+// давали duplicate test name (streams/transferable/transform-stream-members).
+(function() {
+    var tags = [
+        [ReadableStream, 'ReadableStream'],
+        [ReadableStreamDefaultReader, 'ReadableStreamDefaultReader'],
+        [ReadableStreamBYOBReader, 'ReadableStreamBYOBReader'],
+        [WritableStream, 'WritableStream'],
+        [WritableStreamDefaultWriter, 'WritableStreamDefaultWriter'],
+        [TransformStream, 'TransformStream'],
+        [TextDecoderStream, 'TextDecoderStream'],
+        [TextEncoderStream, 'TextEncoderStream'],
+        [CompressionStream, 'CompressionStream'],
+        [DecompressionStream, 'DecompressionStream'],
+        [ByteLengthQueuingStrategy, 'ByteLengthQueuingStrategy'],
+        [CountQueuingStrategy, 'CountQueuingStrategy'],
+    ];
+    for (var i = 0; i < tags.length; i++) {
+        Object.defineProperty(tags[i][0].prototype, Symbol.toStringTag, {
+            value: tags[i][1], writable: false, enumerable: false, configurable: true,
+        });
+    }
+})();
