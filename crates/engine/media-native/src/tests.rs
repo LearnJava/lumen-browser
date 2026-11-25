@@ -43,7 +43,9 @@ fn can_play_type_unknown_or_unopenable_codec_is_empty() {
     assert_eq!(can_play("video/webm; codecs=\"vp09.00.10.08\""), "");
     assert_eq!(can_play("video/webm; codecs=\"av01.0.05M.08, opus\""), "");
     assert_eq!(can_play("video/webm; codecs=\"nonsense\""), "");
-    assert_eq!(can_play("video/webm; codecs=\"\""), "");
+    // Пустой `codecs=` равносилен его отсутствию → "maybe" (HTML LS /
+    // WPT canPlayType: `type + ';codecs='` ожидает "maybe").
+    assert_eq!(can_play("video/webm; codecs=\"\""), "maybe");
     // Кодек не из этого контейнера.
     assert_eq!(can_play("video/webm; codecs=\"avc1.42E01E\""), "");
     assert_eq!(can_play("video/ogg; codecs=\"av01.0.05M.08\""), "");

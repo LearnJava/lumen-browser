@@ -1728,7 +1728,11 @@
     el.load = function() { mediaLoadAlgorithm(); };
 
     el.canPlayType = function(type) {
-      return HAS_STORE ? __lumen_video_can_play_type(type) : '';
+      // Ответ не зависит от стора воспроизведения: без декодера натив сам
+      // отвечает аудио-таблицей (HTMLMediaElement.canPlayType общий для
+      // <audio>/<video>).
+      return typeof __lumen_video_can_play_type === 'function'
+        ? __lumen_video_can_play_type(type) : '';
     };
 
     el.fastSeek = function(t) {

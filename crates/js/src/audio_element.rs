@@ -219,11 +219,11 @@ pub(crate) fn install_audio_element_bindings_v8(
     {
         let p = get_provider();
         let can_play_type = into_v8_fn1(move |mime: String| -> String {
-            match p.as_ref() {
+            let audio_side = match p.as_ref() {
                 Some(p) => p.can_play_type(&mime),
                 None => lumen_core::ext::audio_can_play_type(&mime),
-            }
-            .to_owned()
+            };
+            crate::video_gif_store::can_play_type_union(&mime, audio_side).to_owned()
         });
         rt.register_native("__lumen_audio_can_play_type", can_play_type)?;
     }

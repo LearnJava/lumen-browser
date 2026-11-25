@@ -278,6 +278,30 @@ pub fn get_video_decoder() -> Option<Arc<dyn VideoDecoder>> {
     decoder_lock().read().unwrap().clone()
 }
 
+fn can_play_rank(s: &str) -> u8 {
+    match s {
+        "probably" => 2,
+        "maybe" => 1,
+        _ => 0,
+    }
+}
+
+/// `HTMLMediaElement.canPlayType` (HTML LS §4.8.11.7): `<audio>` и `<video>`
+/// обязаны отвечать одинаково — элемент без видео может проигрывать
+/// аудиодорожку, элемент без аудиобэкенда — контейнер с видеокодеком. Ответ —
+/// максимум из аудио-стороны (`audio_can_play_type`/провайдера) и реестра
+/// контейнерных декодеров, когда тот установлен.
+pub(crate) fn can_play_type_union(mime: &str, audio_side: &'static str) -> &'static str {
+    let decoder_side = get_video_decoder()
+        .map(|d| d.can_play_type(mime))
+        .unwrap_or("");
+    if can_play_rank(decoder_side) > can_play_rank(audio_side) {
+        decoder_side
+    } else {
+        audio_side
+    }
+}
+
 /// Drop the installed decoder — test-only: the registry is process-global.
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]

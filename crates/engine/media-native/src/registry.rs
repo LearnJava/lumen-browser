@@ -272,13 +272,16 @@ fn parse_mime(mime: &str) -> ParsedMime {
         let Some((name, value)) = param.split_once('=') else { continue };
         if name.trim() == "codecs" {
             let value = value.trim().trim_matches(['"', '\'']);
-            codecs = Some(
-                value
-                    .split(',')
-                    .map(|c| c.trim().to_string())
-                    .filter(|c| !c.is_empty())
-                    .collect(),
-            );
+            let list: Vec<String> = value
+                .split(',')
+                .map(|c| c.trim().to_string())
+                .filter(|c| !c.is_empty())
+                .collect();
+            // `codecs=` без значения равносильно его отсутствию (MIME /
+            // HTML LS: параметр есть, но кодеков нет → "maybe", не "").
+            if !list.is_empty() {
+                codecs = Some(list);
+            }
         }
     }
     ParsedMime { container, codecs }

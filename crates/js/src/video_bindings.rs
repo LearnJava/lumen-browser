@@ -362,9 +362,11 @@ pub(crate) fn install_video_bindings_v8(
             if base == "image/gif" {
                 "maybe".to_string()
             } else {
-                get_video_decoder()
-                    .map(|d| d.can_play_type(&m).to_string())
-                    .unwrap_or_default()
+                crate::video_gif_store::can_play_type_union(
+                    &m,
+                    lumen_core::ext::audio_can_play_type(&m),
+                )
+                .to_string()
             }
         });
         rt.register_native("__lumen_video_can_play_type", can_play_type)?;
