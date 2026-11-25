@@ -512,6 +512,18 @@ pub(crate) fn share_key_eligible(doc: &Document, node: NodeId) -> bool {
     let NodeData::Element { name, .. } = &doc.get(node).data else {
         return false;
     };
+    // dir-auto-dynamic-*: `[dir=auto]` and `<bdi>` without an explicit
+    // `ltr`/`rtl` resolve `direction`/`unicode-bidi` from the subtree's
+    // first strong character (`apply_dir_presentational_hint` →
+    // `first_strong_direction`/`slot_assigned_directionality`) — content
+    // no `ShareKey` field captures, in any namespace. Two siblings equal
+    // on every key field but holding different text must not share.
+    let dir_attr = doc.get(node).get_attr("dir").map(|v| v.trim().to_ascii_lowercase());
+    if matches!(dir_attr.as_deref(), Some("auto"))
+        || (name.local == "bdi" && !matches!(dir_attr.as_deref(), Some("ltr") | Some("rtl")))
+    {
+        return false;
+    }
     if super::presentational::is_svg_presentational_element(name.local.as_ref()) {
         return true;
     }
