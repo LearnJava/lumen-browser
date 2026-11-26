@@ -402,7 +402,7 @@ pub(crate) struct LoadedPage {
     /// as `DrawImage.src`. Frame 0 of each entry is already in `images` so the
     /// renderer has a valid texture on first paint; subsequent frames are uploaded
     /// on each `RedrawRequested` tick via `Lumen::animated_gifs`.
-    pub(crate) animated_gifs: Vec<(String, lumen_image::AnimatedGif)>,
+    pub(crate) animated_gifs: Vec<(String, lumen_image::AnimatedImage)>,
     /// `(node_id_u32, url)` pairs for `<img loading="lazy">` — registered with JS
     /// after page load via `_lumen_init_lazy_images` for proximity-based loading.
     #[allow(dead_code)] // read only inside #[cfg(feature = "v8")] blocks
@@ -535,7 +535,7 @@ pub(crate) struct ParsedPage {
     /// Декодированные изображения, найденные при обходе DOM. См. [`LoadedPage::images`].
     pub(crate) images: Vec<(String, Arc<lumen_image::Image>)>,
     /// Multi-frame GIF animations found in the DOM. See [`LoadedPage::animated_gifs`].
-    pub(crate) animated_gifs: Vec<(String, lumen_image::AnimatedGif)>,
+    pub(crate) animated_gifs: Vec<(String, lumen_image::AnimatedImage)>,
     /// `(node_id_u32, url)` pairs for `<img loading="lazy">` elements — skipped by
     /// the eager fetch pass; registered with JS `_lumen_init_lazy_images` after load.
     pub(crate) lazy_pairs: Vec<(u32, String)>,

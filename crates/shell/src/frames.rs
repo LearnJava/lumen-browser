@@ -618,7 +618,7 @@ pub(crate) struct FrameSubresourceOutcomes {
     /// только первый кадр ([`fetch_frame_subresources`] это документировал явно) —
     /// сама анимация отбрасывалась, и `Lumen::animated_gifs` (карта СТРАНИЦЫ) о
     /// ней не знала. Тикает по [`FrameHandle::animated_gifs`].
-    pub(crate) animated_gifs: Vec<(String, lumen_image::AnimatedGif)>,
+    pub(crate) animated_gifs: Vec<(String, lumen_image::AnimatedImage)>,
     /// FRAME-5 срез 2: `<img loading="lazy">` requests of the child, collected
     /// but NOT fetched — mirrors `ParsedPage::lazy_pairs` at the page level.
     /// `image_keys` above already carries a `(raw_src, frame_image_key)` entry
@@ -852,8 +852,8 @@ pub(crate) fn fetch_frame_subresources(
             // как раньше, но теперь вся анимация ЕДЕТ ДАЛЬШЕ (было: «наружу не
             // отдаётся» — сама `gif` отбрасывалась) под тем же ключом, чтобы
             // `redraw_requested` мог тикать её так же, как страничные GIF.
-            Some(crate::image_cache::DecodedImage::Animated { first, gif }) => {
-                animated_gifs.push((key.clone(), (**gif).clone()));
+            Some(crate::image_cache::DecodedImage::Animated { first, anim }) => {
+                animated_gifs.push((key.clone(), (**anim).clone()));
                 Some(Arc::clone(first))
             }
         };
@@ -2576,7 +2576,7 @@ pub(crate) struct FrameHandle {
     /// `page_pipeline.rs` — тиканье в `RedrawRequested` не заводит отдельного
     /// пути для фреймов, потому что ключи уже уникальны на всю страницу
     /// ([`frame_image_key`]).
-    pub(crate) animated_gifs: Vec<(String, lumen_image::AnimatedGif)>,
+    pub(crate) animated_gifs: Vec<(String, lumen_image::AnimatedImage)>,
     /// FRAME-5 срез 2: `<img loading="lazy">` requests of this frame's own
     /// document ([`FrameSubresourceOutcomes::lazy_requests`], fixed at
     /// creation — the child's markup does not change). Re-registered with the

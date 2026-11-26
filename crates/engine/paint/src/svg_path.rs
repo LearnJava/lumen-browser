@@ -263,17 +263,30 @@ impl<'a> Tokenizer<'a> {
     }
 
     /// Reads 7 numbers for arc: rx ry x-rotation large-arc-flag sweep-flag x y.
-    /// Flags are 0 or 1 (no comma separator allowed between them per spec,
-    /// but we accept comma for leniency).
+    /// Flags are single `0`/`1` digits (SVG §path: no separators; `0 0012 0`
+    /// parses as flag 0, flag 0, number 12 — BUG-1853: greedy `try_number`
+    /// swallowed `0012` whole and the whole path was dropped).
     fn try_arc_params(&mut self) -> Option<[f32; 7]> {
         let rx = self.try_number()?;
         let ry = self.try_number()?;
         let xr = self.try_number()?;
-        let la = self.try_number()?;
-        let sw = self.try_number()?;
+        let la = self.try_flag()?;
+        let sw = self.try_flag()?;
         let x  = self.try_number()?;
         let y  = self.try_number()?;
         Some([rx, ry, xr, la, sw, x, y])
+    }
+
+    /// Reads one arc flag: exactly one `0` or `1` byte (SVG §path grammar:
+    /// flag is a single digit, and the following number may abut it —
+    /// `a6 6 0 0012 0` in the real-portal mic icon).
+    fn try_flag(&mut self) -> Option<f32> {
+        self.skip_ws_comma();
+        match self.s.as_bytes().get(self.pos) {
+            Some(b'0') => { self.pos += 1; Some(0.0) }
+            Some(b'1') => { self.pos += 1; Some(1.0) }
+            _ => None,
+        }
     }
 }
 
@@ -1616,6 +1629,60 @@ mod tests {
         assert_eq!(segs, vec![
             PathSegment::MoveTo { x: 10.0, y: 20.0 },
             PathSegment::LineTo { x: 30.0, y: 40.0 },
+        ]);
+    }
+
+    // BUG-1853: arc flags — одиночные цифры по грамматике §path; в компактной
+    // записи флаги могут сливаться со следующим числом (`0 0012 0` = 0, 0, 12).
+    // Жадный try_number поглощал «0012» целиком — вся дуга отбрасывалась,
+    // и иконка микрофона портала nextera рисовалась без path-части.
+
+    #[test]
+    fn parse_arc_compact_flags_portal_mic() {
+        // Реальная разметка #pttBtn portal.nextera.ru.
+        let segs = parse_svg_path("M2 8a6 6 0 0012 0");
+        assert_eq!(segs, vec![
+            PathSegment::MoveTo { x: 2.0, y: 8.0 },
+            PathSegment::ArcTo {
+                rx: 6.0, ry: 6.0, x_rot_deg: 0.0,
+                large_arc: false, sweep: false,
+                x: 14.0, y: 8.0,
+            },
+        ]);
+    }
+
+    #[test]
+    fn parse_arc_spaced_flags_same_result() {
+        let segs = parse_svg_path("M2 8a6 6 0 0 0 12 0");
+        assert_eq!(segs, parse_svg_path("M2 8a6 6 0 0012 0"));
+    }
+
+    #[test]
+    fn parse_arc_compact_flags_with_ones() {
+        // «1101 0» = flag 1, flag 1, число 01.
+        let segs = parse_svg_path("M2 8a6 6 0 1101 0");
+        assert_eq!(segs, vec![
+            PathSegment::MoveTo { x: 2.0, y: 8.0 },
+            PathSegment::ArcTo {
+                rx: 6.0, ry: 6.0, x_rot_deg: 0.0,
+                large_arc: true, sweep: true,
+                x: 3.0, y: 8.0,
+            },
+        ]);
+    }
+
+    #[test]
+    fn parse_arc_compact_flags_then_next_command() {
+        // После слитых флагов парсер обязан продолжить со следующей команды.
+        let segs = parse_svg_path("M2 8a6 6 0 0012 0L4 4");
+        assert_eq!(segs, vec![
+            PathSegment::MoveTo { x: 2.0, y: 8.0 },
+            PathSegment::ArcTo {
+                rx: 6.0, ry: 6.0, x_rot_deg: 0.0,
+                large_arc: false, sweep: false,
+                x: 14.0, y: 8.0,
+            },
+            PathSegment::LineTo { x: 4.0, y: 4.0 },
         ]);
     }
 

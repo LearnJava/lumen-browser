@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-11-26T02:13:23",
+  "timestamp": "2026-11-26T23:52:24",
   "git": {
-    "commit": "3705089434",
-    "branch": "bug-nextera-portal-fix",
-    "subject": "docs: HANDOFF-PERF — shim-фиксы этой сессии и JS-методика проб"
+    "commit": "79582257b3",
+    "branch": "bug-1853-fix",
+    "subject": "Влить ветку bug-1853-portal-visuals: заведён BUG-1853 — визуальные дефекты портала"
   },
   "crop_offset": [
     8,
