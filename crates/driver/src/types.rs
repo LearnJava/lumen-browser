@@ -546,8 +546,16 @@ pub enum AutomationCommand {
     Click(Target),
     /// Type text into an input element.
     Type(Target, String),
-    /// Scroll by delta in document coordinates.
-    Scroll(ScrollDelta),
+    /// Scroll by delta: without `target` — the page itself (document
+    /// coordinates), with `Some(target)` — the nearest scrolling ancestor of
+    /// the target, inclusive of the target itself (BUG-338); when the target
+    /// has no such ancestor, the page scroll applies.
+    Scroll {
+        /// Scroll delta.
+        delta: ScrollDelta,
+        /// Where the delta goes: the nearest scrolling ancestor of the target.
+        target: Option<Target>,
+    },
     /// Move the pointer to viewport CSS-pixel coordinates without pressing a
     /// button (BUG-1194): goes the same way as a real `CursorMoved` — hit
     /// test, `:hover`, `pointerout/mouseout/…/mouseover/pointerenter`.

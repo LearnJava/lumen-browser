@@ -219,8 +219,17 @@ impl Lumen {
                         }
                     }
                 }
-                AutomationCommand::Scroll(delta) => {
-                    self.scroll_by_delta(delta.x, delta.y);
+                AutomationCommand::Scroll { delta, target } => {
+                    // MCP-TOTAL-S1e (хвост BUG-338): дельта с целью уходит в
+                    // её ближайший скролл-контейнер тем же путём, каким его
+                    // скроллит настоящее колесо; без цели (или мимо
+                    // контейнера) — страница, как раньше.
+                    let routed = target
+                        .as_ref()
+                        .is_some_and(|t| self.scroll_target_by_delta(t, delta.x, delta.y));
+                    if !routed {
+                        self.scroll_by_delta(delta.x, delta.y);
+                    }
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
                 // BUG-1194: hover without a click — the same handler a real
