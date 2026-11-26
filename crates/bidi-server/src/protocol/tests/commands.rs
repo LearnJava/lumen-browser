@@ -451,6 +451,34 @@ fn open_prompt_count(state: &BidiState) -> usize {
     state.open_prompt_count()
 }
 
+/// MCP-TOTAL-S7a: диалог живого окна доезжает до `handleUserPrompt` в тот же
+/// вызов, каким открыт (синхронизация стоит *до* разбора метода), ответ
+/// уходит в окно, «no such alert» больше не приходит.
+#[test]
+fn live_window_dialog_is_recorded_and_answered() {
+    let (live, log) = fake_live_session_with_dialog();
+    let mut state = BidiState::with_live_session(live, None);
+    let cid = new_session_ctx(&mut state);
+    // Подписка — второй dispatch, диалог открывается только на третьем.
+    dispatch(
+        r#"{"id":3,"method":"session.subscribe","params":{"events":["browsingContext.userPromptOpened"]}}"#,
+        &mut state,
+    );
+
+    let cmd = format!(
+        r#"{{"id":4,"method":"browsingContext.handleUserPrompt","params":{{"context":"{cid}","accept":true}}}}"#
+    );
+    let r = dispatch(&cmd, &mut state);
+    let all = r.frames.join(" ");
+    assert!(!all.contains("no such alert"), "got: {all}");
+    assert!(all.contains("userPromptOpened"), "got: {all}");
+    assert!(all.contains("\"type\":\"success\""), "got: {all}");
+    let seen: Vec<String> = log.try_iter().collect();
+    assert!(seen.iter().any(|c| c.contains("HandleUserPrompt")), "{seen:?}");
+    // Диалог отвечен — запись из состояния ушла.
+    assert_eq!(open_prompt_count(&state), 0);
+}
+
 // ── preload per-context ──
 
 #[test]

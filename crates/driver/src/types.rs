@@ -697,6 +697,35 @@ pub enum AutomationCommand {
     },
     /// Drop a preload script by id (`script.removePreloadScript`). Reply: `Ack`.
     RemovePreloadScript(String),
+    /// Read the open JS dialog of the live window (`alert`/`confirm`/`prompt`),
+    /// if any (MCP-TOTAL-S7a, BiDi `browsingContext.userPromptOpened`). The
+    /// dialog blocks the JS thread, so this never round-trips through it —
+    /// the shell answers from its own UI state. Shell-internal dialogs
+    /// (close-warning) are not page dialogs and are not reported. Reply:
+    /// [`AutomationReply::UserPrompt`].
+    UserPrompt,
+    /// Answer the open JS dialog of the live window (MCP-TOTAL-S7a, BiDi
+    /// `browsingContext.handleUserPrompt`): `accept` = OK / cancel, `user_text`
+    /// replaces the typed `prompt` value. Errors when no dialog is open.
+    /// Reply: `Ack`.
+    HandleUserPrompt {
+        /// `true` = OK («Уйти» for `beforeunload`), `false` = cancel.
+        accept: bool,
+        /// Replacement text for an open `prompt` dialog.
+        user_text: Option<String>,
+    },
+}
+
+/// The open JS dialog of the live window, as [`AutomationCommand::UserPrompt`]
+/// reports it (MCP-TOTAL-S7a).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutomationDialog {
+    /// Dialog kind: `alert`, `confirm`, `prompt` or `beforeUnload`.
+    pub kind: String,
+    /// Message text the page passed to the dialog call.
+    pub message: String,
+    /// Initial value of the `prompt` input field.
+    pub default_value: String,
 }
 
 /// A cookie as exchanged with the live window (WebDriver BiDi `storage.Cookie`,
@@ -750,4 +779,7 @@ pub enum AutomationReply {
     Tabs(Vec<TabInfo>),
     /// `GetCookies` result: the live jar's non-expired cookies (DEVX-20).
     Cookies(Vec<AutomationCookie>),
+    /// `UserPrompt` result: the live window's open JS dialog, `None` when no
+    /// dialog is open (MCP-TOTAL-S7a).
+    UserPrompt(Option<AutomationDialog>),
 }

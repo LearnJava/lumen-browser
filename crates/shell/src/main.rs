@@ -352,7 +352,7 @@ use lumen_paint::{
     RenderBackend,
 };
 use lumen_driver::{
-    AutomationCommand, AutomationHandle, AutomationReply, AutomationRequest, BoxModel, ConsoleEntry,
+    AutomationCommand, AutomationDialog, AutomationHandle, AutomationReply, AutomationRequest, BoxModel, ConsoleEntry,
     ConsoleLevel as DriverConsoleLevel, InterceptedRequest, NetworkEntry as DriverNetworkEntry,
     WaitCondition,
 };

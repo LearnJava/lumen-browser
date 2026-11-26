@@ -57,12 +57,12 @@
 {
  "generated": "2026-11-26",
  "counts": {
-  "open": 304,
-  "fixed": 1472,
+  "open": 305,
+  "fixed": 1474,
   "inprogress": 0,
   "wontfix": 8
  },
- "total_bugs": 1784,
+ "total_bugs": 1787,
  "phases": [
   {
    "id": "P0",
@@ -11948,6 +11948,20 @@
    "date": null,
    "debtor": false
   },
+  "BUG-1851": {
+   "status": "fixed",
+   "title": "WS-хендшейк не нёс `Cookie`: same-origin WS cookie-гейт бэкенда отвечал 401, портал nextera пожизненно жил на фолбэк-поллинге (висящий индикатор стрима «Анализи…",
+   "component": "network (`websocket/mod.rs` — `WsCookies`/`cookie_headers`, `connect`/`connect_deflate`; `websocket/upgrade.rs` — `perform`/`perform_with_deflate`; `js_providers.rs` — `ws_cookie_context`)",
+   "date": "2026-11-26",
+   "debtor": false
+  },
+  "BUG-1852": {
+   "status": "open",
+   "title": "habr: `window.scrollTo` → `scrollY` уходит, вьюпорт после кадра — сплошной `#f0f0f0` (контент не рисуется); `documentElement.scrollHeight`=845 при `body.scrollH…",
+   "component": "layout/scroll (viewport overflow propagation §3.5 — `lib.rs::collect_page_scroll_containers`/`page_scrollable_extent`; paint-экстент)",
+   "date": null,
+   "debtor": false
+  },
   "BUG-001": {
    "status": "fixed",
    "title": "display:none on inline elements not working",
@@ -22279,6 +22293,13 @@
    "component": "paint (`hit_test.rs` — `Layers`, `collect_layers`, `classify`, `Candidate.chain`)",
    "date": "2026-11-26",
    "debtor": false
+  },
+  "BUG-1850": {
+   "status": "fixed",
+   "title": "portal.nextera.ru: колесо уводило вверх всё окно (скриншот пользователя): `.messages-area` раздувался до 15286 px при вьюпорте 845 (триггер — `container-type: i…",
+   "component": "layout (второй пасс контейнерных запросов — `container_anchor.rs::apply_container_inner` перекладывал детей size-контейнера блочным стеком при `display:flex`) + shell (`display_list_metrics.rs::page_content_extent` — высота DL побеждала клэп viewport-а по Y)",
+   "date": "2026-11-26",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -24726,6 +24747,9 @@
   "layout (inline-раскладка, `box_tree/layout_dispatch.rs::relative_offset` не вызывается для текстового inline-бокса)": [
    "BUG-1711"
   ],
+  "layout (второй пасс контейнерных запросов — `container_anchor.rs::apply_container_inner` перекладывал детей size-контейнера блочным стеком при `display:flex`) + shell (`display_list_metrics.rs::page_content_extent` — высота DL побеждала клэп viewport-а по Y)": [
+   "BUG-1850"
+  ],
   "layout (замер текста: оценщик раскладки против глифов растра, `--screenshot`)": [
    "BUG-1398"
   ],
@@ -24952,6 +24976,9 @@
   "layout/paint/shell": [
    "BUG-242"
   ],
+  "layout/scroll (viewport overflow propagation §3.5 — `lib.rs::collect_page_scroll_containers`/`page_scrollable_extent`; paint-экстент)": [
+   "BUG-1852"
+  ],
   "layout/shell (`crates/shell/src/subresources.rs`, `crates/engine/image/src/svg.rs` — внутренние размеры и пропорции SVG-картинки)": [
    "BUG-1295"
   ],
@@ -25080,6 +25107,9 @@
   ],
   "network (`http/chrome_manifest.rs` — `CHROME_157.tls`; `tls/boring.rs`)": [
    "BUG-1836"
+  ],
+  "network (`websocket/mod.rs` — `WsCookies`/`cookie_headers`, `connect`/`connect_deflate`; `websocket/upgrade.rs` — `perform`/`perform_with_deflate`; `js_providers.rs` — `ws_cookie_context`)": [
+   "BUG-1851"
   ],
   "network (резолвер)": [
    "BUG-304"

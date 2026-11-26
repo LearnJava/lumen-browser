@@ -26,7 +26,7 @@ use std::time::Duration;
 use lumen_core::error::{Error, Result};
 
 use crate::{
-    A11yNode, AutomationCommand, AutomationCookie, AutomationHandle, AutomationReply, AxQuery, BoxModel,
+    A11yNode, AutomationCommand, AutomationCookie, AutomationDialog, AutomationHandle, AutomationReply, AxQuery, BoxModel,
     BrowserSession, ComputedProperties, ComputedStyleSnapshot, ConsoleEntry, ExplainElement,
     ExplainPage, FingerprintProfile, InterceptedRequest, NetworkEntry, NodeRef, ScrollDelta, TabInfo,
     Target, WaitCondition,
@@ -387,6 +387,24 @@ impl BrowserSession for LiveWindowSession {
 
     fn remove_preload_script(&self, id: &str) -> Result<()> {
         self.execute(AutomationCommand::RemovePreloadScript(id.to_owned()))?;
+        Ok(())
+    }
+
+    /// MCP-TOTAL-S7a: the open JS dialog, read from the shell's UI state (the
+    /// dialog blocks the JS thread, so this never round-trips through it).
+    fn user_prompt(&self) -> Result<Option<AutomationDialog>> {
+        match self.execute(AutomationCommand::UserPrompt)? {
+            AutomationReply::UserPrompt(dialog) => Ok(dialog),
+            other => Err(unexpected_reply("UserPrompt", &other)),
+        }
+    }
+
+    /// MCP-TOTAL-S7a: answer the open JS dialog; errors when none is open.
+    fn handle_user_prompt(&self, accept: bool, user_text: Option<&str>) -> Result<()> {
+        self.execute(AutomationCommand::HandleUserPrompt {
+            accept,
+            user_text: user_text.map(str::to_owned),
+        })?;
         Ok(())
     }
 

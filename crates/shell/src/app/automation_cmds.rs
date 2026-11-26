@@ -760,6 +760,43 @@ impl Lumen {
                     };
                     let _ = reply_tx.send(reply);
                 }
+                AutomationCommand::UserPrompt => {
+                    // MCP-TOTAL-S7a: открытый диалог блокирует JS-поток, поэтому
+                    // ответ читается из состояния UI, не через движок;
+                    // close-warning шелла — не диалог страницы, автоматизации
+                    // (которая может закрыть окно) не показывается.
+                    let dialog = self
+                        .page_dialog
+                        .as_ref()
+                        .filter(|d| !d.close_warning)
+                        .map(|d| AutomationDialog {
+                            kind: match d.req.kind {
+                                lumen_js::dialog::DialogKind::Alert => "alert",
+                                lumen_js::dialog::DialogKind::Confirm => "confirm",
+                                lumen_js::dialog::DialogKind::Prompt => "prompt",
+                                lumen_js::dialog::DialogKind::BeforeUnload => "beforeUnload",
+                            }
+                            .to_owned(),
+                            message: d.req.message.clone(),
+                            default_value: d.req.default_value.clone(),
+                        });
+                    let _ = reply_tx.send(AutomationReply::UserPrompt(dialog));
+                }
+                AutomationCommand::HandleUserPrompt { accept, user_text } => {
+                    // MCP-TOTAL-S7a: ответ не ждёт JS-поток — его и блокирует
+                    // сам диалог; `dialog::answer` будит его с UI-потока.
+                    let reply = match self.page_dialog.as_mut().filter(|d| !d.close_warning) {
+                        None => AutomationReply::Error("handle_user_prompt: диалог не открыт".to_string()),
+                        Some(d) => {
+                            if let Some(text) = user_text {
+                                d.input = text;
+                            }
+                            self.answer_page_dialog(accept, event_loop);
+                            AutomationReply::Ack
+                        }
+                    };
+                    let _ = reply_tx.send(reply);
+                }
             }
         }
     }
