@@ -1,50 +1,49 @@
-# BUG-1849 — WebSocket-хендшейк не передаёт cookies: same-origin WS получает 401
+# BUG-1849 — `lumen-paint` и `lumen-media-native` красные на main: empty-cells под border-collapse, DrawText width=0 в снапшотах, HEVC hw-vs-sw
 
 **Статус:** OPEN
-**Заведён:** 2026-11-26 (ZCode, живая сессия portal.nextera.ru, Lumen dev-release 9b4e0a6131)
-**Область:** network (`websocket/upgrade.rs` — `write_upgrade_request`/`perform*`; `websocket/mod.rs` — `WebSocket::connect`/`connect_deflate`; `js_providers.rs` — `JsWebSocketProvider::connect_cancellable`)
+**Заведён:** 2026-11-26 (P6, попутно гейту MCP-TOTAL-S1a)
+**Область:** paint (`crates/engine/paint` — модель collapse в display list; текстовые снапшоты `tests/cases/snapshot_tests.rs`), media-native (`crates/engine/media-native/src/mf/video.rs`)
 
 ## Симптом
 
-Портал nextera после входа держит поток событий через WebSocket; в Lumen рукопожатие падает и
-сайт пожизненно живёт на длинном поллинге:
+Три кластера падают на дереве без единой правки paint/media-native (ветка
+`p6-mcp-total-s1a`, код идентичен `main`) — и в полном прогоне, и по одному:
+
+1. **`display_list::text_and_images::empty_cells_hide_ignored_under_border_collapse`**
+   — «collapse model ignores empty-cells: empty cell bg stays»
+   (`text_and_images.rs:477`); воспроизводится `--exact --test-threads=1`.
+2. **5 снапшотов `tests/cases/snapshot_tests.rs`** (`single_paragraph`,
+   `paragraph_with_background`, `line_wrap_two_lines`,
+   `nested_blocks_paint_order`, `cyrillic_text`) — у `DrawText` ширина
+   `0.00` против ожидаемой (`800.00`/аналогичной): `DrawText (0,0,0,19.2) "hello"`,
+  golden-файл ждёт `(0,0,800,19.2)`. Похоже на нулевой text-advance в тестовом
+   контексте; не локализовано.
+3. **`mf::video::tests::hevc_hardware_matches_software`** — «расхождение GPU и
+   CPU до 255 в канале» (`video.rs:567`); тест сверяет аппаратное декодирование
+   (Media Foundation, D3D11VA, Intel Iris Plus Graphics, драйвер 27.20.100.8853)
+   с программным — вероятно, чувствителен к машине/драйверу.
+
+Проба (кластер 1):
 
 ```
-[JS WebSocket] connect error: network error: ws: upgrade failed (expected 101): HTTP/1.1 401 Unauthorized
-→ GET https://portal.nextera.ru/api/portal/dm?peer=…&after=…   ← 200 (фолбэк-поллинг)
+cargo test -p lumen-paint --lib "display_list::text_and_images::empty_cells_hide_ignored_under_border_collapse" -- --exact --test-threads=1
 ```
-
-Следствия у пользователя: индикатор стрима ответа агента («Анализирую реестр агентов…») висит,
-пока поллинг не принесёт ответ с задержкой; сессия периодически уходит в форс-редирект на
-Keycloak (`approval_prompt=force`), из-за чего окно оказывалось на
-`login-actions/authenticate` при живом документе портала (см. BUG-1850).
-
-В Chrome 158 на том же аккаунте WS работает (консоль чистая, стрим мгновенный).
 
 ## Причина
 
-`WebSocket::connect`/`connect_deflate` (`websocket/mod.rs:82,179`) не принимают ни cookie-jar,
-ни заголовки: `upgrade::write_upgrade_request` шлёт только Host/Upgrade/Connection/Key/Version
-(+ пустой `extra_headers`). Цепочка от JS (`_lumen_ws_connect` →
-`JsWebSocketProvider::connect_cancellable` (`js_providers.rs:1582`) → `connect_deflate`) не
-имеет доступа к банке — и не пытается. По WHATWG (fetch-стиль рукопожатия) same-origin WS
-обязан нести `Cookie`. У `HttpClient` банка есть: fetch прикрепляет куки через
-`jar.get_for_request_in_context(host, path_and_query, is_tls, cookie_partition, site_ctx)`
-(`lib.rs:3031-3044`), setter — `with_cookie_jar` (`lib.rs:4267`).
+Не локализована, не бисектилась. Кластеры 1–2 — движковые; кластер 3 —
+аппаратозависимый (возможно, должен быть `ignore`-ческим на несовпадающих
+GPU, ср. `requires GPU adapter` у соседей).
 
 ## Что делать
 
-В `HttpClient::connect_cancellable` вычислить `Cookie` из `self.cookie_jar` тем же способом,
-что и fetch, и передать в `WebSocket::connect_deflate` → `upgrade::perform_with_deflate`
-(у `write_upgrade_request` уже есть `extra_headers`). Попутно решить, нужен ли заголовок
-`Origin` (Chrome шлёт). Провайдерский трейт `JsWebSocketProvider` менять не требуется.
+1. Кластер 2 сначала: понять, почему advance текста 0 (шрифт/шейпер в тестовой
+   сборке), чинить или признать снапшоты аппаратно-зависимыми.
+2. Кластер 1: пустые ячейки таблицы под `border-collapse` — модель collapse.
+3. Кластер 3: порог/окружение для hw-декода на машинах с слабым D3D11VA.
 
 ## Как проверить
 
-Живой портал, залогиненный: в журнале исчезает `ws: upgrade failed … 401`, появляется
-`WebSocketConnected`; «Анализирую…»-стрим завершается мгновенно; форс-редиректы на Keycloak
-прекращаются. Юнит: сервер-эхо из `ws_permessage_deflate_roundtrip` + проверка, что
-`Cookie: k=v` дошёл в рукопожатии.
-
-Смежные: BUG-1850 (раскол документа/адреса при редирект-цепочке — вероятно следствие этой
-петли), BUG-307/FETCH_READ_TIMEOUT (та же зона чтения рукопожатия).
+`cargo test -p lumen-paint` и `cargo test -p lumen-media-native` зелёные на
+машине гейта; `bash scripts/scoped-test.sh` красный вне этих кластеров и
+BUG-1677/BUG-1848.

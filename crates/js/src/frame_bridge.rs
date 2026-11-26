@@ -1546,6 +1546,38 @@ pub(crate) fn install_frame_bridge_v8(
             }),
         )?;
     }
+    // execution-timing/083-084: `window[i]`/`frames[i]` читают и до загрузки
+    // под-документа, а биндинг появляется только в `register_frame_document`.
+    // Этот натив отдаёт nid idx-го подключённого `<iframe>` в порядке дерева —
+    // тому же порядку, в каком регистрируются биндинги, — чтобы шим мог
+    // собрать ленивый about:blank-фасад через `_lumen_f_initial_frame`.
+    // `try_lock`: натив может зваться из JS, уже держащего замок документа
+    // (диспатч события), — тогда отвечаем `None`, а не дедлочимся.
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_frame_dom_host_at",
+            into_v8_fn1(move |idx: u32| -> Option<u32> {
+                let self_doc = {
+                    let slots = reg.lock().unwrap_or_else(|e| e.into_inner());
+                    slots.self_doc.clone()?
+                };
+                let doc = self_doc.try_lock().ok()?;
+                let mut nids = Vec::new();
+                collect_descendants_matching(
+                    &doc,
+                    doc.root(),
+                    &|node| {
+                        node.element_name()
+                            .map(|n| n.local == "iframe")
+                            .unwrap_or(false)
+                    },
+                    &mut nids,
+                );
+                nids.get(idx as usize).map(|n| n.index() as u32)
+            }),
+        )?;
+    }
     {
         let reg = Arc::clone(&registry);
         rt.register_native(
@@ -2602,6 +2634,54 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     }
   }
 
+  // ── execution-timing/083-084: события документа предка → facadeOn ────────
+  // `top.document.addEventListener` из изолята ребёнка кладёт слушателя в
+  // локальную карту facadeOn, но события на документе предка диспатчит ЕГО
+  // настоящий EventTarget — до этой пары мостов слушатель не срабатывал
+  // никогда. Подписка (`docEventSync` → `__lumen_frame_doc_listen`) ставит на
+  // документе-владельце настоящий addEventListener, который при срабатывании
+  // синхронно зовёт `__lumen_frame_doc_fire` в изоляте подписчика — тот
+  // прогоняет слушателей facadeOn с локальным Event (как ветка 'resource'
+  // пумпы, но синхронно: порядок 'event: foo' до 'inline script #2' важен).
+  //
+  // Сторона владельца: тип → {ключ: {srcBid, docKey}} + по одной настоящей
+  // функции-мосту на тип. Сторона подписчика: docKey → doc-фасад.
+  var docRealListeners = {};
+  var docRealListenerFns = {};
+  var docEventSubs = {};
+  var docEventSeq = 0;
+
+  // Подписчик: сообщить владельцу документа о (не)подписке на тип. Только
+  // документы предков (PARENT_BID/TOP_BID) — для чужих bid свой изолят
+  // владельца в реестре читателя не значится, обратный адрес не вычислить.
+  // Обратный адрес — собственный bid в реестре владельца: host_nid берём из
+  // `window.frameElement` (элемент iframe в документе владельца), а сам bid
+  // спрашиваем у владельца через `_lumen_frame_binding`. Недоступный пир
+  // (nopeer/absent) или чужой bid — тихая деградация до facadeOn-only, как
+  // было до моста.
+  function docEventSync(bid, d, type, add) {
+    if (bid !== PARENT_BID && bid !== TOP_BID) return;
+    if (typeof _lumen_f_global_call !== 'function') return;
+    var key = d.__docKey;
+    if (key === undefined) {
+      key = ++docEventSeq;
+      try {
+        Object.defineProperty(d, '__docKey', { value: key, writable: true, configurable: true });
+      } catch (e) { d.__docKey = key; }
+      docEventSubs[key] = d;
+    }
+    var host = null;
+    try {
+      var fe = (typeof window !== 'undefined' && window !== null) ? window.frameElement : null;
+      host = (fe && fe.__nid__ !== undefined) ? fe.__nid__ : null;
+    } catch (e) {}
+    if (host === null || host === undefined) return;
+    var rb = _lumen_f_global_call(bid, '__lumen_frame_host_bid', [host]);
+    if (!rb || rb.kind !== 'value' || typeof rb.value !== 'number') return;
+    _lumen_f_global_call(bid, '__lumen_frame_doc_listen',
+      [String(type), add ? 1 : 0, rb.value, key, host]);
+  }
+
   function bidOrNull(hostNid) {
     if (hostNid === null || hostNid === undefined) return null;
     var bid = _lumen_frame_binding(hostNid);
@@ -2695,6 +2775,14 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
       var el = _lumen_make_element(hostNid);
       if (el) el.setAttribute('src', resolved);
     }
+    // execution-timing/083: навигация фрейма обесценивает документ, который
+    // его определял, ещё до коммита нового — его слушатели на чужих
+    // документах (docEventSync-мост) молчат сразу.
+    try {
+      if (typeof _lumen_f_global_call === 'function') {
+        _lumen_f_global_call(bid, '__lumen_frame_doc_deactivate', []);
+      }
+    } catch (e) {}
   }
 
   // Срез 5: аргумент-узел мутации — фасад ТОГО ЖЕ биндинга с числовым __nid__.
@@ -3160,14 +3248,20 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     // карту facadeOn, что и у элементов; доставка ресурсных событий ребёнка
     // в doc-фасад — отдельный срез, но отсутствие метода ломало страницы
     // сразу (osm: `contentDocument.addEventListener is not a function`).
+    // execution-timing/083-084: слушатель на документе ПРЕДКА (`top.document`
+    // из iframe) обязан получать события, которые предок диспатчит на своём
+    // настоящем EventTarget — `docEventSync` подписывает этот тип на
+    // документе-владельце, а `__lumen_frame_doc_fire` возвращает событие сюда.
     d.addEventListener = function(type, fn) {
       if (typeof type === 'string' && type && typeof fn === 'function') {
         facadeOn(d, type, fn, true);
+        docEventSync(bid, d, type, true);
       }
     };
     d.removeEventListener = function(type, fn) {
       if (typeof type === 'string' && type && typeof fn === 'function') {
         facadeOn(d, type, fn, false);
+        docEventSync(bid, d, type, false);
       }
     };
     // Срез 5: фабрики узлов под-документа. Отрицательный ответ натива
@@ -3588,6 +3682,20 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     return winFacade(bid);
   };
 
+  // `window[i]`/`frames[i]` до регистрации под-документа (execution-timing/
+  // 083-084): idx-й подключённый `<iframe>` в порядке дерева → его host_nid →
+  // ленивый about:blank-фасад. `undefined`, когда iframe с таким индексом нет.
+  __lumen_C._lumen_frame_window_at = function(idx) {
+    var host = null;
+    if (typeof _lumen_frame_dom_host_at === 'function') {
+      host = _lumen_frame_dom_host_at(idx);
+    }
+    if (host === null || host === undefined) host = _lumen_frame_host_at(idx);
+    if (host === null || host === undefined) return undefined;
+    var w = _lumen_frame_content_window(host);
+    return (w === null || w === undefined) ? undefined : w;
+  };
+
   // HTML LS §8.4.4 document.open()/write()/writeln()/close() на ФАСАДЕ
   // под-документа: родительский изолят зовёт этот глобал пира через
   // `_lumen_f_global_call` (peer_global_call → globalThis[name]). Один
@@ -3631,6 +3739,126 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     }
     if (evt === null) return;
     node.dispatchEvent(evt);
+  };
+
+  // Натив `_lumen_frame_binding` живёт в контейнере и недоступен
+  // `peer_global_call` (тот ищет на globalThis) — этот глобал отдаёт тот же
+  // ответ под именем, которое пир реально найдёт.
+  globalThis.__lumen_frame_host_bid = function(hostNid) {
+    return (typeof _lumen_frame_binding === 'function')
+      ? _lumen_frame_binding(hostNid) : null;
+  };
+
+  // execution-timing/083-084, сторона ВЛАДЕЛЬЦА документа: подписчик из
+  // чужого изолята просит слушать `type` на настоящем document этого
+  // контекста. Один мост-слушатель на тип рассылает событие всем
+  // подписчикам синхронным `_lumen_f_global_call` — диспетч document.
+  // dispatchEvent на родителе остаётся синхронным, и 'event: foo' встаёт
+  // в журнал ребёнка до следующего его шага, как требует тест.
+  globalThis.__lumen_frame_doc_listen = function(type, add, srcBid, docKey, hostNid) {
+    if (typeof document === 'undefined' || document === null
+        || typeof document.addEventListener !== 'function') return;
+    type = String(type);
+    var map = docRealListeners[type];
+    if (!map) { map = {}; docRealListeners[type] = map; }
+    var k = String(srcBid) + ':' + String(docKey);
+    if (add) { map[k] = { srcBid: srcBid, docKey: docKey, hostNid: hostNid }; }
+    else { delete map[k]; }
+    var count = 0;
+    for (var x in map) { if (map.hasOwnProperty(x)) count++; }
+    if (count > 0 && !docRealListenerFns[type]) {
+      var fn = function(evt) {
+        var m = docRealListeners[type];
+        if (!m) return;
+        var flags = '{}';
+        try {
+          flags = JSON.stringify({
+            b: !!(evt && evt.bubbles),
+            c: !!(evt && evt.cancelable),
+            m: !!(evt && evt.composed),
+          });
+        } catch (e) {}
+        for (var kk in m) {
+          if (!m.hasOwnProperty(kk)) continue;
+          var rec = m[kk];
+          // execution-timing/083-084: подписчик живёт, пока его документ —
+          // текущий документ своего фрейма. Удаление iframe хоронит биндинг
+          // и отключает host-элемент от документа — в обоих случаях слушатель
+          // «документа в истории»/«удалённого iframe» молчит.
+          var cur = null;
+          try {
+            cur = (rec.hostNid !== null && rec.hostNid !== undefined
+              && typeof _lumen_frame_binding === 'function')
+              ? _lumen_frame_binding(rec.hostNid) : null;
+          } catch (e0) { cur = null; }
+          var connected = true;
+          try {
+            connected = (typeof _lumen_is_connected !== 'function')
+              ? true : !!_lumen_is_connected(rec.hostNid);
+          } catch (e1) { connected = true; }
+          if (cur !== rec.srcBid || !connected) { delete m[kk]; continue; }
+          try {
+            _lumen_f_global_call(rec.srcBid, '__lumen_frame_doc_fire',
+              [rec.docKey, type, flags]);
+          } catch (e2) {}
+        }
+      };
+      docRealListenerFns[type] = fn;
+      document.addEventListener(type, fn);
+    } else if (count === 0 && docRealListenerFns[type]) {
+      try { document.removeEventListener(type, docRealListenerFns[type]); } catch (e) {}
+      delete docRealListenerFns[type];
+    }
+  };
+
+  // execution-timing/083-084, сторона ПОДПИСЧИКА: документ-владелец сообщил
+  // о событии `type` — прогоняем слушателей facadeOn этого doc-фасада и его
+  // on<type>-свойство локальным Event, в точности как ветка 'resource'
+  // пумпы для ресурсных событий (но синхронно, из вызова владельца).
+  // Навигация/уничтожение документа фрейма: все его doc-подписки на события
+  // чужих документов мертвы — `__lumen_frame_doc_fire` больше не находит
+  // слушателей. Зовётся владельцем через navigateFrameHost до смены src.
+  globalThis.__lumen_frame_doc_deactivate = function() {
+    docEventSubs = {};
+  };
+
+  globalThis.__lumen_frame_doc_fire = function(docKey, type, flagsJson) {
+    var d = docEventSubs[docKey];
+    if (!d) return;
+    var flags = {};
+    try { flags = JSON.parse(String(flagsJson)) || {}; } catch (e) {}
+    var rev = null;
+    try {
+      rev = new Event(String(type), {
+        bubbles: !!flags.b, cancelable: !!flags.c, composed: !!flags.m,
+      });
+    } catch (e1) {}
+    if (!rev) {
+      rev = { type: String(type), bubbles: !!flags.b, cancelable: !!flags.c, composed: !!flags.m };
+    }
+    rev.target = d;
+    rev.currentTarget = d;
+    try { rev.isTrusted = true; } catch (e2) {}
+    var map = elemListeners.get(d);
+    var list = map ? map[String(type)] : null;
+    if (list && list.length) {
+      var snap = list.slice();
+      for (var k = 0; k < snap.length; k++) {
+        try { snap[k].call(d, rev); } catch (err) {
+          if (typeof _lumen_report_exception === 'function') {
+            try { _lumen_report_exception(err); } catch (e3) {}
+          }
+        }
+      }
+    }
+    var oh = d['on' + String(type)];
+    if (typeof oh === 'function') {
+      try { oh.call(d, rev); } catch (err2) {
+        if (typeof _lumen_report_exception === 'function') {
+          try { _lumen_report_exception(err2); } catch (e4) {}
+        }
+      }
+    }
   };
 
   // ── Срез 3: иерархия окон настоящего window этого контекста ──────────────

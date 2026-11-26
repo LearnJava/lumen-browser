@@ -547,6 +547,8 @@ pub(crate) fn spawn_frame(
         // согласован с `fetch_iframe_source` выше (тот же хост `child_url`).
         crate::lumen::compat::compat_identity_for_url(&child_url),
         Some(&ancestry),
+        // У фрейма нет AsyncScriptFeed — его async-скрипты идут общим путём.
+        None,
         ),
     };
     drop(_runtime_span);

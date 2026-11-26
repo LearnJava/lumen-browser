@@ -489,23 +489,51 @@ window.structuredClone = structuredClone;
 
 // ── Page lifecycle driver functions (called from Rust via QuickJsRuntime) ─────
 
+// Whether the 'interactive' pass already ran its DOMContentLoaded half.
+// `_lumen_deferred_scripts_begin` flips readyState and fires readystatechange
+// before the parser's deferred list runs; `_lumen_apply_ready_state` then
+// re-enters once for the DOMContentLoaded half.
+var _lumen_dcl_done = false;
+
+// HTML LS «the end»: readyState becomes 'interactive' and readystatechange
+// fires BEFORE the deferred script list executes; DOMContentLoaded waits for
+// `_lumen_apply_ready_state('interactive')` after that list drains.
+function _lumen_deferred_scripts_begin() {
+    if (_doc_ready_state !== 'loading' || _lumen_dcl_done) return;
+    _doc_ready_state = 'interactive';
+    document.dispatchEvent(new Event('readystatechange', { bubbles: false, cancelable: false }));
+}
+
 // Drive document.readyState forward: 'loading' → 'interactive' → 'complete'.
 // Idempotent — state only advances forward.
 // Called by Rust: after HTML parse → 'interactive'; after all resources loaded → 'complete'.
 function _lumen_apply_ready_state(state) {
-    if (state === 'interactive' && _doc_ready_state !== 'loading') return;
+    if (state === 'interactive' && _lumen_dcl_done) return;
+    if (state === 'interactive' && _doc_ready_state !== 'loading' && _doc_ready_state !== 'interactive') return;
     if (state === 'complete' && _doc_ready_state === 'complete') return;
+    // A 'complete' that arrives while the interactive pass is still owed (the
+    // deferred-begin path above, or a close() racing it) must not skip
+    // DOMContentLoaded — run the interactive half first.
+    if (state === 'complete' && !_lumen_dcl_done && _doc_ready_state !== 'complete') {
+        _lumen_apply_ready_state('interactive');
+    }
     // BUG-1129: inserted external scripts still loading delay `complete`;
     // `_lumen_load_delay_done` comes back here once the last one finishes.
     if (state === 'complete' && typeof _lumen_load_delay_count === 'number' && _lumen_load_delay_count > 0) {
         _lumen_load_deferred = true;
         return;
     }
+    // Only the deferred-begin re-entry skips readystatechange — 'complete'
+    // still owes its own event for the interactive→complete transition.
+    var rsAlreadyFired = (state === 'interactive' && _doc_ready_state === 'interactive');
     _doc_ready_state = state;
     // readystatechange on document
-    var rsEv = new Event('readystatechange', { bubbles: false, cancelable: false });
-    document.dispatchEvent(rsEv);
+    if (!rsAlreadyFired) {
+        var rsEv = new Event('readystatechange', { bubbles: false, cancelable: false });
+        document.dispatchEvent(rsEv);
+    }
     if (state === 'interactive') {
+        _lumen_dcl_done = true;
         // BUG-568: «the end» step 3 — the `defer` scripts `document.write()`
         // produced run after readyState turns 'interactive' and before
         // DOMContentLoaded, like the markup's own deferred list.
@@ -610,6 +638,7 @@ function _lumen_mark_ready_state_restored() {
     _doc_ready_state = 'complete';
 }
 __lumen_C._lumen_apply_ready_state = _lumen_apply_ready_state;
+__lumen_C._lumen_deferred_scripts_begin = _lumen_deferred_scripts_begin;
 __lumen_C._lumen_apply_visibility  = _lumen_apply_visibility;
 __lumen_C._lumen_mark_ready_state_restored = _lumen_mark_ready_state_restored;
 
@@ -2129,7 +2158,17 @@ _lumen_install_reflection(HTMLScriptElement.prototype, [
     Object.defineProperty(proto, 'async', {
         get: function() {
             var nid = this && this.__nid__;
-            if (nid !== undefined && _lumen_script_force_async[nid] === 1) return true;
+            if (nid !== undefined) {
+                var fa = _lumen_script_force_async[nid];
+                if (fa === 1) return true;
+                // force-async «initially true»: parser-inserted скрипты
+                // получают 0 от шелла при prepare-маркировке
+                // (`_lumen_script_mark_all_parser_inserted`) и в dw-пути,
+                // createElement — 1 с рождения. undefined = ещё не
+                // подготовлен (fragment/parse-created) → spec initial true
+                // (execution-timing/091, /122).
+                if (fa === undefined) return true;
+            }
             return desc.get.call(this);
         },
         set: function(v) {
@@ -9010,6 +9049,19 @@ function _css_an_update_all() {
         for (var v = 0; v < vtp.length; v++) _css_an_update(vtOwners[o], vtp[v]);
     }
     if (typeof _lumen_has_keyframes === 'function' && !_lumen_has_keyframes()) return;
+    // PERF-ANIM-CANDIDATES: the flush publishes the (node, pseudo) pairs whose
+    // computed style names a CSS animation — walking it replaces the
+    // `querySelectorAll('*')` scan plus a computed-style read per element per
+    // pseudo-element (~4 native reads × every element). Native missing or an
+    // unparsable answer (worker/test harness) falls back to the full scan.
+    if (typeof _lumen_animation_candidates === 'function') {
+        var cands = null;
+        try { cands = JSON.parse(_lumen_animation_candidates()); } catch (e) { cands = null; }
+        if (cands !== null) {
+            for (var n = 0; n < cands.length; n++) _css_an_update(cands[n][0], cands[n][1]);
+            return;
+        }
+    }
     var els = document.querySelectorAll('*');
     for (var n = 0; n < els.length; n++) {
         var nid = els[n].__nid__;

@@ -5337,7 +5337,7 @@ var _lumen_document_fragment_members = {
         get textContent()     { var nid = this.__nid__; return _lumen_get_text_content(nid); },
         set textContent(v)    { var nid = this.__nid__; _lumen_set_text_content(nid, String(v)); },
         get innerHTML()       { var nid = this.__nid__; return _lumen_get_inner_html(nid); },
-        set innerHTML(v)      { var nid = this.__nid__; _lumen_set_inner_html(nid, String(v)); },
+        set innerHTML(v)      { var nid = this.__nid__; _lumen_set_inner_html_frag(nid, String(v)); },
         // Scoped to this fragment's descendants — see BUG-291.
         querySelector:        function(sel) { var nid = this.__nid__;
             var n = _lumen_u2n(_lumen_query_selector_scoped(nid, _lumen_sel(sel)));
@@ -5366,6 +5366,7 @@ var _lumen_document_fragment_members = {
         cloneNode:            function(deep) { var nid = this.__nid__;
             var clone_nid = _lumen_clone_subtree(nid, deep ? 1 : 0);
             _lumen_track_cloned_style_blocks(clone_nid);
+            _lumen_clone_inherit_script_state(nid, clone_nid);
             return _lumen_make_document_fragment(clone_nid);
         },
         // DOM §4.4 (GAP-XMLDOC срез 38, BUG-685) — own copies, same reason as
@@ -6312,7 +6313,7 @@ Object.defineProperty(ShadowRoot.prototype, 'innerHTML', {
         var s = (typeof _lumen_tt_get_compliant_html === 'function')
             ? _lumen_tt_get_compliant_html(v, 'ShadowRoot innerHTML', true)
             : String(v);
-        _lumen_set_inner_html(this.__nid__, s);
+        _lumen_set_inner_html_frag(this.__nid__, s);
     },
     enumerable: true, configurable: true,
 });
@@ -6466,7 +6467,7 @@ ShadowRoot.prototype.setHTMLUnsafe = function(html) {
     var s = (typeof _lumen_tt_get_compliant_html === 'function')
         ? _lumen_tt_get_compliant_html(html, 'ShadowRoot setHTMLUnsafe', true)
         : String(html);
-    _lumen_set_inner_html(this.__nid__, s);
+    _lumen_set_inner_html_frag(this.__nid__, s);
 };
 // HTML LS §14.5 getHTML({serializableShadowRoots, shadowRoots}) — BUG-1064.
 // Shared by `Element` and `ShadowRoot`; flags come from `_lumen_shadow_root_init`.
@@ -10237,7 +10238,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
             var s = (typeof _lumen_tt_get_compliant_html === 'function')
                 ? _lumen_tt_get_compliant_html(v, 'Element innerHTML', true)
                 : String(v);
-            _lumen_set_inner_html(nid, s);
+            _lumen_set_inner_html_frag(nid, s);
             _lumen_radio_group_post_insert(nid);
         },
         // DOM Parsing §2.6 'Extensions to the Element interface' — outerHTML
@@ -10262,6 +10263,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                     'NoModificationAllowedError');
             }
             var newIds = _lumen_parse_html_fragment(s);
+            for (var _ohi = 0; _ohi < newIds.length; _ohi++) { _lumen_fragment_scripts_started(newIds[_ohi]); }
             var wrapped = [];
             for (var _ohi = 0; _ohi < newIds.length; _ohi++) { wrapped.push(_lumen_make_element(newIds[_ohi])); }
             this.replaceWith.apply(this, wrapped);
@@ -10817,6 +10819,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                 ? _lumen_tt_get_compliant_html(html, 'Element insertAdjacentHTML')
                 : String(html);
             var newIds = _lumen_parse_html_fragment(s);
+            for (var _iahi = 0; _iahi < newIds.length; _iahi++) { _lumen_fragment_scripts_started(newIds[_iahi]); }
             var wrapped = [];
             for (var _iahi = 0; _iahi < newIds.length; _iahi++) { wrapped.push(_lumen_make_element(newIds[_iahi])); }
             switch (String(where).toLowerCase()) {
@@ -10858,6 +10861,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
         cloneNode:       function(deep) { var nid = this.__nid__;
             var clone_nid = _lumen_clone_subtree(nid, deep ? 1 : 0);
             _lumen_track_cloned_style_blocks(clone_nid);
+            _lumen_clone_inherit_script_state(nid, clone_nid);
             return _lumen_make_element(clone_nid);
         },
         // BUG-796: `content` used to live here, as a template-only getter answering
@@ -11677,7 +11681,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // Parses html as a markup fragment and replaces element children.
         // Unsafe: no sanitization (unlike Sanitizer API).
         setHTMLUnsafe: function(html) { var nid = this.__nid__;
-            _lumen_set_inner_html(nid, String(html));
+            _lumen_set_inner_html_frag(nid, String(html));
         },
         // ── getHTML (WHATWG HTML LS §14.5) ───────────────────────────────────────
         // Serialises element's subtree as an HTML string.
@@ -12676,6 +12680,13 @@ function _lumen_build_element(nid, ifaceOverride) {
     if ((_lumen_get_tag_name(nid) || '').toUpperCase() === 'FORM') {
         return new Proxy(_obj, {
             get: function(t, prop, receiver) {
+                // HTML LS §4.10.3 indexed getter: `form[0]` — listed control
+                // по индексу (execution-timing/031 `document.forms[0][0]`).
+                if (typeof prop === 'string' && /^[0-9]+$/.test(prop) && !(prop in t)) {
+                    var idx = parseInt(prop, 10);
+                    var ctrls = _lumen_listed_controls(nid);
+                    return idx < ctrls.length ? _lumen_make_element(ctrls[idx]) : undefined;
+                }
                 if (typeof prop !== 'string' || prop in t) {
                     return Reflect.get(t, prop, receiver);
                 }
@@ -12683,6 +12694,9 @@ function _lumen_build_element(nid, ifaceOverride) {
                 return found === null ? undefined : found;
             },
             has: function(t, prop) {
+                if (typeof prop === 'string' && /^[0-9]+$/.test(prop) && !(prop in t)) {
+                    return parseInt(prop, 10) < _lumen_listed_controls(nid).length;
+                }
                 return prop in t
                     || (typeof prop === 'string' && _lumen_form_named_control(nid, prop) !== null);
             },
@@ -15754,6 +15768,9 @@ var document = {
         // BUG-571: a script element minted here is allowed to run once it is
         // inserted into the document — see `_lumen_resource_track`.
         _lumen_resource_track(nid, tag);
+        // HTML LS §4.12.1: force-async starts true on every script element;
+        // only the parser clears it, and `async` IDL reads it before prepare.
+        if (tag === 'script') _lumen_script_force_async[nid] = 1;
         var _ceEntry = _ceScope.registry[tag];
         if (_ceEntry) return _lumen_ce_construct_sync(nid, _ceEntry);
         return _lumen_make_element(nid);
@@ -16078,6 +16095,7 @@ var document = {
         var body = document.body;
         if (body) { while (body.firstChild) body.removeChild(body.firstChild); }
         _doc_ready_state = 'loading';
+        _lumen_dcl_done = false;
         return document;
     },
     close: function() {
@@ -16224,6 +16242,7 @@ var document = {
         if (node.__nid__ !== undefined) {
             var clone_nid = _lumen_clone_subtree(node.__nid__, deep ? 1 : 0);
             _lumen_track_cloned_style_blocks(clone_nid);
+            _lumen_clone_inherit_script_state(node.__nid__, clone_nid);
             if (options && options.customElements instanceof CustomElementRegistry) {
                 _lumen_ce_scope_by_nid[clone_nid] = { registry: options.customElements._registry, pending: options.customElements._pending };
             }
@@ -16442,6 +16461,27 @@ function _lumen_track_cloned_style_blocks(nid) {
     }
     var kids = _lumen_get_children(nid);
     for (var i = 0; i < kids.length; i++) _lumen_track_cloned_style_blocks(kids[i]);
+}
+
+// HTML LS «clone a node» для <script>: клон наследует внутренние флаги
+// «already started» и «force async» оригинала — поэтому cloneNode уже
+// исполнявшегося парсерного скрипта НЕ запускается при вставке, а правка
+// его текста не доисполняет его (execution-timing/061-067). Обход парный:
+// `_lumen_clone_subtree` сохраняет структуру, поэтому i-й ребёнок клона
+// соответствует i-му ребёнку источника.
+function _lumen_clone_inherit_script_state(srcNid, cloneNid) {
+    if (srcNid === null || srcNid === undefined
+        || cloneNid === null || cloneNid === undefined) return;
+    if (_lumen_is_script_element(srcNid)) {
+        if (_lumen_script_started[srcNid] === 1) _lumen_script_started[cloneNid] = 1;
+        if (_lumen_script_force_async[srcNid] !== undefined) {
+            _lumen_script_force_async[cloneNid] = _lumen_script_force_async[srcNid];
+        }
+    }
+    var sk = _lumen_get_children(srcNid);
+    var ck = _lumen_get_children(cloneNid);
+    var n = sk.length < ck.length ? sk.length : ck.length;
+    for (var i = 0; i < n; i++) _lumen_clone_inherit_script_state(sk[i], ck[i]);
 }
 
 // Same shadow-inclusive test as Node.isConnected, by nid alone — no element
@@ -16847,6 +16887,57 @@ var _lumen_script_started = {};
 // `async` в таком случае читает только атрибут, как обычная рефлексия.
 var _lumen_script_force_async = {};
 
+// HTML LS §4.12.1 «prepare the script element»: парсер прогоняет prepare по
+// каждому созданному им <script> ещё во время разбора — «already started»
+// встаёт на шаге 17 для всех, кто прошёл ранние gate'ы (есть src-атрибут
+// ИЛИ непустой child text, тип classic/module/importmap), ещё до nomodule/
+// for-event/CSP-отказов. Шелл исполняет parser-скрипты сам (Rust-коллектор),
+// поэтому «prepare»-метку started ставим здесь обходом дерева до первой
+// строки скрипта: тогда post-connection/children-changed/attr-change →
+// prepare упрётся в шаг 1 и не перезапустит fetch/тело (execution-timing/
+// 014, 033, 048, 057-067, 103, 114). Скрипты, НЕ прошедшие gate'ы (пустые,
+// data-блоки), «has run» не считаются и остаются перезапускаемыми —
+// appendChild текста в пустой парсерный <script> исполняется (056), а
+// `<script type="text/plain">` после снятия type запускается (122-126).
+// Метим только HTML-namespace — foreign <script> (SVG/MathML) живёт по
+// своим правилам активации (execution-timing/146: `href`, проставленный
+// позже, обязан запускать загрузку).
+function _lumen_script_mark_all_parser_inserted() {
+    var root = null;
+    try { root = document.documentElement; } catch (e) { return; }
+    if (!root || root.__nid__ === undefined) return;
+    var stack = [root.__nid__];
+    while (stack.length > 0) {
+        var n = stack.pop();
+        var local = null, ns = null;
+        try { local = _lumen_u2n(_lumen_get_local_name(n)); } catch (e) {}
+        try { ns = _lumen_u2n(_lumen_get_namespace_uri(n)); } catch (e) {}
+        if (local !== null && String(local).toLowerCase() === 'script'
+            && ns === 'http://www.w3.org/1999/xhtml') {
+            var type = _lumen_u2n(_lumen_get_attr(n, 'type'));
+            var isModule = type !== null && String(type).trim().toLowerCase() === 'module';
+            var isImportmap = type !== null && String(type).trim().toLowerCase() === 'importmap';
+            var isClassic = _lumen_is_classic_script_type(type);
+            if (isModule || isImportmap || isClassic) {
+                var hasSrc = _lumen_script_src_value(n) !== null;
+                var hasBody = false;
+                if (!hasSrc) {
+                    var t = _lumen_script_child_text(n);
+                    hasBody = t !== null && String(t) !== '';
+                }
+                if (hasSrc || hasBody) {
+                    _lumen_script_started[n] = 1;
+                    // «force async» спеки тоже снимается prepare'ом
+                    // parser-inserted'а — `async` IDL читает атрибут (122).
+                    _lumen_script_force_async[n] = 0;
+                }
+            }
+        }
+        var kids = _lumen_get_children(n);
+        for (var i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
+    }
+}
+
 // Внешний источник <script>: у HTML-скрипта это `src`, у SVG/MathML —
 // `href` или legacy `xlink:href` (BUG-685, execution-timing/135-136,142).
 // Важно: parser-размеченный `xlink:href` хранится qualified-именем целиком,
@@ -16884,7 +16975,9 @@ function _lumen_script_prepare(nid) {
     var hasBody = false;
     if (!hasSrcAttr) {
         text = _lumen_script_child_text(nid);
-        hasBody = text !== null && String(text).trim() !== '';
+        // «child text content» — сырая строка: пробельное тело — валидная
+        // (пустая) программа, «already started» ставится и для неё.
+        hasBody = text !== null && String(text) !== '';
     }
     if (!hasSrcAttr && !hasBody) return;
     // Step 10: only classic/module/importmap continue past type resolution
@@ -16901,6 +16994,20 @@ function _lumen_script_prepare(nid) {
     // Import maps are data, consumed elsewhere (not by this function); the
     // flag above is all BUG-882's test cares about here.
     if (isImportmap) return;
+    // HTML LS §4.12.1 step 24 (obsolete `for`/`event` handler attributes):
+    // classic-скрипт с ОБОИМИ атрибутами исполняется, только если `for` —
+    // case-insensitive «window», а `event` — «onload»/«onload()»; иначе —
+    // return. «already started» к этому моменту уже стоит (шаг 17 спеки):
+    // такой скрипт считается «has run» навсегда (execution-timing/149).
+    if (isClassic) {
+        var _ev = _lumen_u2n(_lumen_get_attr(nid, 'event'));
+        var _fr = _lumen_u2n(_lumen_get_attr(nid, 'for'));
+        if (_ev !== null && _fr !== null) {
+            var _evs = String(_ev).replace(/^\s+|\s+$/g, '').toLowerCase();
+            var _frs = String(_fr).replace(/^\s+|\s+$/g, '').toLowerCase();
+            if (_frs !== 'window' || (_evs !== 'onload' && _evs !== 'onload()')) return;
+        }
+    }
     if (_lumen_script_has_empty_src(nid, isModule, type)) {
         _lumen_script_fire_empty_src_error(nid);
         return;
@@ -16935,15 +17042,13 @@ function _lumen_is_script_element(nid) {
 }
 
 // BUG-968: HTML LS "src attribute change steps" / "type attribute change
-// steps" (whatwg/html#10188) — mutating `src` or `type` on a connected
-// script re-enters "prepare a script" no matter whether the attribute
-// previously held a value, unlike the old text this replaced (which only
-// triggered on "previously had no such attribute"). This is deliberately a
-// *second* (or later) legitimate prepare, not the re-entry `_lumen_script_
-// prepare`'s own step-1 "already started" flag exists to guard against —
-// that flag has to be cleared here first, or a script whose earlier prepare
-// already ran (the common "swap the bundle" case this bug is about) would
-// see step 1 bounce this call back out as a no-op.
+// steps" (whatwg/html#10188) — mutating `src` on a connected script runs the
+// element's post-connection steps again. Those reach "prepare the script
+// element", whose own step 1 («already started» → return) is the only gate:
+// a script that already executed does NOT re-run on a later `src` write
+// (execution-timing/024, /025 — «src set on an executed script is ignored»).
+// The earlier revision cleared `_lumen_script_started` here, which made every
+// post-execution `src` write re-fetch and re-run — spec-wise wrong.
 function _lumen_script_attr_changed(nid, attrName, isSet) {
     // HTML LS §4.12.1 attribute change steps: повторный prepare запускает
     // только запись `src` (value !== null), connected-элемент. Смены `type`
@@ -16951,10 +17056,18 @@ function _lumen_script_attr_changed(nid, attrName, isSet) {
     // execution-timing/121: removeAttribute('type') не должен запускать
     // отложенный classic); перезапуск data→code идёт через post-connection
     // steps при повторной вставке или children-changed steps.
-    if (attrName !== 'src' || !isSet) return;
+    // У foreign <script> (SVG/MathML) внешний адрес — `href`/`xlink:href`
+    // (BUG-685): их запись — тот же триггер «prepare» (execution-timing/146).
+    if (!isSet) return;
     if (!_lumen_is_script_element(nid)) return;
     if (!_lumen_resource_is_connected(nid)) return;
-    delete _lumen_script_started[nid];
+    var isSrcWrite = attrName === 'src';
+    if (!isSrcWrite && (attrName === 'href' || attrName === 'xlink:href')) {
+        var ns = _lumen_u2n(_lumen_get_namespace_uri(nid));
+        isSrcWrite = ns === 'http://www.w3.org/2000/svg'
+            || ns === 'http://www.w3.org/1998/Math/MathML';
+    }
+    if (!isSrcWrite) return;
     _lumen_script_prepare(nid);
 }
 
@@ -17339,6 +17452,10 @@ function _lumen_dw_evict_after_insert_point(scriptNid, frame) {
 // that `write()` produced.
 function _lumen_dw_prepare(frame, nid) {
     if (_lumen_script_started[nid] === 1) return;
+    // dw-скрипты — parser-inserted: «force async» у них false (как у
+    // размеченных парсером — `_lumen_script_mark_all_parser_inserted`),
+    // `async` IDL читает атрибут (execution-timing/026, /122).
+    if (_lumen_script_force_async[nid] === undefined) _lumen_script_force_async[nid] = 0;
     var type = _lumen_u2n(_lumen_get_attr(nid, 'type'));
     var isModule = type !== null && String(type).trim().toLowerCase() === 'module';
     var isClassic = !isModule && _lumen_is_classic_script_type(type);
@@ -18361,6 +18478,36 @@ function _lumen_script_post_connect(nid) {
     }
     if (!_lumen_resource_is_connected(nid)) return;
     _lumen_script_prepare(nid);
+}
+
+// HTML fragment parsing (innerHTML / outerHTML / insertAdjacentHTML /
+// createContextualFragment / setHTMLUnsafe): <script>, созданные
+// фрагментным парсером, НИКОГДА не исполняются — «already started»
+// ставится при создании (execution-timing/033: innerHTML-скрипт, потом
+// перенесённый в document, не запускается). `rootNid` — корень
+// фрагментного поддерева: помечаем его самого и всех потомков.
+function _lumen_fragment_scripts_started(rootNid) {
+    var stack = [rootNid];
+    while (stack.length > 0) {
+        var n = stack.pop();
+        if (_lumen_is_script_element(n)) { _lumen_script_started[n] = 1; }
+        var kids = _lumen_get_children(n);
+        for (var i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
+    }
+}
+// Обёртка над нативным `_lumen_set_inner_html`: после замены детей помечаем
+// все script-элементы новых детей (у <template> — его content-фрагмент).
+function _lumen_set_inner_html_frag(nid, html) {
+    _lumen_set_inner_html(nid, html);
+    var kids = _lumen_get_children(nid);
+    for (var i = 0; i < kids.length; i++) { _lumen_fragment_scripts_started(kids[i]); }
+    try {
+        var frag = _lumen_get_template_content(nid);
+        if (frag !== null && frag !== undefined) {
+            var fkids = _lumen_get_children(frag);
+            for (var j = 0; j < fkids.length; j++) { _lumen_fragment_scripts_started(fkids[j]); }
+        }
+    } catch (e) {}
 }
 
 // Post-connection steps идут по всем вставленным узлам, не только по
