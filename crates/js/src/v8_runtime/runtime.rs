@@ -1021,6 +1021,25 @@ impl V8JsRuntime {
         }
     }
 
+    /// The shell changed a form control's state in the document itself — a typed or
+    /// deleted character, a picker choice, a filled-in credential. No JS primitive
+    /// recorded it, and the JS echo that follows finds the new value already in place
+    /// and records nothing either, so an off-thread relayout whose basis predates the
+    /// write asked the tracker which boxes to rebuild and was never told about this
+    /// one. Unlike [`Self::note_shell_attr_writes`] this hands out a handle the caller
+    /// keeps: the note has to land before the caller queues its relayout job, with no
+    /// engine-thread round trip in between. The touch is structural — there is no
+    /// attribute to narrow on.
+    pub fn shell_touch_notifier(&self) -> impl Fn(NodeId) + Send + Sync + 'static {
+        let touched = Arc::clone(&self.dom_touched);
+        let stale = Arc::clone(&self.flush_stale);
+        move |node| {
+            super::dom_helpers::record_dom_touch(&touched, node);
+            // The same-tick flush skips a document nothing has marked stale.
+            stale.store(true, Ordering::Relaxed);
+        }
+    }
+
     /// BUG-935 S80: общий для [`Self::take_dom_touched`] и [`Self::dom_touched_drain`]
     /// сброс набора затронутых узлов.
     fn drain_dom_touched(touched: &Mutex<DomTouched>) -> DomTouched {

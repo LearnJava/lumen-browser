@@ -40,3 +40,22 @@ WPT-RUN-14 срез 27: `css/mediaqueries/mq-calc-*` (8), `mq-calc-sign-function
 ## Как проверить
 
 `css/mediaqueries/mq-range-001.html`, `negation-001.html`, `mq-calc-001.html`, `relative-units-003.html`, `mq-gamut-001.html`.
+
+## Срез 2026-11-26 — range-синтаксис на живой странице портала
+
+portal.nextera.ru, `innerWidth` 1920, живое окно (`--mcp-live-port`, main a0666c3564+патч) против
+Chrome 158.0.8127.37 (окно 1584), проба повторена трижды с одинаковым результатом:
+
+| `matchMedia(q).matches` | Lumen | Chrome |
+|---|---|---|
+| `(width >= 1280px)` | `false` | `true` |
+| `(400px <= width)` | `false` | `true` |
+| `(400px <= width <= 3000px)` | `false` | `true` |
+| `(height >= 100px)` | `false` | `true` |
+| `(width > 1279px)` | `false` | `true` |
+| `(min-width: 1280px)` (контроль) | `true` | `true` |
+
+Range-грамматика на месте не изменилась с среза 27: `[`parser/media.rs`](../crates/engine/css-parser/src/parser/media.rs)
+комментарий у `Range`-фич — «требуют отдельной `<`/`<=`/`>`/`>=`-грамматики и остаются Unsupported»
+(`parser/tests/media.rs:544`). Факт с живой страницы: сайт на range-условии получает `false` при
+выполненном условии (у портала — `matchMedia('(width >= 1280px)')`).

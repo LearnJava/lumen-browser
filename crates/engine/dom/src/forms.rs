@@ -322,7 +322,12 @@ pub fn find_ancestor_form(doc: &Document, mut node: NodeId) -> Option<NodeId> {
 /// one: it is unconditionally checked and never unchecked by a re-click —
 /// unlike a checkbox, a radio button's checkedness cannot be cleared by
 /// clicking it again (only `form.reset()` or checking a group sibling does).
-pub fn set_radio_checked(doc: &mut Document, clicked: NodeId) {
+///
+/// Returns every control whose checkedness the click changed — the group
+/// members it cleared and `clicked` itself — so a caller that reports
+/// restyling per control can be told about each of them.
+pub fn set_radio_checked(doc: &mut Document, clicked: NodeId) -> Vec<NodeId> {
+    let mut changed = Vec::new();
     let name = doc.get(clicked).get_attr("name").unwrap_or("").to_owned();
     if !name.is_empty() {
         let scope = find_ancestor_form(doc, clicked).unwrap_or_else(|| doc.root());
@@ -331,10 +336,13 @@ pub fn set_radio_checked(doc: &mut Document, clicked: NodeId) {
         for id in group {
             if id != clicked && doc.control_checked(id) {
                 doc.set_control_checked(id, false);
+                changed.push(id);
             }
         }
     }
     doc.set_control_checked(clicked, true);
+    changed.push(clicked);
+    changed
 }
 
 /// Собрать все `<input type=radio>` внутри `scope` (включая сам `scope`) с

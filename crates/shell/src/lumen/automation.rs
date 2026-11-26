@@ -124,26 +124,41 @@ impl Lumen {
         ) -> Option<String> {
             let node = resolved.node?;
             let hit = self.pointer_target(resolved.x, resolved.y).page;
-            let doc = self
-                .layout_source
-                .as_ref()
-                .and_then(|s| s.document.lock().ok());
-            match hit {
-                Some(hit) if hit_belongs_to_target(&hit, node, doc.as_deref()) => None,
-                Some(hit) => Some(format!(
+            let intercepted = match hit {
+                None => {
+                    return Some(format!(
+                        "Element click intercepted: point ({:.0}, {:.0}) hits no element at all, not the target (node {})",
+                        resolved.x,
+                        resolved.y,
+                        node.index(),
+                    ));
+                }
+                Some(hit) => {
+                    // The document guard is scoped to this block on purpose:
+                    // `automation_node_label` below takes the same (non-reentrant)
+                    // lock, and a guard kept alive across the `format!` deadlocked
+                    // the `lumen-browser` thread — the only one that drains
+                    // automation commands — on every intercepted click.
+                    let doc = self
+                        .layout_source
+                        .as_ref()
+                        .and_then(|s| s.document.lock().ok());
+                    if hit_belongs_to_target(&hit, node, doc.as_deref()) {
+                        None
+                    } else {
+                        Some(hit.source_node)
+                    }
+                }
+            };
+            intercepted.map(|hit_node| {
+                format!(
                     "Element click intercepted: point ({:.0}, {:.0}) hits {} instead of the target element (node {})",
                     resolved.x,
                     resolved.y,
-                    self.automation_node_label(hit.source_node),
+                    self.automation_node_label(hit_node),
                     node.index(),
-                )),
-                None => Some(format!(
-                    "Element click intercepted: point ({:.0}, {:.0}) hits no element at all, not the target (node {})",
-                    resolved.x,
-                    resolved.y,
-                    node.index(),
-                )),
-            }
+                )
+            })
         }
 
         /// `<tag id>`-style label of a page node for automation diagnostics;

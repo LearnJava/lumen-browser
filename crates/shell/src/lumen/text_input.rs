@@ -521,6 +521,11 @@ impl Lumen {
                 TypeableField::Textarea => forms::set_textarea_text(&mut doc, nid, next),
             }
         }
+        // The write above went straight into the document, and the JS echo below
+        // finds the value already in place and records nothing — so the DOM-touch
+        // tracker is told here, before the relayout is queued: a job on the
+        // incremental restyle road rebuilds only the boxes the tracker names.
+        self.note_shell_control_write(nid);
         // Runtime value overlay used by form submission and constraint
         // validation (`forms::collect_form_entries`) — kept in step with the DOM
         // exactly like the spellcheck-replace path does.
@@ -532,6 +537,22 @@ impl Lumen {
             format!("_lumen_set_field_value({}, '{}')", nid.index(), escape_js_string(next)),
         );
         self.relayout_form();
+    }
+
+    /// Report a form-control write the shell made in the document itself to the page's
+    /// DOM-touch tracker. Such a write goes through no JS primitive, and the JS echo
+    /// that follows it finds the new state already in place and records nothing — so
+    /// an off-thread relayout whose basis predates the write was never told which box
+    /// to rebuild and kept the control's old text. Same channel as
+    /// [`Self::note_shell_attr_writes`], for state that is not an attribute.
+    pub(crate) fn note_shell_control_write(&self, nid: lumen_dom::NodeId) {
+        if let Some(touch) = self
+            .dom_touched_ack_reader
+            .as_ref()
+            .and_then(|reader| reader.touch.as_ref())
+        {
+            touch(nid);
+        }
     }
 
     /// Ctrl+Z / Ctrl+Y in the focused page `<input>` / `<textarea>` (UX-UNDO).

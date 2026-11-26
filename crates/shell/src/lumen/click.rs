@@ -550,6 +550,9 @@ impl Lumen {
             if let Some(src) = self.layout_source.as_mut() {
                 forms::set_value(&mut src.document.lock().unwrap(), pn, &css_color);
             }
+            // Shell-side control write: the DOM-touch tracker hears of it here, not
+            // from the JS echo — see `Lumen::write_field_value`.
+            self.note_shell_control_write(pn);
             self.form_state.entry(pn).or_default().value = css_color;
             // ADR-016 M2.2c-3: value already in the document; no post-read → off-thread.
             self.relayout_form();
@@ -612,6 +615,7 @@ impl Lumen {
                     if let Some(src) = self.layout_source.as_mut() {
                         forms::set_value(&mut src.document.lock().unwrap(), dn, &date_str);
                     }
+                    self.note_shell_control_write(dn);
                     self.form_state.entry(dn).or_default().value = date_str;
                     // ADR-016 M2.2c-3: async-safe form mutation — see color picker.
                     self.relayout_form();
@@ -1235,6 +1239,7 @@ impl Lumen {
                 if let Some(src) = self.layout_source.as_mut() {
                     forms::toggle_checkbox(&mut src.document.lock().unwrap(), id);
                 }
+                self.note_shell_control_write(id);
                 // ADR-016 M2.2c-3: the `checked` flip is already in the shared
                 // document; no geometry is read after → route the reflow off-thread.
                 self.relayout_form();
@@ -1243,8 +1248,14 @@ impl Lumen {
                 clicked,
                 _group_name: _,
             } => {
+                let mut changed = Vec::new();
                 if let Some(src) = self.layout_source.as_mut() {
-                    forms::toggle_radio(&mut src.document.lock().unwrap(), clicked);
+                    changed = forms::toggle_radio(&mut src.document.lock().unwrap(), clicked);
+                }
+                // The click's own `:active` root covers only `clicked`; the group
+                // members it cleared reach the tracker through this note.
+                for id in changed {
+                    self.note_shell_control_write(id);
                 }
                 // ADR-016 M2.2c-3: async-safe form mutation — see ToggleCheckbox.
                 self.relayout_form();
