@@ -58,3 +58,8 @@ body `overflow-y:scroll` + контент 5000px — скролл не долж�
 
 - `perf_audit.LiveBrowser` + MCP `eval`/`resources/read` (`resource://screenshot` → PNG bytes → sha1 + попиксельный анализ zlib).
 - Пиксельный анализ: shot@0 = 55 цветов, shot@1200 = **1 цвет** `#f0f0f0`.
+- **Ретест 2026-11-26** на dev-release после merge `bug-1848-scroll`
+  (BUG-1850-FIXED, portal scroll + `display_list_metrics`): хэш
+  `27a3b23cc88e`/8322 байта — **воспроизводится**, фикс portal-кейса
+  этот дефект не закрыл (другой механизм: там wheel+range, тут
+  scrollTo+пустой кадр).
