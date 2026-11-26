@@ -129,6 +129,16 @@ pub(super) fn from_v8_bounded<'s>(
     }
     if val.is_object() {
         let obj: v8::Local<v8::Object> = val.try_into().unwrap();
+        // Frame facades (`frame_bridge.rs` `frameElem`/`docFacade`/
+        // `winFacade`) carry an own `__bid__`; walking their accessor props
+        // fires `_lumen_f_*` natives and recurses into the whole peer DOM —
+        // one facade never finishes serializing (WPT execution-timing
+        // 072–074 livelock). They cannot cross an isolate anyway: emit a
+        // compact marker that `peer_global_call_body`/`peer_global_set_body`
+        // rehydrate into a real node of the callee's own document.
+        if let Some(marker) = crate::v8_compat::frame_facade_marker(scope, obj) {
+            return Ok(marker);
+        }
         let hash = obj.get_identity_hash();
         if ancestors.len() >= FROM_V8_MAX_DEPTH {
             return Ok(JsValue::String("[Max Depth Exceeded]".into()));

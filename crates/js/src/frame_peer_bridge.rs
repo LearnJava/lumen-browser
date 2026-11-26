@@ -61,7 +61,27 @@ pub trait FramePeerBridge: Send + Sync {
     /// ретраящий на отказе, зависал вместе с читателем. Поэтому занятый пир
     /// деградирует до «нет пира» (`resolve_peer` отдаёт `nopeer`), и читатель
     /// видит прежнее поведение. FRAME-остаток (initial about:blank eval).
+    ///
+    /// Пир, заблокированный в собственном peer-ожидании (`run_peer`/
+    /// `recv_peer`), отвечает `false`: его поток реентерабельно обслуживает
+    /// `RunPeer`-команды из pump'а, поэтому вызов в него исполнится ВНУТРИ
+    /// текущей задачи, а не встанет за ней (WPT execution-timing 070-075).
     fn peer_busy(&self) -> bool;
+    /// Пир прямо сейчас ждёт чужой peer-вызов и способен обслужить
+    /// `RunPeer`-команду реентерабельно. Страж ревхода [`enter_call`] по этому
+    /// флагу пропускает обратное ребро: A→B при ждущем B и B→A (обслуженное
+    /// pump'ом A) — не цикл взаимного ожидания, а вложенный вызов, который
+    /// разрешится сам.
+    fn peer_reentrant_ready(&self) -> bool {
+        false
+    }
+    /// `globalThis[name] = value` в контексте пира (dotted-путь поддерживается
+    /// так же, как у get/call). Default — «не поддерживается»: реализации без
+    /// записи отвечают конвертом `error`, шим тогда пишет в свой фасад.
+    fn peer_global_set(&self, name: &str, value: JsValue) -> JsValue {
+        let _ = (name, value);
+        envelope_error("peer_global_set unsupported")
+    }
 }
 
 /// `{"kind": tag}` with no other fields.
@@ -111,13 +131,16 @@ impl Drop for CallGuard {
 
 /// Open the `from -> to` edge, refusing (instead of blocking forever) if the
 /// reverse edge `to -> from` is already open — the direct A-calls-B-calls-A
-/// reentrancy cycle. `from == to` (a frame calling into itself through its
-/// own facade) is allowed: it is a single thread re-entering its own
+/// reentrancy cycle. `allow_reverse` снимает отказ, когда ЦЕЛЬ (`to`) живая
+/// и находится в peer-ожидании (`FramePeerBridge::peer_reentrant_ready`): её
+/// поток исполнит этот вызов реентерабельно внутри pump'а, поэтому цикл
+/// ожидания не образуется. `from == to` (a frame calling into itself through
+/// its own facade) is allowed: it is a single thread re-entering its own
 /// `run()`, which is an existing hazard of that channel on its own (not
 /// something this guard can fix), not a new one this guard needs to police.
-pub(crate) fn enter_call(from: usize, to: usize) -> Result<CallGuard, JsValue> {
+pub(crate) fn enter_call(from: usize, to: usize, allow_reverse: bool) -> Result<CallGuard, JsValue> {
     let mut edges = in_flight_edges().lock().unwrap_or_else(|e| e.into_inner());
-    if edges.contains(&(to, from)) {
+    if edges.contains(&(to, from)) && !allow_reverse {
         return Err(envelope_error(
             "cross-frame call refused: would deadlock (reentrant call cycle)",
         ));

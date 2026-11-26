@@ -655,96 +655,388 @@ fn names_pristine_intrinsic<'s>(
         .is_some_and(|snapshot| snapshot.strict_equals(val))
 }
 
-impl FramePeerBridge for V8JsRuntime {
-    fn peer_busy(&self) -> bool {
-        self.stall.is_busy()
-    }
+/// Тело `peer_global_get` без диспетчеризации — исполняется на JS-потоке пира
+/// внутри `with_tc!`. Общее для [`V8JsRuntime`] и лёгкого [`V8PeerHandle`]:
+/// тело не зависит от того, чьим `cmd_tx` задача доехала.
+///
+/// `name` может быть dotted-путём (`testlib.addScript`): фасад объектного
+/// глобала пира (`frame_bridge.rs` `peerObjectFacade`) читает методы
+/// вложенных объектов именно так — сериализованная копия объекта методов не
+/// несёт (функции через границу изолятов не ходят), а плоский `globalThis[name]`
+/// до вложенного свойства не достаёт.
+#[cfg(feature = "v8-backend")]
+fn peer_global_get_body(inner: &mut V8Inner, name: &str) -> JsValue {
+    with_tc!(inner, |tc, ctx| {
+        let mut holder = ctx.global(tc);
+        let mut parts = name.split('.').peekable();
+        while let Some(part) = parts.next() {
+            let last = parts.peek().is_none();
+            let Some(key) = v8::String::new(tc, part) else {
+                return envelope_error("OOM: property name");
+            };
+            let val = holder.get(tc, key.into());
+            if tc.has_caught() {
+                tc.reset();
+                return envelope_tag("absent");
+            }
+            let Some(val) = val else {
+                return envelope_tag("absent");
+            };
+            if val.is_undefined() {
+                return envelope_tag("absent");
+            }
+            if !last {
+                let Ok(next) = v8::Local::<v8::Object>::try_from(val) else {
+                    return envelope_tag("absent");
+                };
+                holder = next;
+                continue;
+            }
+            // BUG-1815: встроенный объект realm'а пира отдаётся не копией,
+            // а тегом — читатель подставит свой одноимённый встроенный.
+            if val.is_object()
+                && !val.is_function()
+                && names_pristine_intrinsic(tc, ctx, part, val)
+            {
+                return envelope_tag("builtin");
+            }
+            if val.is_function() {
+                return envelope_tag("function");
+            }
+            return match from_v8(tc, val) {
+                Ok(v) => envelope_value(v),
+                Err(e) => envelope_error(e.to_string()),
+            };
+        }
+        envelope_tag("absent")
+    })
+}
 
-    fn peer_global_get(&self, name: &str) -> JsValue {
-        let name = name.to_owned();
-        self.run(move |inner| {
-            with_tc!(inner, |tc, ctx| {
-                let Some(key) = v8::String::new(tc, &name) else {
-                    return envelope_error("OOM: property name");
-                };
-                let global = ctx.global(tc);
-                let val = global.get(tc, key.into());
-                if tc.has_caught() {
-                    tc.reset();
-                    return envelope_tag("absent");
-                }
-                let Some(val) = val else {
-                    return envelope_tag("absent");
-                };
-                if val.is_undefined() {
-                    return envelope_tag("absent");
-                }
-                // BUG-1815: встроенный объект realm'а пира отдаётся не копией,
-                // а тегом — читатель подставит свой одноимённый встроенный.
-                if val.is_object()
-                    && !val.is_function()
-                    && names_pristine_intrinsic(tc, ctx, &name, val)
-                {
-                    return envelope_tag("builtin");
-                }
-                if val.is_function() {
-                    return envelope_tag("function");
-                }
-                match from_v8(tc, val) {
-                    Ok(v) => envelope_value(v),
-                    Err(e) => envelope_error(e.to_string()),
-                }
-            })
-        })
+/// Маркер фасада кадра (`__lumen_frame_facade` + `__nid__`, см.
+/// `frame_facade_marker` в `value.rs`), приехавший аргументом
+/// `peer_global_call`/`peer_global_set`. `__nid__` индексирует арену
+/// ДОКУМЕНТА пира (фасад `top.document.body` нёс nid тела документа
+/// адресата), поэтому честная регидратация — `_lumen_make_node` в этом
+/// контексте: она оборачивает nid в узел собственного документа. Для
+/// фасада чужого документа (не адресата вызова) это неточно — редкий
+/// случай, принятый как есть.
+#[cfg(feature = "v8-backend")]
+fn rehydrate_frame_marker<'s>(
+    tc: &v8::PinScope<'s, '_>,
+    ctx: v8::Local<'s, v8::Context>,
+    val: v8::Local<'s, v8::Value>,
+) -> Result<v8::Local<'s, v8::Value>, ()> {
+    fn marker_nid<'s>(
+        tc: &v8::PinScope<'s, '_>,
+        val: v8::Local<'s, v8::Value>,
+    ) -> Option<f64> {
+        let obj = v8::Local::<v8::Object>::try_from(val).ok()?;
+        let flag = v8::String::new(tc, "__lumen_frame_facade")?;
+        let fv = obj.get(tc, flag.into())?;
+        if !fv.is_boolean() || !fv.boolean_value(tc) {
+            return None;
+        }
+        let nk = v8::String::new(tc, "__nid__")?;
+        let nv = obj.get(tc, nk.into())?;
+        if nv.is_number() {
+            nv.number_value(tc)
+        } else {
+            None
+        }
     }
-
-    fn peer_global_call(&self, name: &str, args: &[JsValue]) -> JsValue {
-        let name = name.to_owned();
-        let args = args.to_vec();
-        self.run(move |inner| {
-            with_tc!(inner, |tc, ctx| {
-                let Some(key) = v8::String::new(tc, &name) else {
-                    return envelope_error("OOM: property name");
-                };
-                let global = ctx.global(tc);
-                let func_val = global.get(tc, key.into());
-                if tc.has_caught() {
-                    tc.reset();
-                    return envelope_error(format!("reading '{name}' threw"));
+    if let Some(nid) = marker_nid(tc, val) {
+        // `_lumen_make_node` — локальная функция IIFE-шима, на globalThis её
+        // нет; внутренние имена живут акцессорами на контейнере `__lumen_C`
+        // (internal_globals.rs, BUG-753). Fallback на global — для
+        // минимальных контекстов без контейнера.
+        let holder = crate::internal_globals::container(tc, ctx)
+            .unwrap_or_else(|| ctx.global(tc));
+        let Some(mk) = v8::String::new(tc, "_lumen_make_node") else {
+            return Ok(val);
+        };
+        let Some(mv) = holder.get(tc, mk.into()) else {
+            return Ok(val);
+        };
+        let Ok(f) = v8::Local::<v8::Function>::try_from(mv) else {
+            return Ok(val);
+        };
+        let arg = v8::Number::new(tc, nid);
+        // `Local` — Copy: при броске `_lumen_make_node` зовущий сбросит
+        // TryCatch и подставит немаркированное `val`.
+        return f
+            .call(tc, v8::undefined(tc).into(), &[arg.into()])
+            .ok_or(());
+    }
+    // Маркеры могут лежать и внутри массива-аргумента — свежие контейнеры
+    // `to_v8` можно править на месте.
+    if let Ok(arr) = v8::Local::<v8::Array>::try_from(val) {
+        for i in 0..arr.length() {
+            if let Some(item) = arr.get_index(tc, i)
+                && item.is_object()
+            {
+                let r = rehydrate_frame_marker(tc, ctx, item)?;
+                if !r.strict_equals(item) {
+                    arr.set_index(tc, i, r);
                 }
-                let Some(func_val) = func_val else {
-                    return envelope_error(format!("'{name}' not found in globals"));
-                };
-                let Ok(func) = v8::Local::<v8::Function>::try_from(func_val) else {
-                    return envelope_error(format!("'{name}' is not a function"));
-                };
-                let mut v8_args: Vec<v8::Local<v8::Value>> = Vec::with_capacity(args.len());
-                for a in args.iter().cloned() {
-                    match to_v8(tc, a) {
-                        Ok(v) => v8_args.push(v),
-                        Err(e) => return envelope_error(e.to_string()),
+            }
+        }
+    }
+    Ok(val)
+}
+
+/// Тело `peer_global_call` — см. [`peer_global_get_body`]. Dotted-путь
+/// (`testlib.addScript`) резолвится до функции, а `this` вызова — объект-
+/// держатель последнего сегмента (как у обычного `obj.method()`); у
+/// плоского имени receiver остаётся `undefined`, как раньше.
+#[cfg(feature = "v8-backend")]
+fn peer_global_call_body(inner: &mut V8Inner, name: &str, args: &[JsValue]) -> JsValue {
+    with_tc!(inner, |tc, ctx| {
+        let dotted = name.contains('.');
+        let mut holder = ctx.global(tc);
+        let mut parts = name.split('.').peekable();
+        let mut func_val = None;
+        while let Some(part) = parts.next() {
+            let last = parts.peek().is_none();
+            let Some(key) = v8::String::new(tc, part) else {
+                return envelope_error("OOM: property name");
+            };
+            let val = holder.get(tc, key.into());
+            if tc.has_caught() {
+                tc.reset();
+                return envelope_error(format!("reading '{name}' threw"));
+            }
+            let Some(val) = val else {
+                return envelope_error(format!("'{name}' not found in globals"));
+            };
+            if last {
+                func_val = Some(val);
+                break;
+            }
+            let Ok(next) = v8::Local::<v8::Object>::try_from(val) else {
+                return envelope_error(format!("'{name}' path is not an object"));
+            };
+            holder = next;
+        }
+        let Some(func_val) = func_val else {
+            return envelope_error(format!("'{name}' not found in globals"));
+        };
+        let Ok(func) = v8::Local::<v8::Function>::try_from(func_val) else {
+            return envelope_error(format!("'{name}' is not a function"));
+        };
+        let recv: v8::Local<v8::Value> = if dotted {
+            holder.into()
+        } else {
+            v8::undefined(tc).into()
+        };
+        let mut v8_args: Vec<v8::Local<v8::Value>> = Vec::with_capacity(args.len());
+        for a in args.iter().cloned() {
+            match to_v8(tc, a) {
+                Ok(v) => match rehydrate_frame_marker(tc, ctx, v) {
+                    Ok(v) => v8_args.push(v),
+                    Err(()) => {
+                        tc.reset();
+                        v8_args.push(v);
                     }
+                },
+                Err(e) => return envelope_error(e.to_string()),
+            }
+        }
+        let _call_prof = lumen_core::profile::scope("js.call");
+        let result = func.call(tc, recv, &v8_args);
+        drop(_call_prof);
+        if tc.has_caught() {
+            let msg = tc
+                .exception()
+                .and_then(|exc| exc.to_string(tc))
+                .map(|s| s.to_rust_string_lossy(tc))
+                .unwrap_or_else(|| "cross-frame call threw".to_owned());
+            return envelope_error(msg);
+        }
+        match result {
+            Some(val) => match from_v8(tc, val) {
+                Ok(v) => envelope_value(v),
+                Err(e) => envelope_error(e.to_string()),
+            },
+            None => envelope_value(JsValue::Null),
+        }
+    })
+}
+
+/// Тело `peer_global_set` — та же dotted-развёртка, что у get/call: путь
+/// ведёт к объекту-держателю, значение пишется в его последнее свойство
+/// (`top.include6Loaded = true` из скрипта document.write-кадра,
+/// WPT execution-timing 070/071).
+#[cfg(feature = "v8-backend")]
+fn peer_global_set_body(inner: &mut V8Inner, name: &str, value: JsValue) -> JsValue {
+    with_tc!(inner, |tc, ctx| {
+        let mut holder = ctx.global(tc);
+        let mut parts = name.split('.').peekable();
+        while let Some(part) = parts.next() {
+            let last = parts.peek().is_none();
+            let Some(key) = v8::String::new(tc, part) else {
+                return envelope_error("OOM: property name");
+            };
+            if last {
+                let v = match to_v8(tc, value) {
+                    Ok(v) => match rehydrate_frame_marker(tc, ctx, v) {
+                        Ok(v) => v,
+                        Err(()) => {
+                            tc.reset();
+                            v
+                        }
+                    },
+                    Err(e) => return envelope_error(e.to_string()),
+                };
+                if holder.set(tc, key.into(), v).is_none() {
+                    return envelope_error(format!("setting '{name}' failed"));
                 }
-                let recv = v8::undefined(tc).into();
-                let _call_prof = lumen_core::profile::scope("js.call");
-                let result = func.call(tc, recv, &v8_args);
-                drop(_call_prof);
                 if tc.has_caught() {
                     let msg = tc
                         .exception()
                         .and_then(|exc| exc.to_string(tc))
                         .map(|s| s.to_rust_string_lossy(tc))
-                        .unwrap_or_else(|| "cross-frame call threw".to_owned());
+                        .unwrap_or_else(|| "cross-frame set threw".to_owned());
+                    tc.reset();
                     return envelope_error(msg);
                 }
-                match result {
-                    Some(val) => match from_v8(tc, val) {
-                        Ok(v) => envelope_value(v),
-                        Err(e) => envelope_error(e.to_string()),
-                    },
-                    None => envelope_value(JsValue::Null),
-                }
-            })
-        })
+                return envelope_value(JsValue::Bool(true));
+            }
+            let val = holder.get(tc, key.into());
+            if tc.has_caught() {
+                tc.reset();
+                return envelope_error(format!("reading '{name}' threw"));
+            }
+            let val = match val {
+                Some(v) => v,
+                None => return envelope_error(format!("'{name}' not found in globals")),
+            };
+            let Ok(next) = v8::Local::<v8::Object>::try_from(val) else {
+                return envelope_error(format!("'{name}' path is not an object"));
+            };
+            holder = next;
+        }
+        envelope_error(format!("'{name}' not found in globals"))
+    })
+}
+
+impl FramePeerBridge for V8JsRuntime {
+    fn peer_busy(&self) -> bool {
+        // Занят И не в peer-ожидании: поток, заблокированный в `run_peer`,
+        // pump'ит свои `RunPeer`-команды реентерабельно (`thread::recv_peer`),
+        // поэтому «занят» для него — это «исполни и ответь сейчас», а не
+        // «подожди неведомо сколько».
+        self.stall.is_busy() && self.serving.load(Ordering::Relaxed) == 0
+    }
+
+    /// Пир в данный момент ждёт чужой вызов и потому способен обслужить
+    /// `RunPeer`-команду реентерабельно — стражу ревхода можно пустить
+    /// обратное ребро (см. `frame_peer_bridge::enter_call`).
+    fn peer_reentrant_ready(&self) -> bool {
+        self.serving.load(Ordering::Relaxed) > 0
+    }
+
+    fn peer_global_get(&self, name: &str) -> JsValue {
+        let name = name.to_owned();
+        self.run_peer(move |inner| peer_global_get_body(inner, &name))
+    }
+
+    fn peer_global_call(&self, name: &str, args: &[JsValue]) -> JsValue {
+        let name = name.to_owned();
+        let args = args.to_vec();
+        self.run_peer(move |inner| peer_global_call_body(inner, &name, &args))
+    }
+
+    fn peer_global_set(&self, name: &str, value: JsValue) -> JsValue {
+        let name = name.to_owned();
+        self.run_peer(move |inner| peer_global_set_body(inner, &name, value))
+    }
+}
+
+/// Лёгкий [`FramePeerBridge`] без `Arc<V8JsRuntime>`: канал команд клонируется
+/// из рантайма при создании. Нужен начальному about:blank-кадру
+/// (`frame_bridge::ensure_initial_frame_runtime`): его `register_parent_document`
+/// получает peer ЧИТАТЕЛЯ, а `Arc` читателя в js-крейте недоступен — handle
+/// собирается из его же `cmd_tx`.
+///
+/// Два отличия от [`V8JsRuntime`]-пира:
+/// - `peer_busy` всегда `false`: вызов НЕ отказывается на занятом пире, а
+///   встаёт в его очередь команд за текущей задачей. Страж ревхода
+///   (`frame_peer_bridge::enter_call`) держит ребро читатель→пир всё время
+///   блокировки, поэтому задача пира не может ответить вызовом в читателя —
+///   взаимного ожидания нет, а «пир занят» здесь означает лишь «подожди».
+///   Для начального кадра это семантика спекового same-origin вызова
+///   (`top.log` из `document.write`-скрипта, WPT execution-timing 070-075).
+/// - отправка не паникует при смерти потока пира: `try_run` возвращает
+///   `None`, и методы отдают конверт `error`.
+#[cfg(feature = "v8-backend")]
+pub struct V8PeerHandle {
+    pub(crate) cmd_tx: SyncSender<V8Command>,
+    /// Счётчик peer-ожиданий рантайма-владельца канала — для
+    /// `peer_reentrant_ready` (обратное ребро стража ревхода).
+    pub(crate) serving: Arc<AtomicUsize>,
+}
+
+#[cfg(feature = "v8-backend")]
+impl V8PeerHandle {
+    /// `Option`-вариант диспетчера `V8JsRuntime::run`: `None` — поток пира
+    /// мёртв или задача не доехала.
+    fn try_run<R, F>(&self, f: F) -> Option<R>
+    where
+        F: FnOnce(&mut V8Inner) -> R + Send,
+        R: Send,
+    {
+        let (tx, rx) = std::sync::mpsc::channel::<R>();
+        let job: Box<dyn FnOnce(&mut V8Inner) + Send + '_> = Box::new(move |inner| {
+            let _ = tx.send(f(inner));
+        });
+        // Тот же приём, что в `V8JsRuntime::run`: блокируемся на `rx.recv()`,
+        // поэтому заимствования вызывающего живы до конца задачи.
+        // SAFETY: `rx.recv()` ниже держит вызывающего до завершения job,
+        // поэтому любые заимствования в `f` не переживают отправку.
+        let job: Box<dyn FnOnce(&mut V8Inner) + Send + 'static> = unsafe {
+            std::mem::transmute::<
+                Box<dyn FnOnce(&mut V8Inner) + Send + '_>,
+                Box<dyn FnOnce(&mut V8Inner) + Send + 'static>,
+            >(job)
+        };
+        // `RunPeer` + `recv_peer`: вызов peer'а — тот же реентерабельный
+        // канал, что у `V8JsRuntime::run_peer`; на JS-потоке вызывающего
+        // ожидание попутно обслуживает его собственные `RunPeer`-команды.
+        self.cmd_tx.send(V8Command::RunPeer(job)).ok()?;
+        super::thread::recv_peer(&rx)
+    }
+}
+
+#[cfg(feature = "v8-backend")]
+impl FramePeerBridge for V8PeerHandle {
+    /// См. документацию типа: занятый пир — это отложенный ответ, а не отказ.
+    fn peer_busy(&self) -> bool {
+        false
+    }
+
+    /// Рантайм-владелец канала ждёт чужой вызов и pump'ит свои `RunPeer` —
+    /// обратное ребро стража ревхода здесь так же безопасно, как у
+    /// [`V8JsRuntime`]-пира.
+    fn peer_reentrant_ready(&self) -> bool {
+        self.serving.load(Ordering::Relaxed) > 0
+    }
+
+    fn peer_global_get(&self, name: &str) -> JsValue {
+        let name = name.to_owned();
+        self.try_run(move |inner| peer_global_get_body(inner, &name))
+            .unwrap_or_else(|| envelope_error("peer runtime is gone"))
+    }
+
+    fn peer_global_call(&self, name: &str, args: &[JsValue]) -> JsValue {
+        let name = name.to_owned();
+        let args = args.to_vec();
+        self.try_run(move |inner| peer_global_call_body(inner, &name, &args))
+            .unwrap_or_else(|| envelope_error("peer runtime is gone"))
+    }
+
+    fn peer_global_set(&self, name: &str, value: JsValue) -> JsValue {
+        let name = name.to_owned();
+        self.try_run(move |inner| peer_global_set_body(inner, &name, value))
+            .unwrap_or_else(|| envelope_error("peer runtime is gone"))
     }
 }

@@ -35,6 +35,11 @@ pub struct V8JsRuntime {
     pub(super) js_thread: Option<JoinHandle<()>>,
     /// COMPAT-HANG: учёт долгих задач этого рантайма (читает оболочка).
     pub(super) stall: lumen_core::script_stall::StallHandle,
+    /// Число активных peer-ожиданий (`run_peer`) на JS-потоке этого рантайма.
+    /// Пока >0, поток заблокирован в чужом вызове, но pump в `recv_peer`
+    /// обслуживает его `RunPeer`-команды реентерабельно — `peer_busy()`
+    /// поэтому отвечает `false`: отказ был бы ложным «пир занят».
+    pub(super) serving: Arc<AtomicUsize>,
     /// Navigation request written by JS via `location.href=`, `location.assign()` etc.
     /// Captured inside `install_dom`; read by [`Self::take_navigate_request`].
     pub(super) nav_out: Arc<Mutex<Option<crate::dom::NavigateRequest>>>,
@@ -536,6 +541,8 @@ impl V8JsRuntime {
         let (init_tx, init_rx) = std::sync::mpsc::channel::<Result<(), JsError>>();
         let stall = lumen_core::script_stall::StallHandle::new();
         let thread_stall = stall.clone();
+        let serving = Arc::new(AtomicUsize::new(0));
+        let thread_serving = Arc::clone(&serving);
         let js_thread = std::thread::Builder::new()
             .name("lumen-v8".to_string())
             // BUG-1027: на этом потоке живут обходы, рекурсивные по глубине
@@ -544,7 +551,9 @@ impl V8JsRuntime {
             // На штатных 2 МиБ поток умирал вместе со всем процессом, снаружи
             // это выглядело как обрыв BiDi-сокета посреди прогона WPT.
             .stack_size(lumen_core::DEEP_TREE_STACK_BYTES)
-            .spawn(move || v8_thread_main(cmd_rx, init_tx, thread_stall))
+            .spawn(move || {
+                v8_thread_main(cmd_rx, init_tx, thread_stall, thread_serving)
+            })
             .map_err(|e| JsError::Runtime(format!("spawn V8 thread: {e}")))?;
         match init_rx.recv() {
             Ok(Ok(())) => {}
@@ -555,6 +564,7 @@ impl V8JsRuntime {
             cmd_tx,
             js_thread: Some(js_thread),
             stall,
+            serving,
             nav_out: Arc::new(Mutex::new(None)),
             timer_wakeup: Arc::new(Mutex::new(None)),
             dom_dirty: Arc::new(AtomicBool::new(false)),
@@ -1114,6 +1124,18 @@ impl V8JsRuntime {
     #[must_use]
     pub fn stall_handle(&self) -> lumen_core::script_stall::StallHandle {
         self.stall.clone()
+    }
+
+    /// Пир-хэндл этого рантайма для `FramePeerBridge` без `Arc<Self>` —
+    /// `frame_bridge::ensure_initial_frame_runtime` регистрирует его как
+    /// peer читателя в слоте `parent` начального about:blank-кадра (тот
+    /// `Arc`, что хранит shell в `PersistentJs`, до js-крейта не доходит).
+    #[cfg(feature = "v8-backend")]
+    pub(crate) fn frame_peer_handle(&self) -> Arc<dyn crate::frame_peer_bridge::FramePeerBridge> {
+        Arc::new(super::eval::V8PeerHandle {
+            cmd_tx: self.cmd_tx.clone(),
+            serving: Arc::clone(&self.serving),
+        })
     }
 
     /// ADR-016 M2.3: shared, lock-free handle to the rAF-pending flag.
@@ -2313,6 +2335,43 @@ impl V8JsRuntime {
             panic!("lumen-v8 thread terminated unexpectedly");
         }
         rx.recv().expect("lumen-v8 thread dropped without replying")
+    }
+
+    /// [`Self::run`] для синхронных кросс-изолятных peer-вызовов
+    /// (`FramePeerBridge::peer_global_*`): задача идёт как `RunPeer`, а
+    /// ожидание — через [`super::thread::recv_peer`], который на JS-потоке
+    /// вызывает реентерабельный помп (`RunPeer`-команды ЭТОГО рантайма
+    /// исполняются вложенно, пока чужой вызов ждёт ответа). Это и есть
+    /// недостающее звено синхронного `document.write` в под-документ фрейма:
+    /// `top.log` записанного скрипта доезжает до родителя внутри его
+    /// заблокированного `doc.write()` (WPT execution-timing 070-075).
+    ///
+    /// Тот же контракт заимствований, что у [`Self::run`]: вызывающий
+    /// блокируется до исполнения, поэтому `f` может держать ссылки на его
+    /// стек.
+    #[allow(clippy::expect_used)] // унаследовано, docs/lint-policy.md §10
+    pub(super) fn run_peer<R, F>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut V8Inner) -> R + Send,
+        R: Send,
+    {
+        let (tx, rx) = std::sync::mpsc::channel::<R>();
+        let job: Box<dyn FnOnce(&mut V8Inner) + Send + '_> = Box::new(move |inner| {
+            let _ = tx.send(f(inner));
+        });
+        // SAFETY: идентично `run` — блокирующее ожидание держит заимствования
+        // `f` живыми до конца задачи на потоке пира.
+        let job: Box<dyn FnOnce(&mut V8Inner) + Send + 'static> = unsafe {
+            std::mem::transmute::<
+                Box<dyn FnOnce(&mut V8Inner) + Send + '_>,
+                Box<dyn FnOnce(&mut V8Inner) + Send + 'static>,
+            >(job)
+        };
+        #[allow(clippy::panic)]
+        if self.cmd_tx.send(V8Command::RunPeer(job)).is_err() {
+            panic!("lumen-v8 thread terminated unexpectedly");
+        }
+        super::thread::recv_peer(&rx).expect("lumen-v8 thread dropped without replying")
     }
 
     /// Register one already-wrapped native (built via [`crate::v8_compat::into_v8_fn0`]..`fn7`)

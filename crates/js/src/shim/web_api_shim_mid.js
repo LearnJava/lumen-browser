@@ -16084,6 +16084,9 @@ var document = {
         // Spec no-op: close() without a matching open() has no insertion point.
         if (!_doc_explicit_open) return;
         _doc_explicit_open = false;
+        // Парсер ещё ждёт блокирующие скрипты document.write — «the end»
+        // откладываем до их исполнения, иначе load-цепочка обгонит их.
+        if (_lumen_dw_outstanding > 0) { _lumen_dw_close_deferred = true; return; }
         _lumen_apply_ready_state('interactive');
         _lumen_apply_ready_state('complete');
     },
@@ -16959,11 +16962,37 @@ function _lumen_script_attr_changed(nid, attrName, isSet) {
 // One slot per running classic script (pushed with `document.currentScript`):
 // `null` until that script first writes, then its frame.
 var _lumen_dw_frames = [];
+// >0 пока `_lumen_dw_insert` вставляет узлы: post-connection steps для
+// <script> в это окно не готовят его — скриптами пишет управляет
+// `_lumen_dw_prepare` (in-order очередь frame.queue), иначе generic
+// post-connect успевает исполнить inline до внешнего предшественника
+// (WPT execution-timing 071).
+var _lumen_dw_suppress_script_post_connect = 0;
 // External `defer` scripts `write()` produced, run at the end of parsing.
 var _lumen_dw_deferred = [];
 // A parser-blocking written script holds the page on its fetch, so the wait
 // is bounded; past it the element reports `error`.
 var _LUMEN_DW_FETCH_TIMEOUT_MS = 20000;
+// Сколько dw-фреймов ещё занято (блокирующий скрипт ждёт fetch / очередь не
+// пуста / есть отложенные за ним узлы). Пока >0, document.close() не должен
+// доводить документ до 'complete' — парсер ещё не «дошёл до конца», и
+// load-цепочка iframe→parent не должна обгонять отложенные скрипты
+// (WPT execution-timing 071: родительский onload читал eventOrder раньше,
+// чем доезжал 'inline script #2').
+var _lumen_dw_outstanding = 0;
+var _lumen_dw_close_deferred = false;
+function _lumen_dw_sync(frame) {
+    var busy = frame.blocked || frame.queue.length > 0
+        || (frame.deferred_ids !== null && frame.deferred_ids.length > 0);
+    if (busy === frame.busy) return;
+    frame.busy = busy;
+    _lumen_dw_outstanding += busy ? 1 : -1;
+    if (_lumen_dw_outstanding === 0 && _lumen_dw_close_deferred) {
+        _lumen_dw_close_deferred = false;
+        _lumen_apply_ready_state('interactive');
+        _lumen_apply_ready_state('complete');
+    }
+}
 // What the «in head» insertion mode keeps in `<head>` (HTML LS §13.2.6.4.4).
 var _LUMEN_DW_HEAD_OK = {
     'base': 1, 'basefont': 1, 'bgsound': 1, 'link': 1, 'meta': 1, 'noscript': 1,
@@ -16973,7 +17002,7 @@ var _LUMEN_DW_HEAD_OK = {
 // Where the text written while `scriptNid` runs goes. `null` for no body and
 // no usable script (nothing can be written then).
 function _lumen_dw_new_frame(scriptNid) {
-    var frame = { parent: null, ref: null, inHead: false, pending: '', queue: [], blocked: false };
+    var frame = { parent: null, ref: null, inHead: false, pending: '', queue: [], blocked: false, deferred_ids: null, busy: false };
     if (scriptNid !== null && !_doc_explicit_open && _lumen_resource_is_connected(scriptNid)) {
         var pid = _lumen_u2n(_lumen_get_parent(scriptNid));
         if (pid !== null) {
@@ -17028,29 +17057,87 @@ function _lumen_dw_collect_scripts(node, out) {
     }
 }
 
+// HTML LS §4.12.1 step 31：будет ли этот script «pending
+// parsing-blocking» — внешний классический без async/defer. Зеркалит
+// ветку external в `_lumen_dw_prepare`.
+function _lumen_dw_is_blocker(nid) {
+    if (_lumen_script_started[nid] === 1) return false;
+    var type = _lumen_u2n(_lumen_get_attr(nid, 'type'));
+    var isModule = type !== null && String(type).trim().toLowerCase() === 'module';
+    var isClassic = !isModule && _lumen_is_classic_script_type(type);
+    if (!isClassic) return false;
+    if (_lumen_u2n(_lumen_get_attr(nid, 'nomodule')) !== null) return false;
+    var src = _lumen_u2n(_lumen_get_attr(nid, 'src'));
+    if (src === null || String(src).trim() === '') return false;
+    if (_lumen_u2n(_lumen_get_attr(nid, 'async')) !== null) return false;
+    if (_lumen_u2n(_lumen_get_attr(nid, 'defer')) !== null) return false;
+    return true;
+}
+
+// Index of the first top-level fragment node containing a parser-blocking
+// script, or -1. Всё, что идёт в документе после такого скрипта, парсер
+// прочитает только после его исполнения — поэтому хвост откладывается
+// (WPT execution-timing 071: внешний скрипт не должен видеть `<div id=foo>`,
+// записанный следом за ним).
+function _lumen_dw_blocker_index(ids) {
+    for (var i = 0; i < ids.length; i++) {
+        var node = _lumen_make_node(ids[i]);
+        if (!node) continue;
+        var scripts = [];
+        _lumen_dw_collect_scripts(node, scripts);
+        for (var j = 0; j < scripts.length; j++) {
+            if (_lumen_dw_is_blocker(scripts[j])) return i;
+        }
+    }
+    return -1;
+}
+
+// Вставка уже распарсенных узлов фрагмента + prepare их скриптов.
+function _lumen_dw_insert_ids(frame, ids) {
+    var scripts = [];
+    _lumen_dw_suppress_script_post_connect++;
+    try {
+        for (var i = 0; i < ids.length; i++) {
+            var node = _lumen_make_node(ids[i]);
+            if (!node) continue;
+            if (frame.inHead && !_lumen_dw_fits_head(node)) {
+                frame.inHead = false;
+                var body = document.body;
+                if (body) { frame.parent = body; frame.ref = body.firstChild; }
+            }
+            try { frame.parent.insertBefore(node, frame.ref); }
+            catch (e) {
+                // The reference node left the parent since the frame was made.
+                frame.ref = null;
+                try { frame.parent.appendChild(node); } catch (e2) { continue; }
+            }
+            _lumen_dw_collect_scripts(node, scripts);
+        }
+    } finally {
+        _lumen_dw_suppress_script_post_connect--;
+    }
+    for (var k = 0; k < scripts.length; k++) {
+        // Один сломанный script не должен хоронить очередь документа.
+        try { _lumen_dw_prepare(frame, scripts[k]); } catch (e) {}
+    }
+}
+
 // Parse `text` and put it at the frame's insertion point, then prepare the
 // scripts it brought, in document order.
 function _lumen_dw_insert(frame, text) {
     if (text === '') return;
-    var ids = _lumen_parse_html_fragment(text);
-    var scripts = [];
-    for (var i = 0; i < ids.length; i++) {
-        var node = _lumen_make_node(ids[i]);
-        if (!node) continue;
-        if (frame.inHead && !_lumen_dw_fits_head(node)) {
-            frame.inHead = false;
-            var body = document.body;
-            if (body) { frame.parent = body; frame.ref = body.firstChild; }
-        }
-        try { frame.parent.insertBefore(node, frame.ref); }
-        catch (e) {
-            // The reference node left the parent since the frame was made.
-            frame.ref = null;
-            try { frame.parent.appendChild(node); } catch (e2) { continue; }
-        }
-        _lumen_dw_collect_scripts(node, scripts);
+    // Парсер заблокирован ожидающим скриптом — токены пишутся в хвост
+    // входного потока и будут разобраны после его исполнения.
+    if (frame.blocked || (frame.deferred_ids !== null && frame.deferred_ids.length > 0)) {
+        frame.pending += text;
+        return;
     }
-    for (var k = 0; k < scripts.length; k++) _lumen_dw_prepare(frame, scripts[k]);
+    var ids = _lumen_parse_html_fragment(text);
+    var stop = _lumen_dw_blocker_index(ids);
+    if (stop === -1) { _lumen_dw_insert_ids(frame, ids); return; }
+    _lumen_dw_insert_ids(frame, ids.slice(0, stop + 1));
+    var tail = ids.slice(stop + 1);
+    if (tail.length > 0) frame.deferred_ids = tail;
 }
 
 // HTML LS §4.12.1 «prepare the script element» for a parser-inserted script
@@ -17159,18 +17246,76 @@ function _lumen_dw_run_external(job) {
 // The writing script has returned: parse what is still held back, then run
 // what waited on the blocking script, in order. A script run from here that
 // writes gets a frame of its own, right after itself.
+//
+// Внешний блокирующий скрипт НЕ ждут синхронно: спека отпускает write()
+// сразу — fetch идёт в фоне, а очередь frame.queue доезжает по мере
+// готовности (`_lumen_dw_drain` + `_lumen_dw_poll_external`). Иначе
+// 'calling document.close' родителя вставал бы после внешнего скрипта
+// (WPT execution-timing 071).
 function _lumen_dw_flush(frame) {
     if (frame.pending !== '') {
         var rest = frame.pending;
         frame.pending = '';
         _lumen_dw_insert(frame, rest);
     }
+    _lumen_dw_drain(frame);
+    _lumen_dw_sync(frame);
+}
+
+function _lumen_dw_drain(frame) {
     while (frame.queue.length > 0) {
-        var item = frame.queue.shift();
+        var item = frame.queue[0];
+        if (item.kind === 'external' && !item.done) {
+            if (item.handle && typeof _lumen_fetch_async_poll === 'function') {
+                _lumen_dw_poll_external(frame, item);
+                return;
+            }
+            // Нет асинхронного fetch (blob/error/минимальный контекст) —
+            // выполняем синхронно, как раньше.
+            frame.queue.shift();
+            _lumen_dw_run_external(item);
+            continue;
+        }
+        frame.queue.shift();
         if (item.kind === 'external') _lumen_dw_run_external(item);
         else _lumen_dw_prepare_now(item.nid);
     }
     frame.blocked = false;
+    _lumen_dw_resume(frame);
+    _lumen_dw_sync(frame);
+}
+
+// Очередь пуста — парсер больше не заблокирован: сначала вставляем узлы,
+// отложенные за блокирующим скриптом, затем разбираем накопленный хвост
+// входного потока. Если при этом встретился новый блокирующий скрипт,
+// `_lumen_dw_drain` уйдёт в poll и вернётся сюда по готовности.
+function _lumen_dw_resume(frame) {
+    if (frame.deferred_ids !== null && frame.deferred_ids.length > 0) {
+        var ids = frame.deferred_ids;
+        frame.deferred_ids = null;
+        _lumen_dw_insert_ids(frame, ids);
+    }
+    if (frame.pending !== '') {
+        var s = frame.pending;
+        frame.pending = '';
+        var cut = _lumen_dw_safe_cut(s);
+        frame.pending = s.slice(cut);
+        _lumen_dw_insert(frame, s.slice(0, cut));
+    }
+    if (frame.queue.length > 0) _lumen_dw_drain(frame);
+    _lumen_dw_sync(frame);
+}
+
+// Неблокирующий поллинг fetch'а внешнего скрипта: 0 — ещё летит, любой
+// другой статус — завершён (тело дочитает `_lumen_dw_run_external` через
+// уже мгновенный `_lumen_fetch_async_wait_text`).
+function _lumen_dw_poll_external(frame, item) {
+    setTimeout(function() {
+        var st = _lumen_fetch_async_poll(item.handle);
+        if (st === 0) { _lumen_dw_poll_external(frame, item); return; }
+        item.done = true;
+        _lumen_dw_drain(frame);
+    }, 0);
 }
 
 // «The end» step 5 for the `defer` scripts `write()` produced — after the
@@ -17204,6 +17349,12 @@ function _lumen_document_write(args, sink, newline) {
         implicit = true;
     }
     if (!frame) return;
+    // Парсер ждёт блокирующий скрипт: весь текст уходит в хвост
+    // входного потока — safe_cut откладываем до возобновления.
+    if (frame.blocked || (frame.deferred_ids !== null && frame.deferred_ids.length > 0)) {
+        frame.pending += text;
+        return;
+    }
     var s = frame.pending + text;
     var cut = _lumen_dw_safe_cut(s);
     frame.pending = s.slice(cut);
@@ -17952,6 +18103,7 @@ function _lumen_script_children_changed(parent) {
 // батча, как и для pending-скриптов (`_lumen_pending_script_exec`).
 function _lumen_script_post_connect(nid) {
     if (_lumen_script_started[nid] === 1) return;
+    if (_lumen_dw_suppress_script_post_connect > 0) return;
     if (_lumen_ce_reactions_stack.length > 0) {
         if (_lumen_pending_script_exec.indexOf(nid) < 0) {
             _lumen_pending_script_exec.push(nid);

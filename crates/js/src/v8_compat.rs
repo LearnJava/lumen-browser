@@ -976,6 +976,55 @@ fn define_hidden_global(
 /// `from_v8` (`v8_runtime.rs`), the sibling V8→`JsValue` converter used for
 /// `eval()` results, which already recursed into arrays/objects correctly —
 /// the two converters had diverged.
+/// Marker emitted for a frame facade (`frame_bridge.rs` `frameElem`/
+/// `docFacade`/`winFacade`) instead of the usual own-property walk, or
+/// `None` for an ordinary object. Detection reads property DESCRIPTORS,
+/// never values — the facades' accessor getters each fire `_lumen_f_*`
+/// natives and the walk recurses into the whole peer DOM without any
+/// cycle/budget guard here (`v8_to_jsvalue` is unbounded), so one facade
+/// never finishes serializing (WPT execution-timing 072–074 livelock).
+/// Facades cannot cross an isolate anyway: the marker keeps `__bid__`/
+/// `__nid__` and `peer_global_call_body`/`peer_global_set_body`
+/// (`v8_runtime/eval.rs`) rehydrate an `__nid__` into a real node of the
+/// callee's own document. `from_v8_bounded` (`v8_runtime/value.rs`) emits
+/// the same marker for the bounded serializer.
+pub(crate) fn frame_facade_marker<'s>(
+    scope: &v8::PinScope<'s, '_>,
+    obj: v8::Local<'s, v8::Object>,
+) -> Option<JsValue> {
+    fn own_data<'s>(
+        scope: &v8::PinScope<'s, '_>,
+        obj: v8::Local<'s, v8::Object>,
+        key: &str,
+    ) -> Option<v8::Local<'s, v8::Value>> {
+        let k = v8::String::new(scope, key)?;
+        let d = obj.get_own_property_descriptor(scope, k.into())?;
+        if d.is_undefined() {
+            return None;
+        }
+        let dd = v8::Local::<v8::Object>::try_from(d).ok()?;
+        let vk = v8::String::new(scope, "value")?;
+        dd.get(scope, vk.into())
+    }
+    let bid = own_data(scope, obj, "__bid__")?;
+    if !bid.is_number() {
+        return None;
+    }
+    let mut entries = vec![("__lumen_frame_facade".to_owned(), JsValue::Bool(true))];
+    for (key, v) in [
+        ("__bid__", bid),
+        ("__nid__", own_data(scope, obj, "__nid__").unwrap_or_else(|| v8::undefined(scope).into())),
+    ] {
+        if v.is_number() {
+            entries.push((
+                key.to_owned(),
+                JsValue::Number(v.number_value(scope).unwrap_or(f64::NAN)),
+            ));
+        }
+    }
+    Some(JsValue::object(entries))
+}
+
 pub(crate) fn v8_to_jsvalue<'s>(
     scope: &v8::PinScope<'s, '_>,
     val: v8::Local<'s, v8::Value>,
@@ -1024,18 +1073,22 @@ pub(crate) fn v8_to_jsvalue<'s>(
     }
     if val.is_object()
         && let Ok(obj) = v8::Local::<v8::Object>::try_from(val)
-        && let Some(own_props) = obj.get_own_property_names(scope, Default::default())
     {
-        let mut entries: Vec<(String, JsValue)> = Vec::new();
-        for i in 0..own_props.length() {
-            if let Some(key) = own_props.get_index(scope, i)
-                && let Some(key_str) = key.to_string(scope)
-                && let Some(prop_val) = obj.get(scope, key)
-            {
-                entries.push((key_str.to_rust_string_lossy(scope), v8_to_jsvalue(scope, prop_val)));
-            }
+        if let Some(marker) = frame_facade_marker(scope, obj) {
+            return marker;
         }
-        return JsValue::object(entries);
+        if let Some(own_props) = obj.get_own_property_names(scope, Default::default()) {
+            let mut entries: Vec<(String, JsValue)> = Vec::new();
+            for i in 0..own_props.length() {
+                if let Some(key) = own_props.get_index(scope, i)
+                    && let Some(key_str) = key.to_string(scope)
+                    && let Some(prop_val) = obj.get(scope, key)
+                {
+                    entries.push((key_str.to_rust_string_lossy(scope), v8_to_jsvalue(scope, prop_val)));
+                }
+            }
+            return JsValue::object(entries);
+        }
     }
     // Functions and anything else unrepresentable → Null
     JsValue::Null

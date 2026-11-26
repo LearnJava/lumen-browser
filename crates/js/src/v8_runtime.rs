@@ -96,7 +96,7 @@ pub(crate) mod wasm_streaming;
 pub use named_access::ensure_v8_platform;
 pub(crate) use command::DOM_EXCEPTION_POLYFILL;
 pub(crate) use install::net::{text_decode, text_encoding_for_label, websocket_natives};
-use command::{V8Command, V8Inner, V8_CMD_QUEUE_BOUND};
+use command::{V8Command, V8Inner, V8Job, V8_CMD_QUEUE_BOUND};
 use named_access::set_named_access_document;
 use style_flush::FlushHandles;
 use thread::v8_thread_main;
@@ -241,6 +241,9 @@ impl V8JsRuntime {
             // FRAME-остаток: полный адрес — слот предка начального кадра и
             // наследование origin его рантайма читают URL, а не только origin.
             reg.self_url = page_url.clone();
+            // FRAME-остаток: fetch-провайдер — `ensure_initial_frame_runtime`
+            // передаёт его же лениво заводимому начальному about:blank-кадру.
+            reg.self_fetch = fetch_provider.clone();
             self.self_doc_key
                 .store(Arc::as_ptr(&doc) as usize, Ordering::Relaxed);
         }

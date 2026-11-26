@@ -325,6 +325,19 @@ pub(crate) struct FrameDocSlots {
     /// `eval`. Снимается настоящей регистрацией ([`upsert_binding`] через
     /// `register_frame_document`) и уборкой отростков ([`bury_detached_bindings`]).
     pub(crate) initial_frames: HashMap<u32, Option<Arc<crate::v8_runtime::V8JsRuntime>>>,
+    /// Пир-хэндл СОБСТВЕННОГО рантайма контекста ([`V8JsRuntime::frame_peer_handle`]).
+    /// Нужен `ensure_initial_frame_runtime`: регистрируя `parent`/`top` слоты
+    /// лениво заводимому начальному кадру, js-крейт не имеет `Arc` читателя
+    /// (его держит shell), поэтому peer собирается из его `cmd_tx`/`stall`.
+    /// Без него `top.log`/`parent.*` из скрипта начального кадра отвечали
+    /// `nopeer` → `undefined` (WPT execution-timing 070-075).
+    pub(crate) self_peer: Option<Arc<dyn crate::frame_peer_bridge::FramePeerBridge>>,
+    /// Fetch-провайдер собственного контекста — `ensure_initial_frame_runtime`
+    /// передаёт его же лениво заводимому начальному кадру: без него `fetch`/
+    /// `<script src>` под-документа падает с network error (WPT
+    /// execution-timing 070/071 — include-6.js по URL родителя).
+    pub(crate) self_fetch:
+        Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
 }
 
 /// Копия биндинга соседнего фрейма в реестре ребёнка (BUG-1643).
@@ -566,7 +579,7 @@ fn ensure_initial_frame_runtime(
     identity_profile: Option<lumen_core::IdentityProfile>,
     cross_origin_isolated: bool,
 ) -> bool {
-    let (doc, host_nid, name, self_doc, self_url, self_origin, top) = {
+    let (doc, host_nid, name, self_doc, self_url, self_origin, top, self_peer, self_fetch) = {
         let slots = registry.lock().unwrap_or_else(|e| e.into_inner());
         let Some(b) = slots.frames.get(bid as usize) else {
             return false;
@@ -582,10 +595,14 @@ fn ensure_initial_frame_runtime(
         if !matches!(slots.initial_frames.get(&b.host_nid), Some(None)) {
             return false;
         }
-        let top = slots
-            .top
-            .as_ref()
-            .map(|t| (Arc::clone(&t.doc), t.url.clone(), t.accessible));
+        let top = slots.top.as_ref().map(|t| {
+            (
+                Arc::clone(&t.doc),
+                t.url.clone(),
+                t.accessible,
+                t.peer.as_ref().and_then(|w| w.upgrade()),
+            )
+        });
         (
             Arc::clone(&b.doc),
             b.host_nid,
@@ -594,6 +611,8 @@ fn ensure_initial_frame_runtime(
             slots.self_url.clone(),
             slots.self_origin.clone(),
             top,
+            slots.self_peer.clone(),
+            slots.self_fetch.clone(),
         )
     };
     let Some(self_doc) = self_doc else {
@@ -625,7 +644,7 @@ fn ensure_initial_frame_runtime(
     if let Err(e) = child.install_dom(
         Arc::clone(&doc),
         "about:blank",
-        None,
+        self_fetch,
         None,
         None,
         None,
@@ -648,10 +667,10 @@ fn ensure_initial_frame_runtime(
         self_url,
         name.clone(),
         true,
-        None,
+        self_peer,
     );
-    if let Some((top_doc, top_url, accessible_top)) = top {
-        child.register_top_document(top_doc, top_url, accessible_top, None);
+    if let Some((top_doc, top_url, accessible_top, top_peer)) = top {
+        child.register_top_document(top_doc, top_url, accessible_top, top_peer);
     }
     let child_arc = Arc::new(child);
     let peer: Arc<dyn crate::frame_peer_bridge::FramePeerBridge> =
@@ -804,6 +823,19 @@ pub(crate) enum FrameEventKind {
     Resource {
         /// Тип события (`'load'`/`'error'`/…).
         ev_type: String,
+    },
+    /// HTML LS §8.4.4 `document.open()`/`write()`/`writeln()`/`close()` на
+    /// фасаде под-документа. Доставляется асинхронно (собственный тик
+    /// ребёнка): синхронный `_lumen_f_global_call` исполнял бы записанные
+    /// `<script>` внутри заблокированного кросс-изолятного вызова, и любой
+    /// их доступ к родителю (`top.log`, `parent.*`) упирался в «пир занят» —
+    /// скрипт умирал с TypeError. На своём тике ребёнок свободен, и его
+    /// `document.*` работает штатно, включая исполнение скриптов.
+    DocCall {
+        /// Имя метода `document` (`open`/`write`/`writeln`/`close`).
+        method: String,
+        /// JSON-массив аргументов (уже `JSON.stringify` отправителем).
+        args_json: String,
     },
 }
 
@@ -1309,6 +1341,14 @@ pub(crate) fn install_frame_bridge_v8(
 ) -> lumen_core::JsResult<()> {
     use crate::v8_compat::{into_v8_fn0, into_v8_fn1, into_v8_fn2, into_v8_fn3, into_v8_fn4};
     use lumen_core::ext::JsRuntime as _;
+
+    // `self_peer` — пир-хэндл этого рантайма для слотов предков, которые
+    // `ensure_initial_frame_runtime` регистрирует лениво заводимому кадру
+    // (см. поле [`FrameDocSlots::self_peer`]).
+    {
+        let mut slots = registry.lock().unwrap_or_else(|e| e.into_inner());
+        slots.self_peer = Some(rt.frame_peer_handle());
+    }
 
     // bid → есть ли биндинг вообще (для contentWindow, который существует
     // даже при accessible=false).
@@ -1866,6 +1906,48 @@ pub(crate) fn install_frame_bridge_v8(
             }),
         )?;
     }
+    // ── HTML LS §8.4.4: document.open/write/close на фасаде ──────────────────
+    // Асинхронная постановка DocCall-конверта в ящик событий — см. доку
+    // FrameEventKind::DocCall (синхронный вызов пира мёртв для записанных
+    // <script>: их обращение к родителю упирается в «пир занят»).
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_f_queue_doc_call",
+            into_v8_fn3(move |bid: u32, method: String, args_json: String| -> bool {
+                let method = method.trim().to_ascii_lowercase();
+                if !matches!(method.as_str(), "open" | "write" | "writeln" | "close") {
+                    return false;
+                }
+                if args_json.len() > 4 * 1024 * 1024 {
+                    return false;
+                }
+                let reg = reg.lock().unwrap_or_else(|e| e.into_inner());
+                let Some(binding) = resolve_slot(&reg, bid) else {
+                    return false;
+                };
+                if !binding.accessible {
+                    return false;
+                }
+                let nid = {
+                    let doc = binding.doc.lock().unwrap_or_else(|e| e.into_inner());
+                    doc.document_element().map(|n| n.raw()).unwrap_or(0)
+                };
+                let outbox = frame_event_outbox();
+                let mut outbox = outbox.lock().unwrap_or_else(|e| e.into_inner());
+                if outbox.len() >= FRAME_OUTBOX_CAP {
+                    return false;
+                }
+                outbox.push(PendingFrameEvent {
+                    target_doc: Arc::clone(&binding.doc),
+                    nid,
+                    kind: FrameEventKind::DocCall { method, args_json },
+                    source_doc: reg.self_key.unwrap_or(0),
+                });
+                true
+            }),
+        )?;
+    }
     // ── Срез 10: обратная доставка ресурсных событий ─────────────────────────
     // Рёбро «ребёнок → родитель»: `_lumen_resource_fire` шима фрейма зовёт
     // глобальное зеркало (`_lumen_frame_mirror_resource`), оно — этот натив.
@@ -1931,6 +2013,12 @@ pub(crate) fn install_frame_bridge_v8(
                             Some(serde_json::json!({
                                 "kind": "resource", "nid": ev.nid, "type": ev_type,
                                 "bid": sender_bid as u32,
+                            }))
+                        }
+                        FrameEventKind::DocCall { method, args_json } => {
+                            Some(serde_json::json!({
+                                "kind": "docall", "nid": ev.nid,
+                                "method": method, "argsJson": args_json,
                             }))
                         }
                         FrameEventKind::Dom {
@@ -2945,6 +3033,16 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
           composed: !!evt.composed,
         };
         if (evt.detail !== undefined && evt.detail !== null) spec.detail = evt.detail;
+        // Синхронный путь (спека: слушатели бегут до возврата dispatchEvent —
+        // WPT execution-timing 075): глобал `__lumen_frame_dispatch_event`
+        // исполняется в изоляте ДОКУМЕНТА-адресата и диспатчит настоящее
+        // событие на узле синхронно. Занятый/мёртвый пир → прежняя
+        // асинхронная доставка конвертом.
+        if (typeof _lumen_f_global_call === 'function') {
+          var r = _lumen_f_global_call(bid, '__lumen_frame_dispatch_event',
+            [nid, JSON.stringify(spec)]);
+          if (r && r.kind === 'value') return;
+        }
         _lumen_f_queue_event(bid, nid, JSON.stringify(spec));
       },
       // Срез 10: слушатели фасада. Доставку в них делает ветка 'resource'
@@ -3082,6 +3180,50 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
       var i = _lumen_f_create_text(bid, String(data));
       return (i !== null && i !== undefined && i >= 0) ? frameElem(bid, i) : null;
     };
+    // DOM LS §4.5 legacy event factory: событие не пересекает изоляты
+    // (dispatchEvent фасада переносит только снимок type/bubbles/…),
+    // поэтому создаём его локальным document этого контекста — полей
+    // type/bubbles/cancelable/composed/detail достаточно.
+    d.createEvent = function(iface) {
+      if (typeof document === 'undefined' || document === null
+          || typeof document.createEvent !== 'function') return null;
+      return document.createEvent(iface);
+    };
+    // HTML LS §8.4.4 document.open()/write()/writeln()/close() на фасаде:
+    // СИНХРОННЫЙ вызов `__lumen_frame_doc_invoke` в изоляте ребёнка через
+    // `_lumen_f_global_call` (peer_global_call → run_peer). Спека требует,
+    // чтобы записанные `<script>` исполнились ДО возврата write() — иначе
+    // `top.log("inline script #1")` встаёт в журнал позже родительского
+    // `log("calling document.close")` (WPT execution-timing 070-075).
+    // Обратные обращения записанных скриптов к предкам (`top.log`,
+    // `top.testlib.addScript`, `top.include6Loaded = …`) работают, потому что
+    // run_peer/recv_peer на JS-потоке родителя реентерабельно обслуживает
+    // `RunPeer`-команды pump'ом, пока тот ждёт ответ ребёнка. Для начального
+    // about:blank без изолята рантайм заводится заранее
+    // (_lumen_f_initial_frame_runtime), иначе peer не разрешится.
+    // Деградация: занятый/отсутствующий пир → прежний асинхронный DocCall —
+    // вызов доедет на тике ребёнка, порядок будет асинхронным, но не потерян.
+    function docInvoke(method, args) {
+      if (typeof _lumen_f_initial_frame_runtime === 'function') {
+        _lumen_f_initial_frame_runtime(bid);
+      }
+      var argsJson = JSON.stringify(args);
+      if (typeof _lumen_f_global_call === 'function') {
+        var r = _lumen_f_global_call(bid, '__lumen_frame_doc_invoke', [method, argsJson]);
+        if (r && r.kind === 'value') return;
+      }
+      if (typeof _lumen_f_queue_doc_call === 'function') {
+        _lumen_f_queue_doc_call(bid, method, argsJson);
+      }
+    }
+    d.open = function() { docInvoke('open', []); return d; };
+    d.write = function() {
+      docInvoke('write', Array.prototype.map.call(arguments, String));
+    };
+    d.writeln = function() {
+      docInvoke('writeln', Array.prototype.map.call(arguments, String));
+    };
+    d.close = function() { docInvoke('close', []); };
     docs[bid] = d;
     return d;
   }
@@ -3093,6 +3235,11 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     // BUG-1826 срез 5: '[object Window]', как у настоящего окна Chrome —
     // см. docFacade выше.
     Object.defineProperty(w, Symbol.toStringTag, { value: 'Window', configurable: true });
+    // Тот же маркер привязки, что у frameElem/docFacade: `from_v8` по нему
+    // узнаёт фасад и не пытается сериализовать его акцессоры (они дёргают
+    // `_lumen_f_*` нативы и уводят обход в DOM пира). Неперечислимый —
+    // видимый набор ключей окна не меняется.
+    Object.defineProperty(w, '__bid__', { value: bid, enumerable: false });
     var hostNid = _lumen_f_accessible(bid) ? _lumen_f_host(bid) : null;
     Object.defineProperty(w, 'document', {
       get: function() { return _lumen_f_accessible(bid) ? docFacade(bid) : null; },
@@ -3324,46 +3471,108 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
             return undefined;
           }
         }
-        if (r.kind === 'value') { return r.value; }
-        if (r.kind === 'function') {
-          var f = function() {
-            var args = Array.prototype.slice.call(arguments);
-            // BUG-1099: `new w.Ctor(...)` — объект пира через границу
-            // изолятов не передать (возвращается только сериализованное
-            // значение), поэтому конструкция идёт в этом контексте тем же
-            // именем (Worker/SharedWorker/… есть в каждом контексте шима).
-            if (new.target !== undefined) {
-              var local = globalThis[String(prop)];
-              if (typeof local === 'function') {
-                return Reflect.construct(local, args);
-              }
-            }
-            var cr = _lumen_f_global_call(bid, String(prop), args);
-            if (cr.kind === 'error') { throw new Error(cr.message); }
-            return cr.value;
-          };
-          // BUG-1826 срез 5: глобал чужого realm в Chrome — нативная функция,
-          // toString даёт '[native code]'; кловер моста печатал исходник и
-          // выдавал подмену (challenge-VM читала cw.eval и стопорилась на
-          // его печати). Имя — как у оригинала, печать — через маркировку.
-          // Хук FINGERPRINT-JS-REGISTRY живёт на внутреннем контейнере
-          // `__lumen_C` (BUG-753): замыкание создано под `with (container)`,
-          // поэтому лукап работает и после глобального seal (BUG-378).
-          try {
-            Object.defineProperty(f, 'name', { value: String(prop), configurable: true });
-          } catch (e2) {}
-          var mk;
-          try {
-            mk = (typeof __lumen_C !== 'undefined' && __lumen_C !== null)
-              ? __lumen_C._lumen_native_register : undefined;
-          } catch (e3) { mk = undefined; }
-          if (typeof mk !== 'function' && typeof globalThis !== 'undefined') {
-            mk = globalThis._lumen_native_register;
+        if (r.kind === 'value') {
+          var gv = r.value;
+          // Объект пира приезжает сериализованной копией — её методы мертвы
+          // (функции через границу изолятов не ходят). Отдаём прокси, которое
+          // каждое свойство читает у пира по dotted-пути (`testlib.addScript` —
+          // peer_global_get_body): WPT execution-timing 072+ (`top.testlib
+          // .addScript(...)` из document.write-скрипта начального кадра).
+          if (gv !== null && typeof gv === 'object' && !Array.isArray(gv)) {
+            return peerObjectFacade(bid, String(prop), gv);
           }
-          if (typeof mk === 'function') mk(f, 'function');
-          return f;
+          return gv;
+        }
+        if (r.kind === 'function') {
+          return peerCallable(bid, String(prop), String(prop));
         }
         return undefined;
+      },
+      // Запись глобала пира (`top.include6Loaded = true`): own-свойства
+      // фасада пишутся локально, как раньше; чужой глобал уходит в пир
+      // (`_lumen_f_global_set` — frame_bridge_globals.rs). При nopeer/error
+      // (пир недоступен) значение остаётся на фасаде — не роняем страницу.
+      set: function(target, prop, value, receiver) {
+        if (typeof prop === 'symbol' || Reflect.has(target, prop)) {
+          return Reflect.set(target, prop, value, receiver);
+        }
+        var sr = _lumen_f_global_set(bid, String(prop), value);
+        if (sr && sr.kind === 'value') return true;
+        return Reflect.set(target, prop, value, receiver);
+      },
+    });
+  }
+
+  // Кловер вызова глобала пира: `path` — dotted-путь для `_lumen_f_global_call`
+  // (`testlib.addScript`), `propName` — короткое имя для `.name`/конструктора.
+  function peerCallable(bid, path, propName) {
+    var f = function() {
+      var args = Array.prototype.slice.call(arguments);
+      // BUG-1099: `new w.Ctor(...)` — объект пира через границу
+      // изолятов не передать (возвращается только сериализованное
+      // значение), поэтому конструкция идёт в этом контексте тем же
+      // именем (Worker/SharedWorker/… есть в каждом контексте шима).
+      if (new.target !== undefined) {
+        var local = globalThis[propName];
+        if (typeof local === 'function') {
+          return Reflect.construct(local, args);
+        }
+      }
+      var cr = _lumen_f_global_call(bid, path, args);
+      if (cr.kind === 'error') { throw new Error(cr.message); }
+      return cr.value;
+    };
+    // BUG-1826 срез 5: глобал чужого realm в Chrome — нативная функция,
+    // toString даёт '[native code]'; кловер моста печатал исходник и
+    // выдавал подмену (challenge-VM читала cw.eval и стопорилась на
+    // его печати). Имя — как у оригинала, печать — через маркировку.
+    // Хук FINGERPRINT-JS-REGISTRY живёт на внутреннем контейнере
+    // `__lumen_C` (BUG-753): замыкание создано под `with (container)`,
+    // поэтому лукап работает и после глобального seal (BUG-378).
+    try {
+      Object.defineProperty(f, 'name', { value: propName, configurable: true });
+    } catch (e2) {}
+    var mk;
+    try {
+      mk = (typeof __lumen_C !== 'undefined' && __lumen_C !== null)
+        ? __lumen_C._lumen_native_register : undefined;
+    } catch (e3) { mk = undefined; }
+    if (typeof mk !== 'function' && typeof globalThis !== 'undefined') {
+      mk = globalThis._lumen_native_register;
+    }
+    if (typeof mk === 'function') mk(f, 'function');
+    return f;
+  }
+
+  // Прокси объектного глобала пира (ветка 'value' выше): каждое свойство
+  // запрашивается у пира по `path + '.' + prop`; `base` — сериализованная
+  // копия как fallback на nopeer/absent (пир занят/умер — отдаём данные,
+  // как до появления dotted-доступа).
+  function peerObjectFacade(bid, path, base) {
+    return new Proxy(base, {
+      get: function(target, prop, receiver) {
+        if (typeof prop === 'symbol') return Reflect.get(target, prop, receiver);
+        var p = String(prop);
+        var r = _lumen_f_global_get(bid, path + '.' + p);
+        if (r.kind === 'function') return peerCallable(bid, path + '.' + p, p);
+        if (r.kind === 'value') {
+          var v = r.value;
+          if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+            return peerObjectFacade(bid, path + '.' + p, v);
+          }
+          return v;
+        }
+        if (r.kind === 'builtin') {
+          return pristineGlobals[p] === 1 ? globalThis[p] : undefined;
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+      set: function(target, prop, value) {
+        if (typeof prop === 'symbol') return Reflect.set(target, prop, value);
+        var p = String(prop);
+        var sr = _lumen_f_global_set(bid, path + '.' + p, value);
+        if (sr && sr.kind === 'value') return true;
+        return Reflect.set(target, prop, value);
       },
     });
   }
@@ -3377,6 +3586,51 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     var bid = ensureInitialFrame(hostNid);
     if (bid === null) return null;
     return winFacade(bid);
+  };
+
+  // HTML LS §8.4.4 document.open()/write()/writeln()/close() на ФАСАДЕ
+  // под-документа: родительский изолят зовёт этот глобал пира через
+  // `_lumen_f_global_call` (peer_global_call → globalThis[name]). Один
+  // глобал на все методы — имя и аргументы JSON-строкой; возвращаемое
+  // значение не нужно (open() фасад отдаёт сам фасад, write/close — void).
+  // Ставится в КАЖДОМ контексте: и родитель, и под-документ исполняют один
+  // и тот же install, поэтому глобал пира существует к моменту вызова.
+  globalThis.__lumen_frame_doc_invoke = function(method, argsJson) {
+    var m = (typeof document !== 'undefined' && document !== null)
+      ? document[method] : undefined;
+    if (typeof m !== 'function') return;
+    var args = [];
+    try {
+      var parsed = JSON.parse(String(argsJson));
+      if (Array.isArray(parsed)) args = parsed;
+    } catch (e) {}
+    m.apply(document, args);
+  };
+
+  // Синхронный dispatchEvent на узле ЭТОГО документа по nid — вызывается
+  // фасадом чужого изолята через `_lumen_f_global_call` (см. frameElem
+  // .dispatchEvent). Событие строится в realm адресата, поэтому слушатели
+  // видят настоящий Event/MOUSEEvent, а не снимок конверта.
+  globalThis.__lumen_frame_dispatch_event = function(nid, specJson) {
+    if (typeof _lumen_make_node !== 'function') return;
+    var node = _lumen_make_node(nid);
+    if (!node || typeof node.dispatchEvent !== 'function') return;
+    var spec = {};
+    try { spec = JSON.parse(String(specJson)) || {}; } catch (e) {}
+    var type = typeof spec.type === 'string' ? spec.type : '';
+    if (!type) return;
+    var init = {
+      bubbles: !!spec.bubbles,
+      cancelable: !!spec.cancelable,
+      composed: !!spec.composed,
+    };
+    if (typeof spec.detail === 'number') init.detail = spec.detail;
+    var evt = null;
+    try { evt = new MouseEvent(type, init); } catch (e1) {
+      try { evt = new Event(type, init); } catch (e2) {}
+    }
+    if (evt === null) return;
+    node.dispatchEvent(evt);
   };
 
   // ── Срез 3: иерархия окон настоящего window этого контекста ──────────────
@@ -3570,6 +3824,13 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
             } else if (env.kind === 'runscript' &&
                        typeof _lumen_deliver_frame_run_script === 'function') {
               _lumen_deliver_frame_run_script(env.nid);
+            } else if (env.kind === 'docall') {
+              // HTML LS §8.4.4: document.open/write/close на этом документе —
+              // исполняется на своём тике, когда кросс-изолятные обращения
+              // записанных <script> к предкам уже не упираются в «пир занят».
+              if (typeof __lumen_frame_doc_invoke === 'function') {
+                __lumen_frame_doc_invoke(env.method, env.argsJson);
+              }
             } else if (env.kind === 'resource') {
               // ── Срез 10: ресурсное событие ребёнка в обработчики фасада ────
               // Разбирается ЗДЕСЬ, а не хуком WEB_API_SHIM: получатели —
