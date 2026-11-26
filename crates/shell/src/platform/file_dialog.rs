@@ -70,8 +70,20 @@ pub fn entries_to_json_with_tokens(entries: &[FilePickerEntry], tokens: &[String
     format!("[{}]", items.join(","))
 }
 
+/// Wrap `entries_to_json_with_tokens` output into the `_lumen_deliver_file_list(nid, …)`
+/// call. The JSON must arrive as a *string*: the function `JSON.parse`s its argument,
+/// and a bare array literal stringifies to `"[object Object],…"` — the parse fails and
+/// the delivery silently becomes an empty file list (the old bare-literal call sites
+/// never delivered a single file through the real dialog).
 #[cfg(feature = "v8")]
-fn json_str(s: &str) -> String {
+pub(crate) fn deliver_file_list_script(nid: usize, json: &str) -> String {
+    // `json_str` escapes the JSON *and* wraps it in double quotes — exactly the
+    // JS string literal the delivery function needs.
+    format!("_lumen_deliver_file_list({}, {})", nid, json_str(json))
+}
+
+#[cfg(feature = "v8")]
+pub(crate) fn json_str(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
     for c in s.chars() {
@@ -116,9 +128,7 @@ fn open_file_dialog_windows(multiple: bool) -> Vec<FilePickerEntry> {
         .collect()
 }
 
-// BUG-169: used only by platform-cfg'd callers; dead on configs that exclude them.
-#[allow(dead_code)]
-fn entry_from_path(path: &str) -> FilePickerEntry {
+pub(crate) fn entry_from_path(path: &str) -> FilePickerEntry {
     use std::path::Path;
     let p = Path::new(path);
     let name = p
@@ -206,5 +216,17 @@ mod tests {
         assert!(json.contains("\"token\":\"t8\""));
         assert!(json.contains("\"name\":\"a.txt\""));
         assert!(json.contains("\"name\":\"b.png\""));
+    }
+
+    /// MCP-TOTAL-S7b: the delivery script must carry the JSON as a quoted JS
+    /// string — `JSON.parse` stringifies a bare array to "[object Object],…"
+    /// and silently delivers an empty file list.
+    #[test]
+    fn deliver_file_list_script_quotes_the_json() {
+        let script = deliver_file_list_script(7, r#"{"name":"a.txt"}"#);
+        assert_eq!(
+            script,
+            r#"_lumen_deliver_file_list(7, "{\"name\":\"a.txt\"}")"#
+        );
     }
 }

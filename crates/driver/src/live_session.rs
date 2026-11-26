@@ -408,6 +408,16 @@ impl BrowserSession for LiveWindowSession {
         Ok(())
     }
 
+    /// MCP-TOTAL-S7b: fill a file input without the OS dialog; the shell arm
+    /// validates the paths and answers `Error` with the reason.
+    fn set_files(&self, target: &Target, paths: &[String]) -> Result<()> {
+        self.execute(AutomationCommand::SetFiles {
+            target: target.clone(),
+            paths: paths.to_vec(),
+        })?;
+        Ok(())
+    }
+
     // ── Isolation & Fingerprinting ───────────────────────────────────────────
     // Not wired to the live window (SDC-2 MVP scope): the automation
     // channel carries page-interaction commands only, not per-session

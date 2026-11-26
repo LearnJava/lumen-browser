@@ -797,6 +797,23 @@ impl Lumen {
                     };
                     let _ = reply_tx.send(reply);
                 }
+                AutomationCommand::SetFiles { target, paths } => {
+                    // MCP-TOTAL-S7b: доставка файлов в файловый input без
+                    // OS-диалога — валидация путей и регистрация грантов в
+                    // `set_files_on_input`, тот же путь, что у пикера.
+                    let reply = match self.resolve_automation_target(&target) {
+                        Some(resolved) => match resolved.node {
+                            Some(node) => match self.set_files_on_input(node, &paths) {
+                                Ok(()) => AutomationReply::Ack,
+                                Err(msg) => AutomationReply::Error(msg),
+                            },
+                            // `Target::Point` резолвится без узла — заполнять нечего.
+                            None => AutomationReply::Error("set_files: target has no element".to_string()),
+                        },
+                        None => AutomationReply::Error("Element not found".to_string()),
+                    };
+                    let _ = reply_tx.send(reply);
+                }
             }
         }
     }

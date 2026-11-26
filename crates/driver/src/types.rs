@@ -714,6 +714,18 @@ pub enum AutomationCommand {
         /// Replacement text for an open `prompt` dialog.
         user_text: Option<String>,
     },
+    /// Fill a `<input type="file">` resolved from `target` with `paths`
+    /// without the OS dialog (MCP-TOTAL-S7b, BiDi `input.setFiles`): every
+    /// path must exist — each is registered as an opaque grant token (the
+    /// page never sees paths, BUG-371) and the delivery with its
+    /// `input`/`change` events goes the same way as after a real pick.
+    /// Reply: `Ack`.
+    SetFiles {
+        /// The file input to fill (`Target::Point` has no element — error).
+        target: Target,
+        /// Absolute filesystem paths of the files to deliver.
+        paths: Vec<String>,
+    },
 }
 
 /// The open JS dialog of the live window, as [`AutomationCommand::UserPrompt`]

@@ -442,6 +442,19 @@ pub trait BrowserSession {
         Err(lumen_core::error::Error::Other("handle_user_prompt: только для живого окна (--mcp-live-port)".into()))
     }
 
+    /// Заполнить `<input type="file">` по `target` файлами `paths` без
+    /// OS-диалога (MCP-TOTAL-S7b, BiDi `input.setFiles`): каждый путь должен
+    /// существовать — он регистрируется непрозрачным грантом (JS путей не
+    /// видит, BUG-371), доставка и события `input`/`change` — тем же путём,
+    /// что после настоящего выбора в диалоге.
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — команду исполняет только живое окно.
+    fn set_files(&self, target: &Target, paths: &[String]) -> Result<()> {
+        let _ = (target, paths);
+        Err(lumen_core::error::Error::Other("set_files: только для живого окна (--mcp-live-port)".into()))
+    }
+
     // ── Isolation & Fingerprinting (Phase 1: 8E/8F) ─────────────────────────
 
     /// Текущий профиль отпечатка браузера (fingerprint profile).
