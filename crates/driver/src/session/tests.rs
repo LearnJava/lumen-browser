@@ -688,6 +688,10 @@ fn live_window_only_trait_defaults_are_honest_errors() {
         ("poll_intercepted_requests", s.poll_intercepted_requests().is_err()),
         ("user_prompt", s.user_prompt().is_err()),
         ("handle_user_prompt", s.handle_user_prompt(true, None).is_err()),
+        // MCP-TOTAL-S7c: загрузки — тоже только живого окна.
+        ("list_downloads", s.list_downloads().is_err()),
+        ("start_download", s.start_download("file:///tmp/x.bin").is_err()),
+        ("cancel_download", s.cancel_download(1).is_err()),
     ]
     .into_iter()
     .collect();

@@ -814,6 +814,44 @@ impl Lumen {
                     };
                     let _ = reply_tx.send(reply);
                 }
+                AutomationCommand::GetDownloads => {
+                    // MCP-TOTAL-S7c: финальные события фоновых потоков
+                    // подбираем до чтения — иначе только что завершившаяся
+                    // загрузка ещё кадр отвечала бы in_progress.
+                    self.downloads.poll();
+                    let entries = self
+                        .downloads
+                        .entries()
+                        .iter()
+                        .map(|e| AutomationDownload {
+                            id: e.id.raw(),
+                            url: e.url.clone(),
+                            file_name: e.filename.clone(),
+                            state: download::status_name(&e.status),
+                            received_bytes: e.received,
+                            total_bytes: e.total.unwrap_or(0),
+                            path: e.dest.to_string_lossy().into_owned(),
+                        })
+                        .collect();
+                    let _ = reply_tx.send(AutomationReply::Downloads(entries));
+                }
+                AutomationCommand::StartDownload { url } => {
+                    // MCP-TOTAL-S7c: папка, имя и панель — как у загрузки по
+                    // ссылке; запись видна в GetDownloads сразу.
+                    let id = self.downloads.start_url_download(url, None);
+                    let _ = reply_tx.send(AutomationReply::DownloadId(id.raw()));
+                }
+                AutomationCommand::CancelDownload { id } => {
+                    // MCP-TOTAL-S7c: неизвестный id — честная ошибка (сам
+                    // `DownloadManager::cancel` на него молчит).
+                    let reply = if self.downloads.entries().iter().any(|e| e.id.raw() == id) {
+                        self.downloads.cancel(download::DownloadId(id));
+                        AutomationReply::Ack
+                    } else {
+                        AutomationReply::Error(format!("cancel_download: нет загрузки с id {id}"))
+                    };
+                    let _ = reply_tx.send(reply);
+                }
             }
         }
     }

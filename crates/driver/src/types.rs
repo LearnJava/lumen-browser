@@ -726,6 +726,47 @@ pub enum AutomationCommand {
         /// Absolute filesystem paths of the files to deliver.
         paths: Vec<String>,
     },
+    /// Every entry of the live window's download manager (MCP-TOTAL-S7c,
+    /// BiDi `browser.getDownloads`). Reply:
+    /// [`AutomationReply::Downloads`].
+    GetDownloads,
+    /// Start downloading `url` into the OS Downloads directory — the same
+    /// path a user-initiated download takes (MCP-TOTAL-S7c). The entry is
+    /// visible to [`AutomationCommand::GetDownloads`] immediately.
+    /// Reply: [`AutomationReply::DownloadId`].
+    StartDownload {
+        /// URL to fetch.
+        url: String,
+    },
+    /// Request cancellation of download `id` (MCP-TOTAL-S7c). Errors when no
+    /// entry has that id. Reply: `Ack`.
+    CancelDownload {
+        /// Download id from `list_downloads` / `start_download`.
+        id: u32,
+    },
+}
+
+/// One entry of the live window's download manager, as
+/// [`AutomationCommand::GetDownloads`] reports it (MCP-TOTAL-S7c, BiDi
+/// `browser.getDownloads`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutomationDownload {
+    /// Opaque download id, stable within the session — the argument of
+    /// [`AutomationCommand::CancelDownload`].
+    pub id: u32,
+    /// Source URL of the download.
+    pub url: String,
+    /// Destination file name (derived from the URL or the suggested name).
+    pub file_name: String,
+    /// Lifecycle state: `pending`, `in_progress`, `completed`, `failed` or
+    /// `cancelled`.
+    pub state: String,
+    /// Bytes written to disk so far.
+    pub received_bytes: u64,
+    /// Expected total size in bytes; `0` while unknown.
+    pub total_bytes: u64,
+    /// Absolute path on disk the file is (or will be) written to.
+    pub path: String,
 }
 
 /// The open JS dialog of the live window, as [`AutomationCommand::UserPrompt`]
@@ -794,4 +835,10 @@ pub enum AutomationReply {
     /// `UserPrompt` result: the live window's open JS dialog, `None` when no
     /// dialog is open (MCP-TOTAL-S7a).
     UserPrompt(Option<AutomationDialog>),
+    /// `GetDownloads` result: every entry of the live window's download
+    /// manager, oldest first (MCP-TOTAL-S7c).
+    Downloads(Vec<AutomationDownload>),
+    /// `StartDownload` result: the id of the new download entry
+    /// (MCP-TOTAL-S7c).
+    DownloadId(u32),
 }

@@ -38,7 +38,7 @@ pub mod winit_session;
 pub mod gpu_session;
 
 pub use types::{
-    A11yBounds, A11yNode, A11yState, AxQuery, AutomationCommand, AutomationReply, AutomationDialog, BoxModel, ComputedProperties, ConsoleEntry, ConsoleLevel,
+    A11yBounds, A11yNode, A11yState, AxQuery, AutomationCommand, AutomationReply, AutomationDialog, AutomationDownload, BoxModel, ComputedProperties, ConsoleEntry, ConsoleLevel,
     AutomationCookie, ExplainElement, ExplainPage, ExplainPagePhaseTimings, FingerprintProfile, InputCommand, InterceptedRequest,
     InvariantViolationCounts, NetworkEntry, NodeRef, ScrollDelta, TabInfo, Target, WaitCondition,
 };
@@ -453,6 +453,36 @@ pub trait BrowserSession {
     fn set_files(&self, target: &Target, paths: &[String]) -> Result<()> {
         let _ = (target, paths);
         Err(lumen_core::error::Error::Other("set_files: только для живого окна (--mcp-live-port)".into()))
+    }
+
+    /// Загрузки живого окна (MCP-TOTAL-S7c, BiDi `browser.getDownloads`):
+    /// каждая запись менеджера загрузок — id, URL, имя файла, состояние,
+    /// счётчики байт и путь на диске.
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — менеджер загрузок есть только у живого окна.
+    fn list_downloads(&self) -> Result<Vec<AutomationDownload>> {
+        Err(lumen_core::error::Error::Other("list_downloads: только для живого окна (--mcp-live-port)".into()))
+    }
+
+    /// Начать загрузку `url` (MCP-TOTAL-S7c): файл уходит в папку загрузок
+    /// ОС тем же путём, что и загрузка по клику страницы; возвращает id
+    /// записи для [`list_downloads`](BrowserSession::list_downloads) /
+    /// [`cancel_download`](BrowserSession::cancel_download).
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — команду исполняет только живое окно.
+    fn start_download(&self, _url: &str) -> Result<u32> {
+        Err(lumen_core::error::Error::Other("start_download: только для живого окна (--mcp-live-port)".into()))
+    }
+
+    /// Отменить загрузку `id` (MCP-TOTAL-S7c); запись оседает в состоянии
+    /// `cancelled`.
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — команду исполняет только живое окно.
+    fn cancel_download(&self, _id: u32) -> Result<()> {
+        Err(lumen_core::error::Error::Other("cancel_download: только для живого окна (--mcp-live-port)".into()))
     }
 
     // ── Isolation & Fingerprinting (Phase 1: 8E/8F) ─────────────────────────
