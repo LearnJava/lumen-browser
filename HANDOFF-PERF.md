@@ -89,6 +89,43 @@ eval-замеры performance.now). `document.getAnimations()` на habr был
 ≈0.3-3.4с/вызов до гейта — если сайт поллит его в rAF/interval, это был
 главный скрытый налог js.run.
 
+**`_css_an_update_all` — дизайн замены DOM-скана (измерено ~0.6-1с/epoch, готов к реализации):**
+
+Диагноз (motion_probe3/4): скан = `querySelectorAll('*')` (~5-10k) ×
+`_css_an_update(nid,null)` + `_wa_pseudo_targets` (всегда
+`['::marker','::before','::after']`) × 3 pseudo-апдейта; для pseudo без
+бокса `_lumen_get_computed_style_pseudo` → `generated_pseudo_style` =
+полный `compute_pseudo_element_style` каскад на элемент — доминант.
+
+1. `lumen-layout/src/lib.rs`: `pub fn animation_candidates(counters:&CounterMap)
+   -> Vec<(u32,String)>` — main: `counters.styles().iter()`
+   (`CascadeStyles::iter`, pub ~counters.rs:771) фильтр `animation_names`
+   non-empty/!="none" → `(nid,"")`; pseudo: новый pub-метод на `PseudoCache`
+   (counters.rs ~L231, поля private): по `by_node` — `styles` Some(arc) с
+   animation_names≠none → definite; `matches` non-empty по именам
+   {before,after,marker} → maybe (JS резолвит через `_css_prop`, покрывает
+   boxless `content:''`). Interned bare-имена → emit `'::'+name`.
+2. `style_flush.rs`: `animation_scan_needed: Arc<AtomicBool>` +
+   `animation_candidates: Arc<Mutex<Vec<(u32,String)>>>` (по образцу
+   transition_stale ~L161); `snapshot_animation_candidates(&counters)`
+   после computed_styles-блока (~L969), гейтится своим флагом;
+   `runtime.rs`: `*_flag()` геттер (образец runtime.rs:1178).
+3. `platform.rs`: `reg! "_lumen_animation_candidates"` — flag+maybe_flush+
+   JSON `[[nid,"::before"],[nid,""],...]`.
+4. Shim `_css_an_update_all`: в epoch-гейте — `JSON.parse(_lumen_animation_
+   candidates())` → `_css_an_update(nid,pseudo||null)`; fallback на старый
+   DOM-скан без нэйтива. Первый цикл `_css_an_by_key` (drops) и vtOwners —
+   без изменений.
+
+**Ловушка keyspace — решить до кода:** JS `__nid__`=`NodeId::raw()`
+(index|gen<<BITS), а cs/CascadeStyles/PseudoCache ключованы `.index()`.
+`_lumen_get_computed_style` делает `cs.get(&raw_nid)` → для gen>0 слотах
+промах (латентно?). Кандидаты эмитить в пространстве `__nid__` (raw),
+как у текущего скана — иначе `_css_an_by_key` cleanup не совпадёт.
+Из index-карт generation не восстановить (`from_index`=gen0) — проверить,
+чему равен `__nid__` у gen>0 элемента; возможно вся эта карта уже живёт
+в index-space и raw()==index при gen=0 для большинства узлов.
+
 **Найдено, не сделано (аудит «лишней работы»):**
 
 - **`CQ_UNITS_SEEN` — process-global monotone флаг** (`style/env.rs:55`):
