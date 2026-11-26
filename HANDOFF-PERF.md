@@ -76,7 +76,7 @@ engine-thread, не работа самого нэйтива.
 времена это maybe_flush/lock-wait, не crossings. Остаток резать:
 typed-trampoline (~1-3мкс → ~0.5мкс × ~500k переходов ≈ 0.5-1s),
 `_wa_motion_tr_sync` sweep — ~89мс/epoch на 44 seeded nid × ~284 prop
-(батч-снапшот одним нэйтивом срезал бы ~12.5k crossings до 1),
+(закрыто `b1ddd316b5`: `_lumen_computed_properties` bulk-натив),
 `_css_an_update_all` ~700мс/epoch на habr (гейт `088a2123f` убрал повторы
 в стабильном epoch; первый вызов после style-change всё ещё платит
 полный скан — кандидат: Rust-side индекс «у кого animation-name≠none»),
@@ -88,6 +88,60 @@ typed-trampoline (~1-3мкс → ~0.5мкс × ~500k переходов ≈ 0.5-
 eval-замеры performance.now). `document.getAnimations()` на habr был
 ≈0.3-3.4с/вызов до гейта — если сайт поллит его в rAF/interval, это был
 главный скрытый налог js.run.
+
+**`_css_an_update_all` — РЕАЛИЗОВАНО (candidate-list вместо DOM-скана):**
+
+Было: `querySelectorAll('*')` (~2-10k) × `_css_an_update(nid,null)` +
+`_wa_pseudo_targets` (всегда `['::marker','::before','::after']`) × 3
+pseudo-апдейта; для pseudo без бокса `_lumen_get_computed_style_pseudo` →
+`generated_pseudo_style` = полный `compute_pseudo_element_style` каскад —
+доминант (~0.6-1с на первом вызове после style-change на habr).
+
+Сделано (4 точки, как в дизайне ниже, с двумя отличиями):
+
+1. `counters.rs`: `PseudoCache.by_node`/снапшот ключи переведены
+   `node.index()` → `node.raw() as usize` — ключи теперь в JS-пространстве
+   `__nid__` (и заодно закрыта stale-запись при переиспользовании слота
+   арены: index-ключ мог отдать pseudo-стиль мёртвого узла его
+   наследнику слота до `drop_node`). `PseudoCache::animation_pseudo_
+   candidates()` — `(raw nid, "::name")` по `styles` Some(arc) с
+   `animation_names` non-empty, whitelist {before,after,marker,
+   first-line,first-letter}; boxless `content:''` покрыт, т.к. box build
+   считает pseudo-стиль ДО решения «бокса нет» (build.rs:1627,
+   inline_build.rs:1288). `CascadeStyles::animation_candidates()` →
+   `AnimationCandidates = Vec<(u32, Option<String>)>`: main — `iter()`
+   фильтр `animation_names` non-empty → `(id.raw(), None)`.
+   **Отличие от дизайна**: match-записи НЕ эмитятся — только вычисленные
+   стили; псевдо, чей стиль ни разу не считался (display:none/cv-пропуск
+   поддерева), не кандидат → `document.getAnimations()` его не увидит до
+   первого `el.getAnimations()` (спека: без бокса анимации и не должны
+   бегать — расхождение только в edge-case, задокументировано).
+2. `style_flush.rs`: `animation_candidates: Arc<Mutex<AnimationCandidates>>`
+   в FlushHandles, публикуется безусловно в maybe_flush после
+   anchor_scrollers (~L976) — сбор = одно поле-проверка на styled-узел,
+   флаг `_needed` не нужен (дешевле DOM-скана на порядки).
+3. `platform.rs`: `reg! "_lumen_animation_candidates"` → maybe_flush +
+   `serde_json` `[[nid,pseudo|null],…]`.
+4. Shim `_css_an_update_all`: `JSON.parse(_lumen_animation_candidates())`
+   → `_css_an_update(nid, pseudo)`; native отсутствует/битый JSON → старый
+   `querySelectorAll('*')` скан (fallback для worker/тест-харнессов).
+   Циклы `_css_an_by_key` (drops) и vtOwners — без изменений.
+
+Keyspace-ловушка решена: кандидаты эмитятся в `raw()`-пространстве =
+пространство `__nid__` — в точности то, что скармливал старый скан
+(`els[n].__nid__`); для gen>0 слотов поведение идентично прежнему
+(`cs.get(&raw)` промахивается по index-ключам и сегодня — латентно,
+паритет сохранён, не регрессия). Тест:
+`document_get_animations_lists_css_animations_and_pseudo_ones`
+(v8_window_anim_compress.rs) — реальные node-листы + @keyframes,
+проверяет и element, и `::before`, и отсутствие `::after`.
+
+Остаток: typed-trampoline (~0.5-1s js.run). `_wa_motion_tr_sync`
+свип — **сделано `b1ddd316b5`**: `_lumen_computed_properties(nid,
+names_json)` — один кроссинг на nid вместо ~284
+`_lumen_computed_property`; `--*` и bg-image url() — поштучный путь;
+пустой bulk → фолбэк (тест-харнессы со стабом
+`_lumen_computed_property` видят только поштучный путь).
 
 **Найдено, не сделано (аудит «лишней работы»):**
 
@@ -196,7 +250,9 @@ eval-замеры performance.now). `document.getAnimations()` на habr был
 cd C:\kostja\Rust_Projects\Lumen_browser   # или аналог на новой машине
 git pull -q origin main
 # сборка с профилем (нужен LIBCLANG_PATH для boring-sys):
-LIBCLANG_PATH="C:\Users\konstantin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\v8-150.1.0\third_party\rust-toolchain\bin" \
+# LIBCLANG_PATH — каталог с libclang.dll; на этой машине
+# "C:\Program Files\LLVM\bin" (v8/third_party/rust-toolchain в крейте
+# может отсутствовать — тогда LLVM).
   cargo build --profile dev-release -p lumen-shell
 # живой профиль одного сайта (одно окно, логи в .tmp/prof-run — gitignored):
 python scripts/perf/prof_site.py "https://habr.com/ru/" 90     # python = pythoncore-3.14-64

@@ -375,6 +375,8 @@ mod v8_bug935_s64_sheet_delta;
 #[cfg(feature = "v8-backend")]
 mod v8_bug935_s94_shell_attr_writes;
 #[cfg(feature = "v8-backend")]
+mod v8_shell_control_touch;
+#[cfg(feature = "v8-backend")]
 mod v8_bug1245_inline_restyle;
 #[cfg(feature = "v8-backend")]
 mod v8_cssom11_pseudo_element;

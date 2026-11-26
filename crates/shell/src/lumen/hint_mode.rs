@@ -70,6 +70,7 @@ impl Lumen {
                 if let Some(src) = self.layout_source.as_mut() {
                     forms::toggle_checkbox(&mut src.document.lock().unwrap(), id);
                 }
+                self.note_shell_control_write(id);
                 // ADR-016 M2.2c-3 (2): async-safe form-control DOM mutation (Bucket
                 // A) — no synchronous geometry read after, route off-thread when
                 // `LUMEN_ENGINE_THREAD=1`, byte-identical otherwise.
@@ -79,6 +80,7 @@ impl Lumen {
                 if let Some(src) = self.layout_source.as_mut() {
                     forms::toggle_checkbox(&mut src.document.lock().unwrap(), clicked);
                 }
+                self.note_shell_control_write(clicked);
                 // ADR-016 M2.2c-3 (2): async-safe form-control DOM mutation (Bucket A).
                 self.relayout_form();
             }

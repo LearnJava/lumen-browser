@@ -116,6 +116,12 @@ fn cq_doc_guard(doc: &Document) -> CqDocGuard {
 /// the rules the cascade applied for it.
 type StyleEntry = (Arc<ComputedStyle>, u32, u32, Option<Arc<[MatchedRule]>>);
 
+/// PERF-ANIM-CANDIDATES — `(NodeId::raw(), pseudo)` pairs whose computed
+/// style names a CSS animation: `pseudo` is the `::`-prefixed
+/// pseudo-element name, `None` for the element itself. See
+/// [`CascadeStyles::animation_candidates`].
+pub type AnimationCandidates = Vec<(u32, Option<String>)>;
+
 #[derive(Debug, Default, Clone)]
 pub struct CascadeStyles {
     /// `NodeId` → (style, ordinal of the pass that last wrote or confirmed it, raw id
@@ -236,8 +242,13 @@ pub struct PseudoCache {
 struct PseudoCacheInner {
     /// Intern table: pseudo request string → dense index used in `by_node`.
     names: HashMap<String, u32>,
-    /// `node.index()` → per-node entries. Integer keys — [`IdMap`], not SipHash:
-    /// `store_matches_bulk` inserts tens of thousands of records per flush.
+    /// `NodeId::raw()` (arena index + generation) → per-node entries — the
+    /// same space JS `__nid__` lives in, so [`Self::animation_pseudo_candidates`]
+    /// can emit ids the shim consumes directly. Integer keys — [`IdMap`], not
+    /// SipHash: `store_matches_bulk` inserts tens of thousands of records per
+    /// flush. Raw rather than `index()`: a reused arena slot gets a fresh
+    /// generation, so index-keyed entries could serve a dead node's pseudo
+    /// style to its successor before `drop_node` ran.
     by_node: IdMap<usize, PseudoNodeCache>,
 }
 
@@ -273,7 +284,7 @@ pub(crate) fn pseudo_pass_key(
 
 /// Owned, lock-free copy of the match records [`PseudoCache::match_snapshot`]
 /// extracted — `names` maps pseudo request → intern index, `entries` is
-/// `(node.index(), name intern)` → record.
+/// `(node raw id, name intern)` → record.
 pub(crate) struct PseudoMatchSnapshot {
     pub(crate) names: HashMap<String, u32>,
     pub(crate) entries: IdMap<(usize, u32), std::sync::Arc<[crate::style::pseudo::PseudoMatch]>>,
@@ -287,7 +298,7 @@ impl PseudoMatchSnapshot {
         name: &str,
     ) -> Option<std::sync::Arc<[crate::style::pseudo::PseudoMatch]>> {
         let idx = *self.names.get(name)?;
-        self.entries.get(&(node.index(), idx)).cloned()
+        self.entries.get(&(node.raw() as usize, idx)).cloned()
     }
 }
 
@@ -350,7 +361,7 @@ impl PseudoCache {
     ) -> Option<Option<Arc<ComputedStyle>>> {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let name = *inner.names.get(pseudo)?;
-        let entry = inner.by_node.get(&node.index())?;
+        let entry = inner.by_node.get(&(node.raw() as usize))?;
         if entry.key != key {
             return None;
         }
@@ -369,7 +380,7 @@ impl PseudoCache {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let next = inner.names.len() as u32;
         let name = *inner.names.entry(pseudo.to_owned()).or_insert(next);
-        let entry = inner.by_node.entry(node.index()).or_insert_with(|| PseudoNodeCache {
+        let entry = inner.by_node.entry(node.raw() as usize).or_insert_with(|| PseudoNodeCache {
             key,
             styles: IdMap::default(),
             matches: IdMap::default(),
@@ -393,7 +404,7 @@ impl PseudoCache {
     ) -> Option<Arc<[crate::style::pseudo::PseudoMatch]>> {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let name = *inner.names.get(name)?;
-        let entry = inner.by_node.get(&node.index())?;
+        let entry = inner.by_node.get(&(node.raw() as usize))?;
         if entry.key != key {
             return None;
         }
@@ -431,7 +442,7 @@ impl PseudoCache {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let next = inner.names.len() as u32;
         let idx = *inner.names.entry(name.to_owned()).or_insert(next);
-        let entry = inner.by_node.entry(node.index()).or_insert_with(|| PseudoNodeCache {
+        let entry = inner.by_node.entry(node.raw() as usize).or_insert_with(|| PseudoNodeCache {
             key,
             styles: IdMap::default(),
             matches: IdMap::default(),
@@ -477,7 +488,7 @@ impl PseudoCache {
                         (idx, rec)
                     })
                     .collect();
-                (node.index(), names)
+                (node.raw() as usize, names)
             })
             .collect();
         for (node_idx, pseudos) in interned {
@@ -504,6 +515,43 @@ impl PseudoCache {
         CURRENT_PSEUDO_CACHE.with(|c| c.borrow().clone())
     }
 
+    /// PERF-ANIM-CANDIDATES — `(NodeId::raw(), "::pseudo")` for every cached
+    /// pseudo style that names a CSS animation. Boxless pseudos are covered:
+    /// box build computes the pseudo style before deciding whether a box is
+    /// generated, so `content: ''` pseudos land here too. Entries under a
+    /// stale [`PseudoPassKey`] are included deliberately — the JS side
+    /// re-reads the live style, so over-inclusion costs one update while a
+    /// miss would drop a running animation from `getAnimations()`.
+    pub fn animation_pseudo_candidates(&self) -> Vec<(u32, String)> {
+        /// Pseudo bases `document.getAnimations()` can name — the
+        /// parameterized kinds (`::part()`, `::slotted()`, …) have no
+        /// bare-name spelling and the shim's pseudo sweep never probes them.
+        const WANTED: &[&str] = &["before", "after", "marker", "first-line", "first-letter"];
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if inner.by_node.is_empty() {
+            return Vec::new();
+        }
+        // Reverse the intern table once — `names` indices are dense.
+        let mut rev: Vec<&str> = vec![""; inner.names.len()];
+        for (name, &idx) in &inner.names {
+            rev[idx as usize] = name.as_str();
+        }
+        let mut out = Vec::new();
+        for (&node, entry) in &inner.by_node {
+            for (&name_idx, style) in &entry.styles {
+                let Some(style) = style else { continue };
+                if style.animation_names.is_empty() {
+                    continue;
+                }
+                let name = rev[name_idx as usize];
+                if WANTED.contains(&name) {
+                    out.push((node as u32, format!("::{name}")));
+                }
+            }
+        }
+        out
+    }
+
     /// Drops every cached pseudo style of `node` — called by `walk` whenever
     /// the element's own cascade entry is recomputed (see [`PseudoCache`]).
     pub fn drop_node(&self, node: NodeId) {
@@ -511,7 +559,7 @@ impl PseudoCache {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .by_node
-            .remove(&node.index());
+            .remove(&(node.raw() as usize));
     }
 }
 
@@ -770,6 +818,30 @@ impl CascadeStyles {
     /// Iterate `(node, style)` pairs in arbitrary order.
     pub fn iter(&self) -> impl Iterator<Item = (&NodeId, &Arc<ComputedStyle>)> {
         self.entries.iter().map(|(id, (style, ..))| (id, style))
+    }
+
+    /// PERF-ANIM-CANDIDATES — `(NodeId::raw(), pseudo)` pairs whose computed
+    /// style names a CSS animation (`animation-name` ≠ `none`), where `pseudo`
+    /// is the `::`-prefixed pseudo-element name or `None` for the element
+    /// itself — see [`AnimationCandidates`]. This is the candidate list
+    /// `document.getAnimations()`' JS side walks instead of
+    /// `querySelectorAll('*')` plus a computed-style read per element per
+    /// pseudo-element; ids are `raw()` because that is the space JS `__nid__`
+    /// lives in. Iterating every styled node is a field check per entry —
+    /// orders cheaper than the DOM walk it replaces.
+    pub fn animation_candidates(&self) -> AnimationCandidates {
+        let mut out: AnimationCandidates = self
+            .iter()
+            .filter(|(_, style)| !style.animation_names.is_empty())
+            .map(|(id, _)| (id.raw(), None))
+            .collect();
+        out.extend(
+            self.pseudo_cache()
+                .animation_pseudo_candidates()
+                .into_iter()
+                .map(|(nid, pseudo)| (nid, Some(pseudo))),
+        );
+        out
     }
 
     /// This cache's contents as a plain map, dropping the pass stamps.

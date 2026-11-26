@@ -1315,12 +1315,14 @@ impl PersistentJs for V8PersistentJs {
     }
     fn dom_touched_ack_reader(&self) -> Option<DomTouchedAckReader> {
         let (read, ack) = self.rt.dom_changes_reader_acked();
+        let note = self.rt.shell_touch_notifier();
         Some(DomTouchedAckReader {
             read: Arc::new(move || {
                 let t = read();
                 DomTouchedSummary { changes: t.changes, unattributed: t.unattributed, epoch: t.epoch }
             }),
             ack: Arc::new(ack),
+            touch: Some(Arc::new(note)),
         })
     }
     fn pseudo_styles_needed_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
@@ -1896,4 +1898,13 @@ pub(crate) struct DomTouchedSummary {
 pub(crate) struct DomTouchedAckReader {
     pub(crate) read: DomTouchedDrain,
     pub(crate) ack: Arc<dyn Fn(u64) + Send + Sync>,
+    /// Reports a form-control write the shell made in the document itself. The JS echo
+    /// of such a write finds the new value already in place and records nothing, so
+    /// without this note `read` never names the control and a job on the incremental
+    /// restyle road keeps its old box. Called on the browser thread, before the
+    /// relayout job is queued — hence a handle, not an engine-thread task.
+    pub(crate) touch: Option<ShellControlTouch>,
 }
+
+/// See [`DomTouchedAckReader::touch`].
+pub(crate) type ShellControlTouch = Arc<dyn Fn(lumen_dom::NodeId) + Send + Sync>;

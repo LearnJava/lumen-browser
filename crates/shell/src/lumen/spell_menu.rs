@@ -218,6 +218,7 @@ impl Lumen {
                         {
                             forms::set_value(&mut doc, node, &value);
                         }
+                        self.note_shell_control_write(node);
                         self.form_state.entry(node).or_default().value = value;
                     }
                     self.relayout_form();
@@ -231,6 +232,7 @@ impl Lumen {
                         {
                             forms::set_value(&mut doc, target.node, &new_val);
                         }
+                        self.note_shell_control_write(target.node);
                         self.form_state.entry(target.node).or_default().value = new_val;
                     }
                     SpellTargetKind::Textarea => {
@@ -240,6 +242,7 @@ impl Lumen {
                         {
                             forms::set_textarea_text(&mut doc, target.node, &new_val);
                         }
+                        self.note_shell_control_write(target.node);
                         self.form_state.entry(target.node).or_default().value = new_val;
                     }
                     SpellTargetKind::ContentEditable => {

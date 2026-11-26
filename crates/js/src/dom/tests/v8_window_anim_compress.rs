@@ -852,6 +852,54 @@ fn document_get_animations() {
     assert_eq!(r, lumen_core::JsValue::Number(1.0));
 }
 
+/// PERF-ANIM-CANDIDATES: `document.getAnimations()` finds CSS animations from
+/// the candidate list the flush publishes (`_lumen_animation_candidates`) —
+/// the element itself and the pseudo-elements whose computed style names an
+/// animation — not from a `querySelectorAll('*')` sweep. `#main::after` has no
+/// `animation-name`, so it must stay unlisted.
+#[test]
+fn document_get_animations_lists_css_animations_and_pseudo_ones() {
+    let rt = v8_runtime_with_dom(make_doc());
+    // `_lumen_has_keyframes` reads the per-node sheet registry, so the sheet
+    // must hang off a real `<style>` element — a bare `update_stylesheet`
+    // push never reaches it and `getAnimations()` exits before the scan.
+    let style_nid = match rt
+        .eval("var st = document.createElement('style'); document.head.appendChild(st); st.__nid__")
+        .unwrap()
+    {
+        lumen_core::JsValue::Number(n) => n as u32,
+        other => panic!("{other:?}"),
+    };
+    // `maybe_flush` lays out only against the pushed sheet — the node entries
+    // are merged onto it by `patched_cascade`, so both halves are needed; and
+    // it refuses a zero viewport, so the test must size one.
+    rt.update_viewport_size(800.0, 600.0);
+    rt.update_stylesheet(Arc::new(lumen_css_parser::parse("")));
+    rt.update_stylesheet_nodes(vec![lumen_css_parser::StylesheetNodeEntry {
+        node: style_nid,
+        sheet: Arc::new(lumen_css_parser::parse(
+            "@keyframes kf { from { opacity: 0; } to { opacity: 1; } }
+             #main { animation-name: kf; animation-duration: 10s; }
+             #main::before { content: 'x'; animation-name: kf; animation-duration: 10s; }
+             #main::after { content: 'y'; }",
+        )),
+        disabled: false,
+    }]);
+    let r = rt.eval(
+        "document.getAnimations().map(function(a) { \
+             return a.animationName + '@' + ((a.effect && a.effect.pseudoElement) || 'el'); \
+         }).sort().join(' ')"
+    ).unwrap();
+    match r {
+        lumen_core::JsValue::String(s) => {
+            assert!(s.contains("kf@el"), "missing element animation in {s:?}");
+            assert!(s.contains("kf@::before"), "missing ::before animation in {s:?}");
+            assert!(!s.contains("::after"), "unexpected ::after animation in {s:?}");
+        }
+        other => panic!("expected string, got {other:?}"),
+    }
+}
+
 /// The `_lumen_tick_timers()` is required since BUG-808: the playback
 /// events are queued as event-loop tasks (§4.4.3), not dispatched
 /// inside `finish()`.

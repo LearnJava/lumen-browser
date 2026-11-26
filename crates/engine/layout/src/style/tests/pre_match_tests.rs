@@ -102,6 +102,42 @@ fn the_pre_matched_walk_reproduces_the_sequential_cascade_byte_for_byte() {
     );
 }
 
+/// A hover/active subject left over from the outgoing document — an index past this
+/// document's arena — cascades as "nothing hovered" on both roads. It used to take the
+/// rayon workers down with the `BUG-986` panic, which unwound under the caller's
+/// document lock and poisoned it.
+#[test]
+fn an_interactive_index_foreign_to_the_document_cascades_as_nothing_hovered() {
+    let (doc, sheet, flat, vp) = fixture();
+    let foreign = NodeId::from_index(1_000_000);
+    assert!(!doc.contains_id(foreign), "fixture must not reach the foreign index");
+
+    crate::style::set_interactive_state(None, None, None);
+    let idle_sequential = cascade(true, &doc, &sheet, &flat, vp);
+    let _ = pre_match::take_hits();
+    let idle_parallel = cascade(false, &doc, &sheet, &flat, vp);
+    crate::style::clear_interactive_state();
+
+    crate::style::set_interactive_state(Some(foreign), None, Some(foreign));
+    let foreign_sequential = cascade(true, &doc, &sheet, &flat, vp);
+    let _ = pre_match::take_hits();
+    let foreign_parallel = cascade(false, &doc, &sheet, &flat, vp);
+    let hits = pre_match::take_hits();
+    crate::style::clear_interactive_state();
+
+    assert!(hits >= 64, "the pre-matched road must actually run, got {hits} lookups");
+    assert_eq!(
+        foreign_sequential.styles(),
+        idle_sequential.styles(),
+        "a foreign interactive index changed a style on the sequential road"
+    );
+    assert_eq!(
+        foreign_parallel.styles(),
+        idle_parallel.styles(),
+        "a foreign interactive index changed a style on the pre-matched road"
+    );
+}
+
 /// A document with an author shadow tree exercises the `StyleEnvSnapshot` half of the
 /// pre-pass: `:host`/`::slotted()`/interior rules are not part of the record (the walk
 /// re-matches them), but the shadow sheets and the shadow-context `shareable` verdict are

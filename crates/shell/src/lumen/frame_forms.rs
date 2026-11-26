@@ -47,7 +47,9 @@ impl Lumen {
             // (BUG-927) — расходиться поведением клика по радиокнопке между
             // страницей и фреймом нельзя.
             forms::FormClickAction::ToggleRadio { clicked: id, .. } => {
-                self.with_frame_doc(idx, |doc| forms::toggle_radio(doc, id))
+                self.with_frame_doc(idx, |doc| {
+                    forms::toggle_radio(doc, id);
+                })
             }
             forms::FormClickAction::ToggleDetails(id) => self.frame_toggle_details(idx, id),
             forms::FormClickAction::SlideRange(id) => self.frame_slide_range(idx, id, at.x),

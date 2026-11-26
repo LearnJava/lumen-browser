@@ -6806,9 +6806,39 @@ function _wa_motion_tr_sync(target, flushed) {
     var epoch = typeof _lumen_style_epoch === 'function' ? _lumen_style_epoch() : 0;
     if (epoch !== 0 && _wa_motion_synced[nid] === epoch) return;
     _wa_motion_synced[nid] = epoch;
+    // PERF-TR-SYNC: one bulk read for every eligible property instead of a
+    // native crossing per property (hundreds per node per epoch). Custom
+    // properties (`--*`) keep the single-read path — they live in their own
+    // snapshot — and `background-image`'s url() resolution is applied here
+    // exactly as `_lumen_computed_property` does it.
+    var bulk = null, bulkNames = [];
+    if (typeof _lumen_computed_properties === 'function') {
+        for (var bk in props) {
+            if (_wa_motion_eligible(bk) && bk.slice(0, 2) !== '--') bulkNames.push(bk);
+        }
+        if (bulkNames.length) {
+            try { bulk = JSON.parse(_lumen_computed_properties(nid, JSON.stringify(bulkNames))); }
+            catch (e) { bulk = null; }
+            // An empty answer means the nid has no snapshot entry at all —
+            // every per-property read would answer '' too, so fall back to
+            // them: identical result, and it keeps test harnesses that stub
+            // `_lumen_computed_property` working (the bulk native cannot see
+            // their stub).
+            if (bulk !== null && Object.keys(bulk).length === 0) bulk = null;
+        }
+    }
     for (var kebab in props) {
         if (_wa_motion_eligible(kebab)) {
-            var resolved = _lumen_computed_property(nid, kebab);
+            var resolved;
+            if (bulk !== null && kebab.slice(0, 2) !== '--') {
+                resolved = bulk[kebab];
+                if (resolved === undefined) resolved = '';
+                if (resolved !== '' && (kebab === 'background-image' || kebab === '-webkit-background-image')) {
+                    resolved = _lumen_resolve_css_urls(resolved);
+                }
+            } else {
+                resolved = _lumen_computed_property(nid, kebab);
+            }
             if (resolved !== '') _wa_motion_read(nid, null, kebab, resolved);
         }
         var a = _css_tr_by_key[nid + ':' + kebab];
@@ -9049,6 +9079,19 @@ function _css_an_update_all() {
         for (var v = 0; v < vtp.length; v++) _css_an_update(vtOwners[o], vtp[v]);
     }
     if (typeof _lumen_has_keyframes === 'function' && !_lumen_has_keyframes()) return;
+    // PERF-ANIM-CANDIDATES: the flush publishes the (node, pseudo) pairs whose
+    // computed style names a CSS animation — walking it replaces the
+    // `querySelectorAll('*')` scan plus a computed-style read per element per
+    // pseudo-element (~4 native reads × every element). Native missing or an
+    // unparsable answer (worker/test harness) falls back to the full scan.
+    if (typeof _lumen_animation_candidates === 'function') {
+        var cands = null;
+        try { cands = JSON.parse(_lumen_animation_candidates()); } catch (e) { cands = null; }
+        if (cands !== null) {
+            for (var n = 0; n < cands.length; n++) _css_an_update(cands[n][0], cands[n][1]);
+            return;
+        }
+    }
     var els = document.querySelectorAll('*');
     for (var n = 0; n < els.length; n++) {
         var nid = els[n].__nid__;
