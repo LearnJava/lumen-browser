@@ -1511,6 +1511,21 @@ pub(crate) fn install_node_properties(
                     .collect()
             }
         );
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store,
+            "_lumen_parse_html_fragment_ctx",
+            move |html: String, ctx: u32| -> Vec<u32> {
+                // document.write в foreign-контексте (SVG/MathML-родитель):
+                // контекстный элемент решает namespace записанных узлов —
+                // `<script xlink:href>` внутри <svg> становится SVG-скриптом
+                // (execution-timing/142-143).
+                let mut doc = d.lock().unwrap();
+                parse_html_fragment_with_context(&mut doc, &html, Some(NodeId::from_raw(ctx)))
+                    .into_iter()
+                    .map(|n| n.raw())
+                    .collect()
+            }
+        );
     }
     Ok(())
 }
