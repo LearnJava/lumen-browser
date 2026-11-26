@@ -1,21 +1,21 @@
 {
-  "timestamp": "2026-11-19T11:18:11",
+  "timestamp": "2026-11-26T02:13:23",
   "git": {
-    "commit": "5db941c22",
-    "branch": "p1-svg-filter-10-s2",
-    "subject": "SVG-FILTER-10-S1: четыре свойства фильтров в каскаде и CSSOM"
+    "commit": "3705089434",
+    "branch": "bug-nextera-portal-fix",
+    "subject": "docs: HANDOFF-PERF — shim-фиксы этой сессии и JS-методика проб"
   },
   "crop_offset": [
     8,
-    99
+    73
   ],
   "halted_at": null,
   "summary": {
     "total": 173,
-    "passed": 119,
-    "failed": 9,
+    "passed": 111,
+    "failed": 29,
     "errors": 0,
-    "debtors": 45,
+    "debtors": 33,
     "skipped": 0
   },
   "tests": [
@@ -25,10 +25,10 @@
       "label": "calibration",
       "html": "00-calibration.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0008,
+      "status": "FAIL",
+      "diff_pct": 13.8889,
       "diff_region": {
-        "top": 717,
+        "top": 620,
         "left": 0,
         "bottom": 719,
         "right": 1023
@@ -216,10 +216,10 @@
       "label": "outline",
       "html": "16-outline.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0008,
+      "status": "FAIL",
+      "diff_pct": 13.8882,
       "diff_region": {
-        "top": 717,
+        "top": 620,
         "left": 0,
         "bottom": 719,
         "right": 1023
@@ -264,8 +264,8 @@
       "label": "object-fit",
       "html": "19-object-fit.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 9.763,
+      "status": "FAIL",
+      "diff_pct": 22.2004,
       "diff_region": {
         "top": 26,
         "left": 0,
@@ -276,7 +276,7 @@
       "debtor": {
         "bug": "BUG-219",
         "baseline": 9.05,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -420,8 +420,8 @@
       "label": "CSS filter: grayscale/sepia/brightness/invert/contrast/saturate/opacity/blur/hue-rotate",
       "html": "30-css-filter.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.3271,
+      "status": "FAIL",
+      "diff_pct": 12.7597,
       "diff_region": {
         "top": 31,
         "left": 0,
@@ -490,7 +490,7 @@
       "html": "34-forms.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.082,
+      "diff_pct": 3.0821,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -635,8 +635,8 @@
       "label": "CSS Backgrounds L3 §3 — multiple background layers, position/size/repeat/clip/origin",
       "html": "45-multiple-backgrounds.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.3531,
+      "status": "FAIL",
+      "diff_pct": 13.7851,
       "diff_region": {
         "top": 22,
         "left": 0,
@@ -647,7 +647,7 @@
       "debtor": {
         "bug": "BUG-128",
         "baseline": 0.87,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -726,8 +726,8 @@
       "label": "Scrollbar rendering — overflow:scroll/auto vertical/horizontal/both DrawScrollbar track+thumb",
       "html": "51-scrollbar-rendering.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 0.5252,
+      "status": "FAIL",
+      "diff_pct": 12.9578,
       "diff_region": {
         "top": 23,
         "left": 0,
@@ -738,7 +738,7 @@
       "debtor": {
         "bug": "BUG-124",
         "baseline": 1.67,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -747,8 +747,8 @@
       "label": "text-shadow blur — PushFilter{Blur(sigma)} wrapping: sharp/4px/10px/20px blur progression + multi-shadow + glow",
       "html": "52-text-shadow-blur.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.2935,
+      "status": "FAIL",
+      "diff_pct": 15.1812,
       "diff_region": {
         "top": 67,
         "left": 0,
@@ -759,7 +759,7 @@
       "debtor": {
         "bug": "BUG-128",
         "baseline": 1.36,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -768,19 +768,19 @@
       "label": "background-origin — positioning area: border-box/padding-box/content-box vs background-clip; 0%/100% anchoring",
       "html": "53-background-origin.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.0396,
+      "status": "FAIL",
+      "diff_pct": 13.4748,
       "diff_region": {
         "top": 36,
         "left": 0,
         "bottom": 719,
-        "right": 761
+        "right": 1023
       },
       "capture": "gdigrab",
       "debtor": {
         "bug": "BUG-219",
         "baseline": 1.16,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -805,8 +805,8 @@
       "label": "<video> replaced element — grey DrawImage placeholder; UA default 300×150; CSS/attr dimensions; border + border-radius",
       "html": "55-video-placeholder.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.3545,
+      "status": "FAIL",
+      "diff_pct": 12.7861,
       "diff_region": {
         "top": 125,
         "left": 0,
@@ -822,7 +822,7 @@
       "html": "56-mix-blend-mode.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 14.1203,
+      "diff_pct": 28.0082,
       "diff_region": {
         "top": 50,
         "left": 0,
@@ -837,8 +837,8 @@
       "label": "HTML LS §4.12.4 — <canvas> getContext(\"2d\"): fillRect/strokeRect/arc/path fill; UA default 300×150; attr dimensions; CSS background + border + border-radius on the canvas element box",
       "html": "57-canvas-2d.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.2833,
+      "status": "FAIL",
+      "diff_pct": 12.7138,
       "diff_region": {
         "top": 185,
         "left": 0,
@@ -874,8 +874,8 @@
       "label": "CSS Images L4 §5/§4 — image-set() DPR selection + cross-fade() two-image blend; -webkit- vendor prefix variants",
       "html": "59-image-set-cross-fade.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 10.0232,
+      "status": "FAIL",
+      "diff_pct": 22.4562,
       "diff_region": {
         "top": 28,
         "left": 0,
@@ -886,7 +886,7 @@
       "debtor": {
         "bug": "BUG-219",
         "baseline": 10.03,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -911,8 +911,8 @@
       "label": "View Transitions API: document.startViewTransition(cb) — JS API, ViewTransition object, Begin/End events, 300 ms cross-fade",
       "html": "61-view-transitions.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 10.7784,
+      "status": "DEBTOR",
+      "diff_pct": 3.3782,
       "diff_region": {
         "top": 32,
         "left": 40,
@@ -923,7 +923,7 @@
       "debtor": {
         "bug": "BUG-103",
         "baseline": 3.26,
-        "verdict": "REGRESS"
+        "verdict": "OK"
       }
     },
     {
@@ -933,7 +933,7 @@
       "html": "62-scroll-snap.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 0.3379,
+      "diff_pct": 14.1734,
       "diff_region": {
         "top": 9,
         "left": 0,
@@ -944,7 +944,7 @@
       "debtor": {
         "bug": "BUG-644",
         "baseline": 0.75,
-        "verdict": "REMOVE"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -954,7 +954,7 @@
       "html": "63-masonry.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.4034,
+      "diff_pct": 1.4041,
       "diff_region": {
         "top": 31,
         "left": 11,
@@ -996,7 +996,7 @@
       "html": "65-flex-align-content.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.4978,
+      "diff_pct": 0.4979,
       "diff_region": {
         "top": 30,
         "left": 2,
@@ -1213,8 +1213,8 @@
       "label": "CSS Scroll-Driven Animations L1: scroll-timeline-name/axis, view-timeline-name/axis, animation-timeline: scroll()/view()/named",
       "html": "78-scroll-driven-animations.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 2.3777,
+      "status": "FAIL",
+      "diff_pct": 14.7363,
       "diff_region": {
         "top": 28,
         "left": 0,
@@ -1225,7 +1225,7 @@
       "debtor": {
         "bug": "BUG-127",
         "baseline": 3.6,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -1234,8 +1234,8 @@
       "label": "CSS Text Decoration L4: text-underline-offset (px/auto/negative) + text-underline-position (under) wired to push_text_decoration",
       "html": "79-text-underline-offset.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 5.6166,
+      "status": "FAIL",
+      "diff_pct": 18.0495,
       "diff_region": {
         "top": 45,
         "left": 0,
@@ -1246,7 +1246,7 @@
       "debtor": {
         "bug": "BUG-128",
         "baseline": 5.65,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -1256,7 +1256,7 @@
       "html": "80-border-collapse.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.256,
+      "diff_pct": 4.0097,
       "diff_region": {
         "top": 22,
         "left": 0,
@@ -1314,7 +1314,7 @@
       "html": "83-scroll-behavior.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 8.3023,
+      "diff_pct": 8.3016,
       "diff_region": {
         "top": 31,
         "left": 51,
@@ -1355,8 +1355,8 @@
       "label": "INTERACTION: transform × overflow:hidden — клиппинг трансформированных слоёв, поворот самого клип-контейнера",
       "html": "100-transform-overflow.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0098,
+      "status": "FAIL",
+      "diff_pct": 13.3154,
       "diff_region": {
         "top": 448,
         "left": 0,
@@ -1367,6 +1367,11 @@
       "deps": [
         "22",
         "14"
+      ],
+      "affected": [
+        "c3: CONTROL no clip",
+        "c4: negative translate clipped",
+        "c5: rotated clip container"
       ]
     },
     {
@@ -1527,8 +1532,8 @@
       "label": "INTERACTION: clip-path × transform × border-radius — клип в локальном боксе элемента сквозь трансформацию",
       "html": "109-clippath-transform.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.1858,
+      "status": "FAIL",
+      "diff_pct": 13.5782,
       "diff_region": {
         "top": 85,
         "left": 0,
@@ -1540,6 +1545,14 @@
         "31",
         "22",
         "36"
+      ],
+      "affected": [
+        "c0: circle clip on rotated",
+        "c1: inset clip on scaled",
+        "c2: triangle clip on translated",
+        "c3: clipped parent, transformed child",
+        "c4: clip-path ∩ border-radius",
+        "c5: CONTROL no clip"
       ]
     },
     {
@@ -1715,8 +1728,8 @@
       "label": "CSS Lists L3 §4: counter-set — порядок reset→increment→set (set перекрывает increment), создание счётчика на never-reset; ::before content: counter(c) показывает 5/6/0/1/42",
       "html": "97-counter-set.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.3973,
+      "status": "FAIL",
+      "diff_pct": 15.1679,
       "diff_region": {
         "top": 55,
         "left": 0,
@@ -1727,7 +1740,7 @@
       "debtor": {
         "bug": "BUG-128",
         "baseline": 2.78,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -1801,12 +1814,12 @@
       "html": "112-clip-path-fill-rule.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0003,
+      "diff_pct": 0.2262,
       "diff_region": {
-        "top": 137,
-        "left": 280,
+        "top": 90,
+        "left": 256,
         "bottom": 137,
-        "right": 281
+        "right": 305
       },
       "capture": "ipc"
     },
@@ -1875,8 +1888,8 @@
       "label": "CSS Generated Content L3 §3.2: quotes + content open-quote/close-quote — auto curly quotes, вложенные <q> (primary “”→secondary ‘’), кастомные пары « » / ‹ ›, quotes:none без знаков; глубина вложенности считается в document order через counters pre-pass",
       "html": "117-quotes.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.0688,
+      "status": "FAIL",
+      "diff_pct": 14.9567,
       "diff_region": {
         "top": 58,
         "left": 0,
@@ -1887,7 +1900,7 @@
       "debtor": {
         "bug": "BUG-216",
         "baseline": 1.13,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -1951,7 +1964,7 @@
       "html": "122-line-height-step.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 9.584,
+      "diff_pct": 9.5839,
       "diff_region": {
         "top": 32,
         "left": 41,
@@ -2052,8 +2065,8 @@
       "label": "BUG-243 (dynamic SVG, без текста): глубоко вложенные <g>-трансформы — кумулятивная композиция translate/rotate/scale (спираль из 16 вложенных квадратов) + каталог независимых translate()+scale() мотивов. Проверяет parse_svg_transform.compose на глубине. GPU_CAPTURE: снимается gdigrab-ом (трансформы/AA-края реального окна; JS CPU-снимок исполняет)",
       "html": "130-svg-dynamic-nested-transforms.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.3019,
+      "status": "FAIL",
+      "diff_pct": 2.054,
       "diff_region": {
         "top": 112,
         "left": 0,
@@ -2142,8 +2155,8 @@
       "label": "BUG-243 (dynamic SVG, без текста): порядок отрисовки по document order (z-stack) — каскад перекрытых квадратов/кругов, плетёная сетка баров, веер повёрнутых карт. Геометрия перекрытий должна совпасть с Edge. GPU_CAPTURE: снимается gdigrab-ом (трансформы/AA-края реального окна; JS CPU-снимок исполняет)",
       "html": "135-svg-dynamic-paint-order.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.1796,
+      "status": "FAIL",
+      "diff_pct": 5.085,
       "diff_region": {
         "top": 101,
         "left": 0,
@@ -2154,7 +2167,7 @@
       "debtor": {
         "bug": "BUG-247",
         "baseline": 0.54,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -2163,8 +2176,8 @@
       "label": "BUG-243 (dynamic SVG, без текста): геометрия <circle>/<ellipse> — концентрические эллипсы (varying rx/ry), мишень из кругов, радиальный кластер кругов, ряд эллипсов с растущим ry. GPU_CAPTURE: снимается gdigrab-ом (трансформы/AA-края реального окна; JS CPU-снимок исполняет)",
       "html": "136-svg-dynamic-ellipse-radial.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 0.5024,
+      "status": "FAIL",
+      "diff_pct": 3.8691,
       "diff_region": {
         "top": 91,
         "left": 0,
@@ -2175,7 +2188,7 @@
       "debtor": {
         "bug": "BUG-247",
         "baseline": 0.55,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -2233,7 +2246,7 @@
       "html": "140-placeholder-pseudo.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.288,
+      "diff_pct": 1.2877,
       "diff_region": {
         "top": 41,
         "left": 41,
@@ -2340,7 +2353,7 @@
       "html": "147-background-repeat-space.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.9096,
+      "diff_pct": 4.3861,
       "diff_region": {
         "top": 41,
         "left": 0,
@@ -2393,7 +2406,7 @@
       "html": "150-font-variant-caps.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 7.49,
+      "diff_pct": 7.4896,
       "diff_region": {
         "top": 46,
         "left": 37,
@@ -2532,7 +2545,7 @@
       "html": "159-background-clip-text.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 2.5064,
+      "diff_pct": 2.5062,
       "diff_region": {
         "top": 34,
         "left": 41,
@@ -2603,7 +2616,7 @@
       "html": "165-svg-clip-path.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0338,
+      "diff_pct": 0.0335,
       "diff_region": {
         "top": 55,
         "left": 55,
@@ -2618,8 +2631,8 @@
       "label": "TEXTQ-1 качество текста в живом окне (wgpu): Arial и Segoe UI, чёрный на белом и белый на тёмном, 11/12/13/14/15/16/17/20/28/72 px + строка с дробным left 10.3px. Информационный: ClearType Edge против серого покрытия Lumen порога 0.5% не даёт, число — мера «мыла» (bin-ы размеров, дробные позиции). GPU_CAPTURE: снимается gdigrab-ом (wgpu-путь глифов; CPU-снимок текст растрирует иначе)",
       "html": "166-text-quality.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 9.1135,
+      "status": "FAIL",
+      "diff_pct": 22.8611,
       "diff_region": {
         "top": 9,
         "left": 0,
@@ -2630,7 +2643,7 @@
       "debtor": {
         "bug": "BUG-128",
         "baseline": 9.12,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -2683,7 +2696,7 @@
       "html": "170-border-image.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3075,
+      "diff_pct": 0.3014,
       "diff_region": {
         "top": 31,
         "left": 25,
@@ -2699,7 +2712,7 @@
       "html": "171-background-clip-border-area.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0232,
+      "diff_pct": 0.0231,
       "diff_region": {
         "top": 25,
         "left": 341,
@@ -2726,7 +2739,7 @@
       "html": "173-synthetic-bold-italic.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 4.1401,
+      "diff_pct": 5.6162,
       "diff_region": {
         "top": 35,
         "left": 0,

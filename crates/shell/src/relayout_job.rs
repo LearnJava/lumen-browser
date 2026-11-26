@@ -744,6 +744,18 @@ impl Lumen {
             // DOM-мутация не может вклиниться между снимком документа и
             // отметкой epoch (она встаёт на этот же мьютекс).
             let doc = document.lock().unwrap_or_else(|e| e.into_inner());
+            // The interactive triple was captured on the browser thread, before
+            // this job was queued; a document committed in between leaves it
+            // pointing into the outgoing arena. An index past this document
+            // panicked the cascade (`BUG-986`) on the rayon workers — under
+            // this lock, poisoning it for every other thread — so the triple is
+            // re-checked against the document actually being laid out.
+            let in_this_doc = |id: Option<lumen_dom::NodeId>| id.filter(|id| doc.contains_id(*id));
+            lumen_layout::set_interactive_state(
+                in_this_doc(hovered),
+                in_this_doc(focused),
+                in_this_doc(active),
+            );
             let touched = touched_reader.as_ref().map(|r| (r.read)());
             // Водяной знак подтверждается только при применении коммита
             // (poll_engine_commit/readback): вытесненное задание не «сжигает»

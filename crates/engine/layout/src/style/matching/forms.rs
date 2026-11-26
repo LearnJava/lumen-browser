@@ -1412,6 +1412,11 @@ fn is_root_element(doc: &Document, node: NodeId) -> bool {
 /// Returns `true` if `ancestor` is `node` itself, or a proper ancestor of `node` in the tree.
 fn is_self_or_ancestor(doc: &Document, ancestor: NodeId, node: NodeId) -> bool {
     if ancestor == node { return true; }
+    // `node` here is an interactive index (`:hover`/`:active`/`:focus-within`) that
+    // arrived through the thread-local snapshot. One left over from the outgoing
+    // document cascades as "no match": the `BUG-986` panic on `get` unwinds on a
+    // rayon worker under the caller's document lock and poisons it.
+    if !doc.contains_id(node) { return false; }
     let mut cur = doc.get(node).parent;
     while let Some(parent_id) = cur {
         if parent_id == ancestor { return true; }

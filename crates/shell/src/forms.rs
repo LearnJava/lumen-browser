@@ -330,8 +330,9 @@ pub fn toggle_checkbox(doc: &mut Document, id: NodeId) {
 /// radio button in its group (same `name`, nearest form owner). See
 /// [`lumen_dom::set_radio_checked`] for the group-resolution rules. After
 /// calling this, relayout is needed to update `:checked`/`:indeterminate`.
-pub fn toggle_radio(doc: &mut Document, id: NodeId) {
-    set_radio_checked(doc, id);
+/// Returns every control the click changed, in the order it changed them.
+pub fn toggle_radio(doc: &mut Document, id: NodeId) -> Vec<NodeId> {
+    set_radio_checked(doc, id)
 }
 
 /// Set the current value of an `<input>` in the live DOM — typing, a picker

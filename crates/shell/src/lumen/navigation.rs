@@ -234,12 +234,9 @@ impl Lumen {
         self.nav_fwd.clear();
         self.display_url = None;
         self.current_history_state_json = String::from("null");
-        // BUG-995: the outgoing document is being unloaded, so any focus it
-        // held is gone (HTML LS §7.4.5 unloading removes focus) — leaving
-        // `focused_node`/`focused_frame` pointing at a NodeId from that
-        // document's arena panics the next keystroke once the arena is freed.
-        self.focused_node = None;
-        self.focused_frame = None;
+        // The outgoing document is being unloaded: neither its focus (BUG-995)
+        // nor the pointer's hover/active subject survives the navigation.
+        self.reset_interactive_subjects();
         // Assign a fresh key to the incoming page before it becomes current.
         self.nav_key_counter += 1;
         self.current_nav_key = format!("nav-{}", self.nav_key_counter);
@@ -301,10 +298,9 @@ impl Lumen {
         self.nav_fwd.clear();
         self.display_url = None;
         self.current_history_state_json = String::from("null");
-        // BUG-995: see `navigate_to` — the outgoing document's focus does
-        // not survive the navigation.
-        self.focused_node = None;
-        self.focused_frame = None;
+        // See `navigate_to` — the outgoing document's focus and the pointer's
+        // hover/active subject do not survive the navigation.
+        self.reset_interactive_subjects();
         // P3-viewtransnav срез 3: see `navigate_to_inner` — same snapshot, this
         // is `location.replace()`'s equivalent navigation boundary.
         self.maybe_capture_mpa_view_transition_snapshot(&source);
@@ -315,6 +311,41 @@ impl Lumen {
         // refresh — see `commit_nav_state`'s doc comment for why this matters.
         self.relayout_chrome_host();
         self.reload();
+    }
+
+    /// The outgoing document is being unloaded, so its interactive subjects
+    /// are gone with it. Called from every cross-document commit path.
+    ///
+    /// BUG-995: focus — HTML LS §7.4.5 unloading removes focus, and leaving
+    /// `focused_node`/`focused_frame` pointing at a NodeId from that
+    /// document's arena panics the next keystroke once the arena is freed.
+    ///
+    /// The pointer's hover/active subject is the same hazard, and nothing else
+    /// clears it: the cursor has not moved, so no `CursorMoved` recomputes it.
+    /// Left in place it rode into the first layout of the incoming document,
+    /// where `:hover` matching dereferenced the foreign index (`BUG-986`) on
+    /// the rayon workers — the panic unwound under the document lock and
+    /// poisoned it, and the `lumen-browser` thread died on the next
+    /// `lock().unwrap()`.
+    fn reset_interactive_subjects(&mut self) {
+        self.focused_node = None;
+        self.focused_frame = None;
+        if self.hovered_nid.is_some() {
+            self.hovered_nid = None;
+            // Same echo as the in-window hover flip (BUG-1458): the engine
+            // thread's `:hover` mirror must not keep the outgoing index.
+            #[cfg(feature = "v8")]
+            {
+                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+                    js.notify_hover_changed(None);
+                });
+            }
+        }
+        if self.active_nid.is_some() {
+            self.active_nid = None;
+            self.active_from_keyboard = false;
+            self.sync_active_mirror();
+        }
     }
 
     /// Run a `javascript:` URL's code (HTML LS §7.4.5) against the current
