@@ -46,6 +46,19 @@ cargo test -p lumen-js --features v8-backend --lib "document_pip::tests::documen
 `perf9_code_cache_hit_preserves_semantics` в полном прогоне проходят по одному —
 это известный [BUG-1677](BUG-1677-OPEN.md), в этот баг не входит.
 
+Дополнение 2026-11-26 (гейт MCP-TOTAL-S7b, js-код по-прежнему идентичен `main`):
+полный прогон `scoped-test.sh` дал те же кластеры с чуть сместившимся составом —
+к перечисленному добавились `web_audio::tests_v8::bug1089_sink_id_and_playback_stats`,
+`worker::tests_v8::v8_worker_end_to_end_top_level_throw_runs_scope_handlers_once`,
+`frame_bridge::tests::initial_frame_eval_creates_a_runtime_whose_state_persists`
+и три интеграционных из той же семьи (`speech_api::speech_recognition_is_not_exposed`,
+`webrtc_not_declared` — оба). Каждый печатает тот же v8-шум
+`install_document_pip_api_v8 failed` — корень, судя по всему, не сменился; состав
+падающих тестов в полном прогоне плавает от запуска к запуску. Попутно: перф-ворота
+`lumen-layout` `block_flow_trampoline::deep_chain_with_margins_collapses_through_the_trampoline`
+(x17.6 против порога ~x16) в том же параллельном прогоне упали, но соло проходят —
+нагрузочный флейк замера, не регрессия; в баги не отнесено.
+
 ## Причина
 
 Не локализована, не бисектилась. Подозреваемый — «BUG-753 срез 2: внутренний

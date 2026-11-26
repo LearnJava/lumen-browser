@@ -48,10 +48,52 @@ impl Lumen {
             // ADR-016 M2.2c-2d: fire-and-forget file-list delivery через маршрутизатор —
             // токены регистрируются на UI-потоке (до постановки в очередь), сам `eval_js`
             // под флагом уходит off-UI-thread, без флага байт-идентично прежнему `js.eval_js`.
-            let script = format!("_lumen_deliver_file_list({}, {})", id.index(), json);
+            let script = platform::file_dialog::deliver_file_list_script(id.index(), &json);
             route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
         }
         #[cfg(not(feature = "v8"))]
         let _ = entries;
+    }
+
+    /// MCP-TOTAL-S7b: deliver `paths` to the `<input type="file">` at `id`
+    /// without the OS dialog — the same token registration and
+    /// `_lumen_deliver_file_list` delivery a real pick takes (the delivery
+    /// itself fires `input`/`change`). A nonexistent path or a non-file is
+    /// an error; so is a target that is not a file input.
+    pub(crate) fn set_files_on_input(&mut self, id: NodeId, paths: &[String]) -> Result<(), String> {
+        let mut entries = Vec::with_capacity(paths.len());
+        let is_file_input = self
+            .layout_source
+            .as_ref()
+            .and_then(|src| src.document.lock().ok())
+            .map(|doc| doc.get(id).input_type() == Some(lumen_dom::InputType::File))
+            // Узел не нашёлся в дереве — проверять нечего, arm уже отрезолвил цель.
+            .unwrap_or(true);
+        if !is_file_input {
+            return Err(format!("set_files: target is not <input type=file> (node {})", id.index()));
+        }
+        for p in paths {
+            let meta = std::fs::metadata(p).map_err(|e| format!("set_files: {p}: {e}"))?;
+            if !meta.is_file() {
+                return Err(format!("set_files: {p}: not a regular file"));
+            }
+            entries.push(platform::file_dialog::entry_from_path(p));
+        }
+        #[cfg(feature = "v8")]
+        if self.js_present {
+            // Same grant path as the picker (BUG-371): the origin is read
+            // back from the install path, paths stay on the automation side.
+            let origin = lumen_js::file_input::active_document_origin();
+            let tokens: Vec<String> = entries
+                .iter()
+                .map(|e| lumen_js::file_input::register_file_token(&e.path, &origin))
+                .collect();
+            let json = platform::file_dialog::entries_to_json_with_tokens(&entries, &tokens);
+            let script = platform::file_dialog::deliver_file_list_script(id.index(), &json);
+            route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
+        }
+        #[cfg(not(feature = "v8"))]
+        let _ = (&entries, id);
+        Ok(())
     }
 }

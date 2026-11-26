@@ -289,7 +289,7 @@ impl Lumen {
                 .map(|e| lumen_js::file_input::register_file_token(&e.path, &origin))
                 .collect();
             let json = platform::file_dialog::entries_to_json_with_tokens(&entries, &tokens);
-            js.eval_js(&format!("_lumen_deliver_file_list({}, {})", id.index(), json));
+            js.eval_js(&platform::file_dialog::deliver_file_list_script(id.index(), &json));
         }
         #[cfg(not(feature = "v8"))]
         let _ = entries;

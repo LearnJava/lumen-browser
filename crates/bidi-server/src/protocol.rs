@@ -2708,8 +2708,14 @@ fn input_release_actions(id: i64, params: &JsonValue, state: &BidiState) -> Disp
 
 /// `input.setFiles` — set files on a file-input element (BiDi §15.7.2).
 ///
-/// Phase 1 stub: validates context, returns ACK.
-fn input_set_files(id: i64, params: &JsonValue, state: &BidiState) -> DispatchResult {
+/// MCP-TOTAL-S7b: with a live window the element is addressed by
+/// `element.sharedId` (decimal node id) or `element.locator`
+/// (`{type: "css", value}` — the protocol has no element store to mint
+/// `sharedId`s, so a non-decimal one is `no such element`), `files` are
+/// absolute filesystem paths validated and delivered by the shell arm the
+/// same way a real OS pick delivers them. Without a live window the
+/// validate-then-ACK stub stays: in-memory state has no page to fill.
+fn input_set_files(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
     if let Some(ctx_id) = params.get("context").and_then(|v| v.as_str())
         && state.find(ctx_id).is_none()
     {
@@ -2719,7 +2725,47 @@ fn input_set_files(id: i64, params: &JsonValue, state: &BidiState) -> DispatchRe
             &format!("unknown browsing context: {ctx_id}"),
         ));
     }
-    DispatchResult::single(make_success(id, empty_obj()))
+    let Some(live) = &mut state.live else {
+        return DispatchResult::single(make_success(id, empty_obj()));
+    };
+    let bad = |msg: String| DispatchResult::single(make_error(Some(id), "invalid argument", &msg));
+    let element = params.get("element").unwrap_or(&JsonValue::Null);
+    let target = if let Some(shared) = element.get("sharedId").and_then(|v| v.as_str()) {
+        match shared.parse::<u32>() {
+            Ok(node_id) => Target::NodeId(node_id),
+            Err(_) => {
+                return DispatchResult::single(make_error(
+                    Some(id),
+                    "no such element",
+                    &format!(
+                        "setFiles: unknown sharedId {shared:?} — the protocol does not mint element ids; pass a decimal node id or element.locator {{type: \"css\", value}}"
+                    ),
+                ));
+            }
+        }
+    } else if let Some(value) =
+        element.get("locator").and_then(|l| l.get("value")).and_then(|v| v.as_str())
+    {
+        Target::Selector(value.to_owned())
+    } else {
+        return bad("setFiles: element.sharedId or element.locator is required".to_owned());
+    };
+    let Some(files) = params.get("files").and_then(|v| v.as_array()) else {
+        return bad("setFiles: files must be an array of paths".to_owned());
+    };
+    let paths: Vec<String> =
+        files.iter().map(|f| f.as_str().unwrap_or_default().to_owned()).collect();
+    if paths.iter().any(String::is_empty) {
+        return bad("setFiles: files must be an array of strings".to_owned());
+    }
+    match live.set_files(&target, &paths) {
+        Ok(()) => DispatchResult::single(make_success(id, empty_obj())),
+        Err(e) => DispatchResult::single(make_error(
+            Some(id),
+            "unknown error",
+            &format!("setFiles: {e}"),
+        )),
+    }
 }
 
 #[cfg(test)]
