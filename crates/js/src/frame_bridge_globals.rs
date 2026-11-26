@@ -69,10 +69,16 @@ pub(crate) fn install_frame_bridge_globals_v8(
             "_lumen_f_global_get",
             into_v8_fn2(move |bid: u32, name: String| -> JsValue {
                 match resolve_peer(&reg, bid) {
-                    Ok((peer, from, to)) => match enter_call(from, to) {
-                        Ok(_guard) => peer.peer_global_get(&name),
-                        Err(env) => env,
-                    },
+                    Ok((peer, from, to)) => {
+                        // Пир в peer-ожидании pump'ит свои `RunPeer`-команды
+                        // реентерабельно — обратное ребро стража ревхода здесь
+                        // не цикл, а вложенный вызов (execution-timing 070-075).
+                        let allow = peer.peer_reentrant_ready();
+                        match enter_call(from, to, allow) {
+                            Ok(_guard) => peer.peer_global_get(&name),
+                            Err(env) => env,
+                        }
+                    }
                     Err(env) => env,
                 }
             }),
@@ -89,14 +95,38 @@ pub(crate) fn install_frame_bridge_globals_v8(
                     other => vec![other],
                 };
                 match resolve_peer(&reg, bid) {
-                    Ok((peer, from, to)) => match enter_call(from, to) {
-                        Ok(_guard) => peer.peer_global_call(&name, &args),
-                        Err(env) => env,
-                    },
+                    Ok((peer, from, to)) => {
+                        let allow = peer.peer_reentrant_ready();
+                        match enter_call(from, to, allow) {
+                            Ok(_guard) => peer.peer_global_call(&name, &args),
+                            Err(env) => env,
+                        }
+                    }
                     Err(env) => {
                         let _ = args;
                         env
                     }
+                }
+            }),
+        )?;
+    }
+    // Запись глобала пира (`top.include6Loaded = true` из скрипта
+    // document.write-кадра — WPT execution-timing 070/071): тот же
+    // accessibility-гейт и страж ревхода, что у get/call.
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_f_global_set",
+            into_v8_fn3(move |bid: u32, name: String, value: JsValue| -> JsValue {
+                match resolve_peer(&reg, bid) {
+                    Ok((peer, from, to)) => {
+                        let allow = peer.peer_reentrant_ready();
+                        match enter_call(from, to, allow) {
+                            Ok(_guard) => peer.peer_global_set(&name, value),
+                            Err(env) => env,
+                        }
+                    }
+                    Err(env) => env,
                 }
             }),
         )?;

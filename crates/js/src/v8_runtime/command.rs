@@ -50,6 +50,17 @@ pub(super) type V8Job = Box<dyn FnOnce(&mut V8Inner) + Send + 'static>;
 pub(super) enum V8Command {
     /// Run a job against the runtime.
     Run(V8Job),
+    /// Run a job that is safe to execute re-entrantly: only cross-isolate
+    /// peer calls (`FramePeerBridge::peer_global_*`, incl. the synchronous
+    /// `document.write` into a sub-frame document) send this variant. While a
+    /// JS thread is blocked inside [`V8JsRuntime::run_peer`] waiting for a
+    /// peer's answer, it steals `RunPeer` commands from its own queue and
+    /// executes them on its own isolate — that is what lets a written
+    /// `<script>`'s `top.log(...)` reach the parent *during* the parent's
+    /// blocked `doc.write()` instead of after it (WPT execution-timing
+    /// 070-075). Ordinary `Run` jobs (timers, GC, suspend, shell evals) are
+    /// never stolen: they may assume no JS is mid-flight.
+    RunPeer(V8Job),
     /// Shut down the thread and drop the isolate.
     Shutdown,
 }

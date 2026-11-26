@@ -1233,6 +1233,20 @@ function _lumen_document_base_url() {
     try {
         if (typeof location !== 'undefined' && location.href) docUrl = String(location.href);
     } catch (e) {}
+    // about:blank/about:srcdoc наследуют базовый URL документа-создателя
+    // (HTML LS §4.2.3): у начального iframe без src `location.href` —
+    // 'about:blank', и относительные адреса (src у <script>, только что
+    // записанного document.write'ом) иначе не разрешаются — fetch падал с
+    // network error (WPT execution-timing 070/071, include-6.js). Читаем
+    // URL ближайшего предка через бридж (`_lumen_f_url` гейтован
+    // accessible — у opaque-sandbox about:blank вернёт '' и наследования
+    // не будет, как в Chrome). Только PARENT_BID: создатель — родитель,
+    // не top (у фрейма глубины ≥ 2 это разные документы).
+    if (docUrl.indexOf('about:') === 0 && typeof _lumen_f_url === 'function') {
+        var inherited = '';
+        try { inherited = String(_lumen_f_url(0xFFFFFFFF) || ''); } catch (e) {}
+        if (inherited && inherited.indexOf('about:') !== 0) docUrl = inherited;
+    }
     var baseEl = null;
     try { baseEl = document.querySelector('base'); } catch (e) {}
     if (baseEl) {

@@ -6,6 +6,10 @@ use super::codegen_hook;
 use super::named_access::window_named_properties_template;
 use super::promise_reject::{drain_promise_rejections, install_promise_reject_hook};
 use super::*;
+use std::cell::RefCell;
+use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::mpsc::TryRecvError;
 use std::time::Duration;
@@ -144,6 +148,164 @@ unsafe extern "C" fn allow_wasm_code_generation(
     true
 }
 
+// ── Re-entrant peer-call pump ────────────────────────────────────────────────
+//
+// `V8JsRuntime::run_peer` — канал синхронных кросс-изолятных вызовов
+// (`FramePeerBridge::peer_global_*`, включая синхронный `document.write` в
+// под-документ фрейма). Вызывающий поток блокируется на oneshot, пока задача
+// не исполнится на потоке пира. Когда вызывающий — сам JS-поток V8, это
+// ожидание обслуживает pump ниже: поток продолжает забирать `RunPeer`-команды
+// из СВОЕЙ очереди и исполняет их на своём изоляте реентерабельно — то же,
+// что однопоточный браузер получает даром. Именно поэтому `top.log(...)` из
+// записанного `document.write`-скрипта достигает родителя ВНУТРИ его
+// заблокированного `doc.write()`, а не после (WPT execution-timing 070-075).
+//
+// Крадутся только `RunPeer`-команды: обычные `Run` (таймеры, GC, suspend,
+// shell-eval) и `Shutdown` складываются в `held` и переигрываются главным
+// циклом в исходном FIFO-порядке после возврата внешней задачи.
+
+/// Снимок поточного состояния для реентерабельного исполнения команд.
+/// Указатели живы ровно столько, сколько кадр [`v8_thread_main`]: TLS ставится
+/// после создания `inner` и чистится до его drop; pump вызывается только из
+/// `recv_peer`, который работает лишь внутри `V8Command::Run`-задачи на этом
+/// же потоке.
+struct PumpCtx {
+    inner: *mut V8Inner,
+    cmd_rx: *const std::sync::mpsc::Receiver<V8Command>,
+    held: VecDeque<V8Command>,
+    /// Счётчик активных peer-ожиданий этого рантайма: `peer_busy()` отдаёт
+    /// `false`, пока он >0 — поток в это время может обслужить вложенную
+    /// `RunPeer`-команду, и отказ был бы ложным «пир занят».
+    serving: Arc<AtomicUsize>,
+    stall: lumen_core::script_stall::StallHandle,
+    terminate: v8::IsolateHandle,
+}
+
+thread_local! {
+    static JS_PUMP: RefCell<Option<PumpCtx>> = const { RefCell::new(None) };
+}
+
+/// RAII-инкремент `serving` на время блокирующего peer-ожидания.
+pub(super) struct PeerWaitGuard;
+
+impl Drop for PeerWaitGuard {
+    fn drop(&mut self) {
+        JS_PUMP.with(|c| {
+            if let Some(p) = c.borrow().as_ref() {
+                p.serving.fetch_sub(1, Ordering::Relaxed);
+            }
+        });
+    }
+}
+
+/// Блокирующее ожидание ответа peer-задачи с обслуживанием реентерабельных
+/// команд. На не-JS потоке (ctx отсутствует) — обычный `rx.recv()`, как у
+/// [`V8JsRuntime::run`]. Возвращает `None` при обрыве канала (рантайм пира
+/// умер) — семантика `try_run`.
+pub(super) fn recv_peer<R: Send>(
+    rx: &std::sync::mpsc::Receiver<R>,
+) -> Option<R> {
+    // Инкремент serving — только на JS-потоке с живым pump-контекстом.
+    let _guard = JS_PUMP.with(|c| {
+        let b = c.borrow();
+        b.as_ref().map(|p| {
+            p.serving.fetch_add(1, Ordering::Relaxed);
+            PeerWaitGuard
+        })
+    });
+    let pumped = JS_PUMP.with(|c| c.borrow().is_some());
+    if !pumped {
+        return rx.recv().ok();
+    }
+    loop {
+        match rx.recv_timeout(Duration::from_millis(1)) {
+            Ok(v) => return Some(v),
+            Err(RecvTimeoutError::Disconnected) => return None,
+            Err(RecvTimeoutError::Timeout) => pump_reentrant_commands(),
+        }
+    }
+}
+
+/// Исполнить одну украденную `RunPeer`-команду с теми же скобками, что даёт
+/// главный цикл (`stall`, terminate-cancel, promise-rejection drain, platform
+/// tasks). Реентерабельность — осознанный unsafe: внешний `&mut V8Inner`
+/// задачи-получателя приостановлен на время ожидания, а V8 допускает вложенный
+/// вход в изолят из нативного колбэка.
+fn run_peer_job(job: V8Job) {
+    struct Snap {
+        inner: *mut V8Inner,
+        stall: lumen_core::script_stall::StallHandle,
+        terminate: v8::IsolateHandle,
+    }
+    let snap = JS_PUMP.with(|c| {
+        c.borrow().as_ref().map(|p| Snap {
+            inner: p.inner,
+            stall: p.stall.clone(),
+            terminate: p.terminate.clone(),
+        })
+    });
+    let Some(snap) = snap else { return };
+    snap.terminate.cancel_terminate_execution();
+    snap.stall.job_started();
+    // SAFETY: `inner` принадлежит этому потоку и жив — pump вызывается только
+    // внутри `recv_peer` на JS-потоке, внутри активной `V8Command::Run` задачи.
+    // Второй `&mut` формально алиасит внешний, но тот приостановлен в
+    // `rx.recv()`; доступ к `inner` в этот момент одноточечный — здесь.
+    unsafe {
+        job(&mut *snap.inner);
+        drain_promise_rejections(&mut *snap.inner);
+        let platform = v8::V8::get_current_platform();
+        run_platform_tasks(
+            &mut *snap.inner,
+            &platform,
+            &snap.stall,
+            None,
+            std::time::Instant::now(),
+        );
+    }
+    snap.stall.job_finished();
+    snap.terminate.cancel_terminate_execution();
+}
+
+/// Забрать и исполнить все ожидающие `RunPeer`-команды этой нити. Не-`RunPeer`
+/// команды не трогаются — уходят в `held` и доедут до главного цикла позже.
+pub(super) fn pump_reentrant_commands() {
+    enum Step {
+        Job(V8Job),
+        Again,
+        Stop,
+    }
+    loop {
+        let step = JS_PUMP.with(|cell| {
+            let mut b = cell.borrow_mut();
+            let Some(ctx) = b.as_mut() else {
+                return Step::Stop;
+            };
+            // SAFETY: приёмник принадлежит кадру `v8_thread_main` этого же
+            // потока и жив до его конца; `try_recv` берёт `&self`.
+            match unsafe { (*ctx.cmd_rx).try_recv() } {
+                Ok(V8Command::RunPeer(job)) => Step::Job(job),
+                Ok(other) => {
+                    ctx.held.push_back(other);
+                    Step::Again
+                }
+                Err(_) => Step::Stop,
+            }
+        });
+        match step {
+            Step::Job(job) => run_peer_job(job),
+            Step::Again => continue,
+            Step::Stop => break,
+        }
+    }
+}
+
+/// Команда, отложенная pump'ом (`Run`/`Shutdown`, встреченные перед `RunPeer`
+/// в FIFO-очереди): главный цикл обязан переиграть её до новых приёмов.
+fn held_command() -> Option<V8Command> {
+    JS_PUMP.with(|c| c.borrow_mut().as_mut().and_then(|p| p.held.pop_front()))
+}
+
 // ── Thread entry point ────────────────────────────────────────────────────────
 
 /// Entry point of the dedicated V8 thread.
@@ -155,6 +317,7 @@ pub(super) fn v8_thread_main(
     cmd_rx: std::sync::mpsc::Receiver<V8Command>,
     init_tx: Sender<Result<(), JsError>>,
     stall: lumen_core::script_stall::StallHandle,
+    serving: Arc<AtomicUsize>,
 ) {
     ensure_v8_platform();
 
@@ -237,6 +400,20 @@ pub(super) fn v8_thread_main(
             h.terminate_execution();
         }
     });
+    // Реентерабельный peer-pump (см. блок выше): TLS живёт всю жизнь цикла
+    // команд; `recv_peer` на этом потоке читает его для кражи `RunPeer`.
+    JS_PUMP.with(|c| {
+        *c.borrow_mut() = Some(PumpCtx {
+            // SAFETY-окно: `inner` живёт в этом кадре до конца функции; pump
+            // возможен только внутри активной задачи, т.е. до выхода из loop.
+            inner: std::ptr::addr_of_mut!(inner),
+            cmd_rx: &cmd_rx,
+            held: VecDeque::new(),
+            serving,
+            stall: stall.clone(),
+            terminate: terminate_handle.clone(),
+        });
+    });
     let _ = init_tx.send(Ok(()));
 
     // BUG-1752: wait with a step instead of `recv()`, and drain V8's foreground
@@ -257,9 +434,14 @@ pub(super) fn v8_thread_main(
     // свободного рантайма ловит скобку стора, тест `compat_hang`).
     let mut last_task_at: Option<std::time::Instant> = None;
     loop {
-        // A command first, without parking: a park costs the timer tick even
-        // when the platform has work ready (see `PLATFORM_SPIN`).
-        let cmd = match cmd_rx.try_recv() {
+        // Отложенные pump'ом команды идут первыми — они были извлечены из
+        // очереди раньше всего, что пришло после.
+        let cmd = if let Some(cmd) = held_command() {
+            cmd
+        } else {
+            // A command first, without parking: a park costs the timer tick even
+            // when the platform has work ready (see `PLATFORM_SPIN`).
+            match cmd_rx.try_recv() {
             Ok(cmd) => cmd,
             Err(TryRecvError::Disconnected) => break,
             Err(TryRecvError::Empty) => {
@@ -295,9 +477,10 @@ pub(super) fn v8_thread_main(
                     Err(RecvTimeoutError::Disconnected) => break,
                 }
             }
+            }
         };
         match cmd {
-            V8Command::Run(job) => {
+            V8Command::Run(job) | V8Command::RunPeer(job) => {
                 if let Some(s) = &stall_sampler {
                     s.job_started();
                 }
@@ -345,6 +528,9 @@ pub(super) fn v8_thread_main(
             V8Command::Shutdown => break,
         }
     }
+    // Pump-контекст снимается до drop `inner`: его `*mut`/`*const` указатели
+    // после этого мертвы, а живых `recv_peer` на потоке уже не будет.
+    JS_PUMP.with(|c| *c.borrow_mut() = None);
     // Same discipline for the ESM module map's `v8::Global<v8::Module>` roots
     // (S12b-23): release them here, while the isolate is still alive.
     crate::v8_esm::reset();

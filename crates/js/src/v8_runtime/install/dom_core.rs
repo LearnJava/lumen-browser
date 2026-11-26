@@ -683,9 +683,7 @@ pub(crate) fn install_node_lookup(
                     let doc = d.lock().unwrap();
                     let mut cur = NodeId::from_raw(node_id);
                     for _ in 0..8192 {
-                        if doc.try_get(cur).is_none() {
-                            return None;
-                        }
+                        doc.try_get(cur)?;
                         if matches_selector(&doc, cur, &sel) {
                             return Some(cur.raw());
                         }
@@ -1631,7 +1629,7 @@ pub(crate) fn install_tree_navigation(
             matches!(doc.try_get(id).map(|n| &n.data), Some(lumen_dom::NodeData::Element { .. }))
         };
         let d = Arc::clone(&doc);
-        let is_el_c = is_el.clone();
+        let is_el_c = is_el;
         reg!(scope, ctx, store,
             "_lumen_get_element_children",
             move |node_id: u32| -> Vec<u32> {
@@ -1647,7 +1645,7 @@ pub(crate) fn install_tree_navigation(
             }
         );
         let d = Arc::clone(&doc);
-        let is_el_c = is_el.clone();
+        let is_el_c = is_el;
         reg!(scope, ctx, store,
             "_lumen_get_element_siblings_of",
             move |node_id: u32| -> Vec<u32> {
@@ -1673,7 +1671,7 @@ pub(crate) fn install_tree_navigation(
             }
         );
         let d = Arc::clone(&doc);
-        let is_el_c = is_el.clone();
+        let is_el_c = is_el;
         reg!(scope, ctx, store,
             "_lumen_get_parent_element",
             move |node_id: u32| -> Option<u32> {
