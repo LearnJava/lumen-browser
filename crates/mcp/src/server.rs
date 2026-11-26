@@ -31,7 +31,7 @@ pub struct McpServer<S: BrowserSession, T: Transport> {
 }
 
 /// Инструкция для ИИ-агента, отдаётся в `initialize` (MCP §Lifecycle, `instructions`).
-const SERVER_INSTRUCTIONS: &str = "Lumen is a browser you drive and inspect. Workflow: (1) `navigate` (current tab) or `new_tab` with a URL; (2) `wait` with condition document_ready, or network_idle for script-heavy pages — navigation returns before the page has finished loading; (3) read the page with `query` (CSS selector -> nodes with node_id, text, rect) or `eval` (JavaScript; the result is a string, so use JSON.stringify for structured data); (4) interact with `click` / `type` / `scroll`, then `wait` again. A popup (`window.open`, `target=_blank`) opens as a new tab but does not take over the tools: `list_tabs`, then `switch_tab` to it, and `close_tab` / `switch_tab` back when done. `target` of click/type/scroll is a CSS selector string, {selector}, {node_id} or {point: {x, y}}. `screenshot` and the accessibility, layout, console and network resources help to verify what is shown. `eval` may time out on a busy page: raise `timeout_ms`. Tools prefixed `x-` are experimental (ADR-024): causal explanation of styles and layout (`x-computed-style`, `x-explain-element`, `x-explain-page`, `x-scope-layout`), their output format may change. Errors come back as JSON-RPC errors with a message; a failed tool does not close the session.";
+const SERVER_INSTRUCTIONS: &str = "Lumen is a browser you drive and inspect. Workflow: (1) `navigate` (current tab) or `new_tab` with a URL; (2) `wait` with condition document_ready, or network_idle for script-heavy pages — navigation returns before the page has finished loading; (3) read the page with `query` (CSS selector -> nodes with node_id, text, rect) or `eval` (JavaScript; the result is a string, so use JSON.stringify for structured data); (4) interact with `click` / `type` / `scroll`, then `wait` again. Raw input primitives — `pointer_move`, `pointer_down`, `pointer_up`, `key_down`, `key_up`, `type_focused` — drive the live window directly and work only there (`--mcp-live-port`); a headless session answers an error. A popup (`window.open`, `target=_blank`) opens as a new tab but does not take over the tools: `list_tabs`, then `switch_tab` to it, and `close_tab` / `switch_tab` back when done. `target` of click/type/scroll is a CSS selector string, {selector}, {node_id} or {point: {x, y}}. `screenshot` and the accessibility, layout, console and network resources help to verify what is shown. `eval` may time out on a busy page: raise `timeout_ms`. Tools prefixed `x-` are experimental (ADR-024): causal explanation of styles and layout (`x-computed-style`, `x-explain-element`, `x-explain-page`, `x-scope-layout`), their output format may change. Errors come back as JSON-RPC errors with a message; a failed tool does not close the session.";
 
 impl<S: BrowserSession, T: Transport> McpServer<S, T> {
     /// Создать новый MCP сервер без обязательной аутентификации (stdio-режим
@@ -323,6 +323,103 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                                     "description": "Vertical scroll in logical pixels"
                                 }
                             }
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "pointer_move".to_string(),
+                description: "Move the mouse pointer to a point of the content area without pressing a button: the page receives pointermove/mouseover events and `:hover` applies. Coordinates are CSS px of the content viewport. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["x", "y"],
+                    "properties": {
+                        "x": {
+                            "type": "number",
+                            "description": "Viewport X, CSS px of the content area"
+                        },
+                        "y": {
+                            "type": "number",
+                            "description": "Viewport Y, CSS px of the content area"
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "pointer_down".to_string(),
+                description: "Press the left mouse button (the only supported button) at a point of the content area (CSS px of the content viewport): runs the press half of a click and arms text-selection drag. Complete the gesture with `pointer_up`. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["x", "y"],
+                    "properties": {
+                        "x": {
+                            "type": "number",
+                            "description": "Viewport X, CSS px of the content area"
+                        },
+                        "y": {
+                            "type": "number",
+                            "description": "Viewport Y, CSS px of the content area"
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "pointer_up".to_string(),
+                description: "Release the left mouse button pressed by `pointer_down`: ends the armed text-selection drag, the selection itself stays. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({ "type": "object", "properties": {} }),
+                experimental: false,
+            },
+            McpTool {
+                name: "key_down".to_string(),
+                description: "Send `keydown` for a non-text key to the focused element without clicking anywhere: `key` is the `KeyboardEvent.key` (`Escape`, `Enter`, `Shift`...), optional `code` is the `KeyboardEvent.code` (`KeyA`, `ShiftLeft`...) — derived from `key` when omitted; the arm recognizes modifiers (`Shift`, `Control`, `Alt`, `Meta`) by `key`. Complete with `key_up`. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["key"],
+                    "properties": {
+                        "key": {
+                            "type": "string",
+                            "description": "KeyboardEvent.key: Escape, Enter, Shift..."
+                        },
+                        "code": {
+                            "type": "string",
+                            "description": "KeyboardEvent.code: KeyA, ShiftLeft...; derived from key by default"
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "key_up".to_string(),
+                description: "Send `keyup` for a non-text key to the focused element: the counterpart of `key_down`; `key`/`code` have the same meaning, `code` is derived from `key` when omitted. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["key"],
+                    "properties": {
+                        "key": {
+                            "type": "string",
+                            "description": "KeyboardEvent.key: Escape, Enter, Shift..."
+                        },
+                        "code": {
+                            "type": "string",
+                            "description": "KeyboardEvent.code: KeyA, ShiftLeft...; derived from key by default"
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "type_focused".to_string(),
+                description: "Type text into the currently focused element without clicking first (unlike `type`): the page receives per-character key/input events. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["text"],
+                    "properties": {
+                        "text": {
+                            "type": "string",
+                            "description": "Text to type into the focused element"
                         }
                     }
                 }),
@@ -827,6 +924,57 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                     Err(e) => return McpResponse::err(id.clone(), -32603, format!("Query error: {e}")),
                 }
             }
+            "pointer_move" => {
+                let Some(x) = args.get("x").and_then(|v| v.as_f64()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing x argument");
+                };
+                let Some(y) = args.get("y").and_then(|v| v.as_f64()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing y argument");
+                };
+                match self.session.pointer_move(x as f32, y as f32) {
+                    Ok(()) => json!({ "success": true }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("PointerMove error: {e}")),
+                }
+            }
+            "pointer_down" => {
+                let Some(x) = args.get("x").and_then(|v| v.as_f64()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing x argument");
+                };
+                let Some(y) = args.get("y").and_then(|v| v.as_f64()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing y argument");
+                };
+                match self.session.pointer_down(x as f32, y as f32) {
+                    Ok(()) => json!({ "success": true }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("PointerDown error: {e}")),
+                }
+            }
+            "pointer_up" => match self.session.pointer_up() {
+                Ok(()) => json!({ "success": true }),
+                Err(e) => return McpResponse::err(id.clone(), -32603, format!("PointerUp error: {e}")),
+            },
+            "key_down" | "key_up" => {
+                let Some(key) = args.get("key").and_then(|v| v.as_str()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing key argument");
+                };
+                let code = match args.get("code").and_then(|v| v.as_str()) {
+                    Some(c) => c.to_string(),
+                    None => default_dom_code(key),
+                };
+                let down = name == "key_down";
+                match self.session.press_key(key, &code, down) {
+                    Ok(()) => json!({ "success": true, "key": key, "code": code, "down": down }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("Key error: {e}")),
+                }
+            }
+            "type_focused" => {
+                let Some(text) = args.get("text").and_then(|v| v.as_str()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing text argument");
+                };
+                match self.session.type_focused(text) {
+                    Ok(()) => json!({ "success": true, "text": text }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("TypeFocused error: {e}")),
+                }
+            }
             "x-explain-element" => {
                 let selector = match args.get("selector").and_then(|v| v.as_str()) {
                     Some(s) => s,
@@ -935,6 +1083,30 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
 
         McpResponse::ok(id.clone(), result)
     }
+}
+
+/// `KeyboardEvent.code` по умолчанию из `key` (схема MCP: `code` необязателен).
+/// Одна буква → `KeyA`, цифра → `Digit1`, пробел → `Space`, модификаторы — в
+/// левую половину (`Shift` → `ShiftLeft`, как в DOM); у остальных (`Escape`,
+/// `Enter`, `Tab`, `ArrowLeft`, `F1`…) `code` совпадает с `key`.
+fn default_dom_code(key: &str) -> String {
+    let mut chars = key.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) if c.is_ascii_alphabetic() => {
+            return format!("Key{}", c.to_ascii_uppercase());
+        }
+        (Some(c), None) if c.is_ascii_digit() => return format!("Digit{c}"),
+        (Some(' '), None) => return "Space".to_string(),
+        _ => {}
+    }
+    match key {
+        "Shift" => "ShiftLeft",
+        "Control" => "ControlLeft",
+        "Alt" => "AltLeft",
+        "Meta" => "MetaLeft",
+        _ => key,
+    }
+    .to_string()
 }
 
 /// Parse Target from JSON object.
@@ -1279,13 +1451,13 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_twenty_tools() {
+    fn tools_list_returns_twenty_six_tools() {
         let mut server = McpServer::new(MockSession, VecTransport::new());
         let req = make_request("tools/list", serde_json::json!({}));
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_none());
         let tools = resp.result.unwrap()["tools"].as_array().cloned().unwrap_or_default();
-        assert_eq!(tools.len(), 20);
+        assert_eq!(tools.len(), 26);
         let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap_or("")).collect();
         assert!(names.contains(&"navigate"));
         assert!(names.contains(&"new_tab"));
@@ -1295,6 +1467,12 @@ mod tests {
         assert!(names.contains(&"click"));
         assert!(names.contains(&"type"));
         assert!(names.contains(&"scroll"));
+        assert!(names.contains(&"pointer_move"));
+        assert!(names.contains(&"pointer_down"));
+        assert!(names.contains(&"pointer_up"));
+        assert!(names.contains(&"key_down"));
+        assert!(names.contains(&"key_up"));
+        assert!(names.contains(&"type_focused"));
         assert!(names.contains(&"wait"));
         assert!(names.contains(&"eval"));
         assert!(names.contains(&"query"));
@@ -1330,6 +1508,50 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Все шесть инструментов ввода — только для живого окна: сессия без
+    /// живого окна отвечает `isError: true` с честным текстом дефолта трейта
+    /// (MCP-TOTAL-S1b), а не молчаливым успехом.
+    #[test]
+    fn input_tools_error_without_a_live_window() {
+        let calls = [
+            ("pointer_move", serde_json::json!({ "x": 10.0, "y": 20.0 })),
+            ("pointer_down", serde_json::json!({ "x": 10.0, "y": 20.0 })),
+            ("pointer_up", serde_json::json!({})),
+            ("key_down", serde_json::json!({ "key": "Escape" })),
+            ("key_up", serde_json::json!({ "key": "Escape" })),
+            ("type_focused", serde_json::json!({ "text": "hi" })),
+        ];
+        for (name, args) in calls {
+            let mut server = McpServer::new(MockSession, VecTransport::new());
+            let req = make_request("tools/call", serde_json::json!({ "name": name, "arguments": args }));
+            let resp = run_one(&mut server, &req);
+            assert!(resp.error.is_none(), "{name}");
+            let result = resp.result.unwrap_or_else(|| panic!("{name} must answer"));
+            assert_eq!(result["isError"], true, "{name}");
+            let text = result["content"][0]["text"].as_str().unwrap_or("");
+            assert!(text.contains("только для живого окна"), "{name}: {text}");
+        }
+    }
+
+    /// Схема MCP: `code` у `key_down`/`key_up` необязателен и выводится из
+    /// `key` — буквы/цифры/пробел по DOM-правилу, модификаторы в левую
+    /// половину, у именованных клавиш `code` совпадает с `key`.
+    #[test]
+    fn default_dom_code_follows_dom_rules() {
+        assert_eq!(super::default_dom_code("a"), "KeyA");
+        assert_eq!(super::default_dom_code("A"), "KeyA");
+        assert_eq!(super::default_dom_code("1"), "Digit1");
+        assert_eq!(super::default_dom_code(" "), "Space");
+        assert_eq!(super::default_dom_code("Shift"), "ShiftLeft");
+        assert_eq!(super::default_dom_code("Control"), "ControlLeft");
+        assert_eq!(super::default_dom_code("Alt"), "AltLeft");
+        assert_eq!(super::default_dom_code("Meta"), "MetaLeft");
+        assert_eq!(super::default_dom_code("Escape"), "Escape");
+        assert_eq!(super::default_dom_code("Enter"), "Enter");
+        assert_eq!(super::default_dom_code("ArrowLeft"), "ArrowLeft");
+        assert_eq!(super::default_dom_code("F5"), "F5");
     }
 
     #[test]
