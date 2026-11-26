@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use lumen_core::error::Result;
 use lumen_core::event::{Event, TabId};
-use lumen_core::ext::{DnsResolver, EventSink, HstsEnforcement, WebSocketSession, WsMessage};
+use lumen_core::ext::{CookieProvider, DnsResolver, EventSink, HstsEnforcement, WebSocketSession, WsMessage};
 use lumen_core::url::Url;
 
 use crate::{connect, Error, RawStream};
@@ -53,6 +53,38 @@ fn require_ws_scheme(url: &Url) -> Result<(String, u16, bool, String)> {
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 
+/// Cookie context of the document that opened the `WebSocket` (BUG-1851):
+/// a same-site handshake carries `Cookie` from the document's jar, the way
+/// fetch does (WHATWG HTTP-stateful cookies). `SseCookies` (BUG-1222) is the
+/// EventSource counterpart.
+pub(crate) struct WsCookies {
+    pub(crate) jar: Arc<dyn CookieProvider>,
+    /// SameSite site-for-cookies of the owning document (registrable domain).
+    pub(crate) top_level_site: Option<String>,
+    /// BUG-1628 cookie partition key (site of the top-level document).
+    pub(crate) partition: Option<String>,
+}
+
+/// `Cookie` header(s) for the handshake (BUG-1851): fetch-style SameSite
+/// evaluation via [`crate::cookie_site_context`] — a WebSocket is never a
+/// top-level navigation, so a cross-site request lands in the conservative
+/// `CrossSite` context. Empty vec when no jar or no matching cookies.
+fn cookie_headers(
+    cookies: Option<&WsCookies>,
+    host:    &str,
+    path:    &str,
+    is_tls:  bool,
+) -> Vec<(String, String)> {
+    let Some(c) = cookies else { return Vec::new() };
+    let site_ctx = crate::cookie_site_context(host, c.top_level_site.as_deref(), false, "GET");
+    let val = c.jar.get_for_request_in_context(host, path, is_tls, c.partition.as_deref(), site_ctx);
+    if val.is_empty() {
+        Vec::new()
+    } else {
+        vec![("Cookie".to_owned(), val)]
+    }
+}
+
 /// Open WebSocket connection. Implements [`WebSocketSession`].
 pub(crate) struct WebSocket {
     stream:           RawStream,
@@ -78,7 +110,8 @@ impl WebSocket {
     /// Establish a WebSocket connection to `url` (`ws://` or `wss://`).
     ///
     /// Does not negotiate permessage-deflate. Use [`Self::connect_deflate`] for compression.
-    /// `protocols` is the client's ordered preference list of sub-protocols.
+    /// `protocols` is the client's ordered preference list. `cookies` — the
+    /// document's cookie context (`Cookie` header, BUG-1851); `None` sends none.
     pub(crate) fn connect(
         url:       &Url,
         resolver:  &dyn DnsResolver,
@@ -86,6 +119,7 @@ impl WebSocket {
         sink:      Arc<dyn EventSink>,
         tab_id:    TabId,
         protocols: &[String],
+        cookies:   Option<&WsCookies>,
     ) -> Result<Self> {
         let (host, port, mut is_tls, path) = require_ws_scheme(url)?;
 
@@ -113,7 +147,7 @@ impl WebSocket {
 
         let _ = stream.set_read_timeout(Some(crate::FETCH_READ_TIMEOUT));
         let key = upgrade::generate_key();
-        let protocol = upgrade::perform(&mut stream, &host, &path, &key, protocols);
+        let protocol = upgrade::perform(&mut stream, &host, &path, &key, protocols, &cookie_headers(cookies, &host, &path, is_tls));
         let _ = stream.set_read_timeout(None);
         let protocol = protocol?;
 
@@ -141,7 +175,9 @@ impl WebSocket {
     ///
     /// `compress` controls whether outgoing data frames are compressed.
     /// Incoming frames with RSV1=1 are always decompressed when deflate is active.
-    /// `protocols` is the client's ordered preference list of sub-protocols.
+    /// `protocols` is the client's ordered preference list. `cookies` — the
+    /// document's cookie context (`Cookie` header, BUG-1851); `None` sends none.
+    #[allow(clippy::too_many_arguments)]  // как у fetch_with_redirect (docs/lint-policy.md §10)
     pub(crate) fn connect_deflate(
         url:       &Url,
         resolver:  &dyn DnsResolver,
@@ -150,6 +186,7 @@ impl WebSocket {
         tab_id:    TabId,
         compress:  bool,
         protocols: &[String],
+        cookies:   Option<&WsCookies>,
     ) -> Result<Self> {
         let (host, port, mut is_tls, path) = require_ws_scheme(url)?;
 
@@ -195,7 +232,7 @@ impl WebSocket {
 
         let _ = stream.set_read_timeout(Some(crate::FETCH_READ_TIMEOUT));
         let key = upgrade::generate_key();
-        let handshake = upgrade::perform_with_deflate(&mut stream, &host, &path, &key, protocols);
+        let handshake = upgrade::perform_with_deflate(&mut stream, &host, &path, &key, protocols, &cookie_headers(cookies, &host, &path, is_tls));
         let _ = stream.set_read_timeout(None);
 
         if let Some(wd) = watchdog {

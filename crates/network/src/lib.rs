@@ -5963,6 +5963,7 @@ mod tests {
             "/",
             "dGhlIHNhbXBsZSBub25jZQ==",
             &[],
+            &[],
         )
         .expect_err("stalled server must time out the handshake read, not hang forever");
         assert!(
@@ -6096,6 +6097,7 @@ mod tests {
                 TabId(0),
                 true,
                 &[],
+                None,
             )
             .expect("connect_deflate"),
         );
@@ -6103,6 +6105,94 @@ mod tests {
         assert_eq!(ws.recv().unwrap(), WsMessage::Text("server says hi".to_string()));
         ws.close(1000, "").unwrap();
         assert!(server.join().unwrap(), "deflate frames must round-trip both ways");
+    }
+
+    /// BUG-1851: same-site WS handshake carries the document's cookies —
+    /// `connect_deflate` must compute `Cookie` from the jar the way fetch
+    /// does, otherwise cookie-gated endpoints answer 401 and the page falls
+    /// back to polling (portal.nextera.ru live case).
+    #[test]
+    fn ws_handshake_carries_document_cookies() {
+        use lumen_core::ext::WebSocketSession;
+
+        struct DocJar;
+        impl CookieProvider for DocJar {
+            fn get_for_request(&self, _: &str, _: &str, _: bool, _: Option<&str>, _: bool) -> String {
+                unreachable!("WS must call get_for_request_in_context")
+            }
+            fn get_for_request_in_context(
+                &self,
+                _: &str,
+                _: &str,
+                _: bool,
+                _: Option<&str>,
+                _: lumen_core::ext::CookieSiteContext,
+            ) -> String {
+                "sid=abc".to_owned()
+            }
+            fn process_set_cookie(&self, _: &str, _: &str, _: &str, _: bool, _: Option<&str>) {}
+        }
+
+        let listener = bind_ephemeral_listener();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || -> bool {
+            use std::io::{BufRead, BufReader, Write};
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(sock.try_clone().unwrap());
+            let mut key = None;
+            let mut saw_cookie = false;
+            let mut line = String::new();
+            while reader.read_line(&mut line).unwrap() > 0 {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    break;
+                }
+                if trimmed == "Cookie: sid=abc" {
+                    saw_cookie = true;
+                }
+                if trimmed.to_ascii_lowercase().starts_with("sec-websocket-key:") {
+                    key = trimmed.split_once(':').map(|(_, v)| v.trim().to_string());
+                }
+                line.clear();
+            }
+            assert!(saw_cookie, "handshake must carry Cookie: sid=abc");
+            let key = key.expect("Missing Sec-WebSocket-Key header");
+            let accept = crate::websocket::upgrade::compute_accept(&key);
+            sock.write_all(
+                format!(
+                    "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+            sock.flush().unwrap();
+            crate::websocket::frame::read_frame(&mut sock)
+                .map(|f| f.opcode == crate::websocket::frame::Opcode::Close)
+                .unwrap_or(false)
+        });
+
+        let url = lumen_core::url::Url::parse(&format!("ws://127.0.0.1:{port}/api/ws")).unwrap();
+        let cookies = Some(crate::websocket::WsCookies {
+            jar: std::sync::Arc::new(DocJar),
+            top_level_site: Some("nextera.ru".to_owned()),
+            partition: Some("nextera.ru".to_owned()),
+        });
+        let client = HttpClient::new();
+        let mut ws: Box<dyn WebSocketSession> = Box::new(
+            crate::websocket::WebSocket::connect_deflate(
+                &url,
+                client.resolver.as_ref(),
+                client.hsts.as_deref(),
+                std::sync::Arc::new(NoopEventSink),
+                TabId(0),
+                true,
+                &[],
+                cookies.as_ref(),
+            )
+            .expect("connect_deflate"),
+        );
+        ws.close(1000, "").unwrap();
+        assert!(server.join().unwrap(), "handshake must carry the document cookie");
     }
 
     // ── ALPN (5A.1) ──────────────────────────────────────────────────────────
