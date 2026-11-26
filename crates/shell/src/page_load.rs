@@ -2674,6 +2674,30 @@ impl Lumen {
         }
         // JS may have requested navigation via location.href= etc.
         self.pending_js_navigate = page.js_navigate;
+        // execution-timing/028: a `javascript:` URL assigned during parsing
+        // must evaluate BEFORE `load` fires — about_to_wait would pick the
+        // request up a tick too late (onload already ran). Drain it here,
+        // synchronously, ahead of both the deferred-images and the direct
+        // load paths below; non-javascript requests go back for the normal
+        // about_to_wait handling.
+        #[cfg(feature = "v8")]
+        if let Some(nav) = self.pending_js_navigate.take() {
+            let code = match &nav {
+                JsNavigateRequest::Push(url) | JsNavigateRequest::Replace(url) => {
+                    javascript_url_code(url).map(str::to_owned)
+                }
+                _ => None,
+            };
+            match code {
+                Some(code) => {
+                    if let Some(html) = self.eval_javascript_url(&code) {
+                        let current = self.current_display_url().to_owned();
+                        self.navigate_replace(PageSource::Static { html, url: current });
+                    }
+                }
+                None => self.pending_js_navigate = Some(nav),
+            }
+        }
         // HTML LS §8.2.3 — all resources loaded: readyState → "complete" + window.load event.
         // HTML LS §8.6 — `pageshow` fires right after `load`. `persisted=true`
         // only when this page was restored from bfcache (set by navigate_back/

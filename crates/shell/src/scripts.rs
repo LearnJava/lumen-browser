@@ -135,6 +135,25 @@ fn collect_scripts_impl(
         if !is_module && node.get_attr("nomodule").is_some() {
             return;
         }
+        // HTML LS §4.12.1 step 24: legacy `for`/`event` handler attributes —
+        // classic-скрипт с ОБЕИМИ исполняется, только когда `for` —
+        // «window», а `event` — «onload»/«onload()»; иначе — не запускается
+        // вовсе (execution-timing/149; зеркалит гейт в `_lumen_script_prepare`).
+        if !is_module
+            && node.get_attr("event").is_some()
+            && node.get_attr("for").is_some()
+        {
+            let event_ok = node.get_attr("event").is_some_and(|e| {
+                let e = e.trim();
+                e.eq_ignore_ascii_case("onload") || e.eq_ignore_ascii_case("onload()")
+            });
+            let for_ok = node
+                .get_attr("for")
+                .is_some_and(|f| f.trim().eq_ignore_ascii_case("window"));
+            if !(event_ok && for_ok) {
+                return;
+            }
+        }
         // `src` wins over inline body (HTML LS §4.12.1 — inline ignored if set).
         // GAP-XMLDOC срез 13 (BUG-685): SVG's `<script>` names its external
         // source `href` (or the legacy `xlink:href`), not `src` — measured
@@ -176,7 +195,12 @@ fn collect_scripts_impl(
                 text.push_str(s);
             }
         }
-        if !text.trim().is_empty() {
+        // «child text content» спеки — СЫРАЯ строка, без trim: пробельное
+        // тело — валидная (пустая) программа, которая всё равно проходит
+        // «prepare» и получает «already started» (execution-timing/057-060:
+        // `<script> </script>` + поздний appendChild текста исполняться не
+        // должен — скрипт уже «has run»).
+        if !text.is_empty() {
             target.push(ScriptSource::Inline(id, text));
         }
         return;
@@ -695,6 +719,11 @@ fn run_parser_classic_script(
     // записанный предыдущим скриптом, обязан исполниться до этого —
     // дожимаем dw-очереди синхронно (execution-timing/142).
     let _ = rt.eval("_lumen_dw_sync_drain();");
+    // «already started» из «prepare the script element» (шаг 12): парсерные
+    // скрипты идут мимо `_lumen_script_prepare`, поэтому флаг ставим здесь —
+    // иначе children-changed/переinsertion запустил бы тело повторно, а
+    // cloneNode не унаследовал бы «has run» (execution-timing/057-067).
+    let _ = rt.eval(&format!("_lumen_script_started[{}] = 1;", script.node.raw()));
     // Лишний `</script>` из document.write мог «закрыть» этот script раньше
     // времени — его текст в DOM обрезан, а `source` собран до обрезки.
     // JS знает про такие случаи (`_lumen_script_truncated`) и отдаёт живой
@@ -775,7 +804,11 @@ pub(crate) fn report_external_script_failure(
     rt: &lumen_js::v8_runtime::V8JsRuntime,
     script: &ResolvedScript,
 ) {
+    use lumen_core::ext::JsRuntime as _;
     let blocked_uri = script.url.as_deref().unwrap_or("");
+    // «already started» ставится на prepare, до fetch — упавший внешний
+    // скрипт тоже «has run» (execution-timing/067-класс).
+    let _ = rt.eval(&format!("_lumen_script_started[{}] = 1;", script.node.raw()));
     for policy_text in &script.csp_blocked {
         crate::csp_enforce::fire_script_src_violation(rt, blocked_uri, policy_text);
     }
@@ -797,6 +830,9 @@ pub(crate) fn execute_classic_script_body(
     // below, or one throwing script would leave a stale value
     // behind for every script after it.
     let _ = rt.eval(&format!("_lumen_push_current_script({});", nid.index()));
+    // «already started» для путей, идущих мимо `run_parser_classic_script`
+    // (async-классика через `run_async_classic_script`) — идемпотентно.
+    let _ = rt.eval(&format!("_lumen_script_started[{}] = 1;", nid.raw()));
     // eval_and_report (not the plain trait eval()) — this is
     // the genuine top-level page-script execution boundary,
     // so an uncaught exception must also reach the page's own
@@ -932,6 +968,11 @@ pub(crate) fn run_scripts_with_dom(
     // его скрипта (`frame_ancestry.rs`). `None` у всех, кроме
     // `frames::spawn_frame`.
     ancestry: Option<&crate::frame_ancestry::FrameAncestry<'_>>,
+    // LOAD-3A: очередь `<script async src>` этой страницы. Готовые тела
+    // сливаются перед каждой отложенной (`defer`/module) итерацией — spec
+    // «as soon as possible» позволяет async обогнать defer
+    // (execution-timing/085). `None` у фреймов и детерминированных путей.
+    async_feed: Option<Arc<crate::async_scripts::AsyncScriptFeed>>,
 ) -> (Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Arc<dyn PersistentJs>>) {
     // GAP-NAVCTX срез 5 (BUG-797): taken unconditionally, before either early
     // return below — see `window_messaging::take_pending_opener`'s doc
@@ -1170,6 +1211,15 @@ pub(crate) fn run_scripts_with_dom(
                     };
                     let _ = rt.eval(&format!("setTimeout(function() {{ {action}; }}, {delay_ms});"));
                 }
+                // HTML LS §4.12.1: parser-inserted — навсегда. Post-connection
+                // steps (вставка/attr/children-changed → prepare) для таких
+                // элементов — no-op ещё до «already started»: без метки JS
+                // видел бы ждущий `defer`/`async` скрипт как «не started» и
+                // запускал второй fetch по `src=`/`appendChild`
+                // (execution-timing/057-067, /103, /114). На этой точке все
+                // <script> в документе — парсерные (скриптов ещё не было),
+                // поэтому метим обходом всего дерева, а не списком nid'ов.
+                let _ = rt.eval("_lumen_script_mark_all_parser_inserted();");
                 // Parser-blocking classic scripts, in document order.
                 for script in &scripts {
                     // BUG-827: к этому моменту настоящий парсер уже вставил всё,
@@ -1184,6 +1234,12 @@ pub(crate) fn run_scripts_with_dom(
                 // отрезком здесь, пока наблюдатель последнего классического
                 // скрипта ещё может его услышать.
                 flush_parser_inserts(&mut parser_inserts, None, &rt);
+                // HTML LS «the end»: readyState 'interactive' и readystatechange
+                // обязаны прозвучать ДО deferred-списка (execution-timing/103 —
+                // на readystatechange ещё только parser-blocking скрипты).
+                if !deferred_scripts.is_empty() {
+                    let _ = rt.eval("_lumen_deferred_scripts_begin();");
+                }
                 // «The end» of parsing (HTML LS §13.2.7, step 5): the list of
                 // scripts that will execute when the document has finished
                 // parsing, in document order — modules and external classic
@@ -1192,10 +1248,28 @@ pub(crate) fn run_scripts_with_dom(
                 // No `currentScript` bracket for a module: it is `null` inside
                 // a module by spec.
                 for (item, &is_module) in deferred_scripts.iter().zip(&deferred_is_module) {
+                    // LOAD-3A + HTML LS §4.12.1 «as soon as possible»: готовый
+                    // async-классический обгоняет отложенные — сливаем очередь
+                    // фида перед каждой deferred-итерацией (execution-timing/
+                    // 085). Остаток доедет через `drive_async_scripts`.
+                    if let Some(feed) = &async_feed {
+                        let ready = feed.take_ready();
+                        if !ready.is_empty() {
+                            let n = ready.len();
+                            for s in &ready {
+                                run_async_classic_script(&rt, s);
+                            }
+                            feed.mark_executed(n);
+                        }
+                    }
                     if !is_module {
                         run_parser_classic_script(&rt, &doc_arc, csp_policy.as_ref(), item);
                         continue;
                     }
+                    // Тот же «already started», что у классических выше:
+                    // модуль идёт мимо `_lumen_script_prepare` (execution-
+                    // timing/057-067 — children-changed/cloneNode).
+                    let _ = rt.eval(&format!("_lumen_script_started[{}] = 1;", item.node.raw()));
                     // BUG-804: внешний модуль, чей файл не пришёл, обязан
                     // выстрелить `error` ровно так же, как классический.
                     // GAP-CSPENF срез 6: та же CSP-разметка, что у
