@@ -303,6 +303,25 @@ fn apply_container_inner(
                 }
                 continue;
             }
+            // BUG-1848: below, children are laid out as a block stack (child_y += height).
+            // For containers whose children are placed by their own algorithm — flex,
+            // grid, table, … — that drops the main-axis clamping: a
+            // `flex: 1; min-height: 0; overflow-y: auto` scroller inside a
+            // `container-type: inline-size` flex column grew to its content height
+            // (portal.nextera.ru: `.messages-area` 15286 px in an 845 px viewport), and
+            // the wheel then fell through to the root scroller and slid the whole page
+            // away. The main pass already produced the correct geometry for these
+            // children — keep it; the restyled subtrees are marked dirty (above) and the
+            // next incremental flush re-lays them out through their real algorithms.
+            // Only block-flow containers keep the bespoke stacking pass.
+            if !matches!(b.style.display, Display::Block | Display::FlowRoot) {
+                clear_cq_context();
+                drop(_p);
+                for child in &mut b.children {
+                    stack.push((child, child_pcb, content_h_val, Some(Arc::clone(&ctx)), size_h));
+                }
+                continue;
+            }
             let mut child_y = content_y;
             for child in &mut b.children {
                 if matches!(child.style.position, Position::Absolute | Position::Fixed) {
