@@ -1312,6 +1312,7 @@ impl WebSocketProvider for HttpClient {
         tab_id: TabId,
         sink: Arc<dyn EventSink>,
     ) -> Result<Box<dyn WebSocketSession>> {
+        let cookies = self.ws_cookie_context();
         let ws = websocket::WebSocket::connect(
             url,
             self.resolver.as_ref(),
@@ -1319,6 +1320,7 @@ impl WebSocketProvider for HttpClient {
             sink,
             tab_id,
             &[],
+            cookies.as_ref(),
         )?;
         Ok(Box::new(ws))
     }
@@ -1594,6 +1596,17 @@ impl JsWebSocketProvider for HttpClient {
 }
 
 impl HttpClient {
+    /// Cookie context for the WS handshake (BUG-1851): the document's jar +
+    /// SameSite site-for-cookies + partition key, mirroring the SSE `SseCookies`
+    /// plumb (BUG-1222). `None` without a jar.
+    fn ws_cookie_context(&self) -> Option<websocket::WsCookies> {
+        self.cookie_jar.as_ref().map(|jar| websocket::WsCookies {
+            jar: Arc::clone(jar),
+            top_level_site: self.top_level_site.clone(),
+            partition: self.cookie_partition.clone(),
+        })
+    }
+
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn connect_ws_impl(&self, url: &str, protocols: &[String]) -> Result<Box<dyn JsWebSocketSession>> {
         let parsed = Url::parse(url)
@@ -1617,6 +1630,7 @@ impl HttpClient {
         }
         // Always offer permessage-deflate (RFC 7692) — browsers do this by default.
         // compress=false: outgoing frames are uncompressed until JS sets WebSocket.compress.
+        let cookies = self.ws_cookie_context();
         let ws = websocket::WebSocket::connect_deflate(
             &parsed,
             self.resolver.as_ref(),
@@ -1625,6 +1639,7 @@ impl HttpClient {
             lumen_core::event::TabId(0),
             false,
             protocols,
+            cookies.as_ref(),
         )?;
         let impl_ = JsWebSocketSessionImpl::new(ws);
         // Push the Open event immediately — handshake already completed.

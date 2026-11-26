@@ -28,20 +28,24 @@ pub(crate) fn generate_key() -> String {
 /// Performs the WebSocket handshake and returns the server-selected sub-protocol
 /// (RFC 6455 §4.1 `Sec-WebSocket-Protocol`). Returns an empty string if no
 /// sub-protocol was negotiated. `protocols` is the client's ordered preference list.
+/// `extra_headers` carries caller-computed headers (`Cookie` — BUG-1851); they
+/// are appended after the fixed RFC 6455 lines.
 pub(crate) fn perform<S: Read + Write>(
     stream:    &mut S,
     host:      &str,
     path:      &str,
     key_b64:   &str,
     protocols: &[String],
+    extra_headers: &[(String, String)],
 ) -> Result<String> {
     // `proto_hdr` is hoisted to function scope so its borrow outlives `extra_headers`.
     let proto_hdr = protocols.join(", ");
-    let mut extra_headers: Vec<(&str, &str)> = Vec::new();
+    let mut headers: Vec<(&str, &str)> =
+        extra_headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     if !protocols.is_empty() {
-        extra_headers.push(("Sec-WebSocket-Protocol", &proto_hdr));
+        headers.push(("Sec-WebSocket-Protocol", &proto_hdr));
     }
-    send_upgrade_request(stream, host, path, key_b64, &extra_headers)?;
+    send_upgrade_request(stream, host, path, key_b64, &headers)?;
     expect_101(stream, key_b64).map(|(_, selected)| selected)
 }
 
@@ -52,23 +56,27 @@ pub(crate) fn perform<S: Read + Write>(
 /// sub-protocol (empty string if none). Uses
 /// `client_no_context_takeover; server_no_context_takeover` so each message is
 /// independently compressed — no shared zlib state between messages.
+/// `extra_headers` carries caller-computed headers (`Cookie` — BUG-1851); they
+/// are appended after the fixed RFC 6455 lines.
 pub(crate) fn perform_with_deflate<S: Read + Write>(
     stream:    &mut S,
     host:      &str,
     path:      &str,
     key_b64:   &str,
     protocols: &[String],
+    extra_headers: &[(String, String)],
 ) -> Result<(bool, String)> {
     // `proto_hdr` is hoisted to function scope so its borrow outlives `extra_headers`.
     let proto_hdr = protocols.join(", ");
-    let mut extra_headers: Vec<(&str, &str)> = vec![(
+    let mut headers: Vec<(&str, &str)> = vec![(
         "Sec-WebSocket-Extensions",
         "permessage-deflate; client_no_context_takeover; server_no_context_takeover",
     )];
+    headers.extend(extra_headers.iter().map(|(k, v)| (k.as_str(), v.as_str())));
     if !protocols.is_empty() {
-        extra_headers.push(("Sec-WebSocket-Protocol", &proto_hdr));
+        headers.push(("Sec-WebSocket-Protocol", &proto_hdr));
     }
-    send_upgrade_request(stream, host, path, key_b64, &extra_headers)?;
+    send_upgrade_request(stream, host, path, key_b64, &headers)?;
     expect_101(stream, key_b64)
 }
 
