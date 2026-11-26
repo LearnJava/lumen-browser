@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-1847)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-1849; BUG-1848 закрыт)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -369,3 +369,4 @@
 | [BUG-1847](bugs/BUG-1847-OPEN.md) | OPEN | layout (`resolved_geometry.rs` — computed `transform`) | `getComputedStyle().transform` после завершённого transition показывает значение закрытого состояния: открытая панель портала (`rect.x=0`) → `matrix(…,-360/300,0)` ≥1 с после клика, Chrome — `none`; повторено дважды. Отрисовка по этому значению не проверялась. Смежные BUG-1248, BUG-1293/BUG-536 (FIXED) |
 | [BUG-1848](bugs/BUG-1848-OPEN.md) | OPEN | js (установка API на `Window` — `document_pip.rs`; тесты `document_pip.rs`, `v8_events_cache.rs`, `v8_form_constraint_validation.rs`, `v8_idle_message_clipboard.rs`) | 9 тестов `lumen-js` падают детерминированно (`--features v8-backend`, и по одному): `install_document_pip_api_v8` — «Cannot assign to read only property 'documentPictureInPicture'» (5 тестов document_pip + sw_registration + rtcpeerconnection), `show_picker_*` — 2 без v8-шума. Найдено при гейте MCP-TOTAL-S1a на js-дереве, идентичном main; подозреваемый — BUG-753 срез 2 (`1e266b376b`), не бисектилось. Падения clipboard/code_cache полного прогона — BUG-1677, не сюда |
 | [BUG-1849](bugs/BUG-1849-OPEN.md) | OPEN | paint (`display_list` collapse + снапшоты `tests/cases/snapshot_tests.rs`), media-native (`mf/video.rs` hw-декод) | Три кластера красных тестов на main-эквивалентном дереве (гейт MCP-TOTAL-S1a): `empty_cells_hide_ignored_under_border_collapse` (collapse прячет фон пустой ячейки — не должен), 5 снапшотов с `DrawText` шириной 0 против golden (нулевой text-advance в тестовой сборке), `hevc_hardware_matches_software` (расхождение hw/sw декода до 255 — аппаратозависимый). Все воспроизводятся по одному; не бисектились |
+| [BUG-1851](bugs/BUG-1851-OPEN.md) | OPEN | network (`websocket/upgrade.rs`, `websocket/mod.rs` — хендшейк без `Cookie`; `js_providers.rs::connect_cancellable`) | WebSocket-хендшейк не передаёт cookies: same-origin WS портала получает 401 (`ws: upgrade failed (expected 101)`), сайт пожизненно на поллинге — стриминг ответов агентов с задержкой, петли форс-редиректов на Keycloak. Цепочка `_lumen_ws_connect` → `connect_cancellable` → `connect_deflate` без cookie-jar; у fetch прикрепление через `get_for_request_in_context` есть. Chrome — WS работает |
