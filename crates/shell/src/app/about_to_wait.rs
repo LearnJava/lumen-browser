@@ -1824,7 +1824,15 @@ impl Lumen {
                     // session-history entry), regardless of whether it was
                     // assigned via `location.href=` (push) or `.replace()`.
                     if let Some(code) = javascript_url_code(&url) {
-                        self.queue_javascript_url(code);
+                        // HTML LS §7.4.5 queues a task, but the shell only
+                        // learns of the request after parsing — run it now so
+                        // side effects land before `load` and a string
+                        // completion still replaces the document
+                        // (execution-timing/028).
+                        if let Some(html) = self.eval_javascript_url(code) {
+                            let current = self.current_display_url().to_owned();
+                            self.navigate_replace(PageSource::Static { html, url: current });
+                        }
                     } else if let Some((resolved, uir)) = self.js_navigate_to_gate(&url) {
                         // BUG-293: same file://-resolution + web→file guard as popups.
                         match resolve_js_navigation(&resolved, &self.source) {
@@ -1836,7 +1844,10 @@ impl Lumen {
                 JsNavigateRequest::Replace(url) => {
                     click_log::log_js_nav("replaceState/location.replace", &url);
                     if let Some(code) = javascript_url_code(&url) {
-                        self.queue_javascript_url(code);
+                        if let Some(html) = self.eval_javascript_url(code) {
+                            let current = self.current_display_url().to_owned();
+                            self.navigate_replace(PageSource::Static { html, url: current });
+                        }
                     } else if let Some((resolved, uir)) = self.js_navigate_to_gate(&url) {
                         match resolve_js_navigation(&resolved, &self.source) {
                             Ok(source) => self.navigate_replace(source.with_uir_header(uir).with_referrer(self.initiator_referrer(&resolved, None, ""))),
@@ -1862,7 +1873,10 @@ impl Lumen {
                 JsNavigateRequest::Link { url, target } => {
                     click_log::log_js_nav("link.target", &url);
                     if let Some(code) = javascript_url_code(&url) {
-                        self.queue_javascript_url(code);
+                        if let Some(html) = self.eval_javascript_url(code) {
+                            let current = self.current_display_url().to_owned();
+                            self.navigate_replace(PageSource::Static { html, url: current });
+                        }
                     } else if let Some((resolved, uir)) = self.js_navigate_to_gate(&url) {
                         self.scripted_link_navigate(&resolved, &target, uir);
                     }

@@ -209,6 +209,20 @@ pub(crate) fn install_document_meta(
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store, "_lumen_get_body", move || -> Option<u32> {
             let doc = d.lock().unwrap();
+            // HTML LS §3.1.1: `document.body` is the first `body` OR
+            // `frameset` child of the root element — a frameset document
+            // still answers `document.body` with its `<frameset>`.
+            if let Some(html) = doc.document_element() {
+                let html_id = html;
+                let body = doc.get(html_id).children.iter().copied().find(|&c| {
+                    matches!(&doc.get(c).data,
+                        NodeData::Element { name, .. }
+                            if name.local == "body" || name.local == "frameset")
+                });
+                if let Some(b) = body {
+                    return Some(b.raw());
+                }
+            }
             find_element_by_tag(&doc, "body").map(|n| n.raw())
         });
         // BUG-703: `document.head` — the sibling of `_lumen_get_body` that the

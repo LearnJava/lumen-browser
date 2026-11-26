@@ -1568,6 +1568,8 @@ pub(crate) fn parse_and_layout(
         compat_inject.identity,
         // BUG-1198: a page has no ancestors.
         None,
+        // LOAD-3A: готовые `async`-скрипты сливаются перед deferred-очередью.
+        async_scripts.clone(),
     );
     // PERF-14: headless has no event loop to settle the `fetch()` requests
     // the scripts just started — do it here, before the post-script cascade

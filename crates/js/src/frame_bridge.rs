@@ -1546,6 +1546,38 @@ pub(crate) fn install_frame_bridge_v8(
             }),
         )?;
     }
+    // execution-timing/083-084: `window[i]`/`frames[i]` читают и до загрузки
+    // под-документа, а биндинг появляется только в `register_frame_document`.
+    // Этот натив отдаёт nid idx-го подключённого `<iframe>` в порядке дерева —
+    // тому же порядку, в каком регистрируются биндинги, — чтобы шим мог
+    // собрать ленивый about:blank-фасад через `_lumen_f_initial_frame`.
+    // `try_lock`: натив может зваться из JS, уже держащего замок документа
+    // (диспатч события), — тогда отвечаем `None`, а не дедлочимся.
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_frame_dom_host_at",
+            into_v8_fn1(move |idx: u32| -> Option<u32> {
+                let self_doc = {
+                    let slots = reg.lock().unwrap_or_else(|e| e.into_inner());
+                    slots.self_doc.clone()?
+                };
+                let doc = self_doc.try_lock().ok()?;
+                let mut nids = Vec::new();
+                collect_descendants_matching(
+                    &doc,
+                    doc.root(),
+                    &|node| {
+                        node.element_name()
+                            .map(|n| n.local == "iframe")
+                            .unwrap_or(false)
+                    },
+                    &mut nids,
+                );
+                nids.get(idx as usize).map(|n| n.index() as u32)
+            }),
+        )?;
+    }
     {
         let reg = Arc::clone(&registry);
         rt.register_native(
@@ -3586,6 +3618,20 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     var bid = ensureInitialFrame(hostNid);
     if (bid === null) return null;
     return winFacade(bid);
+  };
+
+  // `window[i]`/`frames[i]` до регистрации под-документа (execution-timing/
+  // 083-084): idx-й подключённый `<iframe>` в порядке дерева → его host_nid →
+  // ленивый about:blank-фасад. `undefined`, когда iframe с таким индексом нет.
+  __lumen_C._lumen_frame_window_at = function(idx) {
+    var host = null;
+    if (typeof _lumen_frame_dom_host_at === 'function') {
+      host = _lumen_frame_dom_host_at(idx);
+    }
+    if (host === null || host === undefined) host = _lumen_frame_host_at(idx);
+    if (host === null || host === undefined) return undefined;
+    var w = _lumen_frame_content_window(host);
+    return (w === null || w === undefined) ? undefined : w;
   };
 
   // HTML LS §8.4.4 document.open()/write()/writeln()/close() на ФАСАДЕ

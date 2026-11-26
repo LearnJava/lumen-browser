@@ -194,6 +194,8 @@ pub(crate) fn restore_js_context(
         crate::lumen::compat::compat_identity_for_url(url),
         // BUG-1198: a restored top-level page has no ancestors.
         None,
+        // Восстановленная страница не несёт AsyncScriptFeed.
+        None,
     );
 
     // HTML LS §8.2.3: signal DOMContentLoaded so handlers attached during
