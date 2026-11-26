@@ -31,7 +31,7 @@ pub struct McpServer<S: BrowserSession, T: Transport> {
 }
 
 /// Инструкция для ИИ-агента, отдаётся в `initialize` (MCP §Lifecycle, `instructions`).
-const SERVER_INSTRUCTIONS: &str = "Lumen is a browser you drive and inspect. Workflow: (1) `navigate` (current tab) or `new_tab` with a URL; (2) `wait` with condition document_ready, or network_idle for script-heavy pages — navigation returns before the page has finished loading; (3) read the page with `query` (CSS selector -> nodes with node_id, text, rect) or `eval` (JavaScript; the result is a string, so use JSON.stringify for structured data); (4) interact with `click` / `type` / `scroll`, then `wait` again. Raw input primitives — `pointer_move`, `pointer_down`, `pointer_up`, `key_down`, `key_up`, `type_focused` — drive the live window directly and work only there (`--mcp-live-port`); a headless session answers an error. A popup (`window.open`, `target=_blank`) opens as a new tab but does not take over the tools: `list_tabs`, then `switch_tab` to it, and `close_tab` / `switch_tab` back when done. `target` of click/type/scroll is a CSS selector string, {selector}, {node_id} or {point: {x, y}}. `screenshot` and the accessibility, layout, console and network resources help to verify what is shown. `eval` may time out on a busy page: raise `timeout_ms`. Tools prefixed `x-` are experimental (ADR-024): causal explanation of styles and layout (`x-computed-style`, `x-explain-element`, `x-explain-page`, `x-scope-layout`), their output format may change. Errors come back as JSON-RPC errors with a message; a failed tool does not close the session.";
+const SERVER_INSTRUCTIONS: &str = "Lumen is a browser you drive and inspect. Workflow: (1) `navigate` (current tab) or `new_tab` with a URL; (2) `wait` with condition document_ready, or network_idle for script-heavy pages — navigation returns before the page has finished loading; (3) read the page with `query` (CSS selector -> nodes with node_id, text, rect) or `eval` (JavaScript; the result is a string, so use JSON.stringify for structured data); (4) interact with `click` / `type` / `scroll`, then `wait` again. Raw input primitives — `pointer_move`, `pointer_down`, `pointer_up`, `key_down`, `key_up`, `type_focused` — drive the live window directly and work only there (`--mcp-live-port`); a headless session answers an error. Emulation tools flip what the page sees without touching its DOM — `set_offline`, `set_user_agent`, `set_timezone`, `set_permission` are process-global overrides (network, UA header + `navigator.userAgent`, `Intl`/`Date` timezone, permission states) and `computed_a11y` reads an element's computed accessibility role and name; they work only in the live window except `set_user_agent`, which a headless session also accepts. A popup (`window.open`, `target=_blank`) opens as a new tab but does not take over the tools: `list_tabs`, then `switch_tab` to it, and `close_tab` / `switch_tab` back when done. `target` of click/type/scroll is a CSS selector string, {selector}, {node_id} or {point: {x, y}}. `screenshot` and the accessibility, layout, console and network resources help to verify what is shown. `eval` may time out on a busy page: raise `timeout_ms`. Tools prefixed `x-` are experimental (ADR-024): causal explanation of styles and layout (`x-computed-style`, `x-explain-element`, `x-explain-page`, `x-scope-layout`), their output format may change. Errors come back as JSON-RPC errors with a message; a failed tool does not close the session.";
 
 impl<S: BrowserSession, T: Transport> McpServer<S, T> {
     /// Создать новый MCP сервер без обязательной аутентификации (stdio-режим
@@ -478,6 +478,86 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                         "selector": {
                             "type": "string",
                             "description": "CSS selector"
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "set_offline".to_string(),
+                description: "Cut or restore the network: while offline every later request (navigation, `fetch()`/XHR, subresources) fails immediately instead of reaching the network. Returns {success, offline}. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["offline"],
+                    "properties": {
+                        "offline": {
+                            "type": "boolean",
+                            "description": "true to go offline, false to restore the network"
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "set_user_agent".to_string(),
+                description: "Override the User-Agent string: later navigations send it as the HTTP header and `navigator.userAgent` of the current page switches immediately. Returns {success, user_agent}.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["user_agent"],
+                    "properties": {
+                        "user_agent": {
+                            "type": "string",
+                            "description": "User-Agent string to use from now on"
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "set_timezone".to_string(),
+                description: "Override the timezone the page's JS sees: `Intl`/`Date` follow the IANA id (`Asia/Tokyo`, `America/New_York`...). Call without `timezone` (or with null) to restore the host timezone. Returns {success, timezone}. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "timezone": {
+                            "type": ["string", "null"],
+                            "description": "IANA timezone id; omit or null to restore the host timezone"
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "set_permission".to_string(),
+                description: "Set a permission state without a prompt: `name` is a permission name (`geolocation`, `camera`, `notifications`...), `state` is `granted`, `denied` or `prompt`. Returns {success, accepted, name, state}; `accepted: false` means the engine does not know the name or the state. The override is global (not per-origin, unlike BiDi's `permissions.setPermission`) and survives navigation. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["name", "state"],
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Permission name: geolocation, camera, notifications..."
+                        },
+                        "state": {
+                            "type": "string",
+                            "enum": ["granted", "denied", "prompt"],
+                            "description": "State to set"
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "computed_a11y".to_string(),
+                description: "Resolve a chain of CSS selectors — each selector after the first matches inside the previous match's shadow root — and return the final element's accessibility {role, name}; `null` when the chain matches nothing. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["selectors"],
+                    "properties": {
+                        "selectors": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "CSS selectors, each matched inside the previous match's shadow root"
                         }
                     }
                 }),
@@ -975,6 +1055,66 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                     Err(e) => return McpResponse::err(id.clone(), -32603, format!("TypeFocused error: {e}")),
                 }
             }
+            "set_offline" => {
+                let Some(offline) = args.get("offline").and_then(|v| v.as_bool()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing offline argument");
+                };
+                match self.session.set_offline(offline) {
+                    Ok(()) => json!({ "success": true, "offline": offline }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("SetOffline error: {e}")),
+                }
+            }
+            "set_user_agent" => {
+                let Some(ua) = args.get("user_agent").and_then(|v| v.as_str()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing user_agent argument");
+                };
+                match self.session.set_user_agent(ua) {
+                    Ok(()) => json!({ "success": true, "user_agent": ua }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("SetUserAgent error: {e}")),
+                }
+            }
+            "set_timezone" => {
+                let tz = match args.get("timezone") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(s)) => Some(s.as_str()),
+                    Some(_) => {
+                        return McpResponse::err(id.clone(), -32602, "timezone must be a string or null")
+                    }
+                };
+                match self.session.set_timezone(tz) {
+                    Ok(()) => json!({ "success": true, "timezone": tz }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("SetTimezone error: {e}")),
+                }
+            }
+            "set_permission" => {
+                let Some(name) = args.get("name").and_then(|v| v.as_str()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing name argument");
+                };
+                let Some(state) = args.get("state").and_then(|v| v.as_str()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing state argument");
+                };
+                match self.session.set_permission(name, state) {
+                    Ok(accepted) => json!({ "success": true, "accepted": accepted, "name": name, "state": state }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("SetPermission error: {e}")),
+                }
+            }
+            "computed_a11y" => {
+                let Some(selectors) = args.get("selectors").and_then(|v| v.as_array()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing selectors argument");
+                };
+                let mut sels = Vec::with_capacity(selectors.len());
+                for v in selectors {
+                    let Some(s) = v.as_str() else {
+                        return McpResponse::err(id.clone(), -32602, "selectors must be an array of strings");
+                    };
+                    sels.push(s.to_owned());
+                }
+                match self.session.computed_a11y(&sels) {
+                    Ok(Some((role, name))) => json!({ "role": role, "name": name }),
+                    Ok(None) => json!(null),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("ComputedA11y error: {e}")),
+                }
+            }
             "x-explain-element" => {
                 let selector = match args.get("selector").and_then(|v| v.as_str()) {
                     Some(s) => s,
@@ -1451,13 +1591,13 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_twenty_six_tools() {
+    fn tools_list_returns_thirty_one_tools() {
         let mut server = McpServer::new(MockSession, VecTransport::new());
         let req = make_request("tools/list", serde_json::json!({}));
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_none());
         let tools = resp.result.unwrap()["tools"].as_array().cloned().unwrap_or_default();
-        assert_eq!(tools.len(), 26);
+        assert_eq!(tools.len(), 31);
         let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap_or("")).collect();
         assert!(names.contains(&"navigate"));
         assert!(names.contains(&"new_tab"));
@@ -1473,6 +1613,11 @@ mod tests {
         assert!(names.contains(&"key_down"));
         assert!(names.contains(&"key_up"));
         assert!(names.contains(&"type_focused"));
+        assert!(names.contains(&"set_offline"));
+        assert!(names.contains(&"set_user_agent"));
+        assert!(names.contains(&"set_timezone"));
+        assert!(names.contains(&"set_permission"));
+        assert!(names.contains(&"computed_a11y"));
         assert!(names.contains(&"wait"));
         assert!(names.contains(&"eval"));
         assert!(names.contains(&"query"));
@@ -1533,6 +1678,40 @@ mod tests {
             let text = result["content"][0]["text"].as_str().unwrap_or("");
             assert!(text.contains("только для живого окна"), "{name}: {text}");
         }
+    }
+
+    /// Четыре инструмента эмуляции — только для живого окна (Err-дефолты
+    /// трейта из MCP-TOTAL-S1a): сессия без живого окна отвечает
+    /// `isError: true` с текстом дефолта, не молчаливым успехом;
+    /// `set_user_agent` в headless-сессии работает (InProcessSession его
+    /// реализует) — проверяем и это.
+    #[test]
+    fn emulation_tools_error_without_a_live_window() {
+        let calls = [
+            ("set_offline", serde_json::json!({ "offline": true })),
+            ("set_timezone", serde_json::json!({ "timezone": "Asia/Tokyo" })),
+            ("set_permission", serde_json::json!({ "name": "geolocation", "state": "granted" })),
+            ("computed_a11y", serde_json::json!({ "selectors": ["button"] })),
+        ];
+        for (name, args) in calls {
+            let mut server = McpServer::new(MockSession, VecTransport::new());
+            let req = make_request("tools/call", serde_json::json!({ "name": name, "arguments": args }));
+            let resp = run_one(&mut server, &req);
+            assert!(resp.error.is_none(), "{name}");
+            let result = resp.result.unwrap_or_else(|| panic!("{name} must answer"));
+            assert_eq!(result["isError"], true, "{name}");
+            let text = result["content"][0]["text"].as_str().unwrap_or("");
+            assert!(text.contains("только для живого окна"), "{name}: {text}");
+        }
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({ "name": "set_user_agent", "arguments": { "user_agent": "Probe/1.0" } }),
+        );
+        let resp = run_one(&mut server, &req);
+        let result = resp.result.unwrap();
+        assert_eq!(result["isError"], false);
+        assert_eq!(result["user_agent"], "Probe/1.0");
     }
 
     /// Схема MCP: `code` у `key_down`/`key_up` необязателен и выводится из
