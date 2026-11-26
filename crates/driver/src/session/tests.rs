@@ -647,3 +647,49 @@ fn js_scroll_top_reflects_prior_js_scroll_to_headless() {
     s.eval("document.getElementById('outer').scrollTo(0, 50)").expect("eval scrollTo");
     assert_eq!(s.eval("document.getElementById('outer').scrollTop").expect("eval"), "50");
 }
+
+#[test]
+fn live_window_only_trait_defaults_are_honest_errors() {
+    // MCP-TOTAL-S1a: команды, исполняемые только живым окном, в headless
+    // сессии отвечают честным `Err`, а не молчаливым `Ok` — 10 методов,
+    // поднятых на трейт, плюс 8, чьи `Ok`-дефолты переведены на `Err`.
+    use crate::AutomationCookie;
+
+    let mut s = InProcessSession::new();
+    let selectors = vec!["#a".to_owned()];
+    let cookie = AutomationCookie {
+        name: "n".into(),
+        value: "v".into(),
+        domain: "example.test".into(),
+        path: "/".into(),
+        secure: false,
+        http_only: false,
+        same_site: "lax".into(),
+        expiry: 0,
+    };
+    let checks: Vec<(&str, bool)> = [
+        ("pointer_move", s.pointer_move(1.0, 2.0).is_err()),
+        ("pointer_down", s.pointer_down(1.0, 2.0).is_err()),
+        ("pointer_up", s.pointer_up().is_err()),
+        ("press_key", s.press_key("Escape", "Escape", true).is_err()),
+        ("type_focused", s.type_focused("x").is_err()),
+        ("get_cookies", s.get_cookies().is_err()),
+        ("set_cookie", s.set_cookie(cookie).is_err()),
+        ("delete_cookie", s.delete_cookie("example.test", "/", "n").is_err()),
+        ("add_preload_script", s.add_preload_script("id", "() => {}").is_err()),
+        ("remove_preload_script", s.remove_preload_script("id").is_err()),
+        ("set_offline", s.set_offline(true).is_err()),
+        ("set_timezone", s.set_timezone(Some("UTC")).is_err()),
+        ("set_permission", s.set_permission("geolocation", "granted").is_err()),
+        ("computed_a11y", s.computed_a11y(&selectors).is_err()),
+        ("add_intercept", s.add_intercept("id", &[], &[]).is_err()),
+        ("remove_intercept", s.remove_intercept("id").is_err()),
+        ("resolve_intercepted_request", s.resolve_intercepted_request("r", true).is_err()),
+        ("poll_intercepted_requests", s.poll_intercepted_requests().is_err()),
+    ]
+    .into_iter()
+    .collect();
+    for (name, is_err) in checks {
+        assert!(is_err, "{name}: headless-сессия должна отвечать Err, не молчаливым Ok");
+    }
+}

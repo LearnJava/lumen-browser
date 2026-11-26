@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-11-24",
+ "generated": "2026-11-26",
  "counts": {
-  "open": 300,
-  "fixed": 1467,
+  "open": 304,
+  "fixed": 1472,
   "inprogress": 0,
   "wontfix": 8
  },
- "total_bugs": 1775,
+ "total_bugs": 1784,
  "phases": [
   {
    "id": "P0",
@@ -10916,13 +10916,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1573": {
-   "status": "open",
-   "title": "Любая мутация `el.style.*` скроллера, его потомка или `body` через ~50–150 мс после записи сбрасывает `scrollTop` контейнера с `overflow:auto` в 0: `c.scrollTop…",
-   "component": "layout/shell (повторная раскладка после мутации инлайн-стиля; точное место не изолировано)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1574": {
    "status": "open",
    "title": "У контейнера с `scroll-snap-type: y mandatory` вызовы `scrollTo(0,100)`, `scrollTop = 40`, `scrollBy(0,170)` оставляют позицию как есть (100, 40, 210) — привязк…",
@@ -11935,6 +11928,41 @@
    "status": "open",
    "title": "Открытие PCM-вывода (rodio `OutputStream`, WASAPI) на первом тике играющего `<video>` держит поток браузера ~630 мс (`anim` 628.69 мс в кадре) — после фикса BUG…",
    "component": "shell (`video_tick.rs` — `VideoPcmAudioSink::new()` в цикле `due` шага 2.6; `platform/video_audio_sink.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1845": {
+   "status": "open",
+   "title": "Области inline-обработчиков без `document` и формы-владельца: `onsubmit=\"login.disabled = true\"` формы входа Keycloak портала → `login is not defined` (вход при…",
+   "component": "js (`shim/web_api_shim_mid.js` — `_lumen_compile_inline_handler`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1846": {
+   "status": "open",
+   "title": "Дорожка `auto`/`minmax(0,auto)` получает 0, если в шаблоне есть `fr`: на portal.nextera.ru невиден заголовок чата (средняя дорожка 0 против 70.45px в Chrome), с…",
+   "component": "layout (grid, размерирование дорожек — `box_tree/grid.rs`/`grid_auto_cols.rs`/`intrinsic.rs`, не локализовано; computed — `grid_computed.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1847": {
+   "status": "open",
+   "title": "`getComputedStyle().transform` после завершённого transition показывает значение закрытого состояния: открытая панель портала (`rect.x=0`) → `matrix(…,-360/300,…",
+   "component": "layout (`resolved_geometry.rs` — computed `transform`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1848": {
+   "status": "open",
+   "title": "9 тестов `lumen-js` падают детерминированно (`--features v8-backend`, и по одному): `install_document_pip_api_v8` — «Cannot assign to read only property 'docume…",
+   "component": "js (установка API на `Window` — `document_pip.rs`; тесты `document_pip.rs`, `v8_events_cache.rs`, `v8_form_constraint_validation.rs`, `v8_idle_message_clipboard.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1849": {
+   "status": "open",
+   "title": "Три кластера красных тестов на main-эквивалентном дереве (гейт MCP-TOTAL-S1a): `empty_cells_hide_ignored_under_border_collapse` (collapse прячет фон пустой ячей…",
+   "component": "paint (`display_list` collapse + снапшоты `tests/cases/snapshot_tests.rs`), media-native (`mf/video.rs` hw-декод)",
    "date": null,
    "debtor": false
   },
@@ -22234,6 +22262,41 @@
    "component": "shell (`video_tick.rs` — `tick_video_sessions`/`start_video_open`/`on_video_opened`; `video_open.rs` — воркер открытия)",
    "date": "2026-11-24",
    "debtor": false
+  },
+  "BUG-1573": {
+   "status": "fixed",
+   "title": "Мутация `el.style.*` скроллера/потомка/`body` через ~50–150 мс сбрасывала `scrollTop` в 0. Корень: оба пути пересборки `LayoutBox` обнуляли `scroll_x/y` пересоб…",
+   "component": "shell/layout (`crates/shell/src/relayout.rs` — `relayout_page`/`compute_layout_incremental`/`compute_layout_incremental_restyle`)",
+   "date": "2026-11-25",
+   "debtor": false
+  },
+  "BUG-1841": {
+   "status": "fixed",
+   "title": "portal.nextera.ru: клик «Войти» → навигация на Keycloak → паника `BUG-986` (NodeId вне арены) на rayon-воркерах под локом документа, отравленный `Mutex`, смерть…",
+   "component": "shell (`lumen/navigation.rs` — `reset_interactive_subjects`; `relayout_job.rs`), layout (`style/matching/forms.rs` — `is_self_or_ancestor`)",
+   "date": "2026-11-26",
+   "debtor": false
+  },
+  "BUG-1842": {
+   "status": "fixed",
+   "title": "Перехваченный клик автоматизации не возвращал ответа: guard `document.lock()` переживал `format!`, а `automation_node_label` берёт тот же лок — самоблокировка п…",
+   "component": "shell (`lumen/automation.rs` — `automation_hit_mismatch`, `automation_node_label`)",
+   "date": "2026-11-26",
+   "debtor": false
+  },
+  "BUG-1843": {
+   "status": "fixed",
+   "title": "Поле, изменённое самим браузером (ввод, checkbox/radio, пикеры), держало новое значение в DOM и рисовало старое: запись шла из Rust мимо JS-примитивов, JS-эхо н…",
+   "component": "js (`v8_runtime/runtime.rs` — `shell_touch_notifier`), shell (`persistent_js.rs` — `DomTouchedAckReader::touch`; `lumen/text_input.rs` — `note_shell_control_write`; `lumen/click.rs`, `hint_mode.rs`, `spell_menu.rs`; `forms.rs`), dom (`forms.rs` — `set_radio_checked`)",
+   "date": "2026-11-26",
+   "debtor": false
+  },
+  "BUG-1844": {
+   "status": "fixed",
+   "title": "Хит-тест не видел позиционированные слои, вложенные в обычные блоки: на portal.nextera.ru `elementFromPoint` по панели (`position: fixed; z-index: 1600` внутри…",
+   "component": "paint (`hit_test.rs` — `Layers`, `collect_layers`, `classify`, `Candidate.chain`)",
+   "date": "2026-11-26",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -23611,6 +23674,9 @@
   "js (`named_access.rs` — `lock_document_bounded`: `sleep(100 мкс)` поллинг против системного тика 15,6 мс)": [
    "BUG-1788"
   ],
+  "js (`shim/web_api_shim_mid.js` — `_lumen_compile_inline_handler`)": [
+   "BUG-1845"
+  ],
   "js (`shim/web_api_shim_mid.js` — `createHTMLDocument`, комментарии `_lumen_build_detached_document`)": [
    "BUG-1808"
   ],
@@ -23619,6 +23685,9 @@
   ],
   "js (`streams_shim.js` — `TransformStream`)": [
    "BUG-1741"
+  ],
+  "js (`v8_runtime/runtime.rs` — `shell_touch_notifier`), shell (`persistent_js.rs` — `DomTouchedAckReader::touch`; `lumen/text_input.rs` — `note_shell_control_write`; `lumen/click.rs`, `hint_mode.rs`, `spell_menu.rs`; `forms.rs`), dom (`forms.rs` — `set_radio_checked`)": [
+   "BUG-1843"
   ],
   "js (`v8_runtime/tests/dom_suspend_focus.rs`, `video_gif_store.rs`, `video_bindings.rs`, `audio_element.rs`)": [
    "BUG-1787"
@@ -23679,6 +23748,9 @@
   ],
   "js (тесты `crates/js/src/dom/tests/v8_webworker.rs`, `crates/js/src/worker.rs::tests_v8` — фиксированный `sleep` вместо опроса с дедлайном)": [
    "BUG-1111"
+  ],
+  "js (установка API на `Window` — `document_pip.rs`; тесты `document_pip.rs`, `v8_events_cache.rs`, `v8_form_constraint_validation.rs`, `v8_idle_message_clipboard.rs`)": [
+   "BUG-1848"
   ],
   "js (фреймы, `frame_bridge.rs`)": [
    "BUG-1643"
@@ -24627,6 +24699,9 @@
   "layout (`property_trees`/`resolve_motion_transform`: база `offset-distance: N%`)": [
    "BUG-1587"
   ],
+  "layout (`resolved_geometry.rs` — computed `transform`)": [
+   "BUG-1847"
+  ],
   "layout (`stacking.rs:244-255` `is_stacking_will_change`; containing block fixed/abspos)": [
    "BUG-1602"
   ],
@@ -24659,6 +24734,9 @@
   ],
   "layout (grid track sizing — `minmax(0, 1fr)` внутри `repeat()`)": [
    "BUG-1217"
+  ],
+  "layout (grid, размерирование дорожек — `box_tree/grid.rs`/`grid_auto_cols.rs`/`intrinsic.rs`, не локализовано; computed — `grid_computed.rs`)": [
+   "BUG-1846"
   ],
   "layout (inline-раскладка — перенос строк между атомарными inline-боксами)": [
    "BUG-1284"
@@ -24897,9 +24975,6 @@
   ],
   "layout/shell (замещаемые элементы, aspect-ratio)": [
    "BUG-269"
-  ],
-  "layout/shell (повторная раскладка после мутации инлайн-стиля; точное место не изолировано)": [
-   "BUG-1573"
   ],
   "layout/shell/js (привязка к snap и `scroll-padding` при программной прокрутке)": [
    "BUG-1574"
@@ -25233,8 +25308,14 @@
   "paint (`display_list/` — группа `mix-blend-mode`)": [
    "BUG-1599"
   ],
+  "paint (`display_list` collapse + снапшоты `tests/cases/snapshot_tests.rs`), media-native (`mf/video.rs` hw-декод)": [
+   "BUG-1849"
+  ],
   "paint (`emit_scrollbars`) / test-triage": [
    "BUG-288"
+  ],
+  "paint (`hit_test.rs` — `Layers`, `collect_layers`, `classify`, `Candidate.chain`)": [
+   "BUG-1844"
   ],
   "paint (`renderer.rs`, `DrawBackgroundImage` в wgpu)": [
    "BUG-635"
@@ -25556,8 +25637,14 @@
   "shell (`display_list_metrics.rs::content_width_of`, `scrollbar.rs::build_hscrollbar_overlay`)": [
    "BUG-1642"
   ],
+  "shell (`lumen/automation.rs` — `automation_hit_mismatch`, `automation_node_label`)": [
+   "BUG-1842"
+  ],
   "shell (`lumen/click.rs`, `lumen/keyboard.rs:47`, `lumen/text_input.rs:185`)": [
    "BUG-1624"
+  ],
+  "shell (`lumen/navigation.rs` — `reset_interactive_subjects`; `relayout_job.rs`), layout (`style/matching/forms.rs` — `is_self_or_ancestor`)": [
+   "BUG-1841"
   ],
   "shell (`lumen/tabs_cmd.rs:219`, `app/mod.rs:239`, `lumen/session.rs`)": [
    "BUG-1612"
@@ -25665,6 +25752,9 @@
   ],
   "shell/js (память `lumen.exe` под `wptrunner`; страница `normal-flow/crashtests/block-in-inline-ax-crash.html`)": [
    "BUG-1355"
+  ],
+  "shell/layout (`crates/shell/src/relayout.rs` — `relayout_page`/`compute_layout_incremental`/`compute_layout_incremental_restyle`)": [
+   "BUG-1573"
   ],
   "shell/layout (`shell/src/lumen/media_controls.rs`, `layout/src/box_tree/{types,build}.rs`, `paint_eq.rs`, `incremental.rs`, `snapshot.rs`)": [
    "BUG-1802"
