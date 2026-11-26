@@ -75,11 +75,10 @@ engine-thread, не работа самого нэйтива.
 `_lumen_get_node_type` ×15k, `_lumen_get_scroll_state` ×21k — все «тяжёлые»
 времена это maybe_flush/lock-wait, не crossings. Остаток резать:
 typed-trampoline (~1-3мкс → ~0.5мкс × ~500k переходов ≈ 0.5-1s),
-`_wa_motion_tr_sync` sweep — ~89мс/epoch на 44 seeded nid × ~284 prop
-(закрыто `b1ddd316b5`: `_lumen_computed_properties` bulk-натив),
-`_css_an_update_all` ~700мс/epoch на habr (гейт `088a2123f` убрал повторы
-в стабильном epoch; первый вызов после style-change всё ещё платит
-полный скан — кандидат: Rust-side индекс «у кого animation-name≠none»),
+`_wa_motion_tr_sync` sweep — ~28мс/epoch на habr (44 nid × ~284 prop =
+~12k crossings; замерено `.tmp/motion_probe5.py`),
+`_css_an_update_all` — **закрыто** (см. ниже): первый вызов после
+style-change ~17.8мс на habr (было ~0.6-1с), повторный 0.1мс;
 аудит `_lumen_get_parent`-циклов в shim (79 сайтов, горячие не идентифицированы).
 
 **Методика JS-стороны:** shim-глобалы (`_wa_motion_by_nid`, `_css_an_by_key`,
@@ -137,11 +136,14 @@ Keyspace-ловушка решена: кандидаты эмитятся в `ra
 проверяет и element, и `::before`, и отсутствие `::after`.
 
 Остаток: typed-trampoline (~0.5-1s js.run). `_wa_motion_tr_sync`
-свип — **сделано `b1ddd316b5`**: `_lumen_computed_properties(nid,
-names_json)` — один кроссинг на nid вместо ~284
-`_lumen_computed_property`; `--*` и bg-image url() — поштучный путь;
-пустой bulk → фолбэк (тест-харнессы со стабом
-`_lumen_computed_property` видят только поштучный путь).
+свип — **bulk-вариант ОТКАЧЁН после живого замера**: `_lumen_computed_
+properties` (`b1ddd316b5`) дал 70.8мс против 28.4мс поштучных чтений
+на том же 11928-prop sweep — JSON round-trip ~284 пар/nid (~55мс
+parse+serialize) дороже 12k crossings × ~2.4мкс (~13мс fetch). Вывод:
+per-property crossing уже дёшев, JSON — нет; резать можно только
+ЧИСЛО чтений (фильтр по transition-property coverage — рискованно,
+shorthand/logical/color-follower семантика) или diff в Rust
+(prev-snapshot хранится только для transition_stale-узлов).
 
 **Найдено, не сделано (аудит «лишней работы»):**
 

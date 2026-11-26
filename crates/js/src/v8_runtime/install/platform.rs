@@ -1706,40 +1706,6 @@ pub(crate) fn install_computed_styles(
                 .unwrap_or_default()
         });
     }
-    // PERF-TR-SYNC: `_wa_motion_tr_sync` reads every transition-eligible
-    // property of a node once per style epoch — hundreds of
-    // `_lumen_get_computed_style` crossings per node. This answers the same
-    // values for a whole name list in one crossing: `names` is a JSON array,
-    // the answer a JSON object carrying only the properties the snapshot
-    // actually has (absent reads as `''`, exactly like the single-property
-    // native). Custom properties are NOT covered — they live in their own
-    // snapshot and the shim keeps their single-read path.
-    {
-        let cs = Arc::clone(&computed_styles);
-        let flush = flush.clone();
-        let needed = Arc::clone(&computed_styles_needed);
-        reg!(scope, ctx, store, "_lumen_computed_properties", move |nid: u32, names: String| -> String {
-            needed.store(true, Ordering::Relaxed);
-            flush.maybe_flush();
-            let names: Vec<String> = serde_json::from_str(&names).unwrap_or_default();
-            let prefix = lumen_layout::COMPUTED_VALUE_KEY_PREFIX;
-            let mut out = serde_json::Map::with_capacity(names.len());
-            let guard = cs.lock().unwrap();
-            if let Some(m) = guard.get(&nid) {
-                for name in names {
-                    // CSSOM-9: the snapshot's stashed computed values are not properties.
-                    if name.starts_with(prefix) && name != lumen_layout::BOXLESS_KEY {
-                        continue;
-                    }
-                    if let Some(v) = m.get(&name) {
-                        out.insert(name, serde_json::Value::String(v.clone()));
-                    }
-                }
-            }
-            drop(guard);
-            serde_json::Value::Object(out).to_string()
-        });
-    }
     // CSSANIM-MODEL-2: the number of real style recomputes the flush has published. The
     // transitions overlay only looks for a style change among the properties it snapshotted
     // when this moved (`_wa_motion_tr_sync`). 0 — no recompute ever ran in this context (a
