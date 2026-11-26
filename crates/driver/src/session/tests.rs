@@ -686,6 +686,8 @@ fn live_window_only_trait_defaults_are_honest_errors() {
         ("remove_intercept", s.remove_intercept("id").is_err()),
         ("resolve_intercepted_request", s.resolve_intercepted_request("r", true).is_err()),
         ("poll_intercepted_requests", s.poll_intercepted_requests().is_err()),
+        ("user_prompt", s.user_prompt().is_err()),
+        ("handle_user_prompt", s.handle_user_prompt(true, None).is_err()),
     ]
     .into_iter()
     .collect();

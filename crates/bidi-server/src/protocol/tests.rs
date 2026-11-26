@@ -53,6 +53,8 @@ fn fake_live_session() -> LiveWindowSession {
                     AutomationReply::Ack
                 }
                 AutomationCommand::Wait(_, _) => AutomationReply::Ack,
+                // MCP-TOTAL-S7a: the per-dispatch dialog poll — no dialog open.
+                AutomationCommand::UserPrompt => AutomationReply::UserPrompt(None),
                 _ => AutomationReply::Error("unsupported in fake_live_session".into()),
             };
             let _ = reply_tx.send(reply);
@@ -604,13 +606,54 @@ fn input_perform_actions_with_live_window_clicks() {
 
 /// Fake live window that records every `AutomationCommand` it receives.
 fn recording_live_session() -> (LiveWindowSession, std::sync::mpsc::Receiver<String>) {
-    use lumen_driver::{AutomationHandle, AutomationReply};
+    use lumen_driver::{AutomationCommand, AutomationHandle, AutomationReply};
     let (tx, rx) = std::sync::mpsc::channel::<lumen_driver::AutomationRequest>();
     let (log_tx, log_rx) = std::sync::mpsc::channel::<String>();
     std::thread::spawn(move || {
         for (cmd, reply_tx) in rx {
-            let _ = log_tx.send(format!("{cmd:?}"));
-            let _ = reply_tx.send(AutomationReply::Ack);
+            // MCP-TOTAL-S7a: the per-dispatch dialog poll is not a client
+            // action — answer silently as "no dialog open" and keep it out
+            // of the action log the assertions read.
+            let reply = match cmd {
+                AutomationCommand::UserPrompt => AutomationReply::UserPrompt(None),
+                cmd => {
+                    let _ = log_tx.send(format!("{cmd:?}"));
+                    AutomationReply::Ack
+                }
+            };
+            let _ = reply_tx.send(reply);
+        }
+    });
+    (LiveWindowSession::new(AutomationHandle::new(tx)), log_rx)
+}
+
+/// MCP-TOTAL-S7a: a fake live window whose `confirm("go?")` dialog opens only
+/// on the fourth poll — after `new_session_ctx`'s two dispatches and the
+/// subscribe — so the dialog is genuinely open *during* the tested command,
+/// not before it. `HandleUserPrompt` answers Ack and is logged.
+fn fake_live_session_with_dialog() -> (LiveWindowSession, std::sync::mpsc::Receiver<String>) {
+    use lumen_driver::{AutomationCommand, AutomationDialog, AutomationHandle, AutomationReply};
+    let (tx, rx) = std::sync::mpsc::channel::<lumen_driver::AutomationRequest>();
+    let (log_tx, log_rx) = std::sync::mpsc::channel::<String>();
+    let polls = std::sync::atomic::AtomicUsize::new(0);
+    std::thread::spawn(move || {
+        for (cmd, reply_tx) in rx {
+            let reply = match cmd {
+                AutomationCommand::UserPrompt => {
+                    let n = polls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    AutomationReply::UserPrompt((n >= 3).then(|| AutomationDialog {
+                        kind: "confirm".to_owned(),
+                        message: "go?".to_owned(),
+                        default_value: String::new(),
+                    }))
+                }
+                AutomationCommand::HandleUserPrompt { .. } => {
+                    let _ = log_tx.send(format!("{cmd:?}"));
+                    AutomationReply::Ack
+                }
+                _ => AutomationReply::Ack,
+            };
+            let _ = reply_tx.send(reply);
         }
     });
     (LiveWindowSession::new(AutomationHandle::new(tx)), log_rx)

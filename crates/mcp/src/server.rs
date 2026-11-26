@@ -35,7 +35,7 @@ pub struct McpServer<S: BrowserSession, T: Transport> {
 }
 
 /// Инструкция для ИИ-агента, отдаётся в `initialize` (MCP §Lifecycle, `instructions`).
-const SERVER_INSTRUCTIONS: &str = "Lumen is a browser you drive and inspect. Workflow: (1) `navigate` (current tab) or `new_tab` with a URL; (2) `wait` with condition document_ready, or network_idle for script-heavy pages — navigation returns before the page has finished loading; (3) read the page with `query` (CSS selector -> nodes with node_id, text, rect) or `eval` (JavaScript; the result is a string, so use JSON.stringify for structured data); (4) interact with `click` / `type` / `scroll`, then `wait` again. Raw input primitives — `pointer_move`, `pointer_down`, `pointer_up`, `key_down`, `key_up`, `type_focused` — drive the live window directly and work only there (`--mcp-live-port`); a headless session answers an error. Emulation tools flip what the page sees without touching its DOM — `set_offline`, `set_user_agent`, `set_timezone`, `set_permission` are process-global overrides (network, UA header + `navigator.userAgent`, `Intl`/`Date` timezone, permission states) and `computed_a11y` reads an element's computed accessibility role and name; they work only in the live window except `set_user_agent`, which a headless session also accepts. Network interception, cookies and preload scripts are live window only (`--mcp-live-port`; a headless session answers an error): `add_intercept {phases, url_patterns, id?}` pauses matching requests at `beforeRequestSent`/`responseStarted` until `resolve_intercept {request_id, continue}` decides them, `poll_intercepts` lists the requests paused since the last call, and `add_preload_script {function_declaration, id?}` runs a function in every document created from now on before its own scripts; `list_cookies` / `set_cookie` / `delete_cookie` read and write the active profile's real cookie jar — what `document.cookie` and requests see. A popup (`window.open`, `target=_blank`) opens as a new tab but does not take over the tools: `list_tabs`, then `switch_tab` to it, and `close_tab` / `switch_tab` back when done. `target` of click/type/scroll is a CSS selector string, {selector}, {node_id} or {point: {x, y}}. `screenshot` and the accessibility, layout, console and network resources help to verify what is shown. `eval` may time out on a busy page: raise `timeout_ms`. Tools prefixed `x-` are experimental (ADR-024): causal explanation of styles and layout (`x-computed-style`, `x-explain-element`, `x-explain-page`, `x-scope-layout`), their output format may change. Errors come back as JSON-RPC errors with a message; a failed tool does not close the session.";
+const SERVER_INSTRUCTIONS: &str = "Lumen is a browser you drive and inspect. Workflow: (1) `navigate` (current tab) or `new_tab` with a URL; (2) `wait` with condition document_ready, or network_idle for script-heavy pages — navigation returns before the page has finished loading; (3) read the page with `query` (CSS selector -> nodes with node_id, text, rect) or `eval` (JavaScript; the result is a string, so use JSON.stringify for structured data); (4) interact with `click` / `type` / `scroll`, then `wait` again. Raw input primitives — `pointer_move`, `pointer_down`, `pointer_up`, `key_down`, `key_up`, `type_focused` — drive the live window directly and work only there (`--mcp-live-port`); a headless session answers an error. JS dialogs (`alert`/`confirm`/`prompt`) block the page's JS thread until answered: `user_prompt` reads the open dialog, `handle_user_prompt {accept, user_text?}` answers it — both live window only, and `eval` answers busy while a dialog is open. Emulation tools flip what the page sees without touching its DOM — `set_offline`, `set_user_agent`, `set_timezone`, `set_permission` are process-global overrides (network, UA header + `navigator.userAgent`, `Intl`/`Date` timezone, permission states) and `computed_a11y` reads an element's computed accessibility role and name; they work only in the live window except `set_user_agent`, which a headless session also accepts. Network interception, cookies and preload scripts are live window only (`--mcp-live-port`; a headless session answers an error): `add_intercept {phases, url_patterns, id?}` pauses matching requests at `beforeRequestSent`/`responseStarted` until `resolve_intercept {request_id, continue}` decides them, `poll_intercepts` lists the requests paused since the last call, and `add_preload_script {function_declaration, id?}` runs a function in every document created from now on before its own scripts; `list_cookies` / `set_cookie` / `delete_cookie` read and write the active profile's real cookie jar — what `document.cookie` and requests see. A popup (`window.open`, `target=_blank`) opens as a new tab but does not take over the tools: `list_tabs`, then `switch_tab` to it, and `close_tab` / `switch_tab` back when done. `target` of click/type/scroll is a CSS selector string, {selector}, {node_id} or {point: {x, y}}. `screenshot` and the accessibility, layout, console and network resources help to verify what is shown. `eval` may time out on a busy page: raise `timeout_ms`. Tools prefixed `x-` are experimental (ADR-024): causal explanation of styles and layout (`x-computed-style`, `x-explain-element`, `x-explain-page`, `x-scope-layout`), their output format may change. Errors come back as JSON-RPC errors with a message; a failed tool does not close the session.";
 
 impl<S: BrowserSession, T: Transport> McpServer<S, T> {
     /// Создать новый MCP сервер без обязательной аутентификации (stdio-режим
@@ -424,6 +424,33 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                         "text": {
                             "type": "string",
                             "description": "Text to type into the focused element"
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "user_prompt".to_string(),
+                description: "Read the JS dialog currently open in the live window (alert / confirm / prompt): {open, type, message} plus default_value for a prompt. While the dialog is open the page's JS thread is blocked — eval answers busy until you handle it. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "handle_user_prompt".to_string(),
+                description: "Answer the JS dialog currently open in the live window: accept = OK / cancel, user_text replaces the text typed into a prompt. Errors when no dialog is open. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "accept": {
+                            "type": "boolean",
+                            "description": "true = OK, false = cancel (default true)"
+                        },
+                        "user_text": {
+                            "type": "string",
+                            "description": "Replacement text for an open prompt dialog"
                         }
                     }
                 }),
@@ -1189,6 +1216,37 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                     Err(e) => return McpResponse::err(id.clone(), -32603, format!("TypeFocused error: {e}")),
                 }
             }
+            "user_prompt" => {
+                // MCP-TOTAL-S7a: the open dialog blocks the JS thread, so this
+                // read never waits for it.
+                match self.session.user_prompt() {
+                    Ok(Some(d)) => {
+                        let mut v = json!({ "open": true, "type": d.kind, "message": d.message });
+                        if d.kind == "prompt" {
+                            v["default_value"] = json!(d.default_value);
+                        }
+                        v
+                    }
+                    Ok(None) => json!({ "open": false }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("UserPrompt error: {e}")),
+                }
+            }
+            "handle_user_prompt" => {
+                // MCP-TOTAL-S7a: BiDi semantics — accept defaults to true,
+                // user_text only reaches a prompt dialog.
+                let accept = args.get("accept").and_then(|v| v.as_bool()).unwrap_or(true);
+                let user_text = match args.get("user_text") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(s)) => Some(s.as_str()),
+                    Some(_) => {
+                        return McpResponse::err(id.clone(), -32602, "user_text must be a string")
+                    }
+                };
+                match self.session.handle_user_prompt(accept, user_text) {
+                    Ok(()) => json!({ "success": true, "accept": accept }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("HandleUserPrompt error: {e}")),
+                }
+            }
             "set_offline" => {
                 let Some(offline) = args.get("offline").and_then(|v| v.as_bool()) else {
                     return McpResponse::err(id.clone(), -32602, "Missing offline argument");
@@ -1882,13 +1940,13 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_forty_tools() {
+    fn tools_list_returns_forty_two_tools() {
         let mut server = McpServer::new(MockSession, VecTransport::new());
         let req = make_request("tools/list", serde_json::json!({}));
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_none());
         let tools = resp.result.unwrap()["tools"].as_array().cloned().unwrap_or_default();
-        assert_eq!(tools.len(), 40);
+        assert_eq!(tools.len(), 42);
         let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap_or("")).collect();
         assert!(names.contains(&"navigate"));
         assert!(names.contains(&"new_tab"));
@@ -1904,6 +1962,8 @@ mod tests {
         assert!(names.contains(&"key_down"));
         assert!(names.contains(&"key_up"));
         assert!(names.contains(&"type_focused"));
+        assert!(names.contains(&"user_prompt"));
+        assert!(names.contains(&"handle_user_prompt"));
         assert!(names.contains(&"set_offline"));
         assert!(names.contains(&"set_user_agent"));
         assert!(names.contains(&"set_timezone"));
@@ -1955,9 +2015,9 @@ mod tests {
         }
     }
 
-    /// Все шесть инструментов ввода — только для живого окна: сессия без
+    /// Инструменты ввода и JS-диалогов — только для живого окна: сессия без
     /// живого окна отвечает `isError: true` с честным текстом дефолта трейта
-    /// (MCP-TOTAL-S1b), а не молчаливым успехом.
+    /// (MCP-TOTAL-S1b, S7a), а не молчаливым успехом.
     #[test]
     fn input_tools_error_without_a_live_window() {
         let calls = [
@@ -1967,6 +2027,9 @@ mod tests {
             ("key_down", serde_json::json!({ "key": "Escape" })),
             ("key_up", serde_json::json!({ "key": "Escape" })),
             ("type_focused", serde_json::json!({ "text": "hi" })),
+            // MCP-TOTAL-S7a: JS-диалоги — тоже только живого окна.
+            ("user_prompt", serde_json::json!({})),
+            ("handle_user_prompt", serde_json::json!({ "accept": true })),
         ];
         for (name, args) in calls {
             let mut server = McpServer::new(MockSession, VecTransport::new());

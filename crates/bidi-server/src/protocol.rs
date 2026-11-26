@@ -541,7 +541,6 @@ impl BidiState {
     ///
     /// `prompt_type`: `"alert"`, `"confirm"`, `"prompt"`, or `"beforeUnload"`.
     /// Returns `(prompt_id, event_frames)`.
-    #[allow(dead_code)]
     pub fn fire_user_prompt(
         &mut self,
         context_id: &str,
@@ -583,6 +582,47 @@ impl BidiState {
     #[allow(dead_code)]
     pub fn open_prompt_count(&self) -> usize {
         self.user_prompts.len()
+    }
+
+    /// MCP-TOTAL-S7a: sync the live window's open JS dialog into
+    /// `user_prompts` ahead of a method dispatch, so
+    /// `browsingContext.handleUserPrompt` sees a dialog opened after the last
+    /// command within the same round-trip (this transport has no event-push
+    /// path — the intercept drain below `dispatch` rides on responses the
+    /// same way).
+    ///
+    /// Returns `browsingContext.userPromptOpened` frames for the dialog
+    /// recorded by this call. A record whose dialog is gone (answered from
+    /// the real keyboard/UI) is dropped without a `userPromptClosed` event —
+    /// the shell does not report how a keyboard answer was decided, and a
+    /// fabricated `accepted` would lie to the subscriber.
+    fn sync_user_prompts(&mut self) -> Vec<String> {
+        // Without a live window there is no source of truth to sync against:
+        // records created by a direct `fire_user_prompt` (unit tests) stay.
+        let Some(live) = &mut self.live else {
+            return Vec::new();
+        };
+        let dialog = live.user_prompt().ok().flatten();
+        let Some(dialog) = dialog else {
+            self.user_prompts.clear();
+            return Vec::new();
+        };
+        // One window per process and one dialog at a time: the recorded
+        // prompt *is* this dialog (opened earlier, still open) — nothing new.
+        if self
+            .user_prompts
+            .iter()
+            .any(|p| p.type_ == dialog.kind && p.message == dialog.message)
+        {
+            return Vec::new();
+        }
+        let Some(ctx) = self.contexts.first() else {
+            return Vec::new();
+        };
+        let ctx_id = ctx.id.clone();
+        let (_, frames) =
+            self.fire_user_prompt(&ctx_id, &dialog.kind, &dialog.message, &dialog.default_value);
+        frames
     }
 
     /// Number of cookies in the session (for testing).
@@ -666,6 +706,11 @@ pub fn dispatch(message: &str, state: &mut BidiState) -> DispatchResult {
     let Some(method) = method else {
         return DispatchResult::single(make_error(Some(id), "invalid argument", "missing method"));
     };
+
+    // MCP-TOTAL-S7a: record a live-window dialog opened since the last
+    // command *before* the method runs, so `browsingContext.handleUserPrompt`
+    // as the very next command after the dialog opened still finds it.
+    let prompt_frames = state.sync_user_prompts();
 
     let mut result = match method {
         "session.status" => DispatchResult::single(make_success(id, session_status_result(state))),
@@ -753,6 +798,9 @@ pub fn dispatch(message: &str, state: &mut BidiState) -> DispatchResult {
             let frame = make_event(event, before_request_sent_params(state, req));
             result.frames.insert(0, frame);
         }
+    }
+    for frame in prompt_frames {
+        result.frames.insert(0, frame);
     }
     result
 }
@@ -2065,6 +2113,22 @@ fn bc_handle_user_prompt(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_owned();
+
+    // MCP-TOTAL-S7a: the answer reaches the live window — without this the
+    // protocol state moves but the page's JS thread stays blocked on the
+    // dialog. Only a `prompt` carries replacement text.
+    if let Some(live) = &mut state.live
+        && let Err(e) = live.handle_user_prompt(
+            accepted,
+            if prompt.type_ == "prompt" { Some(user_text.as_str()) } else { None },
+        )
+    {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "unknown error",
+            &format!("handle user prompt: {e}"),
+        ));
+    }
 
     let mut frames = vec![make_success(id, empty_obj())];
     if state.is_subscribed("browsingContext.userPromptClosed") {

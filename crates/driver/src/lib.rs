@@ -38,7 +38,7 @@ pub mod winit_session;
 pub mod gpu_session;
 
 pub use types::{
-    A11yBounds, A11yNode, A11yState, AxQuery, AutomationCommand, AutomationReply, BoxModel, ComputedProperties, ConsoleEntry, ConsoleLevel,
+    A11yBounds, A11yNode, A11yState, AxQuery, AutomationCommand, AutomationReply, AutomationDialog, BoxModel, ComputedProperties, ConsoleEntry, ConsoleLevel,
     AutomationCookie, ExplainElement, ExplainPage, ExplainPagePhaseTimings, FingerprintProfile, InputCommand, InterceptedRequest,
     InvariantViolationCounts, NetworkEntry, NodeRef, ScrollDelta, TabInfo, Target, WaitCondition,
 };
@@ -418,6 +418,28 @@ pub trait BrowserSession {
     fn remove_preload_script(&self, id: &str) -> Result<()> {
         let _ = id;
         Err(lumen_core::error::Error::Other("remove_preload_script: только для живого окна (--mcp-live-port)".into()))
+    }
+
+    /// Открытый JS-диалог живого окна (`alert`/`confirm`/`prompt`), если есть
+    /// (MCP-TOTAL-S7a, BiDi `browsingContext.userPromptOpened`). Диалог
+    /// блокирует JS-поток, поэтому ответ читается из состояния UI, не через
+    /// него; `None` — диалога нет.
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — диалоги живого окна доступны только живому окну.
+    fn user_prompt(&self) -> Result<Option<AutomationDialog>> {
+        Err(lumen_core::error::Error::Other("user_prompt: только для живого окна (--mcp-live-port)".into()))
+    }
+
+    /// Ответить на открытый JS-диалог живого окна (MCP-TOTAL-S7a, BiDi
+    /// `browsingContext.handleUserPrompt`): `accept` — OK/отмена,
+    /// `user_text` — замена введённого текста `prompt`.
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — команду исполняет только живое окно.
+    fn handle_user_prompt(&self, accept: bool, user_text: Option<&str>) -> Result<()> {
+        let _ = (accept, user_text);
+        Err(lumen_core::error::Error::Other("handle_user_prompt: только для живого окна (--mcp-live-port)".into()))
     }
 
     // ── Isolation & Fingerprinting (Phase 1: 8E/8F) ─────────────────────────
