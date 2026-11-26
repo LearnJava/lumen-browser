@@ -267,8 +267,10 @@ impl BrowserSession for LiveWindowSession {
         Ok(())
     }
 
-    fn scroll(&mut self, _target: &Target, delta: ScrollDelta) -> Result<()> {
-        self.execute(AutomationCommand::Scroll(delta))?;
+    fn scroll(&mut self, target: &Target, delta: ScrollDelta) -> Result<()> {
+        // MCP-TOTAL-S1e (хвост BUG-338): цель доезжает до окна — arm крутит
+        // её ближайший скролл-контейнер, а не страницу.
+        self.execute(AutomationCommand::Scroll { delta, target: Some(target.clone()) })?;
         Ok(())
     }
 

@@ -312,8 +312,8 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                     "required": ["target", "delta"],
                     "properties": {
                         "target": {
-                            "type": "object",
-                            "description": "Scroll target"
+                            "type": ["string", "object"],
+                            "description": "Scroll target: a CSS-selector string,                                             {selector}, {node_id} or {point: {x, y}}"
                         },
                         "delta": {
                             "type": "object",

@@ -79,6 +79,70 @@ impl Lumen {
         self.apply_container_scroll(chain.node, chain.new_x, chain.new_y)
     }
 
+    /// MCP-TOTAL-S1e (хвост BUG-338): automation-скролл с target — дельта
+    /// уходит контейнеру цели, а не странице. Узловая цель (селектор/node_id)
+    /// — ближайший скролл-контейнер цели (`find_scroll_container_for_node`,
+    /// как в headless); `{point}` — тот же проход по цепочке, что у
+    /// настоящего колеса (`resolve_scroll_chain_target`). Обе ветки пишут
+    /// смещение общим хвостом колеса — `apply_container_scroll`. `false` —
+    /// цели нет, она вне раскладки или у неё нет контейнера (в т.ч. `body`) —
+    /// вызывающий крутит страницу (`scroll_by_delta`).
+    pub(crate) fn scroll_target_by_delta(
+        &mut self,
+        target: &lumen_driver::Target,
+        dx: f32,
+        dy: f32,
+    ) -> bool {
+        use lumen_driver::Target;
+        let routed = match target {
+            // `Target::Point` — контент-вьюпортные CSS px (тот же смысл, что
+            // у клика): для hit-теста цепочки переводим в документные, как
+            // колесо переводит курсор (+ смещение страницы).
+            Target::Point { x, y } => lumen_layout::resolve_scroll_chain_target(
+                &self.scroll_containers,
+                x + self.scroll_x,
+                y + self.scroll_y,
+                dx,
+                dy,
+            ),
+            Target::Selector(_) | Target::NodeId(_) => {
+                let Some(rt) = self.resolve_automation_target(target) else {
+                    return false;
+                };
+                let Some(node) = rt.node else { return false };
+                let Some(doc) =
+                    self.layout_source.as_ref().and_then(|s| s.document.lock().ok())
+                else {
+                    return false;
+                };
+                let Some(scroll_node) =
+                    lumen_layout::find_scroll_container_for_node(&self.scroll_containers, &doc, node)
+                else {
+                    return false;
+                };
+                let Some(c) = self.scroll_containers.iter().find(|c| c.node == scroll_node)
+                else {
+                    return false;
+                };
+                let new_x = (c.scroll_x + dx).clamp(0.0, (c.scroll_width - c.clip_rect.width).max(0.0));
+                let new_y = (c.scroll_y + dy).clamp(0.0, (c.scroll_height - c.clip_rect.height).max(0.0));
+                Some(lumen_layout::ScrollChainTarget {
+                    node: scroll_node,
+                    new_x,
+                    new_y,
+                    moved: true,
+                })
+            }
+        };
+        match routed {
+            Some(t) if t.moved => self.apply_container_scroll(t.node, t.new_x, t.new_y),
+            // Контейнер на границе с contain/none глушит жест без
+            // распространения на страницу — как у колеса.
+            Some(_) => true,
+            None => false,
+        }
+    }
+
     /// CQ-SCROLL-STATE-2: после движения контейнера запросы `@container scroll-state(…)`
     /// отвечают заново — стили потомков строятся один раз за проход раскладки, поэтому
     /// таблица с такими запросами проходит раскладку целиком (с текущими смещениями).

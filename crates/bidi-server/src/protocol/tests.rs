@@ -46,7 +46,7 @@ fn fake_live_session() -> LiveWindowSession {
                 AutomationCommand::Screenshot => AutomationReply::Screenshot(vec![0x89, b'P', b'N', b'G']),
                 AutomationCommand::Click(_)
                 | AutomationCommand::Type(_, _)
-                | AutomationCommand::Scroll(_)
+                | AutomationCommand::Scroll { .. }
                 | AutomationCommand::PointerMove { .. }
                 | AutomationCommand::Key { .. }
                 | AutomationCommand::TypeFocused(_) => {
