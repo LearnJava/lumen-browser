@@ -89,12 +89,20 @@ pub(crate) fn page_content_extent(
     dl: &lumen_paint::DisplayList,
     lb: &lumen_layout::LayoutBox,
     viewport_width: f32,
+    viewport_height: f32,
 ) -> (f32, f32) {
     let (lw, lh) = lumen_layout::page_scrollable_extent(lb);
     let w = content_width_in(dl, lb, viewport_width);
     // `overflow-x: hidden|clip` на viewport-е (BUG-1642) отсекает и scrollable overflow раскладки.
     let w = if viewport_clips_x(lb) { w } else { w.max(lw) };
-    (content_height_of(dl).max(lh), w)
+    let h = content_height_of(dl).max(lh);
+    // BUG-1848 — зеркало BUG-1642 по вертикали: при `overflow-y: hidden|clip` на viewport-е
+    // страница не прокручивается, что бы ни торчало из-под клипа (раздутый флексом
+    // контейнер чата портала рисовал документ на 54 тыс. px и отдавал колесу 53 тыс. px
+    // диапазона при `overflow: hidden` на html/body). Если сдать только min по высоте
+    // вьюпорта, `max_scroll()` становится 0 и все пути колеса/скролла клэмпятся сами.
+    let h = if viewport_clips_y(lb) { h.min(viewport_height) } else { h };
+    (h, w)
 }
 
 /// Полная ширина контента в CSS px — `max(rect.x + rect.width)` по всем
@@ -186,13 +194,11 @@ pub(crate) fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
     max_x
 }
 
-/// Горизонтально ли viewport не прокручивается пользователем: `overflow-x: hidden | clip` у
-/// `<html>` (или у `<body>`, когда у `<html>` `visible`) уходит на viewport (CSS Overflow L3
-/// §3.5) — страница не растягивается вбок, что бы ни торчало за правым краем.
-fn viewport_clips_x(root: &lumen_layout::LayoutBox) -> bool {
+/// Помеченный `overflow_to_viewport` источник (`<html>`, иначе `<body>`, когда у `<html>`
+/// `visible`) — общий поиск для X- и Y-версий (CSS Overflow L3 §3.5): первый помеченный с
+/// не-`visible` значением, иначе `<html>` с `visible` заслонил бы `<body>`.
+fn viewport_overflow_source(root: &lumen_layout::LayoutBox) -> Option<&lumen_layout::LayoutBox> {
     use lumen_layout::Overflow;
-    // `<html>` помечен всегда, `<body>` — только при `visible` у `<html>`: источник — первый
-    // помеченный с не-`visible` значением (иначе `<html>` с `visible` заслонил бы `<body>`).
     fn source(b: &lumen_layout::LayoutBox, depth: u8) -> Option<&lumen_layout::LayoutBox> {
         let own = b.style.overflow_to_viewport
             && !(b.style.overflow_x == Overflow::Visible && b.style.overflow_y == Overflow::Visible);
@@ -204,7 +210,22 @@ fn viewport_clips_x(root: &lumen_layout::LayoutBox) -> bool {
         }
         b.children.iter().find_map(|c| source(c, depth - 1))
     }
-    source(root, 3).is_some_and(|b| matches!(b.style.overflow_x, Overflow::Hidden | Overflow::Clip))
+    source(root, 3)
+}
+
+/// Горизонтально ли viewport не прокручивается пользователем: `overflow-x: hidden | clip` у
+/// `<html>` (или у `<body>`, когда у `<html>` `visible`) уходит на viewport (CSS Overflow L3
+/// §3.5) — страница не растягивается вбок, что бы ни торчало за правым краем.
+fn viewport_clips_x(root: &lumen_layout::LayoutBox) -> bool {
+    use lumen_layout::Overflow;
+    viewport_overflow_source(root).is_some_and(|b| matches!(b.style.overflow_x, Overflow::Hidden | Overflow::Clip))
+}
+
+/// Вертикальное зеркало [`viewport_clips_x`] (BUG-1848): при `overflow-y: hidden | clip` на
+/// viewport-е высота контента не даёт странице прокрутки, что бы ни торчало из-под клипа.
+fn viewport_clips_y(root: &lumen_layout::LayoutBox) -> bool {
+    use lumen_layout::Overflow;
+    viewport_overflow_source(root).is_some_and(|b| matches!(b.style.overflow_y, Overflow::Hidden | Overflow::Clip))
 }
 
 /// [`content_width_of`] с учётом `overflow-x` корня: при `hidden`/`clip` на viewport ширина

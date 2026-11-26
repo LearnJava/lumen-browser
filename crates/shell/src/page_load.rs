@@ -667,7 +667,7 @@ impl Lumen {
                 // The new runtime starts empty; re-seed it with the current Navigation state.
                 self.commit_nav_state();
                 (self.content_height, self.content_width) =
-                    crate::display_list_metrics::page_content_extent(&page.display_list, &page.layout_box, self.viewport_width_css());
+                    crate::display_list_metrics::page_content_extent(&page.display_list, &page.layout_box, self.viewport_width_css(), self.viewport_height_css());
                 // On full page load, mark all tiles dirty — content has changed completely.
                 self.tile_grid.mark_all_dirty(self.content_width, self.content_height);
                 // BUG-480 срез 14: под-документы новой страницы заменяют старые
@@ -1339,7 +1339,7 @@ impl Lumen {
             );
         }
 
-        (self.content_height, self.content_width) = crate::display_list_metrics::page_content_extent(&dl, &layout, self.viewport_width_css());
+        (self.content_height, self.content_width) = crate::display_list_metrics::page_content_extent(&dl, &layout, self.viewport_width_css(), self.viewport_height_css());
         let has_content = !dl.is_empty();
         self.set_display_list(dl);
         if has_content {
@@ -2172,7 +2172,7 @@ impl Lumen {
             None
         };
         (self.content_height, self.content_width) =
-            crate::display_list_metrics::page_content_extent(&page.display_list, &page.layout_box, self.viewport_width_css());
+            crate::display_list_metrics::page_content_extent(&page.display_list, &page.layout_box, self.viewport_width_css(), self.viewport_height_css());
         // Full page load: force all tiles dirty.
         self.tile_grid.mark_all_dirty(self.content_width, self.content_height);
         self.animation_scheduler.clear();

@@ -560,6 +560,44 @@ fn content_height_ignores_pop_commands() {
     assert_eq!(content_height_of(&dl), 0.0);
 }
 
+// ── page_content_extent (BUG-1848) ────────────────────────────────────────
+
+use crate::display_list_metrics::page_content_extent;
+
+#[test]
+fn page_extent_y_clipped_viewport_has_no_scroll_range() {
+    use lumen_core::geom::{Rect, Size};
+    use lumen_layout::Color;
+    use lumen_paint::DisplayCommand;
+    let doc = lumen_html_parser::parse("<body><div class='tall'></div></body>");
+    // `overflow-y: hidden` на viewport-е: нарисованное за сгибом (раздутый контейнер чата
+    // портала) не должно давать странице диапазон прокрутки — зеркало BUG-1642 по X.
+    let sheet = lumen_css_parser::parse("html { overflow-y: hidden } body { margin: 0 } .tall { height: 5000px }");
+    let lb = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    let dl: lumen_paint::DisplayList = vec![DisplayCommand::FillRect {
+        rect: Rect::new(0.0, 0.0, 100.0, 5000.0),
+        color: Color { r: 0, g: 0, b: 0, a: 255 },
+    }];
+    let (h, _w) = page_content_extent(&dl, &lb, 800.0, 600.0);
+    assert!((h - 600.0).abs() < 0.01, "clipped viewport: {h}");
+}
+
+#[test]
+fn page_extent_scrollable_viewport_keeps_content_height() {
+    use lumen_core::geom::{Rect, Size};
+    use lumen_layout::Color;
+    use lumen_paint::DisplayCommand;
+    let doc = lumen_html_parser::parse("<body><div class='tall'></div></body>");
+    let sheet = lumen_css_parser::parse("body { margin: 0 } .tall { height: 5000px }");
+    let lb = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    let dl: lumen_paint::DisplayList = vec![DisplayCommand::FillRect {
+        rect: Rect::new(0.0, 0.0, 100.0, 5000.0),
+        color: Color { r: 0, g: 0, b: 0, a: 255 },
+    }];
+    let (h, _w) = page_content_extent(&dl, &lb, 800.0, 600.0);
+    assert!((h - 5000.0).abs() < 0.01, "normal page keeps scrolling: {h}");
+}
+
 // ── content_width_of ──────────────────────────────────────────────────────
 
 #[test]
