@@ -426,7 +426,56 @@ fn indexed_define_trusted(scope: &mut v8::PinScope) -> bool {
 /// ordinary own-property lookup, which finds that accessor when one was
 /// installed and answers `undefined`/`false` otherwise, exactly the pre-
 /// existing behaviour for indices nothing ever wrote.
+/// Indexed-property getter for `window` (HTML LS §7.3.3): `window[i]`/
+/// `frames[i]` — i-й дочерний navigable. Свой пер-индексный акцессор ставит
+/// `_lumen_frame_install_index` только после загрузки под-документа, а spec
+/// отвечает WindowProxy уже в тике вставки iframe (execution-timing/083-084) —
+/// поэтому чтение уходит в `_lumen_frame_window_at`, который резолвит idx по
+/// DOM-порядку и лениво собирает about:blank-фасад. `undefined`/нет функции —
+/// `kNo`, дальше обычный поиск по own-свойствам (установленный акцессор).
+fn frame_window_at<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    index: u32,
+) -> Option<v8::Local<'s, v8::Value>> {
+    let ctx = scope.get_current_context();
+    let global = crate::internal_globals::holder_for(scope, ctx, "_lumen_frame_window_at");
+    let key = v8::String::new(scope, "_lumen_frame_window_at")?;
+    let factory = v8::Local::<v8::Function>::try_from(global.get(scope, key.into())?).ok()?;
+    let arg = v8::Integer::new_from_unsigned(scope, index).into();
+    v8::tc_scope!(tc, scope);
+    let value = factory.call(tc, global.into(), &[arg]);
+    if tc.has_caught() {
+        return None;
+    }
+    let value = value?;
+    if value.is_undefined() || value.is_null() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
 fn window_indexed_properties_handler<'s>() -> v8::IndexedPropertyHandlerConfiguration<'s> {
+    let indexed_getter = |scope: &mut v8::PinScope,
+                          index: u32,
+                          _args: v8::PropertyCallbackArguments,
+                          mut rv: v8::ReturnValue<v8::Value>| {
+        // Реэнтранси: сборка фасада может читать window — вложенный заход в
+        // тот же интерцептор отклоняем, как named-ветка выше.
+        if NAMED_ACCESS_BUSY.with(std::cell::Cell::get) {
+            return v8::Intercepted::kNo;
+        }
+        NAMED_ACCESS_BUSY.with(|busy| busy.set(true));
+        let value = frame_window_at(scope, index);
+        NAMED_ACCESS_BUSY.with(|busy| busy.set(false));
+        match value {
+            Some(v) => {
+                rv.set(v);
+                v8::Intercepted::kYes
+            }
+            None => v8::Intercepted::kNo,
+        }
+    };
     let definer = |scope: &mut v8::PinScope,
                    _index: u32,
                    _desc: &v8::PropertyDescriptor,
@@ -450,6 +499,7 @@ fn window_indexed_properties_handler<'s>() -> v8::IndexedPropertyHandlerConfigur
         v8::Intercepted::kYes
     };
     v8::IndexedPropertyHandlerConfiguration::new()
+        .getter(indexed_getter)
         .definer(definer)
         .setter(setter)
 }
