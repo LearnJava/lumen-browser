@@ -137,6 +137,18 @@ MCP `initialize` parameter and a BiDi `session.new` capability. Tracked as
   tooling for no gain; they are simply not L2 — they are unpromoted L1 with
   legacy names. New capabilities get the `x-` prefix. Revisit at v1.0.
 
+- **Q3 — unprefixed mirrors of existing capabilities (user, 2026-11-26,
+  MCP-TOTAL).** A tool that repeats an already-working capability and whose
+  schema is set by BiDi or by an existing command ships **without `x-` and
+  without `"experimental": true`** — level with `click`/`type`; the first batch
+  is `set_offline`, `set_user_agent`, `set_timezone`, `set_permission`,
+  `computed_a11y` (MCP-TOTAL-S1c). This carves an exception into Q2's "new
+  capabilities get the `x-` prefix": the prefix marks Lumen-invented shapes we
+  may still reshape or drop, while a mirror of a schema an external protocol
+  already fixes carries neither that freedom nor that risk. `x-` stays on the
+  existing `x-*` tools and on new data shapes Lumen invents itself (the S5
+  resources).
+
 ## Alternatives considered
 
 | Alternative | Why rejected |
