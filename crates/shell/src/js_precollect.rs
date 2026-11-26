@@ -207,7 +207,11 @@ fn collect_js_tree_data(
         "collect_scroll_containers",
         collect_scroll_containers_for_js_state(lb_ref)
             .iter()
-            .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
+            // BUG-1573: ключ — `NodeId::raw`, тот же key-space, что у
+            // `style_flush.rs` (`c.node.raw()`) и `__nid__` на JS-стороне;
+            // `index()` обрезает поколение слота и для переиспользованного
+            // слота клал бы запись не под тем ключом.
+            .map(|c| (c.node.raw(), [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
             .collect()
     );
     PrecollectedJsData {

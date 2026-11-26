@@ -8158,6 +8158,11 @@ function _wa_doc_get_animations() {
 
 var _css_an_by_key = {};   // `nid:pseudo` → CSSAnimation[] in animation-name order
 var _css_tr_by_key = {};   // `nid:property` → the CSSTransition in flight
+// `nid` → число его записей в `_css_tr_by_key` (включая pseudo-ключи — все
+// начинаются с `nid:`). Без него `_css_tr_prune` сканировал ВСЮ карту
+// `for…in` на каждый `getComputedStyle` — O(переходы) на вызов даже когда у
+// элемента переходов нет.
+var _css_tr_nids = {};
 // «Style change event» counter: transitions started by one style flush share it and sort by
 // property name; those of different flushes keep the order they were started in.
 var _css_gen = 1;
@@ -8902,7 +8907,9 @@ function _css_tr_start(nid, pseudo, kebab, camel, run) {
     k0[camel] = run.from;
     k1[camel] = run.to;
     a._eff._keyframes = [k0, k1];
-    _css_tr_by_key[_wa_tr_key(nid, pseudo, kebab)] = a;
+    var trKey = _wa_tr_key(nid, pseudo, kebab);
+    if (!_css_tr_by_key[trKey]) _css_tr_nids[nid] = (_css_tr_nids[nid] || 0) + 1;
+    _css_tr_by_key[trKey] = a;
     return a;
 }
 
@@ -8922,6 +8929,7 @@ function _css_tr_restore(a) {
     run.done = false;
     rec.run = run;
     rec.finishedRun = null;
+    if (!_css_tr_by_key[key]) _css_tr_nids[a._nid] = (_css_tr_nids[a._nid] || 0) + 1;
     _css_tr_by_key[key] = a;
 }
 
@@ -8931,6 +8939,7 @@ function _css_tr_retire(nid, pseudo, kebab) {
     var key = _wa_tr_key(nid, pseudo, kebab), a = _css_tr_by_key[key];
     if (!a) return;
     delete _css_tr_by_key[key];
+    if (--_css_tr_nids[nid] <= 0) delete _css_tr_nids[nid];
     var i = _wa_animations.indexOf(a);
     if (i >= 0) _wa_animations.splice(i, 1);
 }
@@ -8954,6 +8963,7 @@ function _css_tr_event_cancel(nid, prop) {
     var key = nid + ':' + prop, a = _css_tr_by_key[key];
     if (!a || !a._ev) return;
     delete _css_tr_by_key[key];
+    if (--_css_tr_nids[nid] <= 0) delete _css_tr_nids[nid];
     _css_drop(a);
 }
 
@@ -8963,17 +8973,28 @@ function _css_tr_event_cancel(nid, prop) {
 var _css_tr_pruning = false;
 function _css_tr_prune(nid) {
     if (_css_tr_pruning) return;
-    var live = false;
-    for (var k in _css_tr_by_key) {
-        if (k.indexOf(nid + ':') === 0) { live = true; break; }
-    }
-    if (!live) return;
+    if (!_css_tr_nids[nid]) return;
     _css_tr_pruning = true;
     try { _wa_motion_tr_sync({ __nid__: nid }); } finally { _css_tr_pruning = false; }
 }
 
 // Every element with CSS animations, for `document.getAnimations()`.
+// Style-epoch gate for `_css_an_update_all`: the whole-document scan below is
+// ~1 computed-style read per element (plus ~9 more on elements that name an
+// animation), and its answer can only change when a flush publishes a new style
+// snapshot — `animation-*`, `display`, the `@keyframes` registry and the DOM all
+// derive from it. A page polling `document.getAnimations()` between mutations
+// would otherwise pay the full scan on every call. The pending flush is forced
+// first (one `display` read on the root) so the epoch compared is the fresh one.
+var _css_an_all_epoch = -1;
 function _css_an_update_all() {
+    var rootNid = document.documentElement && document.documentElement.__nid__;
+    if (rootNid != null && typeof _lumen_get_computed_style === 'function') {
+        _lumen_get_computed_style(rootNid, 'display');
+    }
+    var epoch = typeof _lumen_style_epoch === 'function' ? _lumen_style_epoch() : 0;
+    if (epoch !== 0 && _css_an_all_epoch === epoch) return;
+    _css_an_all_epoch = epoch;
     for (var key in _css_an_by_key) {
         var at = key.indexOf(':');
         _css_an_update(+key.slice(0, at), key.slice(at + 1) || null);

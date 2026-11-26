@@ -691,6 +691,17 @@ impl Lumen {
         // `LUMEN_NO_JOB_INCREMENTAL=1` — откат всего инкрементального блока
         // задания к историческому полному проходу (A/B-замеры, регрессии).
         let job_incr_disabled = std::env::var_os("LUMEN_NO_JOB_INCREMENTAL").is_some();
+        // BUG-1573: every producer below rebuilds scroll containers at offset
+        // 0 (full passes always; the graft carries offsets only through fully
+        // reused subtrees). Snapshot the live offsets now — `prev_layout` is
+        // only `Some` on the incremental branches — and restore them onto the
+        // fresh tree before paint/precollect, same rule as the UI-side
+        // `compute_layout_*` wrappers.
+        let scroll_offsets = self
+            .layout_box
+            .as_ref()
+            .map(lumen_layout::scroll_offsets)
+            .unwrap_or_default();
         let sig_match = self.layout_basis_sig.as_ref() == Some(&basis_sig);
         // PERF-FONT-RELAYOUT: изменились только метрики шрифтов (и ничего из
         // каскадных входов + интерактив не дрогнул) — каскад доказуемо тот же,
@@ -842,7 +853,8 @@ impl Lumen {
             }
             };
             drop(doc);
-            let layout_box = layout;
+            let mut layout_box = layout;
+            lumen_layout::restore_scroll_positions(&mut layout_box, &scroll_offsets);
             let content = crate::display_list_metrics::paint_ordered_in(&layout_box, viewport);
             let cascade_styles = want_cascade_styles.then(|| counters.into_styles());
             lumen_layout::clear_interactive_state();
