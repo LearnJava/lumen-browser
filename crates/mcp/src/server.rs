@@ -28,23 +28,27 @@ pub struct McpServer<S: BrowserSession, T: Transport> {
     /// с верным токеном. Пока `false`, любой метод кроме `initialize`
     /// отклоняется.
     authenticated: bool,
+    /// Счётчик opaque-идентификаторов, которые сервер генерирует сам, когда
+    /// клиент не передал `id` (`add_intercept`, `add_preload_script` —
+    /// MCP-TOTAL-S1d; по образцу BiDi `state.next_id`).
+    id_counter: u64,
 }
 
 /// Инструкция для ИИ-агента, отдаётся в `initialize` (MCP §Lifecycle, `instructions`).
-const SERVER_INSTRUCTIONS: &str = "Lumen is a browser you drive and inspect. Workflow: (1) `navigate` (current tab) or `new_tab` with a URL; (2) `wait` with condition document_ready, or network_idle for script-heavy pages — navigation returns before the page has finished loading; (3) read the page with `query` (CSS selector -> nodes with node_id, text, rect) or `eval` (JavaScript; the result is a string, so use JSON.stringify for structured data); (4) interact with `click` / `type` / `scroll`, then `wait` again. Raw input primitives — `pointer_move`, `pointer_down`, `pointer_up`, `key_down`, `key_up`, `type_focused` — drive the live window directly and work only there (`--mcp-live-port`); a headless session answers an error. A popup (`window.open`, `target=_blank`) opens as a new tab but does not take over the tools: `list_tabs`, then `switch_tab` to it, and `close_tab` / `switch_tab` back when done. `target` of click/type/scroll is a CSS selector string, {selector}, {node_id} or {point: {x, y}}. `screenshot` and the accessibility, layout, console and network resources help to verify what is shown. `eval` may time out on a busy page: raise `timeout_ms`. Tools prefixed `x-` are experimental (ADR-024): causal explanation of styles and layout (`x-computed-style`, `x-explain-element`, `x-explain-page`, `x-scope-layout`), their output format may change. Errors come back as JSON-RPC errors with a message; a failed tool does not close the session.";
+const SERVER_INSTRUCTIONS: &str = "Lumen is a browser you drive and inspect. Workflow: (1) `navigate` (current tab) or `new_tab` with a URL; (2) `wait` with condition document_ready, or network_idle for script-heavy pages — navigation returns before the page has finished loading; (3) read the page with `query` (CSS selector -> nodes with node_id, text, rect) or `eval` (JavaScript; the result is a string, so use JSON.stringify for structured data); (4) interact with `click` / `type` / `scroll`, then `wait` again. Raw input primitives — `pointer_move`, `pointer_down`, `pointer_up`, `key_down`, `key_up`, `type_focused` — drive the live window directly and work only there (`--mcp-live-port`); a headless session answers an error. Emulation tools flip what the page sees without touching its DOM — `set_offline`, `set_user_agent`, `set_timezone`, `set_permission` are process-global overrides (network, UA header + `navigator.userAgent`, `Intl`/`Date` timezone, permission states) and `computed_a11y` reads an element's computed accessibility role and name; they work only in the live window except `set_user_agent`, which a headless session also accepts. Network interception, cookies and preload scripts are live window only (`--mcp-live-port`; a headless session answers an error): `add_intercept {phases, url_patterns, id?}` pauses matching requests at `beforeRequestSent`/`responseStarted` until `resolve_intercept {request_id, continue}` decides them, `poll_intercepts` lists the requests paused since the last call, and `add_preload_script {function_declaration, id?}` runs a function in every document created from now on before its own scripts; `list_cookies` / `set_cookie` / `delete_cookie` read and write the active profile's real cookie jar — what `document.cookie` and requests see. A popup (`window.open`, `target=_blank`) opens as a new tab but does not take over the tools: `list_tabs`, then `switch_tab` to it, and `close_tab` / `switch_tab` back when done. `target` of click/type/scroll is a CSS selector string, {selector}, {node_id} or {point: {x, y}}. `screenshot` and the accessibility, layout, console and network resources help to verify what is shown. `eval` may time out on a busy page: raise `timeout_ms`. Tools prefixed `x-` are experimental (ADR-024): causal explanation of styles and layout (`x-computed-style`, `x-explain-element`, `x-explain-page`, `x-scope-layout`), their output format may change. Errors come back as JSON-RPC errors with a message; a failed tool does not close the session.";
 
 impl<S: BrowserSession, T: Transport> McpServer<S, T> {
     /// Создать новый MCP сервер без обязательной аутентификации (stdio-режим
     /// или тесты — недоступен другим локальным процессам).
     pub fn new(session: S, transport: T) -> Self {
-        Self { session, transport, required_token: None, authenticated: true }
+        Self { session, transport, required_token: None, authenticated: true, id_counter: 0 }
     }
 
     /// Создать MCP сервер, требующий верный токен в параметрах `initialize`
     /// (ADR-024 §Access model, DEVX-15) — используется на всех TCP-портах
     /// (`--mcp-port`/`--mcp-live-port`), доступных любому локальному процессу.
     pub fn with_token(session: S, transport: T, token: String) -> Self {
-        Self { session, transport, required_token: Some(token), authenticated: false }
+        Self { session, transport, required_token: Some(token), authenticated: false, id_counter: 0 }
     }
 
     /// Основной цикл сервера: читать запросы и писать ответы.
@@ -479,6 +483,216 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                             "type": "string",
                             "description": "CSS selector"
                         }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "set_offline".to_string(),
+                description: "Cut or restore the network: while offline every later request (navigation, `fetch()`/XHR, subresources) fails immediately instead of reaching the network. Returns {success, offline}. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["offline"],
+                    "properties": {
+                        "offline": {
+                            "type": "boolean",
+                            "description": "true to go offline, false to restore the network"
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "set_user_agent".to_string(),
+                description: "Override the User-Agent string: later navigations send it as the HTTP header and `navigator.userAgent` of the current page switches immediately. Returns {success, user_agent}.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["user_agent"],
+                    "properties": {
+                        "user_agent": {
+                            "type": "string",
+                            "description": "User-Agent string to use from now on"
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "set_timezone".to_string(),
+                description: "Override the timezone the page's JS sees: `Intl`/`Date` follow the IANA id (`Asia/Tokyo`, `America/New_York`...). Call without `timezone` (or with null) to restore the host timezone. Returns {success, timezone}. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "timezone": {
+                            "type": ["string", "null"],
+                            "description": "IANA timezone id; omit or null to restore the host timezone"
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "set_permission".to_string(),
+                description: "Set a permission state without a prompt: `name` is a permission name (`geolocation`, `camera`, `notifications`...), `state` is `granted`, `denied` or `prompt`. Returns {success, accepted, name, state}; `accepted: false` means the engine does not know the name or the state. The override is global (not per-origin, unlike BiDi's `permissions.setPermission`) and survives navigation. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["name", "state"],
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Permission name: geolocation, camera, notifications..."
+                        },
+                        "state": {
+                            "type": "string",
+                            "enum": ["granted", "denied", "prompt"],
+                            "description": "State to set"
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "computed_a11y".to_string(),
+                description: "Resolve a chain of CSS selectors — each selector after the first matches inside the previous match's shadow root — and return the final element's accessibility {role, name}; `null` when the chain matches nothing. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["selectors"],
+                    "properties": {
+                        "selectors": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "CSS selectors, each matched inside the previous match's shadow root"
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "add_intercept".to_string(),
+                description: "Pause network requests whose URL matches one of `url_patterns` (exact-string match, empty array = all URLs) at the given phases, until `resolve_intercept` decides each pause: `beforeRequestSent` (before the request goes out) and `responseStarted` (after status line + headers); `authRequired` is not supported. `id` is optional — generated when omitted and returned. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["phases", "url_patterns"],
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "description": "Opaque intercept id; generated by the server when omitted"
+                        },
+                        "phases": {
+                            "type": "array",
+                            "items": { "type": "string", "enum": ["beforeRequestSent", "responseStarted"] },
+                            "description": "Phases to pause matching requests at"
+                        },
+                        "url_patterns": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "URL patterns to match (exact string); empty array = all URLs"
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "remove_intercept".to_string(),
+                description: "Remove a previously registered intercept rule by `id` (from `add_intercept`): later requests are no longer paused; requests already paused stay paused until resolved. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["id"],
+                    "properties": {
+                        "id": { "type": "string", "description": "Intercept id from `add_intercept`" }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "resolve_intercept".to_string(),
+                description: "Deliver a decision for a request paused by an intercept: `continue: true` lets it proceed unmodified, `continue: false` fails it. Returns `resolved: true` when `request_id` matched an outstanding pause; an unknown id is not an error (`resolved: false`). Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["request_id", "continue"],
+                    "properties": {
+                        "request_id": { "type": "string", "description": "Request id from `poll_intercepts`" },
+                        "continue": { "type": "boolean", "description": "true = let the request proceed, false = fail it" }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "poll_intercepts".to_string(),
+                description: "List the requests newly paused by an active intercept since the last call: {requests: [{request_id, url, phase, status}]}. Poll after navigating — a pause holds the request until `resolve_intercept` decides it. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({ "type": "object", "properties": {} }),
+                experimental: false,
+            },
+            McpTool {
+                name: "list_cookies".to_string(),
+                description: "List every non-expired cookie of the active profile's cookie jar, HttpOnly ones included — what `document.cookie` and later requests see. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({ "type": "object", "properties": {} }),
+                experimental: false,
+            },
+            McpTool {
+                name: "set_cookie".to_string(),
+                description: "Store (or replace) a cookie in the active profile's cookie jar — pages read it through `document.cookie` and requests send it. `expiry` is a Unix timestamp in seconds, `0` = session cookie; `same_site` is `strict`, `lax`, `none` or `default`. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["name", "value", "domain", "path", "secure", "http_only", "same_site", "expiry"],
+                    "properties": {
+                        "name": { "type": "string", "description": "Cookie name" },
+                        "value": { "type": "string", "description": "Cookie value" },
+                        "domain": { "type": "string", "description": "Domain (lowercase host, no leading dot)" },
+                        "path": { "type": "string", "description": "Path (/ by default)" },
+                        "secure": { "type": "boolean", "description": "Secure flag" },
+                        "http_only": { "type": "boolean", "description": "HttpOnly flag" },
+                        "same_site": {
+                            "type": "string",
+                            "enum": ["strict", "lax", "none", "default"],
+                            "description": "SameSite attribute (default = attribute absent)"
+                        },
+                        "expiry": { "type": "integer", "description": "Expiry as a Unix timestamp in seconds; 0 = session cookie" }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "delete_cookie".to_string(),
+                description: "Remove the cookie identified by the triple (`domain`, `path`, `name`) from the active profile's cookie jar. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["name", "domain", "path"],
+                    "properties": {
+                        "name": { "type": "string", "description": "Cookie name" },
+                        "domain": { "type": "string", "description": "Cookie domain as stored in the jar" },
+                        "path": { "type": "string", "description": "Cookie path" }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "add_preload_script".to_string(),
+                description: "Run `function_declaration` (the source of a function, as `script.addPreloadScript` takes it) in every document created from now on, before any of that document's own scripts. `id` is optional — generated when omitted and returned; `remove_preload_script` takes it. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["function_declaration"],
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "description": "Opaque preload-script id; generated by the server when omitted"
+                        },
+                        "function_declaration": {
+                            "type": "string",
+                            "description": "Source of a function to call in every new document"
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "remove_preload_script".to_string(),
+                description: "Stop running a preload script in new documents by `id` (from `add_preload_script`). Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["id"],
+                    "properties": {
+                        "id": { "type": "string", "description": "Preload-script id from `add_preload_script`" }
                     }
                 }),
                 experimental: false,
@@ -975,6 +1189,223 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                     Err(e) => return McpResponse::err(id.clone(), -32603, format!("TypeFocused error: {e}")),
                 }
             }
+            "set_offline" => {
+                let Some(offline) = args.get("offline").and_then(|v| v.as_bool()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing offline argument");
+                };
+                match self.session.set_offline(offline) {
+                    Ok(()) => json!({ "success": true, "offline": offline }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("SetOffline error: {e}")),
+                }
+            }
+            "set_user_agent" => {
+                let Some(ua) = args.get("user_agent").and_then(|v| v.as_str()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing user_agent argument");
+                };
+                match self.session.set_user_agent(ua) {
+                    Ok(()) => json!({ "success": true, "user_agent": ua }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("SetUserAgent error: {e}")),
+                }
+            }
+            "set_timezone" => {
+                let tz = match args.get("timezone") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(s)) => Some(s.as_str()),
+                    Some(_) => {
+                        return McpResponse::err(id.clone(), -32602, "timezone must be a string or null")
+                    }
+                };
+                match self.session.set_timezone(tz) {
+                    Ok(()) => json!({ "success": true, "timezone": tz }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("SetTimezone error: {e}")),
+                }
+            }
+            "set_permission" => {
+                let Some(name) = args.get("name").and_then(|v| v.as_str()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing name argument");
+                };
+                let Some(state) = args.get("state").and_then(|v| v.as_str()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing state argument");
+                };
+                match self.session.set_permission(name, state) {
+                    Ok(accepted) => json!({ "success": true, "accepted": accepted, "name": name, "state": state }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("SetPermission error: {e}")),
+                }
+            }
+            "computed_a11y" => {
+                let Some(selectors) = args.get("selectors").and_then(|v| v.as_array()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing selectors argument");
+                };
+                let mut sels = Vec::with_capacity(selectors.len());
+                for v in selectors {
+                    let Some(s) = v.as_str() else {
+                        return McpResponse::err(id.clone(), -32602, "selectors must be an array of strings");
+                    };
+                    sels.push(s.to_owned());
+                }
+                match self.session.computed_a11y(&sels) {
+                    Ok(Some((role, name))) => json!({ "role": role, "name": name }),
+                    Ok(None) => json!(null),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("ComputedA11y error: {e}")),
+                }
+            }
+            "add_intercept" => {
+                let mut phases = Vec::new();
+                match args.get("phases") {
+                    None => return McpResponse::err(id.clone(), -32602, "Missing phases argument"),
+                    Some(Value::Array(items)) => {
+                        for v in items {
+                            let Some(s) = v.as_str() else {
+                                return McpResponse::err(id.clone(), -32602, "phases must be an array of strings");
+                            };
+                            // `authRequired` движок не ставит на паузу — та же
+                            // честная ошибка, что у BiDi `network.addIntercept`.
+                            if s != "beforeRequestSent" && s != "responseStarted" {
+                                return McpResponse::err(
+                                    id.clone(),
+                                    -32602,
+                                    format!("Unsupported phase: {s} (supported: beforeRequestSent, responseStarted)"),
+                                );
+                            }
+                            phases.push(s.to_owned());
+                        }
+                    }
+                    Some(_) => return McpResponse::err(id.clone(), -32602, "phases must be an array of strings"),
+                }
+                let mut url_patterns = Vec::new();
+                match args.get("url_patterns") {
+                    None => return McpResponse::err(id.clone(), -32602, "Missing url_patterns argument"),
+                    Some(Value::Array(items)) => {
+                        for v in items {
+                            let Some(s) = v.as_str() else {
+                                return McpResponse::err(id.clone(), -32602, "url_patterns must be an array of strings");
+                            };
+                            url_patterns.push(s.to_owned());
+                        }
+                    }
+                    Some(_) => return McpResponse::err(id.clone(), -32602, "url_patterns must be an array of strings"),
+                }
+                let intercept_id = match args.get("id").and_then(|v| v.as_str()) {
+                    Some(s) => s.to_owned(),
+                    None => {
+                        self.id_counter += 1;
+                        format!("intercept-{}", self.id_counter)
+                    }
+                };
+                match self.session.add_intercept(&intercept_id, &phases, &url_patterns) {
+                    Ok(()) => json!({ "success": true, "id": intercept_id }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("AddIntercept error: {e}")),
+                }
+            }
+            "remove_intercept" => {
+                let Some(intercept_id) = args.get("id").and_then(|v| v.as_str()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing id argument");
+                };
+                match self.session.remove_intercept(intercept_id) {
+                    Ok(()) => json!({ "success": true, "id": intercept_id }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("RemoveIntercept error: {e}")),
+                }
+            }
+            "resolve_intercept" => {
+                let Some(request_id) = args.get("request_id").and_then(|v| v.as_str()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing request_id argument");
+                };
+                let Some(continue_request) = args.get("continue").and_then(|v| v.as_bool()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing continue argument");
+                };
+                match self.session.resolve_intercepted_request(request_id, continue_request) {
+                    Ok(resolved) => json!({ "success": true, "request_id": request_id, "resolved": resolved }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("ResolveIntercept error: {e}")),
+                }
+            }
+            "poll_intercepts" => match self.session.poll_intercepted_requests() {
+                Ok(requests) => json!({ "requests": requests }),
+                Err(e) => return McpResponse::err(id.clone(), -32603, format!("PollIntercepts error: {e}")),
+            },
+            "list_cookies" => match self.session.get_cookies() {
+                Ok(cookies) => json!({ "cookies": cookies }),
+                Err(e) => return McpResponse::err(id.clone(), -32603, format!("ListCookies error: {e}")),
+            },
+            "set_cookie" => {
+                let Some(name) = args.get("name").and_then(|v| v.as_str()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing name argument");
+                };
+                let Some(value) = args.get("value").and_then(|v| v.as_str()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing value argument");
+                };
+                let Some(domain) = args.get("domain").and_then(|v| v.as_str()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing domain argument");
+                };
+                let Some(path) = args.get("path").and_then(|v| v.as_str()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing path argument");
+                };
+                let Some(secure) = args.get("secure").and_then(|v| v.as_bool()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing secure argument");
+                };
+                let Some(http_only) = args.get("http_only").and_then(|v| v.as_bool()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing http_only argument");
+                };
+                let Some(same_site) = args.get("same_site").and_then(|v| v.as_str()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing same_site argument");
+                };
+                let Some(expiry) = args.get("expiry").and_then(|v| v.as_u64()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing expiry argument");
+                };
+                let cookie = lumen_driver::AutomationCookie {
+                    name: name.to_owned(),
+                    value: value.to_owned(),
+                    domain: domain.to_owned(),
+                    path: path.to_owned(),
+                    secure,
+                    http_only,
+                    same_site: same_site.to_owned(),
+                    expiry,
+                };
+                match self.session.set_cookie(cookie) {
+                    Ok(()) => json!({ "success": true }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("SetCookie error: {e}")),
+                }
+            }
+            "delete_cookie" => {
+                let Some(domain) = args.get("domain").and_then(|v| v.as_str()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing domain argument");
+                };
+                let Some(path) = args.get("path").and_then(|v| v.as_str()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing path argument");
+                };
+                let Some(name) = args.get("name").and_then(|v| v.as_str()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing name argument");
+                };
+                match self.session.delete_cookie(domain, path, name) {
+                    Ok(()) => json!({ "success": true }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("DeleteCookie error: {e}")),
+                }
+            }
+            "add_preload_script" => {
+                let Some(function_declaration) = args.get("function_declaration").and_then(|v| v.as_str()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing function_declaration argument");
+                };
+                let script_id = match args.get("id").and_then(|v| v.as_str()) {
+                    Some(s) => s.to_owned(),
+                    None => {
+                        self.id_counter += 1;
+                        format!("preload-{}", self.id_counter)
+                    }
+                };
+                match self.session.add_preload_script(&script_id, function_declaration) {
+                    Ok(()) => json!({ "success": true, "id": script_id }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("AddPreloadScript error: {e}")),
+                }
+            }
+            "remove_preload_script" => {
+                let Some(script_id) = args.get("id").and_then(|v| v.as_str()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing id argument");
+                };
+                match self.session.remove_preload_script(script_id) {
+                    Ok(()) => json!({ "success": true, "id": script_id }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("RemovePreloadScript error: {e}")),
+                }
+            }
             "x-explain-element" => {
                 let selector = match args.get("selector").and_then(|v| v.as_str()) {
                     Some(s) => s,
@@ -1451,13 +1882,13 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_twenty_six_tools() {
+    fn tools_list_returns_forty_tools() {
         let mut server = McpServer::new(MockSession, VecTransport::new());
         let req = make_request("tools/list", serde_json::json!({}));
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_none());
         let tools = resp.result.unwrap()["tools"].as_array().cloned().unwrap_or_default();
-        assert_eq!(tools.len(), 26);
+        assert_eq!(tools.len(), 40);
         let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap_or("")).collect();
         assert!(names.contains(&"navigate"));
         assert!(names.contains(&"new_tab"));
@@ -1473,9 +1904,23 @@ mod tests {
         assert!(names.contains(&"key_down"));
         assert!(names.contains(&"key_up"));
         assert!(names.contains(&"type_focused"));
+        assert!(names.contains(&"set_offline"));
+        assert!(names.contains(&"set_user_agent"));
+        assert!(names.contains(&"set_timezone"));
+        assert!(names.contains(&"set_permission"));
+        assert!(names.contains(&"computed_a11y"));
         assert!(names.contains(&"wait"));
         assert!(names.contains(&"eval"));
         assert!(names.contains(&"query"));
+        assert!(names.contains(&"add_intercept"));
+        assert!(names.contains(&"remove_intercept"));
+        assert!(names.contains(&"resolve_intercept"));
+        assert!(names.contains(&"poll_intercepts"));
+        assert!(names.contains(&"list_cookies"));
+        assert!(names.contains(&"set_cookie"));
+        assert!(names.contains(&"delete_cookie"));
+        assert!(names.contains(&"add_preload_script"));
+        assert!(names.contains(&"remove_preload_script"));
         assert!(names.contains(&"x-explain-element"));
         assert!(names.contains(&"x-explain-page"));
         assert!(names.contains(&"x-scope-layout"));
@@ -1532,6 +1977,101 @@ mod tests {
             assert_eq!(result["isError"], true, "{name}");
             let text = result["content"][0]["text"].as_str().unwrap_or("");
             assert!(text.contains("только для живого окна"), "{name}: {text}");
+        }
+    }
+
+    /// Четыре инструмента эмуляции — только для живого окна (Err-дефолты
+    /// трейта из MCP-TOTAL-S1a): сессия без живого окна отвечает
+    /// `isError: true` с текстом дефолта, не молчаливым успехом;
+    /// `set_user_agent` в headless-сессии работает (InProcessSession его
+    /// реализует) — проверяем и это.
+    #[test]
+    fn emulation_tools_error_without_a_live_window() {
+        let calls = [
+            ("set_offline", serde_json::json!({ "offline": true })),
+            ("set_timezone", serde_json::json!({ "timezone": "Asia/Tokyo" })),
+            ("set_permission", serde_json::json!({ "name": "geolocation", "state": "granted" })),
+            ("computed_a11y", serde_json::json!({ "selectors": ["button"] })),
+        ];
+        for (name, args) in calls {
+            let mut server = McpServer::new(MockSession, VecTransport::new());
+            let req = make_request("tools/call", serde_json::json!({ "name": name, "arguments": args }));
+            let resp = run_one(&mut server, &req);
+            assert!(resp.error.is_none(), "{name}");
+            let result = resp.result.unwrap_or_else(|| panic!("{name} must answer"));
+            assert_eq!(result["isError"], true, "{name}");
+            let text = result["content"][0]["text"].as_str().unwrap_or("");
+            assert!(text.contains("только для живого окна"), "{name}: {text}");
+        }
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({ "name": "set_user_agent", "arguments": { "user_agent": "Probe/1.0" } }),
+        );
+        let resp = run_one(&mut server, &req);
+        let result = resp.result.unwrap();
+        assert_eq!(result["isError"], false);
+        assert_eq!(result["user_agent"], "Probe/1.0");
+    }
+
+    /// Девять инструментов перехвата, cookies и preload — только для живого
+    /// окна (Err-дефолты трейта из MCP-TOTAL-S1a): сессия без живого окна
+    /// отвечает `isError: true` с текстом дефолта, не молчаливым успехом
+    /// (MCP-TOTAL-S1d).
+    #[test]
+    fn intercept_tools_error_without_a_live_window() {
+        let calls = [
+            ("add_intercept", serde_json::json!({ "phases": ["beforeRequestSent"], "url_patterns": ["http://localhost/"] })),
+            ("remove_intercept", serde_json::json!({ "id": "intercept-1" })),
+            ("resolve_intercept", serde_json::json!({ "request_id": "req-1", "continue": true })),
+            ("poll_intercepts", serde_json::json!({})),
+            ("list_cookies", serde_json::json!({})),
+            ("set_cookie", serde_json::json!({
+                "name": "k", "value": "v", "domain": "localhost", "path": "/",
+                "secure": false, "http_only": false, "same_site": "lax", "expiry": 0
+            })),
+            ("delete_cookie", serde_json::json!({ "name": "k", "domain": "localhost", "path": "/" })),
+            ("add_preload_script", serde_json::json!({ "function_declaration": "() => {}" })),
+            ("remove_preload_script", serde_json::json!({ "id": "preload-1" })),
+        ];
+        for (name, args) in calls {
+            let mut server = McpServer::new(MockSession, VecTransport::new());
+            let req = make_request("tools/call", serde_json::json!({ "name": name, "arguments": args }));
+            let resp = run_one(&mut server, &req);
+            assert!(resp.error.is_none(), "{name}");
+            let result = resp.result.unwrap_or_else(|| panic!("{name} must answer"));
+            assert_eq!(result["isError"], true, "{name}");
+            let text = result["content"][0]["text"].as_str().unwrap_or("");
+            assert!(text.contains("только для живого окна"), "{name}: {text}");
+        }
+    }
+
+    /// Неизвестная фаза перехвата (`authRequired` движок не ставит на паузу —
+    /// как у BiDi `network.addIntercept`) и чужой тип аргумента — `-32602`
+    /// до вызова сессии, не `-32603` (MCP-TOTAL-S1d).
+    #[test]
+    fn add_intercept_rejects_unsupported_phase_and_wrong_types() {
+        let calls = [
+            (
+                serde_json::json!({ "phases": ["authRequired"], "url_patterns": [] }),
+                "Unsupported phase",
+            ),
+            (
+                serde_json::json!({ "phases": ["beforeRequestSent", 42], "url_patterns": [] }),
+                "array of strings",
+            ),
+            (
+                serde_json::json!({ "phases": ["beforeRequestSent"], "url_patterns": "http://x/" }),
+                "array of strings",
+            ),
+        ];
+        for (args, expected) in calls {
+            let mut server = McpServer::new(MockSession, VecTransport::new());
+            let req = make_request("tools/call", serde_json::json!({ "name": "add_intercept", "arguments": args }));
+            let resp = run_one(&mut server, &req);
+            let err = resp.error.unwrap_or_else(|| panic!("{args} must be a -32602 error"));
+            assert_eq!(err.code, -32602, "{args}");
+            assert!(err.message.contains(expected), "{args}: {}", err.message);
         }
     }
 
