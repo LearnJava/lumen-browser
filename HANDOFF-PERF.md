@@ -76,7 +76,7 @@ engine-thread, не работа самого нэйтива.
 времена это maybe_flush/lock-wait, не crossings. Остаток резать:
 typed-trampoline (~1-3мкс → ~0.5мкс × ~500k переходов ≈ 0.5-1s),
 `_wa_motion_tr_sync` sweep — ~89мс/epoch на 44 seeded nid × ~284 prop
-(батч-снапшот одним нэйтивом срезал бы ~12.5k crossings до 1),
+(закрыто `b1ddd316b5`: `_lumen_computed_properties` bulk-натив),
 `_css_an_update_all` ~700мс/epoch на habr (гейт `088a2123f` убрал повторы
 в стабильном epoch; первый вызов после style-change всё ещё платит
 полный скан — кандидат: Rust-side индекс «у кого animation-name≠none»),
@@ -136,8 +136,12 @@ Keyspace-ловушка решена: кандидаты эмитятся в `ra
 (v8_window_anim_compress.rs) — реальные node-листы + @keyframes,
 проверяет и element, и `::before`, и отсутствие `::after`.
 
-Остаток: typed-trampoline (~0.5-1s js.run), `_wa_motion_tr_sync`
-батч-снапшот (~89мс/epoch).
+Остаток: typed-trampoline (~0.5-1s js.run). `_wa_motion_tr_sync`
+свип — **сделано `b1ddd316b5`**: `_lumen_computed_properties(nid,
+names_json)` — один кроссинг на nid вместо ~284
+`_lumen_computed_property`; `--*` и bg-image url() — поштучный путь;
+пустой bulk → фолбэк (тест-харнессы со стабом
+`_lumen_computed_property` видят только поштучный путь).
 
 **Найдено, не сделано (аудит «лишней работы»):**
 
@@ -246,7 +250,9 @@ Keyspace-ловушка решена: кандидаты эмитятся в `ra
 cd C:\kostja\Rust_Projects\Lumen_browser   # или аналог на новой машине
 git pull -q origin main
 # сборка с профилем (нужен LIBCLANG_PATH для boring-sys):
-LIBCLANG_PATH="C:\Users\konstantin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\v8-150.1.0\third_party\rust-toolchain\bin" \
+# LIBCLANG_PATH — каталог с libclang.dll; на этой машине
+# "C:\Program Files\LLVM\bin" (v8/third_party/rust-toolchain в крейте
+# может отсутствовать — тогда LLVM).
   cargo build --profile dev-release -p lumen-shell
 # живой профиль одного сайта (одно окно, логи в .tmp/prof-run — gitignored):
 python scripts/perf/prof_site.py "https://habr.com/ru/" 90     # python = pythoncore-3.14-64
