@@ -319,6 +319,107 @@ pub trait BrowserSession {
     /// мутирует только одно поддерево, и хотят более дешёвый пересчёт.
     fn eval_scoped(&mut self, selector: &str, js: &str) -> Result<String>;
 
+    // ── Ввод, cookies и preload живого окна ─────────────────────────────────
+
+    /// Переместить указатель вьюпорта в `(x, y)` (CSS px контентной области),
+    /// ничего не нажимая (BUG-1194): страница получает `pointermove` и
+    /// поднимает `:hover`.
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — команду исполняет только живое окно
+    /// (`--mcp-live-port`).
+    fn pointer_move(&self, x: f32, y: f32) -> Result<()> {
+        let _ = (x, y);
+        Err(lumen_core::error::Error::Other("pointer_move: только для живого окна (--mcp-live-port)".into()))
+    }
+
+    /// Нажать левую кнопку в `(x, y)` (CSS px вьюпорта) — открывает
+    /// text-selection drag, который продолжает `pointer_move` (WPT
+    /// `selection-pointer.html`).
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — команду исполняет только живое окно.
+    fn pointer_down(&self, x: f32, y: f32) -> Result<()> {
+        let _ = (x, y);
+        Err(lumen_core::error::Error::Other("pointer_down: только для живого окна (--mcp-live-port)".into()))
+    }
+
+    /// Отпустить левую кнопку — завершает открытый `pointer_down`-drag.
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — команду исполняет только живое окно.
+    fn pointer_up(&self) -> Result<()> {
+        Err(lumen_core::error::Error::Other("pointer_up: только для живого окна (--mcp-live-port)".into()))
+    }
+
+    /// Один `keydown` (`down = true`) или `keyup` для нетекстовой клавиши
+    /// на фокусном элементе, без клика (BUG-1194). `key` — `Escape`, `Enter`,
+    /// `Shift`…; `code` — `KeyA`, `ShiftLeft`…
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — команду исполняет только живое окно.
+    fn press_key(&self, key: &str, code: &str, down: bool) -> Result<()> {
+        let _ = (key, code, down);
+        Err(lumen_core::error::Error::Other("press_key: только для живого окна (--mcp-live-port)".into()))
+    }
+
+    /// Ввести `text` в фокусный элемент без предварительного клика (BUG-1194).
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — команду исполняет только живое окно.
+    fn type_focused(&self, text: &str) -> Result<()> {
+        let _ = text;
+        Err(lumen_core::error::Error::Other("type_focused: только для живого окна (--mcp-live-port)".into()))
+    }
+
+    /// Неистёкшие cookies активного jar живого окна, `HttpOnly` включительно
+    /// (`storage.getCookies`, DEVX-20).
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — jar есть только у живого окна.
+    fn get_cookies(&self) -> Result<Vec<AutomationCookie>> {
+        Err(lumen_core::error::Error::Other("get_cookies: только для живого окна (--mcp-live-port)".into()))
+    }
+
+    /// Сохранить cookie в активный jar живого окна (`storage.setCookie`, DEVX-20).
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — jar есть только у живого окна.
+    fn set_cookie(&self, cookie: AutomationCookie) -> Result<()> {
+        let _ = cookie;
+        Err(lumen_core::error::Error::Other("set_cookie: только для живого окна (--mcp-live-port)".into()))
+    }
+
+    /// Удалить одну cookie из активного jar живого окна
+    /// (`storage.deleteCookies`, DEVX-20).
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — jar есть только у живого окна.
+    fn delete_cookie(&self, domain: &str, path: &str, name: &str) -> Result<()> {
+        let _ = (domain, path, name);
+        Err(lumen_core::error::Error::Other("delete_cookie: только для живого окна (--mcp-live-port)".into()))
+    }
+
+    /// Зарегистрировать preload-скрипт в живом окне
+    /// (`script.addPreloadScript`, BUG-1811): исполняется в каждом документе,
+    /// созданном после вызова.
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — команду исполняет только живое окно.
+    fn add_preload_script(&self, id: &str, function_declaration: &str) -> Result<()> {
+        let _ = (id, function_declaration);
+        Err(lumen_core::error::Error::Other("add_preload_script: только для живого окна (--mcp-live-port)".into()))
+    }
+
+    /// Удалить preload-скрипт по id (`script.removePreloadScript`, BUG-1811).
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — команду исполняет только живое окно.
+    fn remove_preload_script(&self, id: &str) -> Result<()> {
+        let _ = id;
+        Err(lumen_core::error::Error::Other("remove_preload_script: только для живого окна (--mcp-live-port)".into()))
+    }
+
     // ── Isolation & Fingerprinting (Phase 1: 8E/8F) ─────────────────────────
 
     /// Текущий профиль отпечатка браузера (fingerprint profile).
@@ -357,12 +458,11 @@ pub trait BrowserSession {
     /// запросы (навигация, `fetch()`/XHR, подресурсы) должны падать вместо
     /// похода в сеть.
     ///
-    /// Реализация по умолчанию — no-op (`Ok(())`), чтобы существующие
-    /// implementors трейта (headless-сессии без реального сетевого слоя)
-    /// не ломались добавлением метода; [`LiveWindowSession`] переопределяет
-    /// его для реального эффекта.
+    /// Реализация по умолчанию — `Err` (MCP-TOTAL-S1a: headless-сессия без
+    /// реального сетевого слоя отвечает честно, а не молчаливым успехом);
+    /// [`LiveWindowSession`] переопределяет метод для реального эффекта.
     fn set_offline(&mut self, _offline: bool) -> Result<()> {
-        Ok(())
+        Err(lumen_core::error::Error::Other("set_offline: только для живого окна (--mcp-live-port)".into()))
     }
 
     /// Override the `Intl`/`Date` timezone (WebDriver BiDi
@@ -370,27 +470,31 @@ pub trait BrowserSession {
     /// timezone identifier (e.g. `"America/New_York"`); `None` restores the
     /// host timezone.
     ///
-    /// Default impl is a no-op (`Ok(())`), same rationale as [`set_offline`](
-    /// BrowserSession::set_offline); [`LiveWindowSession`] overrides it for
+    /// Default impl is `Err` (MCP-TOTAL-S1a, same rationale as [`set_offline`](
+    /// BrowserSession::set_offline)); [`LiveWindowSession`] overrides it for
     /// real effect.
     fn set_timezone(&mut self, _timezone_id: Option<&str>) -> Result<()> {
-        Ok(())
+        Err(lumen_core::error::Error::Other("set_timezone: только для живого окна (--mcp-live-port)".into()))
     }
 
     /// Set a permission state (WebDriver BiDi `permissions.setPermission`,
     /// BUG-1014). `Ok(false)` = the engine does not know `name`.
     ///
-    /// Default impl reports `Ok(true)` without effect (headless sessions have
-    /// no page to observe it); [`LiveWindowSession`] overrides it.
+    /// Default impl is `Err` (MCP-TOTAL-S1a: a headless session has no page to
+    /// observe the override, so reporting success would be a lie);
+    /// [`LiveWindowSession`] overrides it.
     fn set_permission(&mut self, _name: &str, _state: &str) -> Result<bool> {
-        Ok(true)
+        Err(lumen_core::error::Error::Other("set_permission: только для живого окна (--mcp-live-port)".into()))
     }
 
     /// Role and accessible name of the element the selector chain resolves to
-    /// (BUG-1014). `Ok(None)` = no such element; headless sessions have no
-    /// live page and always answer `None`.
+    /// (BUG-1014). `Ok(None)` = no such element.
+    ///
+    /// Default impl is `Err` (MCP-TOTAL-S1a: a headless session has no live
+    /// page and no accessibility tree to answer from);
+    /// [`LiveWindowSession`] overrides it.
     fn computed_a11y(&mut self, _selectors: &[String]) -> Result<Option<(String, String)>> {
-        Ok(None)
+        Err(lumen_core::error::Error::Other("computed_a11y: только для живого окна (--mcp-live-port)".into()))
     }
 
     /// Register a network intercept rule (WebDriver BiDi `network.addIntercept`,
@@ -402,18 +506,18 @@ pub trait BrowserSession {
     /// `"beforeRequestSent"` and `"responseStarted"` (DEVX-20); `"authRequired"`
     /// is not paused on — the BiDi layer rejects it before it gets here.
     ///
-    /// Default impl is a no-op (`Ok(())`), same rationale as [`set_offline`](
-    /// BrowserSession::set_offline); [`LiveWindowSession`] overrides it for
+    /// Default impl is `Err` (MCP-TOTAL-S1a, same rationale as [`set_offline`](
+    /// BrowserSession::set_offline)); [`LiveWindowSession`] overrides it for
     /// real effect.
     fn add_intercept(&mut self, _id: &str, _phases: &[String], _url_patterns: &[String]) -> Result<()> {
-        Ok(())
+        Err(lumen_core::error::Error::Other("add_intercept: только для живого окна (--mcp-live-port)".into()))
     }
 
     /// Remove a previously registered intercept rule (`network.removeIntercept`).
     ///
-    /// Default impl is a no-op, same rationale as [`add_intercept`](BrowserSession::add_intercept).
+    /// Default impl is `Err`, same rationale as [`add_intercept`](BrowserSession::add_intercept).
     fn remove_intercept(&mut self, _id: &str) -> Result<()> {
-        Ok(())
+        Err(lumen_core::error::Error::Other("remove_intercept: только для живого окна (--mcp-live-port)".into()))
     }
 
     /// Deliver a decision for a paused request (`network.continueRequest`/
@@ -424,20 +528,20 @@ pub trait BrowserSession {
     /// unknown id is not an error (mirrors the bare-ACK tolerance the BiDi
     /// handlers already had before real bookkeeping existed).
     ///
-    /// Default impl always returns `Ok(false)`, same rationale as
+    /// Default impl is `Err`, same rationale as
     /// [`add_intercept`](BrowserSession::add_intercept).
     fn resolve_intercepted_request(&mut self, _request_id: &str, _continue_request: bool) -> Result<bool> {
-        Ok(false)
+        Err(lumen_core::error::Error::Other("resolve_intercepted_request: только для живого окна (--mcp-live-port)".into()))
     }
 
     /// Requests newly paused by an active intercept since the last call —
     /// data for the `network.beforeRequestSent` / `network.responseStarted`
     /// events a BiDi connection should deliver to its client.
     ///
-    /// Default impl always returns an empty vector, same rationale as
+    /// Default impl is `Err`, same rationale as
     /// [`add_intercept`](BrowserSession::add_intercept).
     fn poll_intercepted_requests(&mut self) -> Result<Vec<InterceptedRequest>> {
-        Ok(Vec::new())
+        Err(lumen_core::error::Error::Other("poll_intercepted_requests: только для живого окна (--mcp-live-port)".into()))
     }
 
     // ── Deterministic mode (8F) ──────────────────────────────────────────────

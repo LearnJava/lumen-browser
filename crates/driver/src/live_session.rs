@@ -65,81 +65,6 @@ impl LiveWindowSession {
         Self { handle, current_url: Mutex::new(String::new()) }
     }
 
-    /// Move the pointer to viewport CSS-pixel `(x, y)` without pressing
-    /// anything (BUG-1194).
-    pub fn pointer_move(&self, x: f32, y: f32) -> Result<()> {
-        self.execute(AutomationCommand::PointerMove { x, y })?;
-        Ok(())
-    }
-
-    /// Press the left button at viewport CSS-pixel `(x, y)` — arms the
-    /// text-selection drag a following `pointer_move` extends (WPT
-    /// `selection-pointer.html`).
-    pub fn pointer_down(&self, x: f32, y: f32) -> Result<()> {
-        self.execute(AutomationCommand::PointerDown { x, y })?;
-        Ok(())
-    }
-
-    /// Release the left button — ends the armed selection drag.
-    pub fn pointer_up(&self) -> Result<()> {
-        self.execute(AutomationCommand::PointerUp)?;
-        Ok(())
-    }
-
-    /// Dispatch one `keydown` (`down`) or `keyup` for a non-text key at the
-    /// focused element, without clicking (BUG-1194).
-    pub fn press_key(&self, key: &str, code: &str, down: bool) -> Result<()> {
-        self.execute(AutomationCommand::Key { key: key.to_owned(), code: code.to_owned(), down })?;
-        Ok(())
-    }
-
-    /// Type `text` into the focused element without clicking first (BUG-1194).
-    pub fn type_focused(&self, text: &str) -> Result<()> {
-        self.execute(AutomationCommand::TypeFocused(text.to_owned()))?;
-        Ok(())
-    }
-
-    /// Non-expired cookies of the live window's active jar, `HttpOnly` included
-    /// (`storage.getCookies`, DEVX-20).
-    pub fn get_cookies(&self) -> Result<Vec<AutomationCookie>> {
-        match self.execute(AutomationCommand::GetCookies)? {
-            AutomationReply::Cookies(cookies) => Ok(cookies),
-            other => Err(unexpected_reply("Cookies", &other)),
-        }
-    }
-
-    /// Store a cookie in the live window's active jar (`storage.setCookie`, DEVX-20).
-    pub fn set_cookie(&self, cookie: AutomationCookie) -> Result<()> {
-        self.execute(AutomationCommand::SetCookie(cookie))?;
-        Ok(())
-    }
-
-    /// Remove one cookie from the live window's active jar (`storage.deleteCookies`, DEVX-20).
-    pub fn delete_cookie(&self, domain: &str, path: &str, name: &str) -> Result<()> {
-        self.execute(AutomationCommand::DeleteCookie {
-            domain: domain.to_owned(),
-            path: path.to_owned(),
-            name: name.to_owned(),
-        })?;
-        Ok(())
-    }
-
-    /// Register a preload script in the live window (`script.addPreloadScript`,
-    /// BUG-1811): it runs in every document created after this call.
-    pub fn add_preload_script(&self, id: &str, function_declaration: &str) -> Result<()> {
-        self.execute(AutomationCommand::AddPreloadScript {
-            id: id.to_owned(),
-            function_declaration: function_declaration.to_owned(),
-        })?;
-        Ok(())
-    }
-
-    /// Drop a preload script by id (`script.removePreloadScript`, BUG-1811).
-    pub fn remove_preload_script(&self, id: &str) -> Result<()> {
-        self.execute(AutomationCommand::RemovePreloadScript(id.to_owned()))?;
-        Ok(())
-    }
-
     /// Send `command` and unwrap the expected reply variant, mapping
     /// `AutomationReply::Error` and any other unexpected reply to `Err`.
     fn execute(&self, command: AutomationCommand) -> Result<AutomationReply> {
@@ -402,18 +327,80 @@ impl BrowserSession for LiveWindowSession {
         Err(Error::Other("eval_scoped: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
     }
 
+    // ── Ввод, cookies и preload живого окна ─────────────────────────────────
+
+    fn pointer_move(&self, x: f32, y: f32) -> Result<()> {
+        self.execute(AutomationCommand::PointerMove { x, y })?;
+        Ok(())
+    }
+
+    fn pointer_down(&self, x: f32, y: f32) -> Result<()> {
+        self.execute(AutomationCommand::PointerDown { x, y })?;
+        Ok(())
+    }
+
+    fn pointer_up(&self) -> Result<()> {
+        self.execute(AutomationCommand::PointerUp)?;
+        Ok(())
+    }
+
+    fn press_key(&self, key: &str, code: &str, down: bool) -> Result<()> {
+        self.execute(AutomationCommand::Key { key: key.to_owned(), code: code.to_owned(), down })?;
+        Ok(())
+    }
+
+    fn type_focused(&self, text: &str) -> Result<()> {
+        self.execute(AutomationCommand::TypeFocused(text.to_owned()))?;
+        Ok(())
+    }
+
+    fn get_cookies(&self) -> Result<Vec<AutomationCookie>> {
+        match self.execute(AutomationCommand::GetCookies)? {
+            AutomationReply::Cookies(cookies) => Ok(cookies),
+            other => Err(unexpected_reply("Cookies", &other)),
+        }
+    }
+
+    fn set_cookie(&self, cookie: AutomationCookie) -> Result<()> {
+        self.execute(AutomationCommand::SetCookie(cookie))?;
+        Ok(())
+    }
+
+    fn delete_cookie(&self, domain: &str, path: &str, name: &str) -> Result<()> {
+        self.execute(AutomationCommand::DeleteCookie {
+            domain: domain.to_owned(),
+            path: path.to_owned(),
+            name: name.to_owned(),
+        })?;
+        Ok(())
+    }
+
+    fn add_preload_script(&self, id: &str, function_declaration: &str) -> Result<()> {
+        self.execute(AutomationCommand::AddPreloadScript {
+            id: id.to_owned(),
+            function_declaration: function_declaration.to_owned(),
+        })?;
+        Ok(())
+    }
+
+    fn remove_preload_script(&self, id: &str) -> Result<()> {
+        self.execute(AutomationCommand::RemovePreloadScript(id.to_owned()))?;
+        Ok(())
+    }
+
     // ── Isolation & Fingerprinting ───────────────────────────────────────────
-    // Not yet wired to the live window (SDC-2 MVP scope): the automation
+    // Not wired to the live window (SDC-2 MVP scope): the automation
     // channel carries page-interaction commands only, not per-session
-    // isolation controls. These return local no-op defaults so
-    // `LiveWindowSession` satisfies the trait; live wiring is future work.
+    // isolation controls — honest `Err` (MCP-TOTAL-S1a), live wiring is
+    // future work. `fingerprint_profile` stays a static `Standard`: the
+    // channel has no query for it.
 
     fn fingerprint_profile(&self) -> FingerprintProfile {
         FingerprintProfile::Standard
     }
 
     fn set_fingerprint_profile(&mut self, _profile: FingerprintProfile) -> Result<()> {
-        Ok(())
+        Err(Error::Other("set_fingerprint_profile: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
     }
 
     fn user_agent(&self) -> String {
@@ -527,15 +514,15 @@ impl BrowserSession for LiveWindowSession {
     }
 
     fn set_clock(&mut self, _mode: crate::ClockMode) -> Result<()> {
-        Ok(())
+        Err(Error::Other("set_clock: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
     }
 
     fn set_rng_seed(&mut self, _seed: Option<u64>) -> Result<()> {
-        Ok(())
+        Err(Error::Other("set_rng_seed: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
     }
 
     fn freeze_fingerprint(&mut self, _profile: FingerprintProfile) -> Result<()> {
-        Ok(())
+        Err(Error::Other("freeze_fingerprint: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
     }
 }
 
