@@ -68,7 +68,7 @@ fn linked_sheet_urls_resolve_against_sheet_directory() {
     let doc = lumen_html_parser::parse(r#"<html><head><link rel="stylesheet" href="css/s.css"></head><body></body></html>"#);
     let base = ResourceBase::file_base(dir.join("page.html"));
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
-    let (css, _outcomes, _blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx, None);
+    let (css, _outcomes, _blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx, None, &std::collections::HashSet::new());
     let css = crate::doc_extract::concat_chunks(&css);
     let resolved: Vec<_> = css
         .split('"')

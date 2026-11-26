@@ -803,6 +803,10 @@ fn build_page_cascade(
     // COMPAT-PACK-CSS: текст изолированной таблицы пакета (пусто — записи нет).
     compat_css: &str,
     late_css: Option<&LateCssFeed>,
+    // HTML LS §4.12.1.1: `<script>`, которые исполнятся при разборе или после
+    // него (classic + deferred) — `<link>` раньше последнего из них не уходит
+    // в `late`, а ждётся синхронно (execution-timing/106-*, /150-*).
+    blocking_scripts: &std::collections::HashSet<lumen_dom::NodeId>,
 ) -> Result<PageCascade, Box<dyn Error>> {
     let (css, dynamic_css, link_outcomes, blocked_by_style_src, blocked_inline_style_policies, blocked_style_attr_nodes, blocked_style_attr_policies) = {
         let _s = lumen_core::trace::span("fetch-css", "net");
@@ -854,6 +858,7 @@ fn build_page_cascade(
             cookie_jar.clone(),
             &link_media_ctx,
             late_css,
+            blocking_scripts,
         );
         blocked_by_style_src.extend(blocked_by_style_src_imports);
         // BUG-1413: порядок листов — порядок элементов в документе.
@@ -1340,7 +1345,7 @@ pub(crate) fn parse_and_layout(
     // `fetch-scripts`: его качает `AsyncScriptFeed` параллельно конвейеру, а исполняет UI
     // после `RenderDone`. Headless/детерминированные режимы остаются на порядке документа.
     let mut async_scripts = None;
-    let (classic_scripts, deferred_scripts) = {
+    let (classic_scripts, deferred_scripts, blocking_script_nodes) = {
         let _s = lumen_core::trace::span("fetch-scripts", "net");
         let mut classic_items = Vec::new();
         let mut deferred_items = Vec::new();
@@ -1352,6 +1357,14 @@ pub(crate) fn parse_and_layout(
         } else {
             collect_scripts_ordered(&doc, doc.root(), &mut classic_items, &mut deferred_items);
         }
+        // HTML LS §4.12.1.1: classic + deferred исполнятся при разборе или
+        // после него и ждут stylesheet'и, встреченные раньше них; async
+        // классика парсер не блокирует и в набор не входит.
+        let blocking_script_nodes: std::collections::HashSet<lumen_dom::NodeId> = classic_items
+            .iter()
+            .chain(deferred_items.iter())
+            .map(|s| s.node())
+            .collect();
         let eff_base = effective_base(&doc, base);
         if !async_items.is_empty()
             && let Some(proxy) = dynamic_image_hook_ctx.as_ref().map(|c| c.proxy.clone())
@@ -1378,6 +1391,7 @@ pub(crate) fn parse_and_layout(
         (
             resolve_script_sources(&classic_items, &eff_base, sink, cookie_jar.clone(), &doc),
             resolve_script_sources(&deferred_items, &eff_base, sink, cookie_jar.clone(), &doc),
+            blocking_script_nodes,
         )
     };
     // BUG-443: the cascade is built BEFORE the page's scripts run, and so is the
@@ -1406,6 +1420,7 @@ pub(crate) fn parse_and_layout(
         &doc, &effective_base(&doc, base), sink, cookie_jar.clone(), viewport, dark_mode, media_print,
         &compat_inject.css,
         late_css.as_ref(),
+        &blocking_script_nodes,
     )?;
     // GAP-CSPENF срез 23: hand the decision down to `Document` before the
     // first layout below reads any `style=""` attribute — see
@@ -1592,6 +1607,8 @@ pub(crate) fn parse_and_layout(
             &d, &effective_base(&d, base), sink, cookie_jar.clone(), viewport, dark_mode, media_print,
             &compat_inject.css,
             late_css.as_ref(),
+            // Скрипты уже отработали — parser-blocking ожидание не нужно.
+            &std::collections::HashSet::new(),
         )?;
         // GAP-CSPENF срез 23: re-derived alongside the rest of `cascade` —
         // scripts may have inserted new elements with a `style=""` attribute

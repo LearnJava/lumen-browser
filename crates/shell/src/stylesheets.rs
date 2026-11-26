@@ -77,12 +77,61 @@ pub(crate) fn document_encoding(doc: &Document) -> lumen_encoding::Encoding {
     lumen_encoding::Encoding::from_label(doc.character_set()).unwrap_or(lumen_encoding::Encoding::Utf8)
 }
 
+/// Позиции в document order для media-матчащих `<link>` и исполняемых
+/// `<script>` — HTML LS §4.12.1.1: скрипт, исполняющийся при разборе или
+/// после него (parser-blocking classic, `defer`, module — но НЕ `async`),
+/// обязан видеть применёнными все stylesheet'и, встреченные парсером
+/// РАНЬШЕ него. В живом окне `late`-подписка такой лист не ждёт, поэтому
+/// для `<link>`, стоящего раньше последнего исполняемого скрипта, берём
+/// синхронный путь (`fetch_stylesheet_for_cascade` ждёт байты через
+/// `PREFETCH_CACHE::fetch_current`).
+///
+/// `blocking_scripts` — NodeId'ы `<script>`, которые исполнятся (classic +
+/// deferred; async и data-блоки сюда не входят). Возвращает
+/// `(preorder-позиции узлов, позиция последнего исполняемого скрипта)`;
+/// `None`, когда ждать нечего — либо скриптов нет, либо `late` неактивен.
+fn blocking_link_positions(
+    doc: &Document,
+    link_nodes: &std::collections::HashSet<NodeId>,
+    blocking_scripts: &std::collections::HashSet<NodeId>,
+) -> Option<(std::collections::HashMap<NodeId, usize>, usize)> {
+    if blocking_scripts.is_empty() {
+        return None;
+    }
+    let mut wanted = link_nodes.clone();
+    wanted.extend(blocking_scripts.iter().copied());
+    let mut pos = std::collections::HashMap::with_capacity(wanted.len());
+    let mut idx = 0usize;
+    let mut last_script = 0usize;
+    // Итеративный preorder-обход: стек с детьми в обратном порядке.
+    let mut stack = vec![doc.root()];
+    while let Some(nid) = stack.pop() {
+        idx += 1;
+        if wanted.contains(&nid) {
+            pos.insert(nid, idx);
+            if blocking_scripts.contains(&nid) {
+                last_script = last_script.max(idx);
+            }
+        }
+        for &c in doc.get(nid).children.iter().rev() {
+            stack.push(c);
+        }
+    }
+    Some((pos, last_script))
+}
+
 /// Загрузить все `<link rel=stylesheet>` документа и склеить их текст.
 ///
 /// `late` — LOAD-4: живое окно не ждёт медленный лист в финальном каскаде.
 /// `Some` строит каскад только из пришедших листов, а на остальные
 /// подписывается ([`subscribe_late_stylesheet`]); `None` — прежний
 /// блокирующий путь (headless, `--deterministic`, dump-режимы).
+///
+/// `blocking_scripts` — NodeId'ы `<script>`, которые исполнятся при разборе
+/// или после него (classic + deferred): `<link>`, стоящий раньше последнего
+/// из них, не имеет права уходить в `late` — parser-blocking скрипт обязан
+/// увидеть его применённым (execution-timing/106-*, /150-*). Пустое
+/// множество — поведение как раньше.
 ///
 /// Второй элемент результата — исход по каждому элементу (`узел`, `получен
 /// ли лист`) в порядке объявления, для BUG-804: `load`/`error` принадлежат
@@ -118,9 +167,19 @@ pub(crate) fn load_linked_stylesheets(
     cookie_jar: Option<DocCookieJar>,
     media_ctx: &lumen_css_parser::MediaContext,
     late: Option<&LateCssFeed>,
+    blocking_scripts: &std::collections::HashSet<NodeId>,
 ) -> (SheetChunks, Vec<(NodeId, bool)>, Vec<String>) {
     let mut hrefs = Vec::new();
     collect_link_hrefs(doc, doc.root(), &mut hrefs, media_ctx);
+    // HTML LS §4.12.1.1: `<link>`, встреченный парсером раньше исполняемого
+    // скрипта, обязан быть применён к моменту его исполнения — `late`-пути
+    // для него нет, только синхронное ожидание байт.
+    let link_positions = if late.is_some() {
+        let link_nodes: std::collections::HashSet<NodeId> = hrefs.iter().map(|h| h.0).collect();
+        blocking_link_positions(doc, &link_nodes, blocking_scripts)
+    } else {
+        None
+    };
     let doc_encoding = document_encoding(doc);
     // GAP-REFERRER срез 4: `<link rel=stylesheet>`/`@import` now carry the
     // document's own resolved policy (`<meta name=referrer>`/`Referrer-Policy`
@@ -171,7 +230,13 @@ pub(crate) fn load_linked_stylesheets(
         // LOAD-4: живое окно строит каскад из пришедших листов — незавершённую
         // загрузку не ждём, а подписываемся на неё. Файловая база читается с
         // диска мгновенно, поэтому решается только URL-ветка.
+        // HTML LS §4.12.1.1: лист раньше исполняемого скрипта — не `late`,
+        // а блокирующее ожидание (execution-timing/106-*, /150-*).
+        let must_block = link_positions.as_ref().is_some_and(|(pos, last_script)| {
+            pos.get(node).is_some_and(|&p| p < *last_script)
+        });
         if let Some(feed) = late
+            && !must_block
             && matches!(base.resolve(href), ResolvedResource::Url(_))
             && crate::prefetch::PREFETCH_CACHE.try_fetch_current(&gate_url).is_none()
         {
