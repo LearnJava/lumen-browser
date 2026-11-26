@@ -16517,6 +16517,16 @@ function _lumen_resource_fire(nid, type) {
 // any asynchronous callback read `null`, which is exactly what the spec asks
 // for (the stack is empty by the time a task or microtask runs).
 var _lumen_current_script_stack = [];
+// dw-фреймы, из которых скрипт уже вышел, но у которых осталась
+// недоисполненная «parser-blocking» работа (внешний fetch в полёте).
+// `_lumen_dw_sync_drain` дожимает их перед каждым следующим парсерным
+// скриптом — стек `_lumen_dw_frames` к тому моменту уже пуст.
+var _lumen_dw_active = [];
+function _lumen_dw_frame_idle(frame) {
+    return frame.queue.length === 0
+        && (frame.deferred_ids === null || frame.deferred_ids.length === 0)
+        && frame.pending === '';
+}
 function _lumen_push_current_script(nid) {
     var n = _lumen_u2n(nid);
     _lumen_current_script_stack.push(n === null || n < 0 ? null : _lumen_make_element(n));
@@ -16529,7 +16539,10 @@ function _lumen_pop_current_script() {
     var frame = _lumen_dw_frames.pop();
     // BUG-568: the script that wrote has returned — the parser «resumes» and
     // runs what it wrote, in order, before the next script of the document.
-    if (frame) _lumen_dw_flush(frame);
+    if (frame) {
+        _lumen_dw_flush(frame);
+        if (!_lumen_dw_frame_idle(frame)) _lumen_dw_active.push(frame);
+    }
 }
 
 // A classic script body runs as a real Script (BUG-1049: not indirect eval,
@@ -16834,6 +16847,23 @@ var _lumen_script_started = {};
 // `async` в таком случае читает только атрибут, как обычная рефлексия.
 var _lumen_script_force_async = {};
 
+// Внешний источник <script>: у HTML-скрипта это `src`, у SVG/MathML —
+// `href` или legacy `xlink:href` (BUG-685, execution-timing/135-136,142).
+// Важно: parser-размеченный `xlink:href` хранится qualified-именем целиком,
+// а `setAttributeNS`-овский — local `href`; проверяем оба варианта.
+function _lumen_script_src_value(nid) {
+    var src = _lumen_u2n(_lumen_get_attr(nid, 'src'));
+    if (src !== null) return src;
+    var ns = _lumen_u2n(_lumen_get_namespace_uri(nid));
+    if (ns === 'http://www.w3.org/2000/svg' || ns === 'http://www.w3.org/1998/Math/MathML') {
+        var href = _lumen_u2n(_lumen_get_attr(nid, 'href'));
+        if (href !== null) return href;
+        // `xlink:href` хранится qualified-именем целиком (local = 'xlink:href').
+        return _lumen_u2n(_lumen_get_attr(nid, 'xlink:href'));
+    }
+    return null;
+}
+
 // HTML LS §4.12.1 steps 1-32, minus the parser-only branches (every caller
 // here is the "script becomes connected" hook, never the initial parse).
 function _lumen_script_prepare(nid) {
@@ -16845,7 +16875,7 @@ function _lumen_script_prepare(nid) {
     // Step 5 reads "no src *attribute*", not "src is the empty string" — a
     // `src=""` (BUG-838) still counts as present and must not gate the flag
     // the same way an absent attribute does.
-    var srcAttr = _lumen_u2n(_lumen_get_attr(nid, 'src'));
+    var srcAttr = _lumen_script_src_value(nid);
     var hasSrcAttr = srcAttr !== null;
     var src = hasSrcAttr ? String(srcAttr).trim() : '';
     // Step 5: no src attribute and no source text — return without touching
@@ -17044,8 +17074,10 @@ function _lumen_dw_fits_head(node) {
 
 function _lumen_dw_collect_scripts(node, out) {
     if (node.nodeType !== 1) return;
+    // SVG/MathML <script> исполняется так же (BUG-685, execution-timing/142-143)
+    // — фильтр по HTML-namespace здесь только терял их.
     if (node.localName === 'script') {
-        if (_lumen_is_html_element_nid(node.__nid__)) out.push(node.__nid__);
+        out.push(node.__nid__);
         return;
     }
     if (typeof node.getElementsByTagName !== 'function') return;
@@ -17053,7 +17085,7 @@ function _lumen_dw_collect_scripts(node, out) {
     var nids = [];
     for (var i = 0; i < list.length; i++) nids.push(list[i].__nid__);
     for (var j = 0; j < nids.length; j++) {
-        if (_lumen_is_html_element_nid(nids[j])) out.push(nids[j]);
+        if (_lumen_is_script_element(nids[j])) out.push(nids[j]);
     }
 }
 
@@ -17067,7 +17099,7 @@ function _lumen_dw_is_blocker(nid) {
     var isClassic = !isModule && _lumen_is_classic_script_type(type);
     if (!isClassic) return false;
     if (_lumen_u2n(_lumen_get_attr(nid, 'nomodule')) !== null) return false;
-    var src = _lumen_u2n(_lumen_get_attr(nid, 'src'));
+    var src = _lumen_script_src_value(nid);
     if (src === null || String(src).trim() === '') return false;
     if (_lumen_u2n(_lumen_get_attr(nid, 'async')) !== null) return false;
     if (_lumen_u2n(_lumen_get_attr(nid, 'defer')) !== null) return false;
@@ -17096,6 +17128,11 @@ function _lumen_dw_blocker_index(ids) {
 function _lumen_dw_insert_ids(frame, ids) {
     var scripts = [];
     _lumen_dw_suppress_script_post_connect++;
+    // Парсерная вставка — не children-changed step: узлы, попавшие в
+    // script-элемент через write() (foreign content), не должны запускать
+    // `_lumen_script_prepare` по children_changed — исполнением Written-
+    // скриптов управляет `_lumen_dw_prepare` (execution-timing/143).
+    _lumen_dw_muting_script_prepare++;
     try {
         for (var i = 0; i < ids.length; i++) {
             var node = _lumen_make_node(ids[i]);
@@ -17114,6 +17151,7 @@ function _lumen_dw_insert_ids(frame, ids) {
             _lumen_dw_collect_scripts(node, scripts);
         }
     } finally {
+        _lumen_dw_muting_script_prepare--;
         _lumen_dw_suppress_script_post_connect--;
     }
     for (var k = 0; k < scripts.length; k++) {
@@ -17132,12 +17170,169 @@ function _lumen_dw_insert(frame, text) {
         frame.pending += text;
         return;
     }
-    var ids = _lumen_parse_html_fragment(text);
+    // В foreign-контексте (родитель — SVG/MathML) записанная разметка
+    // парсится по правилам того же namespace: `<script xlink:href>` внутри
+    // <svg> — это SVG-скрипт с `href`, а не HTML-скрипт без src
+    // (execution-timing/142-143). Для HTML-родителя контекст не передаём —
+    // поведение body-level fragment parse не меняется.
+    var ctxNid = null;
+    if (frame.parent && frame.parent.__nid__ !== undefined) {
+        var pns = _lumen_u2n(_lumen_get_namespace_uri(frame.parent.__nid__));
+        if (pns === 'http://www.w3.org/2000/svg' || pns === 'http://www.w3.org/1998/Math/MathML') {
+            ctxNid = frame.parent.__nid__;
+        }
+    }
+    var ids = ctxNid === null
+        ? _lumen_parse_html_fragment(text)
+        : _lumen_parse_html_fragment_ctx(text, ctxNid);
     var stop = _lumen_dw_blocker_index(ids);
-    if (stop === -1) { _lumen_dw_insert_ids(frame, ids); return; }
+    if (stop === -1) {
+        _lumen_dw_insert_ids(frame, ids);
+        _lumen_dw_close_enclosing_scripts(frame, _lumen_dw_script_end_excess(text));
+        return;
+    }
     _lumen_dw_insert_ids(frame, ids.slice(0, stop + 1));
     var tail = ids.slice(stop + 1);
     if (tail.length > 0) frame.deferred_ids = tail;
+}
+
+// Сколько `</script>` в записанном тексте не имеют парного `<script>` на
+// markup-уровне. Такой end tag в живом потоке закрыл бы ближайший открытый
+// script-элемент — тем самым «обрезав» всё, что за ним (execution-timing/
+// 143: dw из вложенного SVG-скрипта пишет `</script>` лишним, и внешний
+// script исполняется без хвоста с синтаксической ошибкой). Парсер фрагмента
+// такие end tag'и молча роняет — считаем их сами. `<script>…</script>`
+// внутри текста пропускается целиком как rawtext, как делает настоящий
+// токенизатор (поэтому `</script>` в JS-строке честно закрывает скрипт).
+function _lumen_dw_script_end_excess(text) {
+    var excess = 0, i = 0;
+    var n = text.length;
+    var openRe = /<script(?=[\s\/>])/gi;
+    var closeRe = /<\/script(?=[\s\/>])/gi;
+    // Прочие rawtext/RCDATA-элементы и комментарии: `</script>` внутри них —
+    // текст, а не end tag (title/textarea — RCDATA, style/xmp/iframe/… —
+    // rawtext; `<!--` — комментарий).
+    var rawRe = /<(title|textarea|style|xmp|iframe|noembed|noframes|noscript)(?=[\s\/>])/gi;
+    while (i < n) {
+        var lt = text.indexOf('<', i);
+        if (lt === -1) break;
+        if (text.substr(lt, 4) === '<!--') {
+            var ce = text.indexOf('-->', lt + 4);
+            i = ce === -1 ? n : ce + 3;
+            continue;
+        }
+        rawRe.lastIndex = lt;
+        var rm = rawRe.exec(text);
+        if (rm !== null && rm.index === lt) {
+            var rgt = text.indexOf('>', lt);
+            if (rgt === -1) break;
+            var rclose = new RegExp('</' + rm[1].toLowerCase() + '(?=[\\s\\/>])', 'i');
+            rclose.lastIndex = rgt + 1;
+            var rc = rclose.exec(text);
+            if (rc === null) break;
+            var rcgt = text.indexOf('>', rc.index);
+            i = rcgt === -1 ? n : rcgt + 1;
+            continue;
+        }
+        openRe.lastIndex = lt;
+        var m = openRe.exec(text);
+        closeRe.lastIndex = lt;
+        var c = closeRe.exec(text);
+        // Ближайший из двух тегов.
+        var isClose = c !== null && (m === null || c.index <= m.index);
+        var tag = isClose ? c : m;
+        if (tag === null || tag.index !== lt) { i = lt + 1; continue; }
+        var gt = text.indexOf('>', lt);
+        if (gt === -1) break;
+        if (isClose) { excess++; i = gt + 1; continue; }
+        // Открывающий <script>: всё до парного </script> — rawtext.
+        closeRe.lastIndex = gt + 1;
+        var cm = closeRe.exec(text);
+        if (cm === null) break; // незакрытый — safe_cut такое не отдаёт
+        var cgt = text.indexOf('>', cm.index);
+        i = cgt === -1 ? n : cgt + 1;
+    }
+    return excess;
+}
+
+// nid'ы script-элементов, «закрытых» лишним `</script>` из document.write —
+// их исполняемый текст обрезан, и шелл должен перечитать его из живого DOM
+// (в `ResolvedScript.source` зашит текст до обрезки). Читается из
+// `_lumen_script_live_text` в `run_parser_classic_script`.
+var _lumen_script_truncated = {};
+
+function _lumen_script_live_text(nid) {
+    if (_lumen_script_truncated[nid] === 1) return _lumen_script_child_text(nid);
+    return null;
+}
+
+// Эмуляция «закрытия» script-элемента лишним end tag'ом из входного потока:
+// всё, что в нём стоит после точки вставки write(), в живом парсере уже
+// не попало бы в скрипт — переносим эти узлы к родителю script'а (сразу за
+// ним), как сделал бы токенизатор. DOM-мутации при этом не должны
+// перезапускать prepare — исполнение остаётся за парсерным списком шелла.
+var _lumen_dw_muting_script_prepare = 0;
+function _lumen_dw_close_enclosing_scripts(frame, count) {
+    if (count <= 0 || !frame.parent || frame.parent.__nid__ === undefined) return;
+    var ctx = frame.parent.__nid__;
+    for (var k = 0; k < count; k++) {
+        // Ближайший script-элемент на пути от точки вставки вверх.
+        var found = null;
+        var nid = ctx;
+        while (nid !== null && nid !== undefined) {
+            if (_lumen_is_script_element(nid)) { found = nid; break; }
+            nid = _lumen_u2n(_lumen_get_parent(nid));
+        }
+        if (found === null) return;
+        _lumen_script_truncated[found] = 1;
+        _lumen_dw_evict_after_insert_point(found, frame);
+        ctx = _lumen_u2n(_lumen_get_parent(found));
+        if (ctx === null || ctx === undefined) return;
+    }
+}
+
+// Убирает из `scriptNid` всё, что стоит после точки вставки текущего
+// dw-фрейма, и переносит это к родителю script'а — см. комментарий выше.
+function _lumen_dw_evict_after_insert_point(scriptNid, frame) {
+    var sParent = _lumen_u2n(_lumen_get_parent(scriptNid));
+    if (sParent === null) return;
+    var parentEl = _lumen_make_element(sParent);
+    var scriptEl = _lumen_make_element(scriptNid);
+    if (!parentEl || !scriptEl) return;
+    // Ребёнок script'а, внутри которого лежит точка вставки (или сама точка
+    // вставки, если frame.parent и есть этот script).
+    var anchorNid = null;
+    if (frame.parent.__nid__ === scriptNid) {
+        anchorNid = frame.ref !== null && frame.ref.__nid__ !== undefined
+            ? frame.ref.__nid__ : null;
+    } else {
+        var cur = frame.parent.__nid__;
+        var par = _lumen_u2n(_lumen_get_parent(cur));
+        while (par !== null && par !== scriptNid) {
+            cur = par;
+            par = _lumen_u2n(_lumen_get_parent(cur));
+        }
+        if (par === scriptNid) anchorNid = cur;
+    }
+    var kids = _lumen_get_children(scriptNid);
+    var start = -1;
+    if (anchorNid !== null) {
+        for (var i = 0; i < kids.length; i++) {
+            if (kids[i] === anchorNid) { start = i; break; }
+        }
+    }
+    if (start === -1) return;
+    var evicted = [];
+    for (var j = start; j < kids.length; j++) evicted.push(_lumen_make_node(kids[j]));
+    _lumen_dw_muting_script_prepare++;
+    try {
+        var after = scriptEl.nextSibling;
+        for (var m = 0; m < evicted.length; m++) {
+            if (evicted[m]) parentEl.insertBefore(evicted[m], after);
+        }
+    } finally {
+        _lumen_dw_muting_script_prepare--;
+    }
 }
 
 // HTML LS §4.12.1 «prepare the script element» for a parser-inserted script
@@ -17149,7 +17344,7 @@ function _lumen_dw_prepare(frame, nid) {
     var isClassic = !isModule && _lumen_is_classic_script_type(type);
     // Step 13: an engine with modules skips a `nomodule` classic script.
     if (isClassic && _lumen_u2n(_lumen_get_attr(nid, 'nomodule')) !== null) return;
-    var src = _lumen_u2n(_lumen_get_attr(nid, 'src'));
+    var src = _lumen_script_src_value(nid);
     var external = isClassic && src !== null && String(src).trim() !== '';
     if (external && _lumen_u2n(_lumen_get_attr(nid, 'async')) === null) {
         _lumen_script_started[nid] = 1;
@@ -17262,11 +17457,18 @@ function _lumen_dw_flush(frame) {
     _lumen_dw_sync(frame);
 }
 
+// >0 пока `_lumen_dw_sync_drain` дожимает очередь синхронно: внешние
+// скрипты ждутся блокирующим `_lumen_fetch_async_wait_text` внутри
+// `_lumen_dw_run_external`, а не setTimeout-поллингом — иначе они всегда
+// проигрывают гонку парсерным скриптам, идущим следом в классическом
+// списке шелла (execution-timing/142).
+var _lumen_dw_sync_mode = 0;
 function _lumen_dw_drain(frame) {
     while (frame.queue.length > 0) {
         var item = frame.queue[0];
         if (item.kind === 'external' && !item.done) {
-            if (item.handle && typeof _lumen_fetch_async_poll === 'function') {
+            if (item.handle && typeof _lumen_fetch_async_poll === 'function'
+                && _lumen_dw_sync_mode === 0) {
                 _lumen_dw_poll_external(frame, item);
                 return;
             }
@@ -17316,6 +17518,36 @@ function _lumen_dw_poll_external(frame, item) {
         item.done = true;
         _lumen_dw_drain(frame);
     }, 0);
+}
+
+// Вызывается шеллом перед каждым парсерным скриптом: «pending
+// parsing-blocking script» из document.write обязан исполниться до того,
+// как дойдёт очередь до следующего скрипта документа — иначе внешний
+// скрипт, записанный одним скриптом, всегда оказывался бы в хвосте за
+// всеми остальными (execution-timing/142). Все fetch'и уже стартовали в
+// момент write(), так что ожидание — просто блокирующий wait_text.
+function _lumen_dw_sync_drain() {
+    if (_lumen_dw_sync_mode !== 0) return;
+    if (_lumen_dw_frames.length === 0 && _lumen_dw_active.length === 0) return;
+    _lumen_dw_sync_mode++;
+    try {
+        for (var f = 0; f < _lumen_dw_frames.length; f++) {
+            var frame = _lumen_dw_frames[f];
+            if (frame) _lumen_dw_drain(frame);
+        }
+        // Дожатые фреймы выбывают из active; poll-цепочки (`_lumen_dw_poll_
+        // external`) продолжают работать и без нас — они держат frame
+        // в замыкании, а sync_drain подхватит его при следующем скрипте.
+        var still = [];
+        for (var a = 0; a < _lumen_dw_active.length; a++) {
+            var af = _lumen_dw_active[a];
+            _lumen_dw_drain(af);
+            if (!_lumen_dw_frame_idle(af)) still.push(af);
+        }
+        _lumen_dw_active = still;
+    } finally {
+        _lumen_dw_sync_mode--;
+    }
 }
 
 // «The end» step 5 for the `defer` scripts `write()` produced — after the
@@ -18089,9 +18321,26 @@ function _lumen_style_children_changed(parent) {
 // data-блок, у которого позже убрали type и дописали тело (execution-timing/
 // 124), доисполняется; у уже запущенного скрипта `_lumen_script_prepare`
 // отсекает шагом «already started», у data-блока — проверкой типа.
+// nid'ы <script>, чьи children изменились внутри CE-батча: `appendChild(frag)`
+// вставляет детей по одному, и prepare на первом же ребёнке увидел бы
+// обрезанный текст (`t.step(function() {…` без закрывающей скобки —
+// SyntaxError, execution-timing/127-130). Собираем nid'ы и готовим один раз
+// на выходе из внешнего батча, когда все дети уже на месте.
+var _lumen_script_children_pending = [];
 function _lumen_script_children_changed(parent) {
     if (!_lumen_is_script_element(parent)) return;
     if (!_lumen_resource_is_connected(parent)) return;
+    // `_lumen_dw_evict_after_insert_point` переносит «хвост» script'а к его
+    // родителю, эмулируя досрочное закрытие парсером — это не children-
+    // changed step, prepare здесь только испортил бы порядок исполнения.
+    if (typeof _lumen_dw_muting_script_prepare !== 'undefined'
+        && _lumen_dw_muting_script_prepare > 0) return;
+    if (_lumen_ce_reactions_stack.length > 0) {
+        if (_lumen_script_children_pending.indexOf(parent) < 0) {
+            _lumen_script_children_pending.push(parent);
+        }
+        return;
+    }
     _lumen_script_prepare(parent);
 }
 
@@ -18417,7 +18666,16 @@ function _lumen_script_flush_pending_exec() {
 }
 function _lumen_ce_pop_current_element_queue() {
     var q = _lumen_ce_reactions_stack.pop();
-    if (_lumen_ce_reactions_stack.length === 0) _lumen_script_flush_pending_exec();
+    if (_lumen_ce_reactions_stack.length === 0) {
+        _lumen_script_flush_pending_exec();
+        if (_lumen_script_children_pending.length > 0) {
+            var pend = _lumen_script_children_pending;
+            _lumen_script_children_pending = [];
+            for (var i = 0; i < pend.length; i++) {
+                if (_lumen_resource_is_connected(pend[i])) _lumen_script_prepare(pend[i]);
+            }
+        }
+    }
     _lumen_ce_invoke_element_queue(q);
 }
 

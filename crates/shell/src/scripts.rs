@@ -103,6 +103,14 @@ fn collect_scripts_impl(
     if let NodeData::Element { name, .. } = &node.data
         && name.local == "script"
     {
+        // В foreign content (SVG/MathML) <script> может содержать дочерние
+        // элементы, включая вложенные <script>: их `</script>` закрывается
+        // раньше внешнего, поэтому по HTML LS §13.2.6.5 они исполняются
+        // ПЕРВЫМИ (execution-timing/138-143). Собираем их до собственного
+        // текста — post-order внутри script-элемента.
+        for &child in &node.children {
+            collect_scripts_impl(doc, child, classic, deferred, asyncs.as_deref_mut());
+        }
         // GAP-XMLDOC срез 13 (BUG-685): a foreign (SVG/MathML) `<script>`
         // the parser closed without a genuine HTML LS §13.2.6.5 execution
         // trigger — see `Document::mark_foreign_script_not_executable` —
@@ -682,6 +690,40 @@ fn run_parser_classic_script(
     csp_policy: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
     script: &ResolvedScript,
 ) {
+    use lumen_core::ext::JsRuntime as _;
+    // «Pending parsing-blocking script» из document.write: внешний скрипт,
+    // записанный предыдущим скриптом, обязан исполниться до этого —
+    // дожимаем dw-очереди синхронно (execution-timing/142).
+    let _ = rt.eval("_lumen_dw_sync_drain();");
+    // Лишний `</script>` из document.write мог «закрыть» этот script раньше
+    // времени — его текст в DOM обрезан, а `source` собран до обрезки.
+    // JS знает про такие случаи (`_lumen_script_truncated`) и отдаёт живой
+    // текст; без пометки возвращает null и работает собранный source.
+    let live_storage;
+    let script = if script.external_ok.is_none() {
+        let live = rt
+            .eval(&format!("_lumen_script_live_text({});", script.node.index()))
+            .ok()
+            .and_then(|v| match v {
+                lumen_core::ext::JsValue::String(s) => Some(s),
+                _ => None,
+            });
+        match live {
+            Some(text) => {
+                live_storage = ResolvedScript {
+                    node: script.node,
+                    source: text,
+                    url: None,
+                    external_ok: None,
+                    csp_blocked: Vec::new(),
+                };
+                &live_storage
+            }
+            None => script,
+        }
+    } else {
+        script
+    };
     let ResolvedScript { node: nid, source: src, external_ok, .. } = script;
     // BUG-804: внешний файл не пришёл — исполнять нечего, но
     // элемент обязан сообщить об отказе на своём месте в
@@ -1191,6 +1233,9 @@ pub(crate) fn run_scripts_with_dom(
                             continue;
                         }
                     }
+                    // Тот же «pending parsing-blocking script» из
+                    // document.write, что и у классических выше.
+                    let _ = rt.eval("_lumen_dw_sync_drain();");
                     let src = &item.source;
                     // Внешний модуль исполняется под СВОИМ адресом: от него
                     // считаются его относительные импорты. У inline-модуля
