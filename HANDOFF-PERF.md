@@ -74,7 +74,19 @@ engine-thread, не работа самого нэйтива.
 `_lumen_get_computed_style` ×~101k, `_lumen_query_selector` ×25k (кэш уже есть),
 `_lumen_get_node_type` ×15k, `_lumen_get_scroll_state` ×21k — все «тяжёлые»
 времена это maybe_flush/lock-wait, не crossings. Остаток резать:
-typed-trampoline (~1-3мкс → ~0.5мкс × ~500k переходов ≈ 0.5-1s),
+typed-trampoline — **замерено `.tmp/trampoline_bench.py`, резерв
+переоценён**: scalar-native (`u32→u32`, `u32→Option<u32>`,
+`u32→bool`) = **~0.40мкс/вызов**, string-native
+(`u32,String→String`, `_lumen_computed_property`) = **~1.20мкс**.
+500k crossings ≈ 0.2s, не 0.5-1s — основная стоимость на стороне V8
+(FunctionCallback→extern "C"→PinScope), Rust-сторона ~0.1мкс.
+Сделано: args-buffer trampoline'а переведён на stack array ≤8
+(v8_compat.rs, аллокация Vec на вызов убрана). Дальнейший выигрыш —
+только меньшее ЧИСЛО crossings (батчинг/кэширование на JS-стороне),
+не быстрее trampoline. Самый дорогой нэйтив — string→string
+(`_lumen_get_computed_style` ~101k вызовов на habr): кандидаты —
+мемоизация (nid,prop) по style_epoch с invalidation-проблемой
+same-tick flush, либо prop→id интернирование.
 `_wa_motion_tr_sync` sweep — ~28мс/epoch на habr (44 nid × ~284 prop =
 ~12k crossings; замерено `.tmp/motion_probe5.py`),
 `_css_an_update_all` — **закрыто** (см. ниже): первый вызов после

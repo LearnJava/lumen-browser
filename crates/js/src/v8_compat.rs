@@ -1169,18 +1169,30 @@ pub(crate) fn native_fn_trampoline(
     // the isolate.
     let fn_ref: &dyn V8NativeFn = unsafe { &**(ptr as *const Box<dyn V8NativeFn + Send>) };
 
-    // Convert V8 arguments to JsValue.
+    // Convert V8 arguments to JsValue. Arity ≤ 8 covers every registered
+    // native — keep the buffer on the stack and skip the per-call heap alloc
+    // a `Vec::with_capacity` used to pay (~50ns × ~500k crossings/page).
     let n = args.length() as usize;
-    let mut js_args: Vec<JsValue> = Vec::with_capacity(n);
-    for i in 0..n {
-        js_args.push(v8_to_jsvalue(scope, args.get(i as i32)));
-    }
+    let mut stack_args: [JsValue; 8] = std::array::from_fn(|_| JsValue::Undefined);
+    let mut heap_args = Vec::new();
+    let js_args: &[JsValue] = if n <= stack_args.len() {
+        for (i, slot) in stack_args.iter_mut().enumerate().take(n) {
+            *slot = v8_to_jsvalue(scope, args.get(i as i32));
+        }
+        &stack_args[..n]
+    } else {
+        heap_args.reserve_exact(n);
+        for i in 0..n {
+            heap_args.push(v8_to_jsvalue(scope, args.get(i as i32)));
+        }
+        &heap_args[..]
+    };
 
     // Dispatch. AssertUnwindSafe is sound here: every native closure captures
     // its mutable state behind `Arc<Mutex<_>>`/`Arc<Atomic*>`, which are
     // already poison-on-panic and therefore unwind-safe by design.
     let outcome =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fn_ref.call_js(&js_args)));
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fn_ref.call_js(js_args)));
     match outcome {
         Ok(Ok(result)) => {
             let v8_val = jsvalue_to_v8(scope, result);
