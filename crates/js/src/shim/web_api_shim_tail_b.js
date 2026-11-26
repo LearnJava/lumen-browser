@@ -6767,9 +6767,39 @@ function _wa_motion_tr_sync(target, flushed) {
     var epoch = typeof _lumen_style_epoch === 'function' ? _lumen_style_epoch() : 0;
     if (epoch !== 0 && _wa_motion_synced[nid] === epoch) return;
     _wa_motion_synced[nid] = epoch;
+    // PERF-TR-SYNC: one bulk read for every eligible property instead of a
+    // native crossing per property (hundreds per node per epoch). Custom
+    // properties (`--*`) keep the single-read path — they live in their own
+    // snapshot — and `background-image`'s url() resolution is applied here
+    // exactly as `_lumen_computed_property` does it.
+    var bulk = null, bulkNames = [];
+    if (typeof _lumen_computed_properties === 'function') {
+        for (var bk in props) {
+            if (_wa_motion_eligible(bk) && bk.slice(0, 2) !== '--') bulkNames.push(bk);
+        }
+        if (bulkNames.length) {
+            try { bulk = JSON.parse(_lumen_computed_properties(nid, JSON.stringify(bulkNames))); }
+            catch (e) { bulk = null; }
+            // An empty answer means the nid has no snapshot entry at all —
+            // every per-property read would answer '' too, so fall back to
+            // them: identical result, and it keeps test harnesses that stub
+            // `_lumen_computed_property` working (the bulk native cannot see
+            // their stub).
+            if (bulk !== null && Object.keys(bulk).length === 0) bulk = null;
+        }
+    }
     for (var kebab in props) {
         if (_wa_motion_eligible(kebab)) {
-            var resolved = _lumen_computed_property(nid, kebab);
+            var resolved;
+            if (bulk !== null && kebab.slice(0, 2) !== '--') {
+                resolved = bulk[kebab];
+                if (resolved === undefined) resolved = '';
+                if (resolved !== '' && (kebab === 'background-image' || kebab === '-webkit-background-image')) {
+                    resolved = _lumen_resolve_css_urls(resolved);
+                }
+            } else {
+                resolved = _lumen_computed_property(nid, kebab);
+            }
             if (resolved !== '') _wa_motion_read(nid, null, kebab, resolved);
         }
         var a = _css_tr_by_key[nid + ':' + kebab];
