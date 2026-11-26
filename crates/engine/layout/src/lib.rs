@@ -100,6 +100,7 @@ pub use counters::{
     format_counter, format_counter_with_registry, precompute_counters,
     build_counter_style_registry, build_list_marker_text, resolve_counter_value,
     CascadeStyles, CounterMap, CounterSnapshot, CounterStyleDef, CounterStyleRegistry,
+    AnimationCandidates,
     CounterSystem, CounterRange, PrevCascade, QuoteSlot, RangeBound,
 };
 pub use color_mix::{HueInterpolationMethod, MixColorSpace, mix_colors, mix_colors_hue};

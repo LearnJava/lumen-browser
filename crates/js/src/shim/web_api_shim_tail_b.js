@@ -9010,6 +9010,19 @@ function _css_an_update_all() {
         for (var v = 0; v < vtp.length; v++) _css_an_update(vtOwners[o], vtp[v]);
     }
     if (typeof _lumen_has_keyframes === 'function' && !_lumen_has_keyframes()) return;
+    // PERF-ANIM-CANDIDATES: the flush publishes the (node, pseudo) pairs whose
+    // computed style names a CSS animation — walking it replaces the
+    // `querySelectorAll('*')` scan plus a computed-style read per element per
+    // pseudo-element (~4 native reads × every element). Native missing or an
+    // unparsable answer (worker/test harness) falls back to the full scan.
+    if (typeof _lumen_animation_candidates === 'function') {
+        var cands = null;
+        try { cands = JSON.parse(_lumen_animation_candidates()); } catch (e) { cands = null; }
+        if (cands !== null) {
+            for (var n = 0; n < cands.length; n++) _css_an_update(cands[n][0], cands[n][1]);
+            return;
+        }
+    }
     var els = document.querySelectorAll('*');
     for (var n = 0; n < els.length; n++) {
         var nid = els[n].__nid__;

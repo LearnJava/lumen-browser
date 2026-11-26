@@ -1716,6 +1716,20 @@ pub(crate) fn install_computed_styles(
             epoch.load(Ordering::Relaxed) as f64
         });
     }
+    // PERF-ANIM-CANDIDATES: `document.getAnimations()`' candidate list —
+    // `[[node, pseudo|null], …]` for every element/pseudo whose computed
+    // style names a CSS animation, republished by each flush. The shim's
+    // `_css_an_update_all` walks this instead of `querySelectorAll('*')`
+    // plus a computed-style read per element per pseudo-element.
+    {
+        let cands = Arc::clone(&flush.animation_candidates);
+        let handles = flush.clone();
+        reg!(scope, ctx, store, "_lumen_animation_candidates", move || -> String {
+            handles.maybe_flush();
+            let c = cands.lock().unwrap_or_else(|e| e.into_inner());
+            serde_json::to_string(&*c).unwrap_or_else(|_| "[]".to_string())
+        });
+    }
     // CSSANIM-MODEL-3 срез 2: the document «style change event». The flush this call forces keeps,
     // for every node whose style names a transition, the entries the recompute replaced; comparing
     // them with the fresh ones names the properties that actually moved — the before-change values

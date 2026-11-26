@@ -163,6 +163,12 @@ pub(crate) struct FlushHandles {
     /// over the layout tree (`collect_transition_candidates`) and the copy above worth their
     /// cost on every flush.
     pub(crate) transition_stale_needed: Arc<AtomicBool>,
+    /// PERF-ANIM-CANDIDATES: `(NodeId::raw(), "::pseudo" | null)` pairs whose
+    /// computed style names a CSS animation, republished by every flush —
+    /// `_lumen_animation_candidates` feeds `document.getAnimations()`' JS
+    /// side, which otherwise scans `querySelectorAll('*')` and reads a
+    /// computed style per element per pseudo-element.
+    pub(crate) animation_candidates: Arc<Mutex<lumen_layout::AnimationCandidates>>,
     /// CSSOM-8 вариант C / BUG-493: the per-`<style>`/`<link>` registry, the
     /// CSSOM edit log and its "grew since the last flush" flag, bundled with
     /// what reconciles the registry with the DOM — see
@@ -968,6 +974,12 @@ impl FlushHandles {
             }
         }
         *self.anchor_scrollers.lock().unwrap_or_else(|e| e.into_inner()) = counters.anchor_scrollers().clone();
+        // PERF-ANIM-CANDIDATES: unconditional — the collect is one field check
+        // per styled node plus a scan of the pseudo cache, far cheaper than
+        // the DOM walk it replaces, and gating it on a `_needed` flag would
+        // race the same way `computed_styles`' first collect did (BUG-1211).
+        *self.animation_candidates.lock().unwrap_or_else(|e| e.into_inner()) =
+            counters.styles().animation_candidates();
         // BUG-1468: sticky geometry is cheap and rare — a full walk on both the scoped and
         // full paths (no DOM lock, no measurement), so a sticky box's stuck shift is fresh
         // after any flush, incremental or not.

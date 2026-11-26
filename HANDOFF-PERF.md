@@ -89,42 +89,55 @@ eval-замеры performance.now). `document.getAnimations()` на habr был
 ≈0.3-3.4с/вызов до гейта — если сайт поллит его в rAF/interval, это был
 главный скрытый налог js.run.
 
-**`_css_an_update_all` — дизайн замены DOM-скана (измерено ~0.6-1с/epoch, готов к реализации):**
+**`_css_an_update_all` — РЕАЛИЗОВАНО (candidate-list вместо DOM-скана):**
 
-Диагноз (motion_probe3/4): скан = `querySelectorAll('*')` (~5-10k) ×
-`_css_an_update(nid,null)` + `_wa_pseudo_targets` (всегда
-`['::marker','::before','::after']`) × 3 pseudo-апдейта; для pseudo без
-бокса `_lumen_get_computed_style_pseudo` → `generated_pseudo_style` =
-полный `compute_pseudo_element_style` каскад на элемент — доминант.
+Было: `querySelectorAll('*')` (~2-10k) × `_css_an_update(nid,null)` +
+`_wa_pseudo_targets` (всегда `['::marker','::before','::after']`) × 3
+pseudo-апдейта; для pseudo без бокса `_lumen_get_computed_style_pseudo` →
+`generated_pseudo_style` = полный `compute_pseudo_element_style` каскад —
+доминант (~0.6-1с на первом вызове после style-change на habr).
 
-1. `lumen-layout/src/lib.rs`: `pub fn animation_candidates(counters:&CounterMap)
-   -> Vec<(u32,String)>` — main: `counters.styles().iter()`
-   (`CascadeStyles::iter`, pub ~counters.rs:771) фильтр `animation_names`
-   non-empty/!="none" → `(nid,"")`; pseudo: новый pub-метод на `PseudoCache`
-   (counters.rs ~L231, поля private): по `by_node` — `styles` Some(arc) с
-   animation_names≠none → definite; `matches` non-empty по именам
-   {before,after,marker} → maybe (JS резолвит через `_css_prop`, покрывает
-   boxless `content:''`). Interned bare-имена → emit `'::'+name`.
-2. `style_flush.rs`: `animation_scan_needed: Arc<AtomicBool>` +
-   `animation_candidates: Arc<Mutex<Vec<(u32,String)>>>` (по образцу
-   transition_stale ~L161); `snapshot_animation_candidates(&counters)`
-   после computed_styles-блока (~L969), гейтится своим флагом;
-   `runtime.rs`: `*_flag()` геттер (образец runtime.rs:1178).
-3. `platform.rs`: `reg! "_lumen_animation_candidates"` — flag+maybe_flush+
-   JSON `[[nid,"::before"],[nid,""],...]`.
-4. Shim `_css_an_update_all`: в epoch-гейте — `JSON.parse(_lumen_animation_
-   candidates())` → `_css_an_update(nid,pseudo||null)`; fallback на старый
-   DOM-скан без нэйтива. Первый цикл `_css_an_by_key` (drops) и vtOwners —
-   без изменений.
+Сделано (4 точки, как в дизайне ниже, с двумя отличиями):
 
-**Ловушка keyspace — решить до кода:** JS `__nid__`=`NodeId::raw()`
-(index|gen<<BITS), а cs/CascadeStyles/PseudoCache ключованы `.index()`.
-`_lumen_get_computed_style` делает `cs.get(&raw_nid)` → для gen>0 слотах
-промах (латентно?). Кандидаты эмитить в пространстве `__nid__` (raw),
-как у текущего скана — иначе `_css_an_by_key` cleanup не совпадёт.
-Из index-карт generation не восстановить (`from_index`=gen0) — проверить,
-чему равен `__nid__` у gen>0 элемента; возможно вся эта карта уже живёт
-в index-space и raw()==index при gen=0 для большинства узлов.
+1. `counters.rs`: `PseudoCache.by_node`/снапшот ключи переведены
+   `node.index()` → `node.raw() as usize` — ключи теперь в JS-пространстве
+   `__nid__` (и заодно закрыта stale-запись при переиспользовании слота
+   арены: index-ключ мог отдать pseudo-стиль мёртвого узла его
+   наследнику слота до `drop_node`). `PseudoCache::animation_pseudo_
+   candidates()` — `(raw nid, "::name")` по `styles` Some(arc) с
+   `animation_names` non-empty, whitelist {before,after,marker,
+   first-line,first-letter}; boxless `content:''` покрыт, т.к. box build
+   считает pseudo-стиль ДО решения «бокса нет» (build.rs:1627,
+   inline_build.rs:1288). `CascadeStyles::animation_candidates()` →
+   `AnimationCandidates = Vec<(u32, Option<String>)>`: main — `iter()`
+   фильтр `animation_names` non-empty → `(id.raw(), None)`.
+   **Отличие от дизайна**: match-записи НЕ эмитятся — только вычисленные
+   стили; псевдо, чей стиль ни разу не считался (display:none/cv-пропуск
+   поддерева), не кандидат → `document.getAnimations()` его не увидит до
+   первого `el.getAnimations()` (спека: без бокса анимации и не должны
+   бегать — расхождение только в edge-case, задокументировано).
+2. `style_flush.rs`: `animation_candidates: Arc<Mutex<AnimationCandidates>>`
+   в FlushHandles, публикуется безусловно в maybe_flush после
+   anchor_scrollers (~L976) — сбор = одно поле-проверка на styled-узел,
+   флаг `_needed` не нужен (дешевле DOM-скана на порядки).
+3. `platform.rs`: `reg! "_lumen_animation_candidates"` → maybe_flush +
+   `serde_json` `[[nid,pseudo|null],…]`.
+4. Shim `_css_an_update_all`: `JSON.parse(_lumen_animation_candidates())`
+   → `_css_an_update(nid, pseudo)`; native отсутствует/битый JSON → старый
+   `querySelectorAll('*')` скан (fallback для worker/тест-харнессов).
+   Циклы `_css_an_by_key` (drops) и vtOwners — без изменений.
+
+Keyspace-ловушка решена: кандидаты эмитятся в `raw()`-пространстве =
+пространство `__nid__` — в точности то, что скармливал старый скан
+(`els[n].__nid__`); для gen>0 слотов поведение идентично прежнему
+(`cs.get(&raw)` промахивается по index-ключам и сегодня — латентно,
+паритет сохранён, не регрессия). Тест:
+`document_get_animations_lists_css_animations_and_pseudo_ones`
+(v8_window_anim_compress.rs) — реальные node-листы + @keyframes,
+проверяет и element, и `::before`, и отсутствие `::after`.
+
+Остаток: typed-trampoline (~0.5-1s js.run), `_wa_motion_tr_sync`
+батч-снапшот (~89мс/epoch).
 
 **Найдено, не сделано (аудит «лишней работы»):**
 

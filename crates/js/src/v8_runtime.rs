@@ -421,6 +421,7 @@ impl V8JsRuntime {
                 style_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
                 transition_stale: Arc::new(Mutex::new(HashMap::new())),
                 transition_stale_needed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                animation_candidates: Arc::new(Mutex::new(Vec::new())),
                 sheet_sync: sheet_sync.clone(),
                 pseudo_styles_needed: Arc::clone(&self.pseudo_styles_needed),
                 pseudo_styles_collected: Arc::clone(&self.pseudo_styles_collected),
