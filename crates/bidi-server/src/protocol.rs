@@ -54,7 +54,7 @@
 //! Without a live window this layer stays a pure protocol state machine: one
 //! connection = one [`BidiState`].
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use lumen_core::json::{parse as parse_json, JsonValue};
@@ -625,13 +625,91 @@ impl BidiState {
         frames
     }
 
+    /// MCP-TOTAL-S7c: sync the live window's download manager into
+    /// `download_items` ahead of a method dispatch, so `browser.getDownloads`
+    /// and the `browser.download*` events answer from the manager's real
+    /// state (this transport has no event-push path — the same pattern as
+    /// `sync_user_prompts` and the intercept drain below `dispatch`).
+    ///
+    /// Returns the subscribed `browser.downloadWillBegin` /
+    /// `browser.downloadItemUpdated` / `browser.downloadItemCompleted` /
+    /// `browser.downloadItemAborted` frames for what changed during this
+    /// sync. Records whose live entry disappeared (`clear_finished` in the
+    /// manager) are dropped without a fabricated closing event.
+    fn sync_downloads(&mut self) -> Vec<String> {
+        // Without a live window there is no source of truth to sync against:
+        // records created by a direct `begin_download` (unit tests) stay.
+        let Some(live) = &mut self.live else {
+            return Vec::new();
+        };
+        let Ok(entries) = live.list_downloads() else {
+            return Vec::new();
+        };
+        let live_ids: HashSet<u32> = entries.iter().map(|e| e.id).collect();
+        self.download_items
+            .retain(|_, item| item.id.parse::<u32>().map_or(true, |n| live_ids.contains(&n)));
+
+        let mut frames = Vec::new();
+        for e in entries {
+            let item_id = e.id.to_string();
+            let state = match e.state.as_str() {
+                "completed" => DownloadState::Completed,
+                "failed" | "cancelled" => DownloadState::Aborted,
+                _ => DownloadState::InProgress,
+            };
+            let (url, file_name) = match self.download_items.get_mut(&item_id) {
+                Some(item) => {
+                    if item.received_bytes == e.received_bytes
+                        && item.total_bytes == e.total_bytes
+                        && item.state == state
+                    {
+                        continue;
+                    }
+                    item.received_bytes = e.received_bytes;
+                    item.total_bytes = e.total_bytes;
+                    item.state = state;
+                    (item.url.clone(), item.file_name.clone())
+                }
+                None => {
+                    // New download: record it and announce the start (and its
+                    // already-settled state, when the manager raced us — a
+                    // small local file can finish between two dispatches).
+                    if self.is_subscribed("browser.downloadWillBegin") {
+                        frames.push(make_event(
+                            "browser.downloadWillBegin",
+                            download_event_params(&item_id, &e.url, &e.file_name, e.received_bytes, e.total_bytes, "inProgress"),
+                        ));
+                    }
+                    self.download_items.insert(item_id.clone(), DownloadItem {
+                        id: item_id.clone(),
+                        url: e.url.clone(),
+                        file_name: e.file_name.clone(),
+                        total_bytes: e.total_bytes,
+                        received_bytes: e.received_bytes,
+                        state,
+                    });
+                    if state == DownloadState::InProgress {
+                        continue;
+                    }
+                    (e.url.clone(), e.file_name.clone())
+                }
+            };
+            let (event, state_name) = download_change_event(state);
+            if self.is_subscribed(event) {
+                frames.push(make_event(
+                    event,
+                    download_event_params(&item_id, &url, &file_name, e.received_bytes, e.total_bytes, state_name),
+                ));
+            }
+        }
+        frames
+    }
+
     /// Number of cookies in the session (for testing).
     #[allow(dead_code)]
     pub fn cookie_count(&self) -> usize {
         self.cookies.len()
-    }
-
-    /// Number of active download items.
+    }    /// Number of active download items.
     #[allow(dead_code)]
     pub fn download_count(&self) -> usize {
         self.download_items.len()
@@ -711,6 +789,10 @@ pub fn dispatch(message: &str, state: &mut BidiState) -> DispatchResult {
     // command *before* the method runs, so `browsingContext.handleUserPrompt`
     // as the very next command after the dialog opened still finds it.
     let prompt_frames = state.sync_user_prompts();
+    // MCP-TOTAL-S7c: the same for the live window's download manager —
+    // `browser.getDownloads` as the very next command after a download
+    // started still sees it, and `browser.download*` events ride along.
+    let download_frames = state.sync_downloads();
 
     let mut result = match method {
         "session.status" => DispatchResult::single(make_success(id, session_status_result(state))),
@@ -800,6 +882,9 @@ pub fn dispatch(message: &str, state: &mut BidiState) -> DispatchResult {
         }
     }
     for frame in prompt_frames {
+        result.frames.insert(0, frame);
+    }
+    for frame in download_frames {
         result.frames.insert(0, frame);
     }
     result
@@ -2446,6 +2531,16 @@ fn cookie_event_params(cookie: &BidiCookie) -> JsonValue {
     let mut params = BTreeMap::new();
     params.insert("cookie".into(), cookie_to_json(cookie));
     JsonValue::Object(params)
+}
+
+/// Event name and BiDi state string for a download's new state — the update
+/// event while it runs, the terminal ones when it settles (MCP-TOTAL-S7c).
+fn download_change_event(state: DownloadState) -> (&'static str, &'static str) {
+    match state {
+        DownloadState::Completed => ("browser.downloadItemCompleted", "completed"),
+        DownloadState::Aborted => ("browser.downloadItemAborted", "aborted"),
+        DownloadState::InProgress => ("browser.downloadItemUpdated", "inProgress"),
+    }
 }
 
 /// Build `browser.download*` event params.

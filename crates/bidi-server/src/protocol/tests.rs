@@ -611,11 +611,12 @@ fn recording_live_session() -> (LiveWindowSession, std::sync::mpsc::Receiver<Str
     let (log_tx, log_rx) = std::sync::mpsc::channel::<String>();
     std::thread::spawn(move || {
         for (cmd, reply_tx) in rx {
-            // MCP-TOTAL-S7a: the per-dispatch dialog poll is not a client
-            // action — answer silently as "no dialog open" and keep it out
-            // of the action log the assertions read.
+            // MCP-TOTAL-S7a/S7c: the per-dispatch dialog/download polls are
+            // not client actions — answer silently and keep them out of the
+            // action log the assertions read.
             let reply = match cmd {
                 AutomationCommand::UserPrompt => AutomationReply::UserPrompt(None),
+                AutomationCommand::GetDownloads => AutomationReply::Downloads(Vec::new()),
                 cmd => {
                     let _ = log_tx.send(format!("{cmd:?}"));
                     AutomationReply::Ack

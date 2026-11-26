@@ -26,7 +26,7 @@ use std::time::Duration;
 use lumen_core::error::{Error, Result};
 
 use crate::{
-    A11yNode, AutomationCommand, AutomationCookie, AutomationDialog, AutomationHandle, AutomationReply, AxQuery, BoxModel,
+    A11yNode, AutomationCommand, AutomationCookie, AutomationDialog, AutomationDownload, AutomationHandle, AutomationReply, AxQuery, BoxModel,
     BrowserSession, ComputedProperties, ComputedStyleSnapshot, ConsoleEntry, ExplainElement,
     ExplainPage, FingerprintProfile, InterceptedRequest, NetworkEntry, NodeRef, ScrollDelta, TabInfo,
     Target, WaitCondition,
@@ -415,6 +415,30 @@ impl BrowserSession for LiveWindowSession {
             target: target.clone(),
             paths: paths.to_vec(),
         })?;
+        Ok(())
+    }
+
+    /// MCP-TOTAL-S7c: the live window's download manager entries; the arm
+    /// polls terminal events first, so a just-finished download is not
+    /// reported a frame behind.
+    fn list_downloads(&self) -> Result<Vec<AutomationDownload>> {
+        match self.execute(AutomationCommand::GetDownloads)? {
+            AutomationReply::Downloads(entries) => Ok(entries),
+            other => Err(unexpected_reply("Downloads", &other)),
+        }
+    }
+
+    /// MCP-TOTAL-S7c: start a download; the arm answers with the new id.
+    fn start_download(&self, url: &str) -> Result<u32> {
+        match self.execute(AutomationCommand::StartDownload { url: url.to_owned() })? {
+            AutomationReply::DownloadId(id) => Ok(id),
+            other => Err(unexpected_reply("DownloadId", &other)),
+        }
+    }
+
+    /// MCP-TOTAL-S7c: cancel a download by id; an unknown id is an error.
+    fn cancel_download(&self, id: u32) -> Result<()> {
+        self.execute(AutomationCommand::CancelDownload { id })?;
         Ok(())
     }
 
