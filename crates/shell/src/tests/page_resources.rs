@@ -282,7 +282,7 @@ fn load_linked_stylesheets_reports_one_outcome_per_element() {
     let base = ResourceBase::file_base(PathBuf::from("samples/page.html"));
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
-    let (css, outcomes, _blocked) = load_linked_stylesheets(&doc, &base, &sink, None, &ctx, None);
+    let (css, outcomes, _blocked) = load_linked_stylesheets(&doc, &base, &sink, None, &ctx, None, &std::collections::HashSet::new());
     let css = crate::doc_extract::concat_chunks(&css);
     assert!(css.is_empty(), "neither sheet exists on disk");
     assert_eq!(outcomes.len(), 2, "rel=alternate is not a cascade sheet");
@@ -942,7 +942,7 @@ fn page_sheets_follow_document_order() {
     let base = ResourceBase::file_base(dir.join("page.html"));
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
     let (inline, _) = extract_style_chunks(&doc, None, None);
-    let (linked, _, _) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx, None);
+    let (linked, _, _) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx, None, &std::collections::HashSet::new());
     let css = merge_sheet_chunks(&doc, &inline, &linked);
     let first = css.find(".first").unwrap();
     let link = css.find("background-color:red").unwrap();
@@ -961,7 +961,7 @@ fn style_after_link_wins_at_equal_specificity() {
     let base = ResourceBase::file_base(dir.join("page.html"));
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
     let (inline, _) = extract_style_chunks(&doc, None, None);
-    let (linked, _, _) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx, None);
+    let (linked, _, _) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx, None, &std::collections::HashSet::new());
     let sheet = lumen_css_parser::parse(&merge_sheet_chunks(&doc, &inline, &linked));
     let last_bg = sheet
         .rules
@@ -992,7 +992,7 @@ fn inline_style_imports_stay_with_their_own_style() {
         lumen_network::ReferrerPolicy::default_policy(),
     );
     assert_eq!(prefixes.len(), 1);
-    let (linked, _, _) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx, None);
+    let (linked, _, _) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx, None, &std::collections::HashSet::new());
     let css = merge_sheet_chunks(&doc, &resolved, &linked);
     let o = css.find(".o{}").unwrap();
     let imp = css.find(".imp{}").unwrap();
@@ -1449,7 +1449,7 @@ fn nonced_link_stylesheet_passes_style_src_nonce_policy() {
     let base = ResourceBase::url_base("http://127.0.0.1:9/page.html".to_owned());
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
 
-    let (_css, _outcomes, blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx, None);
+    let (_css, _outcomes, blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx, None, &std::collections::HashSet::new());
 
     assert_eq!(
         blocked,
@@ -1483,7 +1483,7 @@ fn load_linked_stylesheets_falls_back_to_document_encoding() {
     let base = ResourceBase::file_base(dir.join("page.html"));
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
 
-    let (css, outcomes, _blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx, None);
+    let (css, outcomes, _blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx, None, &std::collections::HashSet::new());
     let css = crate::doc_extract::concat_chunks(&css);
 
     assert!(outcomes[0].1, "a.css must be fetched");
@@ -1512,7 +1512,7 @@ fn load_linked_stylesheets_uses_link_charset_attribute() {
     let base = ResourceBase::file_base(dir.join("page.html"));
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
 
-    let (css, _, _blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx, None);
+    let (css, _, _blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx, None, &std::collections::HashSet::new());
     let css = crate::doc_extract::concat_chunks(&css);
 
     assert!(
@@ -1542,7 +1542,7 @@ fn load_linked_stylesheets_bom_wins_over_document_encoding() {
     let base = ResourceBase::file_base(dir.join("page.html"));
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
 
-    let (css, _, _blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx, None);
+    let (css, _, _blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx, None, &std::collections::HashSet::new());
     let css = crate::doc_extract::concat_chunks(&css);
 
     assert!(

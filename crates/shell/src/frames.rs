@@ -777,8 +777,10 @@ pub(crate) fn fetch_frame_subresources(
     // discarding the blocked-URL list `load_linked_stylesheets` already
     // computes and surfaces it via `FrameSubresourceOutcomes` for the caller
     // to dispatch `securitypolicyviolation` on (no JS runtime exists yet here).
-    let (linked, links, mut blocked_by_style_src) =
-        load_linked_stylesheets(doc, base, sink, cookie_jar.clone(), media_ctx, None);
+    let (linked, links, mut blocked_by_style_src) = load_linked_stylesheets(
+        doc, base, sink, cookie_jar.clone(), media_ctx, None,
+        &std::collections::HashSet::new(),
+    );
     blocked_by_style_src.extend(blocked_by_style_src_imports);
     // BUG-1413: порядок листов — порядок элементов в документе.
     let css = merge_sheet_chunks(doc, &inline_resolved, &linked);

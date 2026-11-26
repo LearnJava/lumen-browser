@@ -355,6 +355,220 @@ impl ParserInsertLog {
     }
 }
 
+/// Видимость парсерного будущего во время исполнения parser-blocking
+/// скриптов (execution-timing/026-класс, BUG-parser-ahead).
+///
+/// Шелл разбирает документ целиком до первого скрипта, поэтому к моменту
+/// исполнения script#K в DOM уже лежат узлы, которые настоящий парсер ещё
+/// не вставил: `getElementsByTagName('script')` видит будущие элементы,
+/// `document.body` отвечает раньше времени и т.п. Эта структура прячет
+/// «будущее» физическим detach'ем поддеревьев и возвращает его по мере того,
+/// как парсер «доходил» бы до очередного скрипта.
+///
+/// Видимое множество — префикс дерева в document order: всё до конца
+/// поддерева текущего скрипта включительно. Скрытое — набор frontier-под-
+/// деревьев (узлы с rank > cutoff, чей родитель видим); внутри каждого из
+/// них скрыто всё поддерево целиком, поэтому скрытый узел невозможно
+/// «дотянуться» из скрипта — он не участвует ни в одном обходе DOM.
+///
+/// Ранги — позиции пар `(parent, child)` из [`ParserInsertLog`]: тот же
+/// обход дерева в document order, так что `rank(v) <= segment_end(script)`
+/// в точности означает «парсер вставил v до конца script'а».
+#[cfg(feature = "v8")]
+struct ParseVisibility {
+    /// `NodeId` → позиция в document-order обходе (1-based; корень и узлы,
+    /// созданные скриптами после разбора, в карте отсутствуют → rank 0).
+    rank: HashMap<NodeId, usize>,
+    /// `(ребёнок, родитель)` в порядке document-order обхода — `order[i-1]`
+    /// это узел с rank `i`. Тот же обход, что и `ParserInsertLog::pairs`,
+    /// но в `NodeId` — нужен для prime/sync без повторного walk'а.
+    order: Vec<(NodeId, NodeId)>,
+    /// Сейчас отсоединённые frontier-узлы: nid → его родитель (detach стирает
+    /// `parent`, поэтому он запоминается здесь для обратной вставки).
+    hidden: HashMap<NodeId, NodeId>,
+}
+
+#[cfg(feature = "v8")]
+impl ParseVisibility {
+    /// Собрать ранги по журналу парсерных вставок. Вызывается один раз —
+    /// дерево статично с точки зрения разметки (скриптовые мутации видимых
+    /// узлов на ранги не влияют).
+    fn build(log: &ParserInsertLog) -> Self {
+        let mut rank = HashMap::with_capacity(log.pairs.len() + 1);
+        let mut order = Vec::with_capacity(log.pairs.len());
+        for (i, &(parent, child)) in log.pairs.iter().enumerate() {
+            let child = NodeId::from_index(child);
+            rank.insert(child, i + 1);
+            order.push((child, NodeId::from_index(parent)));
+        }
+        Self { rank, order, hidden: HashMap::new() }
+    }
+
+    fn rank_of(&self, nid: NodeId) -> usize {
+        self.rank.get(&nid).copied().unwrap_or(0)
+    }
+
+    /// Первичная расстановка перед первым parser-blocking скриптом:
+    /// отсоединить всё, что парсер ещё не вставил к концу его поддерева
+    /// (`seg` — `ParserInsertLog::segment_end` этого скрипта).
+    fn prime(&mut self, doc: &mut Document, seg: usize) {
+        for i in 0..self.order.len() {
+            let (child, parent) = self.order[i];
+            if i < seg || self.rank_of(parent) > seg {
+                continue;
+            }
+            doc.detach(child);
+            self.hidden.insert(child, parent);
+        }
+    }
+
+    /// Довести видимое множество до `seg`: отсоединённые раньше узлы с
+    /// rank <= seg возвращаются в дерево (вместе со всем поддеревом —
+    /// детачили целиком), а внутри них заново отсекаются узлы, которые
+    /// парсер к `seg` ещё не вставил. `seg == usize::MAX` — «парсер дошёл
+    /// до конца», возвращается всё.
+    fn sync(&mut self, doc: &mut Document, seg: usize) {
+        // Отсоединённые узлы, чей черёд наступил, — в порядке рангов, чтобы
+        // родитель возвращался раньше потомка (rank(parent) < rank(child)).
+        let mut reveal: Vec<(usize, NodeId, NodeId)> = self
+            .hidden
+            .iter()
+            .filter(|(nid, _)| self.rank_of(**nid) <= seg)
+            .map(|(&nid, &parent)| (self.rank_of(nid), nid, parent))
+            .collect();
+        reveal.sort_unstable_by_key(|t| t.0);
+        for (_, nid, parent) in reveal {
+            self.hidden.remove(&nid);
+            self.attach_at_rank(doc, parent, nid);
+            self.cut_frontier(doc, nid, seg);
+        }
+    }
+
+    /// Вставить `nid` в `parent` на его место в document order: перед первым
+    /// ребёнком с большим рангом. Дети без ранга (созданные скриптами после
+    /// разбора — document.write, appendChild) пропускаются: по спецификации
+    /// они стоят РАНЬШЕ ещё нераспарсенного хвоста, так что скрытый узел
+    /// встаёт после них.
+    fn attach_at_rank(&self, doc: &mut Document, parent: NodeId, nid: NodeId) {
+        let r = self.rank_of(nid);
+        let mut reference = None;
+        for &c in &doc.get(parent).children {
+            if self.rank_of(c) > r {
+                reference = Some(c);
+                break;
+            }
+        }
+        match reference {
+            Some(rf) => doc.insert_before(nid, rf),
+            None => doc.append_child(parent, nid),
+        }
+    }
+
+    /// После возврата `root` в дерево отсечь его потомков, которые парсер к
+    /// `seg` ещё не вставил: обход вглубь, узел с rank > seg и видимым
+    /// родителем становится новым frontier (detach + запись в `hidden`), а
+    /// поддерево узла с rank > seg пропускается целиком — все его ранги
+    /// больше `seg` по построению preorder.
+    fn cut_frontier(&mut self, doc: &mut Document, root: NodeId, seg: usize) {
+        let mut stack: Vec<(NodeId, NodeId)> = doc
+            .get(root)
+            .children
+            .iter()
+            .rev()
+            .map(|&c| (c, root))
+            .collect();
+        while let Some((nid, parent)) = stack.pop() {
+            let r = self.rank_of(nid);
+            if r > seg {
+                if self.rank_of(parent) <= seg {
+                    doc.detach(nid);
+                    self.hidden.insert(nid, parent);
+                }
+                continue;
+            }
+            for &c in doc.get(nid).children.iter().rev() {
+                stack.push((c, nid));
+            }
+        }
+    }
+
+    /// «Парсер дошёл до конца» — вернуть всё скрытое.
+    fn reveal_all(&mut self, doc: &mut Document) {
+        self.sync(doc, usize::MAX);
+    }
+
+    /// Переписать записанного родителя скрытых детей `from` на `to`.
+    ///
+    /// document.write может «закрыть» script лишним `</script>`: JS-сторона
+    /// (`_lumen_dw_evict_after_insert_point`) переносит к родителю script'а
+    /// видовых детей после точки вставки, но скрытые ею недостижимы — без
+    /// этой поправки они вернулись бы в дерево внутрь уже «закрытого»
+    /// script'а (execution-timing/143). Потомки скрытых узлов идут за своими
+    /// родителями сами — переписывать нужно только прямых детей.
+    fn reparent_hidden_children(&mut self, from: NodeId, to: NodeId) {
+        for parent in self.hidden.values_mut() {
+            if *parent == from {
+                *parent = to;
+            }
+        }
+    }
+}
+
+/// Подхватить свежие `_lumen_script_truncated` со стороны JS и переписать
+/// скрытым детям «закрытых» script'ов родителя на их текущего (пост-эвикшн).
+///
+/// Зовётся после каждого parser-blocking скрипта: document.write внутри
+/// него может урезать текст внешнего script'а, и скрытый «хвост» обязан
+/// прикрепиться к тому же родителю, куда JS перенёс видимую часть.
+/// Вложенные закрытия (несколько script'ов разом) обрабатываются от
+/// глубокого к мелкому — эвикшн внутреннего script'а может сам попасть
+/// под внешний.
+#[cfg(feature = "v8")]
+fn sync_truncated_visibility(
+    vis: &mut ParseVisibility,
+    doc_arc: &std::sync::Arc<std::sync::Mutex<Document>>,
+    rt: &lumen_js::v8_runtime::V8JsRuntime,
+    seen: &mut std::collections::HashSet<u32>,
+) {
+    use lumen_core::ext::JsRuntime as _;
+    // `__nid__` в JS — `NodeId::raw()` (index+generation), поэтому ключи
+    // `_lumen_script_truncated` приходят в raw-пространстве.
+    // ВАЖНО: eval идёт ДО захвата `doc_arc` — под мьютексом JS-поток
+    // страницы может ждать этот же мьютекс (peer-вызов фрейма → DOM-доступ),
+    // и круг замыкается в дедлок/голодание (execution-timing/039).
+    let Ok(val) = rt.eval(
+        "(typeof _lumen_script_truncated === 'undefined' ? '[]' \
+         : JSON.stringify(Object.keys(_lumen_script_truncated).map(Number)))",
+    ) else {
+        return;
+    };
+    let lumen_core::ext::JsValue::String(s) = val else { return };
+    let Ok(list) = serde_json::from_str::<Vec<u32>>(&s) else { return };
+    let fresh: Vec<u32> = list.into_iter().filter(|k| seen.insert(*k)).collect();
+    if fresh.is_empty() {
+        return;
+    }
+    let doc = doc_arc.lock().unwrap_or_else(|e| e.into_inner());
+    let depth = |doc: &Document, nid: NodeId| {
+        let mut d = 0usize;
+        let mut cur = doc.get(nid).parent;
+        while let Some(p) = cur {
+            d += 1;
+            cur = doc.get(p).parent;
+        }
+        d
+    };
+    let mut resolved: Vec<(usize, NodeId)> = fresh
+        .iter()
+        .filter_map(|&k| doc.resolve(k).map(|nid| (depth(&doc, nid), nid)))
+        .collect();
+    resolved.sort_by_key(|t| std::cmp::Reverse(t.0));
+    for (_, nid) in resolved {
+        let Some(to) = doc.get(nid).parent else { continue };
+        vis.reparent_hidden_children(nid, to);
+    }
+}
+
 /// Отдать JS-стороне парсерные вставки вплоть до `upto` (см. [`ParserInsertLog`]).
 ///
 /// Наблюдателей нет — строку не строим вовсе: запись, поставленная до
@@ -1220,14 +1434,72 @@ pub(crate) fn run_scripts_with_dom(
                 // <script> в документе — парсерные (скриптов ещё не было),
                 // поэтому метим обходом всего дерева, а не списком nid'ов.
                 let _ = rt.eval("_lumen_script_mark_all_parser_inserted();");
+                // execution-timing/026-класс: парсер «бежит вперёд» — к первому
+                // скрипту DOM уже содержит весь документ. Прячем «будущее»
+                // (всё за концом поддерева текущего скрипта) физическим
+                // detach'ом и возвращаем по мере исполнения — DOM, который
+                // видит скрипт, совпадает с тем, что видел бы настоящий
+                // парсер. Метка выше обязана отработать ДО prime: её обход
+                // дерева должен увидеть все <script>, включая скрытые.
+                //
+                // У под-документов фреймов видимость выключена: их DOM
+                // доступен родителю через `contentDocument` ещё до конца
+                // разбора (moving-between-documents/*-iframe-*), а чужой
+                // MutationObserver по узлам соседнего документа Lumen не
+                // доставляет — скрытый на момент «fox»-postMessage
+                // `streaming-element` родитель не находит, и `proceed()`
+                // ждёт вечно. Парсер у фрейма тоже целиком буферизован
+                // (`fetch_subresource_document`), так что выигрыша у
+                // сокрытия здесь нет — остаётся только риск.
+                let mut parse_visibility = if scripts.is_empty() || ancestry.is_some() {
+                    None
+                } else {
+                    let mut vis = ParseVisibility::build(&parser_inserts);
+                    let seg0 = parser_inserts.segment_end(Some(scripts[0].node));
+                    let mut d = doc_arc.lock().unwrap_or_else(|e| e.into_inner());
+                    vis.prime(&mut d, seg0);
+                    drop(d);
+                    Some(vis)
+                };
+                let parse_segs: Vec<usize> = scripts
+                    .iter()
+                    .map(|s| parser_inserts.segment_end(Some(s.node)))
+                    .collect();
                 // Parser-blocking classic scripts, in document order.
-                for script in &scripts {
+                let mut seen_truncated = std::collections::HashSet::new();
+                for (script_idx, script) in scripts.iter().enumerate() {
+                    // execution-timing/026-класс: сначала возвращаем в дерево
+                    // всё, что парсер вставил бы к концу этого скрипта, —
+                    // и только потом отдаём MO-записи и исполняем тело:
+                    // `_lumen_mo_parser_inserted` работает с уже видимыми
+                    // узлами.
+                    if let Some(vis) = &mut parse_visibility {
+                        let mut d = doc_arc.lock().unwrap_or_else(|e| e.into_inner());
+                        vis.sync(&mut d, parse_segs[script_idx]);
+                    }
                     // BUG-827: к этому моменту настоящий парсер уже вставил всё,
                     // что стоит в документе выше этого скрипта, и сам его
                     // элемент — наблюдатель, поставленный предыдущим скриптом,
                     // обязан увидеть эти вставки записями.
                     flush_parser_inserts(&mut parser_inserts, Some(script.node), &rt);
                     run_parser_classic_script(&rt, &doc_arc, csp_policy.as_ref(), script);
+                    // execution-timing/143-класс: document.write внутри
+                    // скрипта мог «закрыть» внешний script лишним `</script>` —
+                    // скрытый «хвост» должен прикрепиться к пост-эвикшн
+                    // родителю, а не вернуться внутрь закрытого script'а.
+                    if let Some(vis) = &mut parse_visibility {
+                        sync_truncated_visibility(vis, &doc_arc, &rt, &mut seen_truncated);
+                    }
+                }
+                // «The end» of parsing: отложенные (defer/module) и async
+                // исполняются только после того, как парсер вставил документ
+                // целиком — возвращаем всё скрытое ДО слива хвоста журнала:
+                // MO-записи за ещё скрытые узлы иначе приходят наблюдателям,
+                // которые в этот момент не находят их в дереве, и никогда
+                // не переспрашивают (moving-between-documents/*-iframe-*).
+                if let Some(vis) = &mut parse_visibility {
+                    let mut d = doc_arc.lock().unwrap_or_else(|e| e.into_inner());
+                    vis.reveal_all(&mut d);
                 }
                 // BUG-827: хвост документа парсер вставил ещё до того, как
                 // отложенные скрипты начали исполняться, — отдаём его одним
