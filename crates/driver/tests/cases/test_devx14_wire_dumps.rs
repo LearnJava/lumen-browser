@@ -97,6 +97,15 @@ fn fake_live_session(boxes: Vec<BoxModel>, entries: Vec<NetworkEntry>) -> LiveWi
                     box_count: 5,
                     ..Default::default()
                 }),
+                // MCP-TOTAL-S2e: canned answers echoing the selector/code
+                // through, so the round-trip test sees them survive the channel.
+                AutomationCommand::ScreenshotScoped { selector } => {
+                    AutomationReply::Screenshot(format!("png [{selector}]").into_bytes())
+                }
+                AutomationCommand::RelayoutScoped { selector: _ } => AutomationReply::Ack,
+                AutomationCommand::EvalScoped { selector, code } => {
+                    AutomationReply::Eval(format!("eval [{selector}] [{code}]"))
+                }
                 _ => AutomationReply::Error("unsupported in fake_live_session".into()),
             };
             let _ = reply_tx.send(reply);
@@ -176,12 +185,28 @@ fn live_window_computed_style_and_explain_round_trip_through_automation_channel(
     assert_eq!(page.box_count, 5);
 }
 
-/// MCP-TOTAL-S2a: the four remaining silent x-surface stubs (`Ok(пусто)`/
+/// MCP-TOTAL-S2e: the scoped screenshot, relayout and eval round-trip through
+/// the automation channel — the PNG bytes and the eval JSON verbatim, the
+/// selector carried through to the arm.
+#[test]
+fn live_window_scoped_screenshot_relayout_eval_round_trip_through_automation_channel() {
+    let mut session = fake_live_session(Vec::new(), Vec::new());
+    let png = session.screenshot_scoped("#box").expect("screenshot_scoped failed");
+    assert_eq!(png, b"png [#box]");
+    session.relayout_scoped("#box").expect("relayout_scoped failed");
+    let json = session
+        .eval_scoped("#box", "1 + 1")
+        .expect("eval_scoped failed");
+    assert_eq!(json, "eval [#box] [1 + 1]");
+}
+
+/// MCP-TOTAL-S2a: the remaining silent x-surface stubs (`Ok(пусто)`/
 /// `Ok(None)`) answer an honest `Err` instead. The receiver half is dropped,
 /// so a stub that still tried an automation round-trip would fail on `send` —
 /// the only `Err` these methods can return is their own. (S2c un-stubbed
 /// `layout_snapshot_scoped`/`query_scoped`, S2b `display_list*`, S2d
-/// `computed_style`/`explain_element`/`explain_page`.)
+/// `computed_style`/`explain_element`/`explain_page`, S2e
+/// `screenshot_scoped`/`relayout_scoped`/`eval_scoped`.)
 #[test]
 fn live_window_x_surface_stubs_are_honest_errors() {
     let (tx, rx) = std::sync::mpsc::channel::<lumen_driver::AutomationRequest>();
@@ -192,7 +217,6 @@ fn live_window_x_surface_stubs_are_honest_errors() {
         let msg = r.expect_err("stub must answer Err").to_string();
         assert!(msg.contains("не реализовано для LiveWindowSession"), "wrong stub error: {msg}");
     };
-    check(session.screenshot_scoped("#a").map(drop));
     check(session.computed_style_snapshot("#a").map(drop));
     check(session.layout_box_by_selector("#a").map(drop));
     check(session.all_layout_boxes_by_selector("#a").map(drop));

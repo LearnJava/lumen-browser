@@ -124,12 +124,16 @@ impl BrowserSession for LiveWindowSession {
         }
     }
 
-    /// Not yet wired to the live window (SDC-2 MVP scope) — always `Err`
-    /// (an empty screenshot/dump isn't a meaningfully distinct "not found"
-    /// answer); since MCP-TOTAL-S2a every silent x-surface stub here mirrors
-    /// this shape instead of silently returning nothing.
-    fn screenshot_scoped(&self, _selector: &str) -> Result<Vec<u8>> {
-        Err(Error::Other("screenshot_scoped: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
+    /// MCP-TOTAL-S2e: the subtree PNG round-trips through
+    /// [`AutomationCommand::ScreenshotScoped`] — the live window's CPU render
+    /// cropped to the matched element's border box; a selector matching
+    /// nothing (or an element outside the rendered viewport) is the arm's
+    /// `Error`, the same shape the headless sessions answer.
+    fn screenshot_scoped(&self, selector: &str) -> Result<Vec<u8>> {
+        match self.execute(AutomationCommand::ScreenshotScoped { selector: selector.to_owned() })? {
+            AutomationReply::Screenshot(png) => Ok(png),
+            other => Err(unexpected_reply("Screenshot", &other)),
+        }
     }
 
     /// MCP-TOTAL-S2b: the subtree dump round-trips through
@@ -362,16 +366,30 @@ impl BrowserSession for LiveWindowSession {
         }
     }
 
-    /// Not yet wired to the live window (SDC-2 MVP scope, same gap as
-    /// `query_scoped`) — always `Err`.
-    fn relayout_scoped(&mut self, _selector: &str) -> Result<()> {
-        Err(Error::Other("relayout_scoped: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
+    /// MCP-TOTAL-S2e: the relayout round-trips through
+    /// [`AutomationCommand::RelayoutScoped`] — the live window's standard
+    /// relayout pass (it always rebuilds the tree from the shared `Document`),
+    /// synchronous with the reply; an unmatched selector is the arm's `Error`.
+    fn relayout_scoped(&mut self, selector: &str) -> Result<()> {
+        match self.execute(AutomationCommand::RelayoutScoped { selector: selector.to_owned() })? {
+            AutomationReply::Ack => Ok(()),
+            other => Err(unexpected_reply("Relayout", &other)),
+        }
     }
 
-    /// Not yet wired to the live window (SDC-2 MVP scope, same gap as
-    /// `relayout_scoped`) — always `Err`.
-    fn eval_scoped(&mut self, _selector: &str, _js: &str) -> Result<String> {
-        Err(Error::Other("eval_scoped: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
+    /// MCP-TOTAL-S2e: eval + relayout round-trips through
+    /// [`AutomationCommand::EvalScoped`] — the reply arrives after the relayout
+    /// (the `Eval` machinery with a relayout slotted in at the reply point), so
+    /// the caller's next read already sees the script's geometry; an unmatched
+    /// selector is the arm's `Error`.
+    fn eval_scoped(&mut self, selector: &str, js: &str) -> Result<String> {
+        match self.execute(AutomationCommand::EvalScoped {
+            selector: selector.to_owned(),
+            code: js.to_owned(),
+        })? {
+            AutomationReply::Eval(json) => Ok(json),
+            other => Err(unexpected_reply("Eval", &other)),
+        }
     }
 
     // ── Ввод, cookies и preload живого окна ─────────────────────────────────

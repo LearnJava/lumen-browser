@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 fn pending(timeout: Duration) -> (PendingEval, mpsc::SyncSender<EvalOutcome>) {
     let (result_tx, result_rx) = mpsc::sync_channel(1);
     let (reply_tx, _reply_rx) = mpsc::channel();
-    let pending = PendingEval { result_rx, started: Instant::now(), timeout, reply_tx };
+    let pending = PendingEval { result_rx, started: Instant::now(), timeout, reply_tx, relayout: false };
     (pending, result_tx)
 }
 

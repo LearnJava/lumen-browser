@@ -355,6 +355,44 @@ impl Lumen {
             lumen_driver::scope::display_list_scoped(lb, &doc, selector)
         }
 
+        /// Whether `selector`'s first match exists in the live document — the
+        /// honest "not found" gate the mutating scoped commands share
+        /// (MCP-TOTAL-S2e). `false` also covers no page / no layout source.
+        pub(crate) fn automation_selector_matches(&self, selector: &str) -> bool {
+            let Some(source) = self.layout_source.as_ref() else { return false };
+            let Ok(doc) = source.document.lock() else { return false };
+            lumen_layout::find_first_dom_node_by_selector(&doc, selector).is_some()
+        }
+
+        /// PNG of `selector`'s subtree for `AutomationCommand::ScreenshotScoped`
+        /// (MCP-TOTAL-S2e, wires `x-scope-screenshot` to the live window) — the
+        /// same find-rect → render → crop path the headless sessions use, with
+        /// the live CPU render ([`Self::render_current_page_to_png`]) as the
+        /// source image and the box rect translated into it by the scroll
+        /// offset (the live render is viewport-sized, not whole-page).
+        ///
+        /// `Err` = no page, no match, render failure, or the element fully
+        /// outside the rendered viewport (`crop_screenshot`'s zero-area rule).
+        pub(crate) fn automation_screenshot_scoped(&self, selector: &str) -> Result<Vec<u8>, String> {
+            let not_found = || format!("screenshot_scoped: селектор не найден: {selector}");
+            let lb = self.layout_box.as_ref().ok_or_else(not_found)?;
+            let source = self.layout_source.as_ref().ok_or_else(not_found)?;
+            let rect = {
+                let doc = source.document.lock().map_err(|e| format!("mutex: {e}"))?;
+                lumen_layout::find_box_by_selector(lb, &doc, selector)
+                    .map(|b| b.rect)
+                    .ok_or_else(not_found)?
+            };
+            let png = self.render_current_page_to_png()?;
+            let in_viewport = lumen_core::geom::Rect::new(
+                rect.x - self.scroll_x,
+                rect.y - self.scroll_y,
+                rect.width,
+                rect.height,
+            );
+            lumen_driver::scope::crop_screenshot(&png, in_viewport).map_err(|e| e.to_string())
+        }
+
         /// Box-model snapshot of `selector`'s subtree for
         /// `AutomationCommand::LayoutSnapshotScoped` (MCP-TOTAL-S2c, wires
         /// `x-scope-layout` to the live window) — the same
