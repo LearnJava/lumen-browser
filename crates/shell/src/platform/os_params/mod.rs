@@ -32,6 +32,7 @@ pub enum WheelScroll {
     /// A notch scrolls this many text lines (`SPI_GETWHEELSCROLLLINES`).
     Lines(u32),
     /// A notch scrolls one page (`WHEEL_PAGESCROLL`).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))] // крутится на windows-тестах
     Page,
 }
 
@@ -210,6 +211,7 @@ fn publish(next: OsParams) -> bool {
 
 /// Re-reads the OS settings and publishes them. Returns whether anything
 /// changed. A no-op while the registry is [frozen](freeze_defaults).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn reload() -> bool {
     ensure_loaded();
     if FROZEN.load(Ordering::Acquire) {

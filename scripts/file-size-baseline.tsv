@@ -35,7 +35,7 @@
 2240	crates/engine/layout/src/style/cascade.rs
 2234	crates/js/src/v8_runtime/install/platform.rs
 2219	crates/engine/layout/src/style/values/typography.rs
-2209	crates/shell/src/tests/page_pipeline.rs
+2213	crates/shell/src/tests/page_pipeline.rs
 2208	crates/engine/layout/src/style/restyle.rs
 2193	crates/js/src/web_audio.rs
 2166	crates/engine/layout/src/selector_query/tests.rs
