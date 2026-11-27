@@ -113,12 +113,15 @@ impl BrowserSession for LiveWindowSession {
         }
     }
 
-    /// Not yet wired to the live window: `AutomationCommand` has no scoped
-    /// layout-snapshot variant yet (SDC-2 MVP scope, DEVX-14 wired the
-    /// whole-page `layout_snapshot` but not this) — always `Err`
-    /// (MCP-TOTAL-S2a), see `screenshot_scoped`.
-    fn layout_snapshot_scoped(&self, _selector: &str) -> Result<Vec<BoxModel>> {
-        Err(Error::Other("layout_snapshot_scoped: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
+    /// MCP-TOTAL-S2c: the subtree box-model snapshot round-trips through
+    /// [`AutomationCommand::LayoutSnapshotScoped`]; a selector matching
+    /// nothing is an empty snapshot — the same shape the headless sessions
+    /// answer.
+    fn layout_snapshot_scoped(&self, selector: &str) -> Result<Vec<BoxModel>> {
+        match self.execute(AutomationCommand::LayoutSnapshotScoped { selector: selector.to_owned() })? {
+            AutomationReply::LayoutSnapshot(boxes) => Ok(boxes),
+            other => Err(unexpected_reply("LayoutSnapshot", &other)),
+        }
     }
 
     /// Not yet wired to the live window (SDC-2 MVP scope) — always `Err`
@@ -336,11 +339,17 @@ impl BrowserSession for LiveWindowSession {
         }
     }
 
-    /// Not yet wired to the live window (SDC-2 MVP scope): `AutomationCommand`
-    /// has no scoped-query variant yet — always `Err` (MCP-TOTAL-S2a), see
-    /// `screenshot_scoped`.
-    fn query_scoped(&self, _root_selector: &str, _selector: &str) -> Result<Vec<NodeRef>> {
-        Err(Error::Other("query_scoped: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
+    /// MCP-TOTAL-S2c: the subtree-scoped DOM query round-trips through
+    /// [`AutomationCommand::QueryScoped`] — Element.querySelectorAll scoping,
+    /// the arm resolves `root_selector` and matches `selector` inside it.
+    fn query_scoped(&self, root_selector: &str, selector: &str) -> Result<Vec<NodeRef>> {
+        match self.execute(AutomationCommand::QueryScoped {
+            root_selector: root_selector.to_owned(),
+            selector: selector.to_owned(),
+        })? {
+            AutomationReply::Query(nodes) => Ok(nodes),
+            other => Err(unexpected_reply("Query", &other)),
+        }
     }
 
     /// Not yet wired to the live window (SDC-2 MVP scope, same gap as

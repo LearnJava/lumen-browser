@@ -668,6 +668,24 @@ pub enum AutomationCommand {
         /// CSS selector of the subtree root.
         selector: String,
     },
+    /// Box-model snapshot of `selector`'s subtree only (MCP-TOTAL-S2c, wires
+    /// `x-scope-layout` to the live window). A selector matching nothing is an
+    /// empty snapshot — the same shape the headless sessions answer.
+    /// Reply: [`AutomationReply::LayoutSnapshot`].
+    LayoutSnapshotScoped {
+        /// CSS selector of the subtree root.
+        selector: String,
+    },
+    /// DOM query restricted to `root_selector`'s subtree (MCP-TOTAL-S2c, wires
+    /// `x-scope-query` to the live window) — Element.querySelectorAll scoping.
+    /// Empty when either selector matches nothing.
+    /// Reply: [`AutomationReply::Query`].
+    QueryScoped {
+        /// CSS selector for the subtree root.
+        root_selector: String,
+        /// CSS selector to match within the subtree.
+        selector: String,
+    },
     /// Enable/disable offline-network simulation (BUG-295, WebDriver BiDi
     /// `network.setOfflineStatus`) on the live window.
     SetOffline(bool),

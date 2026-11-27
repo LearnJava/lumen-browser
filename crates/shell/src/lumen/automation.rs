@@ -355,6 +355,61 @@ impl Lumen {
             lumen_driver::scope::display_list_scoped(lb, &doc, selector)
         }
 
+        /// Box-model snapshot of `selector`'s subtree for
+        /// `AutomationCommand::LayoutSnapshotScoped` (MCP-TOTAL-S2c, wires
+        /// `x-scope-layout` to the live window) — the same
+        /// `find_box_by_selector`+`collect_boxes` path the headless sessions
+        /// use. Empty when the selector matches nothing (headless shape).
+        pub(crate) fn automation_layout_snapshot_scoped(&self, selector: &str) -> Vec<BoxModel> {
+            let Some(lb) = self.layout_box.as_ref() else { return Vec::new() };
+            let Some(source) = self.layout_source.as_ref() else { return Vec::new() };
+            let Ok(doc) = source.document.lock() else { return Vec::new() };
+            let Some(target) = lumen_layout::find_box_by_selector(lb, &doc, selector) else { return Vec::new() };
+            let mut out = Vec::new();
+            lumen_driver::scope::collect_boxes(target, &doc, &mut out);
+            out
+        }
+
+        /// DOM query restricted to `root_selector`'s subtree for
+        /// `AutomationCommand::QueryScoped` (MCP-TOTAL-S2c, wires
+        /// `x-scope-query` to the live window) — `query_all_within`, the same
+        /// scoping the headless `query_scoped` uses. Rects take the shape
+        /// [`Self::query_automation_nodes`] reports: the node's layout box,
+        /// else the unioned inline frag rects (a plain `<a>` match has no box
+        /// of its own), else zero.
+        pub(crate) fn automation_query_scoped(&self, root_selector: &str, selector: &str) -> Vec<lumen_driver::NodeRef> {
+            let Some(lb) = self.layout_box.as_ref() else { return Vec::new() };
+            let Some(source) = self.layout_source.as_ref() else { return Vec::new() };
+            let Ok(doc) = source.document.lock() else { return Vec::new() };
+            let Some(root_id) = lumen_layout::find_first_dom_node_by_selector(&doc, root_selector) else { return Vec::new() };
+            let inline_rects = lumen_layout::collect_client_rects(lb, &doc);
+            lumen_layout::selector_query::query_all_within(&doc, root_id, selector)
+                .into_iter()
+                .map(|nid| {
+                    let rect = lumen_layout::find_box_by_node(lb, nid)
+                        .map(|b| b.rect)
+                        .or_else(|| {
+                            inline_rects.get(&(nid.index() as u32)).map(|rs| {
+                                let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+                                for r in rs {
+                                    x0 = x0.min(r[0]);
+                                    y0 = y0.min(r[1]);
+                                    x1 = x1.max(r[0] + r[2]);
+                                    y1 = y1.max(r[1] + r[3]);
+                                }
+                                if x0 > x1 {
+                                    lumen_core::geom::Rect::ZERO
+                                } else {
+                                    lumen_core::geom::Rect::new(x0, y0, x1 - x0, y1 - y0)
+                                }
+                            })
+                        })
+                        .unwrap_or(lumen_core::geom::Rect::ZERO);
+                    self.node_ref_for(&doc, nid, rect)
+                })
+                .collect()
+        }
+
         /// Network request log for `AutomationCommand::NetworkLog` (DEVX-14,
         /// wires `resource://network` to the live window) — reads the same
         /// shared `NetworkLog` the DevTools network panel renders from,

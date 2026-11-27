@@ -668,6 +668,14 @@ impl Lumen {
                         }
                     }
                 }
+                AutomationCommand::LayoutSnapshotScoped { selector } => {
+                    let boxes = self.automation_layout_snapshot_scoped(&selector);
+                    let _ = reply_tx.send(AutomationReply::LayoutSnapshot(boxes));
+                }
+                AutomationCommand::QueryScoped { root_selector, selector } => {
+                    let nodes = self.automation_query_scoped(&root_selector, &selector);
+                    let _ = reply_tx.send(AutomationReply::Query(nodes));
+                }
                 AutomationCommand::SetOffline(offline) => {
                     // BUG-295 (`network.setOfflineStatus`): process-global flag
                     // consulted at the one `fetch_with_redirect` chokepoint every
