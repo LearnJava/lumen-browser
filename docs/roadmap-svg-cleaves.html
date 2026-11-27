@@ -57,12 +57,12 @@
 {
  "generated": "2026-11-27",
  "counts": {
-  "open": 310,
+  "open": 313,
   "fixed": 1474,
   "inprogress": 0,
   "wontfix": 8
  },
- "total_bugs": 1792,
+ "total_bugs": 1795,
  "phases": [
   {
    "id": "P0",
@@ -11964,8 +11964,8 @@
   },
   "BUG-1853": {
    "status": "open",
-   "title": "portal.nextera.ru, домашний экран, живое сравнение с Chrome 158 при 1920×845: (1) WebP-логотип `logo-balls-c-*.webp` (448×58) рисуется тёмными пятнами — метадан…",
-   "component": "paint (WebP-декод, маленькие inline-SVG), layout (ширина центральной колонки главной — семейство BUG-1846)",
+   "title": "portal.nextera.ru: (1) WebP-логотип — анимированный WebP (61 кадр), проигрывание сделано (`AnimatedImage` GIF+WebP); (2) микрофон `#pttBtn` — компактные arc-фла…",
+   "component": "paint (анимированный WebP, svg_path arc-флаги), layout (колоночный flex — поперечный сайзинг)",
    "date": null,
    "debtor": false
   },
@@ -11994,6 +11994,27 @@
    "status": "open",
    "title": "Флейк: сырой бинд `127.0.0.1:0` мок-сервера получил от ОС 5061 (bad-port, sips) — навигация на мок-URL честно блокируется (`blocked port: 5061`), тест красен. К…",
    "component": "network (тест-инфра `tests/cases/nav_post_body.rs:38`; прод-код не трогается)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1858": {
+   "status": "open",
+   "title": "portal.nextera.ru, залогиненный чат «Некстер»: пользовательские пузыри сообщений в Lumen прижаты влево и переносятся на 2 строки (≈368px), в Chrome — правее и в…",
+   "component": "layout (область сообщений чат-экрана `#screen-chat-dev`; семейство BUG-1846)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1859": {
+   "status": "open",
+   "title": "portal.nextera.ru, залогиненный сайдбар: DEVX-8a паника в debug-сборке — auto-width block-ребёнок (текст, h≈15.3) на 30px шире родителя (257→287, тот же x), §10…",
+   "component": "layout (блочный сайзинг: auto-width block-ребёнок в plain-block-родителе)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1860": {
+   "status": "open",
+   "title": "После выхода из fullscreen вьюпорт страницы отстаёт на один resize: `innerWidth/innerHeight` остаются 1904×869 (fullscreen минус хром) при вернувшемся окне 1040…",
+   "component": "shell (sync `chrome_page_host_rect` ↔ `relayout`: `relayout.rs:1548`, `app/mod.rs:247`, `lumen/viewport_sync.rs`)",
    "date": null,
    "debtor": false
   },
@@ -24788,6 +24809,9 @@
   "layout (inline-раскладка, `box_tree/layout_dispatch.rs::relative_offset` не вызывается для текстового inline-бокса)": [
    "BUG-1711"
   ],
+  "layout (блочный сайзинг: auto-width block-ребёнок в plain-block-родителе)": [
+   "BUG-1859"
+  ],
   "layout (второй пасс контейнерных запросов — `container_anchor.rs::apply_container_inner` перекладывал детей size-контейнера блочным стеком при `display:flex`) + shell (`display_list_metrics.rs::page_content_extent` — высота DL побеждала клэп viewport-а по Y)": [
    "BUG-1850"
   ],
@@ -24805,6 +24829,9 @@
   ],
   "layout (корень дерева боксов / ICB, не локализовано)": [
    "BUG-1274"
+  ],
+  "layout (область сообщений чат-экрана `#screen-chat-dev`; семейство BUG-1846)": [
+   "BUG-1858"
   ],
   "layout (привязка `border-*-width`/`outline-width` к пикселям устройства, CSS Backgrounds 3 §4.2)": [
    "BUG-1585"
@@ -25251,9 +25278,6 @@
    "BUG-226",
    "BUG-227"
   ],
-  "paint (WebP-декод, маленькие inline-SVG), layout (ширина центральной колонки главной — семейство BUG-1846)": [
-   "BUG-1853"
-  ],
   "paint (WgpuBackend/Renderer) / shell (streaming первого кадра)": [
    "BUG-274"
   ],
@@ -25408,6 +25432,9 @@
   ],
   "paint (wgpu-исполнение плана рендера — группа `mix-blend-mode`, `renderer.rs`)": [
    "BUG-1641"
+  ],
+  "paint (анимированный WebP, svg_path arc-флаги), layout (колоночный flex — поперечный сайзинг)": [
+   "BUG-1853"
   ],
   "paint (путь снимка `resource://screenshot` → `cpu_raster.rs`) против shell (эвристика `broken_render`, `health_log.rs`)": [
    "BUG-993"
@@ -25758,6 +25785,9 @@
   ],
   "shell (main thread) / network": [
    "BUG-307"
+  ],
+  "shell (sync `chrome_page_host_rect` ↔ `relayout`: `relayout.rs:1548`, `app/mod.rs:247`, `lumen/viewport_sync.rs`)": [
+   "BUG-1860"
   ],
   "shell (навигация)": [
    "BUG-308"
