@@ -129,22 +129,24 @@ impl BrowserSession for LiveWindowSession {
         Err(Error::Other("screenshot_scoped: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
     }
 
-    /// Not yet wired to the live window (SDC-2 MVP scope) — always `Err`,
-    /// see `screenshot_scoped`. Unlike `display_list_scoped`, the whole-page
-    /// [`display_list`](BrowserSession::display_list) has the same gap —
-    /// `AutomationCommand` carries no display-list variant at all yet
-    /// (DEVX-14 wired `layout_snapshot`/`network_log` only).
-    fn display_list_scoped(&self, _selector: &str) -> Result<String> {
-        Err(Error::Other("display_list_scoped: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
+    /// MCP-TOTAL-S2b: the subtree dump round-trips through
+    /// [`AutomationCommand::DisplayListScoped`]; a selector matching nothing
+    /// is the arm's `Error` — the same shape the headless sessions answer.
+    fn display_list_scoped(&self, selector: &str) -> Result<String> {
+        match self.execute(AutomationCommand::DisplayListScoped { selector: selector.to_owned() })? {
+            AutomationReply::DisplayList(text) => Ok(text),
+            other => Err(unexpected_reply("DisplayList", &other)),
+        }
     }
 
-    /// Not yet wired to the live window (SDC-2 MVP scope): `AutomationCommand`
-    /// carries no display-list variant yet — always `Err`. Unlike
-    /// `layout_snapshot`/`network_log`, DEVX-14 left this one a documented
-    /// gap rather than wiring it (the brief scoped live-window work to
-    /// `resource://layout`/`resource://network` only).
+    /// MCP-TOTAL-S2b: the whole-page dump round-trips through
+    /// [`AutomationCommand::DisplayList`] — the arm serializes the same
+    /// display list the window paints (frame content included, BUG-480).
     fn display_list(&self) -> Result<String> {
-        Err(Error::Other("display_list: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
+        match self.execute(AutomationCommand::DisplayList)? {
+            AutomationReply::DisplayList(text) => Ok(text),
+            other => Err(unexpected_reply("DisplayList", &other)),
+        }
     }
 
     /// Not yet wired to the live window (SDC-2 MVP scope) — always `Err`

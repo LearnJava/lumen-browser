@@ -657,6 +657,17 @@ pub enum AutomationCommand {
     /// Network request log since the last `Navigate` (DEVX-14, wires
     /// `resource://network` to the live window).
     NetworkLog,
+    /// Text dump of the whole page's display list (MCP-TOTAL-S2b, wires
+    /// `resource://x-display-list` to the live window). Reply:
+    /// [`AutomationReply::DisplayList`].
+    DisplayList,
+    /// Display-list commands attributed to `selector`'s subtree only
+    /// (MCP-TOTAL-S2b, wires `x-scope-display-list` to the live window).
+    /// A selector matching nothing is an [`AutomationReply::Error`].
+    DisplayListScoped {
+        /// CSS selector of the subtree root.
+        selector: String,
+    },
     /// Enable/disable offline-network simulation (BUG-295, WebDriver BiDi
     /// `network.setOfflineStatus`) on the live window.
     SetOffline(bool),
@@ -880,6 +891,9 @@ pub enum AutomationReply {
     LayoutSnapshot(Vec<BoxModel>),
     /// `NetworkLog` result: network request log (DEVX-14).
     NetworkLog(Vec<NetworkEntry>),
+    /// `DisplayList`/`DisplayListScoped` result: the display-list text dump
+    /// (MCP-TOTAL-S2b).
+    DisplayList(String),
     /// `ResolveIntercept` result: whether `request_id` matched a pending pause.
     InterceptResolved(bool),
     /// `PollIntercepts` result: requests newly paused since the last poll.

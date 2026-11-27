@@ -652,6 +652,22 @@ impl Lumen {
                     let entries = self.automation_network_log();
                     let _ = reply_tx.send(AutomationReply::NetworkLog(entries));
                 }
+                AutomationCommand::DisplayList => {
+                    let dump = self.automation_display_list();
+                    let _ = reply_tx.send(AutomationReply::DisplayList(dump));
+                }
+                AutomationCommand::DisplayListScoped { selector } => {
+                    match self.automation_display_list_scoped(&selector) {
+                        Some(dump) => {
+                            let _ = reply_tx.send(AutomationReply::DisplayList(dump));
+                        }
+                        None => {
+                            let _ = reply_tx.send(AutomationReply::Error(format!(
+                                "display_list_scoped: селектор не найден: {selector}"
+                            )));
+                        }
+                    }
+                }
                 AutomationCommand::SetOffline(offline) => {
                     // BUG-295 (`network.setOfflineStatus`): process-global flag
                     // consulted at the one `fetch_with_redirect` chokepoint every

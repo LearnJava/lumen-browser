@@ -45,10 +45,10 @@ fn winit_session_display_list_contains_page_commands() {
     assert!(dump.contains("FillRect"), "expected a fill command in the dump:\n{dump}");
 }
 
-/// A fake "live window" answering `LayoutSnapshot`/`NetworkLog` from a
-/// background thread, the same pattern `lumen-bidi-server`'s
-/// `fake_live_session` uses for BiDi-relevant commands — here for the two
-/// DEVX-14 wired MCP-relevant ones.
+/// A fake "live window" answering `LayoutSnapshot`/`NetworkLog`/`DisplayList`/
+/// `DisplayListScoped` from a background thread, the same pattern
+/// `lumen-bidi-server`'s `fake_live_session` uses for BiDi-relevant commands —
+/// here for the DEVX-14/S2b wired MCP-relevant ones.
 fn fake_live_session(boxes: Vec<BoxModel>, entries: Vec<NetworkEntry>) -> LiveWindowSession {
     let (tx, rx) = std::sync::mpsc::channel::<lumen_driver::AutomationRequest>();
     std::thread::spawn(move || {
@@ -56,6 +56,10 @@ fn fake_live_session(boxes: Vec<BoxModel>, entries: Vec<NetworkEntry>) -> LiveWi
             let reply = match cmd {
                 AutomationCommand::LayoutSnapshot => AutomationReply::LayoutSnapshot(boxes.clone()),
                 AutomationCommand::NetworkLog => AutomationReply::NetworkLog(entries.clone()),
+                AutomationCommand::DisplayList => AutomationReply::DisplayList("whole-page dump".into()),
+                AutomationCommand::DisplayListScoped { selector } => {
+                    AutomationReply::DisplayList(format!("scoped [{selector}] dump"))
+                }
                 _ => AutomationReply::Error("unsupported in fake_live_session".into()),
             };
             let _ = reply_tx.send(reply);
@@ -91,6 +95,19 @@ fn live_window_network_log_round_trips_through_automation_channel() {
     assert_eq!(got.len(), 1);
     assert_eq!(got[0].url, "https://example.com/");
     assert_eq!(got[0].status, 200);
+}
+
+/// MCP-TOTAL-S2b: both display-list reads round-trip through the automation
+/// channel — the whole-page dump verbatim, the scoped one carrying the
+/// selector through to the arm.
+#[test]
+fn live_window_display_list_round_trips_through_automation_channel() {
+    let session = fake_live_session(Vec::new(), Vec::new());
+    assert_eq!(session.display_list().expect("display_list failed"), "whole-page dump");
+    assert_eq!(
+        session.display_list_scoped("#b").expect("display_list_scoped failed"),
+        "scoped [#b] dump"
+    );
 }
 
 /// MCP-TOTAL-S2a: the eight silent x-surface stubs (`Ok(пусто)`/`Ok(None)`)

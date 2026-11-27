@@ -331,6 +331,30 @@ impl Lumen {
             out
         }
 
+        /// Whole-page display-list text dump for `AutomationCommand::DisplayList`
+        /// (MCP-TOTAL-S2b, wires `resource://x-display-list` to the live window).
+        ///
+        /// Serializes `self.display_list` — the list the renderer actually
+        /// paints, frame content spliced in (BUG-480's bar for dumps) — not a
+        /// fresh build from the layout tree the headless sessions make.
+        pub(crate) fn automation_display_list(&self) -> String {
+            lumen_paint::serialize_display_list(&self.display_list)
+        }
+
+        /// Display-list commands of `selector`'s subtree for
+        /// `AutomationCommand::DisplayListScoped` (MCP-TOTAL-S2b) — rebuilt
+        /// from the layout tree via DEVX-7 provenance, the same
+        /// `lumen_driver::scope::display_list_scoped` path the headless
+        /// sessions use (the live list doesn't carry provenance).
+        ///
+        /// `None` = no page, no layout tree, or no match.
+        pub(crate) fn automation_display_list_scoped(&self, selector: &str) -> Option<String> {
+            let lb = self.layout_box.as_ref()?;
+            let source = self.layout_source.as_ref()?;
+            let doc = source.document.lock().ok()?;
+            lumen_driver::scope::display_list_scoped(lb, &doc, selector)
+        }
+
         /// Network request log for `AutomationCommand::NetworkLog` (DEVX-14,
         /// wires `resource://network` to the live window) — reads the same
         /// shared `NetworkLog` the DevTools network panel renders from,
