@@ -41,7 +41,15 @@ use crate::{tls::CertInfo, RawStream};
 /// submitted mid-flight may wait before the owner notices it. Windows rounds
 /// `SO_RCVTIMEO` up to the system timer tick (measured 15.6 ms), which is the
 /// real worst case there — still far below the handshake it saves.
+/// macOS (Darwin) rejects millisecond-granularity `SO_RCVTIMEO` with EINVAL
+/// in some socket states (`H2 set poll timeout: Invalid argument (os error
+/// 22)`, reproduced twice on aarch64 CI runners 2026-11-27), so it gets a
+/// coarser 20 ms interval — a mid-flight request is noticed at most 20 ms
+/// later, still noise next to the seconds-scale probe/ping timeouts.
+#[cfg(not(target_os = "macos"))]
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
+#[cfg(target_os = "macos")]
+const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// Close a connection that carried no stream for this long. Shorter than the
 /// common server-side HTTP/2 idle limits, so we normally close first instead
