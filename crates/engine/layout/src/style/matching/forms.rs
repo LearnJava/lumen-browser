@@ -19,7 +19,7 @@ use std::cell::Cell;
 use lumen_css_parser::{Combinator, ComplexSelector, DirArg, PseudoClass};
 use lumen_dom::{Document, NodeData, NodeId};
 
-use crate::style::env::{ACTIVE_KEYBOARD, ACTIVE_NID, FOCUS_NID, HOVER_NID, KEYBOARD_FOCUS};
+use crate::style::env::{ACTIVE_KEYBOARD, ACTIVE_NID, FOCUS_NID, HOVER_NID, KEYBOARD_FOCUS, pseudo_focus};
 use crate::style::presentational::{first_strong_direction, first_strong_in_text, slot_assigned_directionality};
 use crate::style::{Direction, SHADOW_HOST_SCOPE};
 
@@ -183,7 +183,15 @@ pub(in crate::style) fn matches_pseudo_class(p: &PseudoClass, doc: &Document, no
             is_self_or_ancestor(doc, node, NodeId::from_index(hid as usize))
         }
         // `:focus` — exact keyboard-focused element (no ancestor propagation).
+        // CSS Overflow L5 §3.3.2: while a scroll-control pseudo-element
+        // (`::scroll-marker`/`::scroll-button()`) holds focus, `:focus` matches
+        // ONLY that pseudo-element — no element does, so this is `false` for
+        // every element node (the pseudo side is handled in
+        // `style::pseudo::matches_complex_for_pseudo`).
         PseudoClass::Focus => {
+            if pseudo_focus().is_some() {
+                return false;
+            }
             FOCUS_NID.with(Cell::get) == node.index() as u32
         }
         // `:active` — mouse-pressed element and its ancestors (CSS Selectors
@@ -200,7 +208,19 @@ pub(in crate::style) fn matches_pseudo_class(p: &PseudoClass, doc: &Document, no
             is_self_or_ancestor(doc, node, NodeId::from_index(aid as usize))
         }
         // `:focus-within` — element or any descendant has focus (CSS Selectors L4 §4.4.2).
+        // CSS Overflow L5 §3.3.2: a focused scroll-control pseudo-element counts
+        // as focus inside its scroll container — `:focus-within` matches the
+        // container and its ancestors, but NOT the marker's originating element
+        // (a descendant of the container, never an ancestor of it).
         PseudoClass::FocusWithin => {
+            let pf = pseudo_focus();
+            if pf.is_some() {
+                return is_self_or_ancestor(
+                    doc,
+                    node,
+                    NodeId::from_index(pf.container as usize),
+                );
+            }
             let fid = FOCUS_NID.with(Cell::get);
             if fid == u32::MAX { return false; }
             is_self_or_ancestor(doc, node, NodeId::from_index(fid as usize))
@@ -288,6 +308,11 @@ fn input_type_lower(doc: &Document, node: NodeId) -> String {
 /// Тот же предикат читает UA-хинт кольца (`ua::apply_ua_focus_ring`), поэтому
 /// селектор и кольцо не могут разойтись.
 pub(in crate::style) fn matches_focus_visible(doc: &Document, node: NodeId) -> bool {
+    // CSS Overflow L5 §3.3.2: `:focus-visible` on elements is suppressed while
+    // a scroll-control pseudo-element holds focus — it matches the pseudo only.
+    if pseudo_focus().is_some() {
+        return false;
+    }
     if FOCUS_NID.with(Cell::get) != node.index() as u32 {
         return false;
     }

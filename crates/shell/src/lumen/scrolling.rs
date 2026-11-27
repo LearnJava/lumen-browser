@@ -146,11 +146,13 @@ impl Lumen {
     /// CQ-SCROLL-STATE-2: после движения контейнера запросы `@container scroll-state(…)`
     /// отвечают заново — стили потомков строятся один раз за проход раскладки, поэтому
     /// таблица с такими запросами проходит раскладку целиком (с текущими смещениями).
+    /// CSS Overflow L5 §3.2: `::scroll-button():enabled`/`:disabled` отвечает на те
+    /// же края прокрутки — таблица с таким селектором тоже проходит раскладку.
     pub(crate) fn restyle_scroll_state_queries(&mut self) {
-        let asked = self
-            .layout_source
-            .as_ref()
-            .is_some_and(|src| lumen_layout::sheet_has_scroll_state_queries(&src.stylesheet));
+        let asked = self.layout_source.as_ref().is_some_and(|src| {
+            lumen_layout::sheet_has_scroll_state_queries(&src.stylesheet)
+                || lumen_layout::sheet_has_scroll_button_state(&src.stylesheet)
+        });
         if asked {
             self.relayout();
         }
@@ -162,7 +164,15 @@ impl Lumen {
         let now = (self.scroll_x, self.scroll_y);
         if now != self.scroll_state_page_seen {
             self.scroll_state_page_seen = now;
-            if self.layout_box.as_ref().is_some_and(lumen_layout::root_is_scroll_state_container) {
+            // Корневые `::scroll-button():enabled`/`:disabled` зависят от
+            // прокрутки страницы так же, как `scroll-state()` корня.
+            let root_scroll_sensitive = self.layout_box.as_ref().is_some_and(|lb| {
+                lumen_layout::root_is_scroll_state_container(lb)
+                    || self.layout_source.as_ref().is_some_and(|src| {
+                        lumen_layout::sheet_has_scroll_button_state(&src.stylesheet)
+                    })
+            });
+            if root_scroll_sensitive {
                 self.restyle_scroll_state_queries();
             }
         }
@@ -633,6 +643,254 @@ impl Lumen {
         self.update_scroll_containers();
         if !moved.is_empty() {
             self.issue_container_scroll_command(&moved);
+        }
+    }
+
+    /// CSS Overflow L5 §scroll-marker-activation: активация `::scroll-marker`
+    /// скроллит *ассоциированный* скролл-контейнер цели так, чтобы цель встала
+    /// по `scroll-snap-align` цели (default direction position — `start`), и
+    /// не трогает внешние контейнеры. Цель — `PseudoHit.origin`, DOM-узла у
+    /// самого маркера нет.
+    ///
+    /// Ассоциированный контейнер — ближайший предок цели из `scroll_containers`.
+    /// Если такого нет (маркеры `:root`-группы, цель в обычном потоке), скроллит
+    /// страница: целевая позиция — `target.y` с клампом `scroll_to`.
+    ///
+    /// Оси: block — `scroll-snap-align.block` (`None` → `Start`); inline —
+    /// `scroll-snap-align.inline` (`None` → `Nearest`: скроллим только если цель
+    /// реально за краем clip, минимальной дельтой — как `scrollIntoView`'s
+    /// default inline).
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    pub(crate) fn activate_scroll_marker(&mut self, target_nid: NodeId) {
+        use lumen_layout::style::ScrollSnapAlignKeyword as A;
+
+        let Some(src) = self.layout_source.as_ref() else { return };
+        let Some(lb_root) = self.layout_box.as_ref() else { return };
+        let (Some(target_rect), Some(target_box)) = (
+            crate::forms::find_box_rect(lb_root, target_nid),
+            crate::forms::find_layout_box(lb_root, target_nid),
+        ) else {
+            return;
+        };
+        let align = target_box.style.scroll_snap_align;
+
+        // Ближайший scroll-контейнер-предок цели.
+        let mut ancestor = src.document.lock().unwrap().get(target_nid).parent;
+        let mut found: Option<lumen_layout::ScrollContainer> = None;
+        while let Some(n) = ancestor {
+            if let Some(c) = self.scroll_containers.iter().find(|c| c.node == n) {
+                found = Some(c.clone());
+                break;
+            }
+            ancestor = src.document.lock().unwrap().get(n).parent;
+        }
+
+        // Root-элемент понадобится ветке без scroll-контейнера; читаем до
+        // `&mut self`-вызовов ниже, чтобы заимствование `src` закрылось.
+        let root_nid = src
+            .document
+            .lock()
+            .unwrap()
+            .document_element()
+            .unwrap_or(target_nid);
+        let container = match found {
+            Some(c) => {
+                let clip = c.clip_rect;
+                let new_scroll_y = match align.block {
+                    A::End => target_rect.y + target_rect.height - (clip.y + clip.height),
+                    A::Center => {
+                        target_rect.y + target_rect.height * 0.5
+                            - (clip.y + clip.height * 0.5)
+                    }
+                    // `None` и `Start` — default direction position `start`.
+                    _ => target_rect.y - clip.y,
+                };
+                let visible_left = target_rect.x - c.scroll_x;
+                let visible_right = visible_left + target_rect.width;
+                let new_scroll_x = match align.inline {
+                    A::End => target_rect.x + target_rect.width - (clip.x + clip.width),
+                    A::Center => {
+                        target_rect.x + target_rect.width * 0.5
+                            - (clip.x + clip.width * 0.5)
+                    }
+                    A::Start => target_rect.x - clip.x,
+                    A::None => {
+                        if visible_left < clip.x {
+                            target_rect.x - clip.x
+                        } else if visible_right > clip.x + clip.width {
+                            target_rect.x + target_rect.width - (clip.x + clip.width)
+                        } else {
+                            c.scroll_x
+                        }
+                    }
+                };
+
+                if (new_scroll_y - c.scroll_y).abs() > f32::EPSILON
+                    || (new_scroll_x - c.scroll_x).abs() > f32::EPSILON
+                {
+                    // `apply_container_scroll` — общий хвост колеса:
+                    // кламп, патч display list, `scroll_states` для JS
+                    // (`scrollLeft`/`scrollTop`) и `scroll`/`scrollend`.
+                    self.apply_container_scroll(c.node, new_scroll_x, new_scroll_y);
+                    self.issue_container_scroll_command(&[c.node.index() as u32]);
+                }
+                c.node
+            }
+            None => {
+                // Root-маркеры: скролл-контейнер — viewport страницы; его
+                // «container» для фокуса — корневой элемент (документ).
+                self.scroll_marker_page_axis(target_rect, align.block, align.inline);
+                root_nid
+            }
+        };
+
+        // CSS Overflow L5 §3.1.9/§3.3: активация фокусирует маркер — scroll
+        // container становится `document.activeElement`, а `:focus*`
+        // псевдоклассы резолвятся на самом псевдоэлементе. Следующий Tab
+        // продолжает от scroll target (§3.1.10) — `pseudo_nav_pending`.
+        self.pseudo_nav_pending = true;
+        self.apply_pseudo_focus(
+            target_nid,
+            lumen_layout::PseudoKind::ScrollMarker as u8,
+            container,
+            false,
+        );
+    }
+
+    /// CSS Overflow L5 §3.2/§3.3: активация `::scroll-button()` — скролл
+    /// originating-элемента (оно и есть scroll container) на «страницу»
+    /// (~85% scrollport) в направлении кнопки, затем фокус кнопки.
+    /// `PseudoHit.origin` кнопки — её scroll container.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    pub(crate) fn activate_scroll_button(
+        &mut self,
+        container_nid: NodeId,
+        kind: lumen_layout::PseudoKind,
+    ) {
+        use lumen_layout::PseudoKind as P;
+        // CSS Overflow L5 §3.2: `:disabled` `::scroll-button()` не активируется
+        // — ни скролла, ни фокуса (кнопка в этом состоянии не кликабельна).
+        if let (Some(vp), Some(lb)) = (self.relayout_viewport(), self.layout_box.as_ref()) {
+            let edges = lumen_layout::scroll_state_edges(lb, vp);
+            let enabled = crate::forms::find_layout_box(lb, container_nid)
+                .map(|cb| {
+                    lumen_layout::scroll_button_dir_enabled(&edges, container_nid, kind, &cb.style)
+                })
+                .unwrap_or(true);
+            if !enabled {
+                return;
+            }
+        }
+        // Ближайший scroll-контейнер — сам originating-элемент; если его нет
+        // в `scroll_containers` (root/viewport-скроллер), скроллит страница.
+        if let Some(c) = self.scroll_containers.iter().find(|c| c.node == container_nid).cloned() {
+            let (axis_y, sign) = match kind {
+                P::ScrollButtonBlockStart => (true, -1.0f32),
+                P::ScrollButtonBlockEnd => (true, 1.0),
+                P::ScrollButtonInlineStart => (false, -1.0),
+                P::ScrollButtonInlineEnd => (false, 1.0),
+                _ => return,
+            };
+            // «Одна страница» ≈ 85% scrollport в направлении кнопки.
+            let delta = if axis_y {
+                sign * c.clip_rect.height * 0.85
+            } else {
+                sign * c.clip_rect.width * 0.85
+            };
+            let (new_x, new_y) = if axis_y {
+                (c.scroll_x, c.scroll_y + delta)
+            } else {
+                (c.scroll_x + delta, c.scroll_y)
+            };
+            // `apply_container_scroll` — общий хвост колеса: кламп, патч
+            // display list, `scroll_states` для JS и `scroll`/`scrollend`.
+            // `apply_container_scroll` — общий хвост колеса: кламп, патч
+            // display list, `scroll_states` для JS и `scroll`/`scrollend`.
+            self.apply_container_scroll(c.node, new_x, new_y);
+            self.issue_container_scroll_command(&[c.node.index() as u32]);
+        } else {
+            // Root scroll-button: страничный скролл viewport-а.
+            let vh = self.viewport_height_css();
+            let vw = self.page_content_width_css();
+            let (dx, dy) = match kind {
+                P::ScrollButtonBlockStart => (0.0, -vh * 0.85),
+                P::ScrollButtonBlockEnd => (0.0, vh * 0.85),
+                P::ScrollButtonInlineStart => (-vw * 0.85, 0.0),
+                P::ScrollButtonInlineEnd => (vw * 0.85, 0.0),
+                _ => return,
+            };
+            if dy != 0.0 {
+                self.scroll_to(self.scroll_y + dy);
+            }
+            if dx != 0.0 {
+                self.scroll_x_to(self.scroll_x + dx);
+            }
+        }
+        // Кнопка тоже фокусируемый контрол: activeElement — её scroll
+        // container, `:focus*` — на псевдоэлементе (§3.3.1/§3.3.2). В отличие
+        // от маркера §3.1.10 на кнопки не распространяется — Tab идёт по
+        // обычному merged-порядку.
+        self.pseudo_nav_pending = false;
+        self.apply_pseudo_focus(container_nid, kind as u8, container_nid, false);
+    }
+
+    /// Общий хвост активации scroll-контрола: фокус pseudo-элемента +
+    /// restyle/notification. `keyboard` — модальность `:focus-visible`
+    /// (клавиатурная активация вроде Enter/Space на кнопке).
+    fn apply_pseudo_focus(
+        &mut self,
+        origin: NodeId,
+        kind: u8,
+        container: NodeId,
+        keyboard: bool,
+    ) {
+        self.set_pseudo_focus_state(origin, kind, container);
+        self.set_focus_modality(keyboard);
+        self.status_bubble_sync(false);
+        self.relayout_chrome();
+        self.platform_bridge.focused_node_changed(self.focused_node);
+        self.request_redraw();
+    }
+
+    /// Page-level ветка [`Self::activate_scroll_marker`] для root-маркеров:
+    /// выравнивает цель по block-краю viewport-а (inline — только если цель за
+    /// краем по горизонтали). `scroll_to`/`scroll_x_to` сами клампят и шлют
+    /// scroll-команду рендер-потоку.
+    fn scroll_marker_page_axis(
+        &mut self,
+        target_rect: lumen_core::geom::Rect,
+        align_block: lumen_layout::style::ScrollSnapAlignKeyword,
+        align_inline: lumen_layout::style::ScrollSnapAlignKeyword,
+    ) {
+        use lumen_layout::style::ScrollSnapAlignKeyword as A;
+        let vh = self.viewport_height_css();
+        let vw = self.page_content_width_css();
+        let new_y = match align_block {
+            A::End => target_rect.y + target_rect.height - vh,
+            A::Center => target_rect.y + target_rect.height * 0.5 - vh * 0.5,
+            _ => target_rect.y,
+        };
+        let new_x = match align_inline {
+            A::End => target_rect.x + target_rect.width - vw,
+            A::Center => target_rect.x + target_rect.width * 0.5 - vw * 0.5,
+            A::Start => target_rect.x,
+            A::None => {
+                let left = target_rect.x - self.scroll_x;
+                let right = left + target_rect.width;
+                if left < 0.0 {
+                    target_rect.x
+                } else if right > vw {
+                    target_rect.x + target_rect.width - vw
+                } else {
+                    self.scroll_x
+                }
+            }
+        };
+        if (new_y - self.scroll_y).abs() > f32::EPSILON {
+            self.scroll_to(new_y);
+        }
+        if (new_x - self.scroll_x).abs() > f32::EPSILON {
+            self.scroll_x_to(new_x);
         }
     }
 

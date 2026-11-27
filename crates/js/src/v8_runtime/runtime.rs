@@ -113,6 +113,11 @@ pub struct V8JsRuntime {
     pub(super) lazy_img_requests: Arc<Mutex<Vec<(u32, String)>>>,
     /// Scroll state per scroll-container node, updated after each relayout.
     pub(super) scroll_states: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
+    /// CSS Overflow L5 §3.2: per-direction scrollability edges per
+    /// scroll-container node (`NodeId::raw()` → [`lumen_layout::EdgeFlags`]),
+    /// computed from the previous flush's finished tree — feeds
+    /// `::scroll-button():enabled`/`:disabled` through `ScrollHints::edges`.
+    pub(super) scroll_button_edges: Arc<Mutex<HashMap<u32, lumen_layout::EdgeFlags>>>,
     /// CSS Anchor Positioning L1 §4.3: the scroll containers each anchor-positioned box follows
     /// (`NodeId::index()` → `(NodeId::raw(), follows x, follows y)` list), refreshed by every flush. Their current offsets
     /// (from [`Self::scroll_states`]) shift the box's `getBoundingClientRect`.
@@ -373,6 +378,13 @@ pub struct V8JsRuntime {
     /// by the same-tick style flush so `getComputedStyle()` sees the same
     /// `:focus-visible` state the painted relayout does.
     pub(super) keyboard_focus: Arc<AtomicBool>,
+    /// CSS Overflow L5 §3.3: focused scroll-control pseudo-element —
+    /// `(originating element index, PseudoKind as u8, scroll container index)`,
+    /// the `:focus`/`:focus-visible`/`:focus-within` input for
+    /// `::scroll-marker`/`::scroll-button()`/`::scroll-marker-group` rules.
+    /// Written by `V8JsRuntime::set_pseudo_focus` from the shell's
+    /// `notify_pseudo_focus`; `None` = ordinary element focus only.
+    pub(super) pseudo_focus: Arc<Mutex<Option<(u32, u8, u32)>>>,
     /// The modality baked into the current same-tick style flush snapshot —
     /// see [`crate::v8_runtime::style_flush::FlushHandles::last_flushed_keyboard_focus`].
     pub(super) last_flushed_keyboard_focus: Arc<AtomicBool>,
@@ -581,6 +593,7 @@ impl V8JsRuntime {
             meta_viewport_scale: Arc::new(Mutex::new(1.0)),
             lazy_img_requests: Arc::new(Mutex::new(Vec::new())),
             scroll_states: Arc::new(Mutex::new(HashMap::new())),
+            scroll_button_edges: Arc::new(Mutex::new(HashMap::new())),
             anchor_scrollers: Arc::new(Mutex::new(HashMap::new())),
             pending_scrolls: Arc::new(Mutex::new(Vec::new())),
             pending_page_scrolls: Arc::new(Mutex::new(Vec::new())),
@@ -654,6 +667,7 @@ impl V8JsRuntime {
             // default — `true` until the first pointer press on a
             // click-focusable element (`Lumen::set_focus_modality`).
             keyboard_focus: Arc::new(AtomicBool::new(true)),
+            pseudo_focus: Arc::new(Mutex::new(None)),
             last_flushed_keyboard_focus: Arc::new(AtomicBool::new(true)),
             pointer_capture_nid: Arc::new(Mutex::new(None)),
             deterministic: AtomicBool::new(false),
@@ -1915,6 +1929,15 @@ impl V8JsRuntime {
     /// changes (Tab/arrows/typing vs pointer press).
     pub fn set_keyboard_focus(&self, keyboard: bool) {
         self.keyboard_focus.store(keyboard, Ordering::Relaxed);
+    }
+
+    /// CSS Overflow L5 §3.3: record the focused scroll-control
+    /// pseudo-element on the engine thread's own mirror
+    /// ([`Self::pseudo_focus`]) — `(origin index, PseudoKind as u8, container
+    /// index)`, `None` for ordinary element focus. Called from
+    /// `notify_pseudo_focus` alongside every shell-side focus change.
+    pub fn set_pseudo_focus(&self, pf: Option<(u32, u8, u32)>) {
+        *self.pseudo_focus.lock().unwrap_or_else(|e| e.into_inner()) = pf;
     }
 
     /// Returns the DOM node nid that currently holds pointer capture (pointer_id=1).

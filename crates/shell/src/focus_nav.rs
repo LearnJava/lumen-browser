@@ -113,13 +113,22 @@ fn collapse_radio_stops(doc: &Document, zero: &[NodeId]) -> (Vec<NodeId>, Vec<bo
 }
 
 /// DOM order of every sequentially-focusable node under `root`, plus a
-/// parallel `is_stop` flag per entry. Sorted per HTML Standard §6.6.6:
-/// positive `tabindex` first (ascending, ties broken by tree order), then
-/// `tabindex="0"`/implicitly-focusable elements in tree order with radio
-/// groups collapsed to their representative (see [`collapse_radio_stops`]).
-/// A `hidden` element (and its whole subtree — HTML: `hidden` means not
-/// rendered) is skipped entirely.
-fn build_focus_seq(doc: &Document, flat_tree: &FlatTree, root: NodeId) -> (Vec<NodeId>, Vec<bool>) {
+/// parallel `is_stop` flag per entry, and the count of leading positive-
+/// `tabindex` entries (they always precede the tree-ordered zero section).
+/// Sorted per HTML Standard §6.6.6: positive `tabindex` first (ascending,
+/// ties broken by tree order), then `tabindex="0"`/implicitly-focusable
+/// elements in tree order with radio groups collapsed to their representative
+/// (see [`collapse_radio_stops`]). A `hidden` element (and its whole subtree —
+/// HTML: `hidden` means not rendered) is skipped entirely.
+///
+/// `pub(crate)` since CSS Overflow L5 §3.3.3: scroll-marker tab stops are
+/// spliced into the zero-`tabindex` section at their tree positions, which
+/// needs both halves separately (`crate::lumen::focus_tab`).
+pub(crate) fn build_focus_seq(
+    doc: &Document,
+    flat_tree: &FlatTree,
+    root: NodeId,
+) -> (Vec<NodeId>, Vec<bool>, usize) {
     let mut positive: Vec<(i32, usize, NodeId)> = Vec::new();
     let mut zero: Vec<NodeId> = Vec::new();
     let mut seq: usize = 0;
@@ -144,6 +153,7 @@ fn build_focus_seq(doc: &Document, flat_tree: &FlatTree, root: NodeId) -> (Vec<N
         }
     }
     positive.sort_by_key(|&(tabindex, seq, _)| (tabindex, seq));
+    let positive_count = positive.len();
     let (zero_seq, zero_stops) = collapse_radio_stops(doc, &zero);
     let mut out_seq: Vec<NodeId> = Vec::with_capacity(positive.len() + zero_seq.len());
     let mut out_stop: Vec<bool> = Vec::with_capacity(positive.len() + zero_seq.len());
@@ -153,13 +163,22 @@ fn build_focus_seq(doc: &Document, flat_tree: &FlatTree, root: NodeId) -> (Vec<N
     }
     out_seq.extend(zero_seq);
     out_stop.extend(zero_stops);
-    (out_seq, out_stop)
+    (out_seq, out_stop, positive_count)
+}
+
+/// Whether `node` is a sequential-focus-navigation stop — `tabindex >= 0` or
+/// implicitly focusable, `hidden`-subtree semantics aside (CSS Overflow L5
+/// §3.1.10's «focusable» for a scroll marker's target reads this set: a
+/// `tabindex="-1"` target is click-focusable but NOT a Tab stop, so the search
+/// continues from it instead).
+pub(crate) fn is_sequential_tab_stop(node: &lumen_dom::Node) -> bool {
+    sequential_tab_index(node).is_some()
 }
 
 /// Stops-only view of [`build_focus_seq`] — what the unit tests assert on.
 #[cfg(test)]
 fn build_focus_order(doc: &Document, flat_tree: &FlatTree, root: NodeId) -> Vec<NodeId> {
-    let (seq, stops) = build_focus_seq(doc, flat_tree, root);
+    let (seq, stops, _) = build_focus_seq(doc, flat_tree, root);
     seq.into_iter()
         .zip(stops)
         .filter_map(|(id, stop)| stop.then_some(id))
@@ -251,6 +270,7 @@ fn next_stop(seq: &[NodeId], stops: &[bool], from: usize, step: isize, wrap: boo
     None
 }
 
+#[cfg(test)]
 pub(crate) fn next_focus_target(
     doc: &Document,
     flat_tree: &FlatTree,
@@ -258,7 +278,7 @@ pub(crate) fn next_focus_target(
     current: Option<NodeId>,
     forward: bool,
 ) -> Option<NodeId> {
-    let (seq, stops) = build_focus_seq(doc, flat_tree, root);
+    let (seq, stops, _) = build_focus_seq(doc, flat_tree, root);
     if !stops.iter().any(|&s| s) {
         return None;
     }
@@ -295,7 +315,7 @@ pub(crate) fn next_focus_target_no_wrap(
     current: Option<NodeId>,
     forward: bool,
 ) -> Option<NodeId> {
-    let (seq, stops) = build_focus_seq(doc, flat_tree, root);
+    let (seq, stops, _) = build_focus_seq(doc, flat_tree, root);
     if !stops.iter().any(|&s| s) {
         return None;
     }

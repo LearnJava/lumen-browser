@@ -158,6 +158,12 @@ impl OverflowRollup {
 
 /// [`crate::scroll_container_into`] with `include_non_wheel = true`, the extent coming from `r`.
 fn publish(b: &LayoutBox, r: &OverflowRollup, out: &mut Vec<ScrollContainer>) {
+    // Same principal-box rule as `scroll_container_into`: anonymous wrappers
+    // and pseudo boxes share the element's `NodeId` and must not publish a
+    // second entry that shadows the element's own scroll state.
+    if !matches!(b.origin.role, crate::box_tree::BoxRole::Element) {
+        return;
+    }
     let s = &b.style;
     let scrolls = |o: Overflow| matches!(o, Overflow::Scroll | Overflow::Auto | Overflow::Hidden | Overflow::Clip);
     if scrolls(s.overflow_x) || scrolls(s.overflow_y) {

@@ -15,7 +15,7 @@ use crate::style::RuleBlock;
 
 use lumen_core::geom::Size;
 use lumen_css_parser::{
-    ComplexSelector, MediaContext, PseudoElementKind, Rule, SimpleSelector, Stylesheet,
+    ComplexSelector, MediaContext, PseudoClass, PseudoElementKind, Rule, SimpleSelector, Stylesheet,
     StylesheetRevision, SUPPORTED_PROPERTIES,
 };
 use lumen_dom::NodeId;
@@ -487,6 +487,32 @@ fn all_rules(sheet: &Stylesheet) -> impl Iterator<Item = &Rule> {
         .chain(sheet.supports_rules.iter().flat_map(|s| s.rules.iter()))
         .chain(sheet.layers.iter().flat_map(|l| l.rules.iter()))
         .chain(sheet.scope_rules.iter().flat_map(|s| s.rules.iter()))
+}
+
+/// CSS Overflow L5 §3.2 — whether `sheet` carries a `::scroll-button()`
+/// selector qualified by `:enabled`/`:disabled`, i.e. whether the button's
+/// scrollability state can change its style and the layout must feed it
+/// per-direction scroll edges (`scroll_state::scroll_state_edges`).
+/// Media-unaware like [`CascadeIndex::pseudo_subjects`]: an inactive
+/// `@media` rule only over-approximates, which costs one tree walk.
+pub fn sheet_has_scroll_button_state(sheet: &Stylesheet) -> bool {
+    all_rules(sheet).any(|r| {
+        r.selectors.iter().any(|s| {
+            let subject = s.tail.last().map_or(&s.head, |(_, c)| c);
+            let mut has_button = false;
+            let mut has_state = false;
+            for p in &subject.parts {
+                match p {
+                    SimpleSelector::PseudoElement(PseudoElementKind::ScrollButton(_)) => has_button = true,
+                    SimpleSelector::PseudoClass(PseudoClass::Enabled | PseudoClass::Disabled) => {
+                        has_state = true
+                    }
+                    _ => {}
+                }
+            }
+            has_button && has_state
+        })
+    })
 }
 
 /// Whether `selector`'s subject compound carries a `::-webkit-scrollbar*`

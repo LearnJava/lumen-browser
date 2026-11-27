@@ -358,6 +358,7 @@ impl V8JsRuntime {
             let meta_viewport_scale = Arc::clone(&self.meta_viewport_scale);
             let lazy_img_requests = Arc::clone(&self.lazy_img_requests);
             let scroll_states = Arc::clone(&self.scroll_states);
+            let scroll_button_edges = Arc::clone(&self.scroll_button_edges);
             let pending_scrolls = Arc::clone(&self.pending_scrolls);
             let pending_page_scrolls = Arc::clone(&self.pending_page_scrolls);
             let page_scroll_y = Arc::clone(&self.page_scroll_y);
@@ -408,6 +409,7 @@ impl V8JsRuntime {
                 flush_stale: Arc::clone(&flush_stale),
                 never_flushed: Arc::clone(&self.style_never_flushed),
                 scroll_states: Arc::clone(&scroll_states),
+                scroll_button_edges: Arc::clone(&scroll_button_edges),
                 anchor_scrollers: Arc::clone(&self.anchor_scrollers),
                 page_scroll_y: Arc::clone(&page_scroll_y),
                 page_scroll_x: Arc::clone(&page_scroll_x),
@@ -418,6 +420,8 @@ impl V8JsRuntime {
                 last_flushed_hover: Arc::clone(&self.last_flushed_hover),
                 keyboard_focus: Arc::clone(&self.keyboard_focus),
                 last_flushed_keyboard_focus: Arc::clone(&self.last_flushed_keyboard_focus),
+                pseudo_focus: Arc::clone(&self.pseudo_focus),
+                last_flushed_pseudo_focus: Arc::new(Mutex::new(None)),
                 style_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
                 transition_stale: Arc::new(Mutex::new(HashMap::new())),
                 transition_stale_needed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -517,6 +521,7 @@ impl V8JsRuntime {
                     Arc::clone(&self.hovered_nid),
                     Arc::clone(&self.active_nid),
                     Arc::clone(&self.keyboard_focus),
+                    Arc::clone(&self.pseudo_focus),
                 ),
                 Arc::clone(&dom_touched),
             )?;

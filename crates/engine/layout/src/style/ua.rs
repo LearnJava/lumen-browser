@@ -755,7 +755,11 @@ pub(in crate::style) fn apply_ua_form_controls(doc: &Document, node: NodeId, sty
 /// CSS Overflow L5 §scroll-buttons: `::scroll-button()` is a button-like box, so it starts with the
 /// `<button>` look (1px border, face colours, 21px content height, centred text, `inline-block`; like Lumen's
 /// `<button>` it has no padding and stays `content-box`);
-/// author rules, applied afterwards, override each part.
+/// author rules, applied afterwards, override each part. An author
+/// `background`/`border`/`padding` (or `appearance: none`) drops this UA box
+/// styling the same way it does on `<button>` — see the appearance-disabling
+/// pass in `style::pseudo` (`::scroll-button` is a widget in its own right,
+/// the origin element's tag is irrelevant).
 pub(in crate::style) fn apply_ua_scroll_button(style: &mut ComputedStyle, dark_mode: bool) {
     let (border, bg, fg) = ua_form_element_colors("button", dark_mode);
     style.display = Display::InlineBlock;

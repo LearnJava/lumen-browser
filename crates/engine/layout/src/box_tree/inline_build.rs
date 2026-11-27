@@ -289,6 +289,13 @@ pub(crate) fn anon_style(parent: &ComputedStyle) -> ComputedStyle {
     s.border_bottom_width = 0.0;
     s.border_left_width = 0.0;
     s.box_sizing = BoxSizing::ContentBox;
+    // CSS Overflow L3 — `overflow` is not inherited (initial `visible`): an
+    // anonymous box never establishes a scroll container. Without the reset
+    // the row cloned a scroller's `overflow: auto`, clipped the extent walk
+    // (`scrollable_extent_*` stops at clipping boxes) and published a second
+    // `ScrollContainer` for the same `NodeId`, shadowing the real one.
+    s.overflow_x = Overflow::Visible;
+    s.overflow_y = Overflow::Visible;
     s
 }
 
@@ -301,7 +308,13 @@ pub(crate) fn anon_inline_run(
     segs: Vec<InlineSegment>,
     role: BoxRole,
 ) -> LayoutBox {
-    let style = anon_style(parent);
+    let mut style = anon_style(parent);
+    // `anon_style` resets `overflow` (anonymous boxes never scroll), but the
+    // run still carries the originating block's clip intent: the
+    // `text-overflow` pass in `layout_dispatch` reads `overflow` off the run
+    // style to decide whether to draw the ellipsis marker.
+    style.overflow_x = parent.overflow_x;
+    style.overflow_y = parent.overflow_y;
     LayoutBox {
         anchor_scroll: None, cv_hidden: Vec::new(),
         node,

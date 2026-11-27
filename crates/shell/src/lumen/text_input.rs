@@ -149,9 +149,10 @@ impl Lumen {
         // Only the last request in the batch matters.
         let Some(last_req) = focus_reqs.into_iter().last() else { return };
         let new_nid = last_req.map(|n| lumen_dom::NodeId::from_index(n as usize));
-        if new_nid == self.focused_node {
+        if new_nid == self.focused_node && self.focused_pseudo.is_none() {
             return;
         }
+        self.clear_pseudo_focus();
         self.focused_node = new_nid;
         // `focus_from_keyboard` is deliberately NOT reset: it records the
         // last *input* modality (CSS UI L4 §3.3 `:focus-visible`), and a

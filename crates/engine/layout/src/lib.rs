@@ -72,7 +72,7 @@ pub use style_map::StyleMap;
 pub mod scoped_collect;
 mod scroll_rollup;
 mod scroll_state;
-pub use scroll_state::{install_scroll_hints, root_is_scroll_state_container, scroll_offsets, sheet_has_scroll_state_queries, ScrollHints, ScrollHintsGuard};
+pub use scroll_state::{install_scroll_button_states, install_scroll_hints, root_is_scroll_state_container, scroll_offsets, scroll_state_edges, sheet_has_scroll_state_queries, ButtonStatesGuard, ScrollHints, ScrollHintsGuard};
 pub use scroll_rollup::RollupCache;
 pub mod paint_eq;
 pub use paint_eq::subtree_paint_eq;
@@ -143,7 +143,7 @@ pub use box_tree::{
     lay_out_incremental, select_widget_arrow_width, select_widget_font_size, AnchorScroll, AnchorScroller, BoxKind, BoxOrigin,
     BoxRole, CrossOriginMode, FieldsetLegend, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox, MergedSource,
     PseudoKind, SvgMaskContent, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, SvgBaselineShift,
-    ViewBox, SELECT_WIDGET_PAD_PX,
+    ViewBox, scroll_button_box_enabled, scroll_button_dir_enabled, SELECT_WIDGET_PAD_PX,
 };
 pub use incremental::{ReleasedIds, DirtyBits, mark_dirty, mark_dirty_set, clear_dirty, translate_subtree};
 pub use page::{MarginBox, MarginBoxPosition, PageBox, PageProperties, MarginBoxTextFragment};
@@ -168,7 +168,7 @@ pub use text_geometry::{
 };
 pub use style::{
     is_highlight_pseudo, compute_selection_style, compute_style, compute_style_from_declarations, compute_target_text_style,
-    compute_view_transition_pseudo_style, compute_view_transition_tree_style, ViewTransitionPart,
+    compute_view_transition_pseudo_style, compute_view_transition_tree_style, sheet_has_scroll_button_state, ViewTransitionPart,
 };
 pub use selector_query::{
     computed_style_by_selector, computed_style_json, computed_style_json_by_selector,
@@ -207,6 +207,7 @@ pub use style::{
     apply_container_rules, evaluate_container_condition, evaluate_container_query,
     set_interactive_state, clear_interactive_state,
     set_keyboard_focus, set_active_keyboard,
+    set_pseudo_focus, pseudo_focus, PseudoFocus,
     set_animated_heights, clear_animated_heights,
     set_forced_colors, forced_colors_active,
     set_print_media, print_media_active,
@@ -602,6 +603,15 @@ fn collect_scroll_containers_inner(b: &LayoutBox, out: &mut Vec<ScrollContainer>
 
 fn scroll_container_into(b: &LayoutBox, out: &mut Vec<ScrollContainer>, include_non_wheel: bool) {
     use style::Overflow;
+    // Scroll containers are an element concept: anonymous wrappers and
+    // pseudo boxes share the originating element's `NodeId`, so emitting an
+    // entry for them publishes a second `ScrollContainer` under the same
+    // node — the later (deeper) one shadows the element's own entry in the
+    // JS-visible `scroll_states` map and `set_scroll_position`'s first-match
+    // walk can land the offset on a box that is not the scroller.
+    if !matches!(b.origin.role, box_tree::BoxRole::Element) {
+        return;
+    }
     let s = &b.style;
     let is_scroll_x = matches!(s.overflow_x, Overflow::Scroll | Overflow::Auto)
         || (include_non_wheel && matches!(s.overflow_x, Overflow::Hidden | Overflow::Clip));
@@ -2275,7 +2285,10 @@ pub fn collect_anchor_scrollers(root: &LayoutBox) -> AnchorScrollers {
 }
 
 fn set_scroll_position_rec(root: &mut LayoutBox, node: lumen_dom::NodeId, x: f32, y: f32) -> bool {
-    if root.node == node {
+    // Only the element's principal box owns the scroll offset — anonymous
+    // wrappers and pseudo boxes can share `node` and precede it in tree
+    // order (see `scroll_container_into`).
+    if root.node == node && matches!(root.origin.role, box_tree::BoxRole::Element) {
         let pb = padding_box(root);
         root.scroll_x = if root.style.overflow_x == style::Overflow::Clip {
             0.0
@@ -2319,7 +2332,10 @@ pub fn restore_scroll_positions(root: &mut LayoutBox, states: &std::collections:
     let mut stack: Vec<&mut LayoutBox> = vec![&mut *root];
     while let Some(b) = stack.pop() {
         let node = b.node;
-        if let Some(s) = states.get(&node.raw())
+        // Same principal-box rule as `set_scroll_position_rec`: an anonymous
+        // or pseudo box sharing `node` must not consume the node's one shot.
+        if matches!(b.origin.role, box_tree::BoxRole::Element)
+            && let Some(s) = states.get(&node.raw())
             && applied.insert(node.raw())
         {
             pending -= 1;

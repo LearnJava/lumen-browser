@@ -330,6 +330,7 @@ impl Lumen {
     fn reset_interactive_subjects(&mut self) {
         self.focused_node = None;
         self.focused_frame = None;
+        self.clear_pseudo_focus();
         if self.hovered_nid.is_some() {
             self.hovered_nid = None;
             // Same echo as the in-window hover flip (BUG-1458): the engine

@@ -234,14 +234,52 @@ pub(crate) fn render_source_to_png(
     // (`el.scrollBy()`/`scrollTo()`/`scrollTop = …`): живой цикл применяет их
     // в `about_to_wait` через `set_scroll_position`, headless-путь их никогда
     // не дренировал, и снимок показывал контейнер непрокрученным.
+    let mut scrolled = false;
     if let Some(js) = parsed.js_ctx.as_ref() {
         for (nid, x, y) in js.take_scroll_requests() {
-            lumen_layout::set_scroll_position(
+            if lumen_layout::set_scroll_position(
                 &mut parsed.layout,
                 lumen_dom::NodeId::from_index(nid as usize),
                 x,
                 y,
-            );
+            ) {
+                scrolled = true;
+            }
+        }
+    }
+    // Скролл может перевернуть `::scroll-button():enabled`/`:disabled` и ответы
+    // `scroll-state(…)` — живой цикл пересчитывает стили через
+    // `restyle_scroll_state_queries` → `relayout()`. Здесь тот же приём: одна
+    // раскладка с подсказками смещений и краёв прокрутки, как
+    // `relayout_page_keeping_scroll` в живом окне. `:focus` этой раскладкой не
+    // сохраняется — `settle_after_load` уже забрал свои focus-запросы; страница
+    // с одновременно скролл-зависимыми и focus-стилями редка (WPT reftest).
+    if scrolled
+        && (lumen_layout::sheet_has_scroll_state_queries(&parsed.stylesheet)
+            || lumen_layout::sheet_has_scroll_button_state(&parsed.stylesheet))
+    {
+        let offsets = lumen_layout::scroll_offsets(&parsed.layout);
+        let edges = lumen_layout::scroll_state_edges(&parsed.layout, vp);
+        if let Ok(doc) = parsed.document.lock() {
+            let new_layout = {
+                let _hints = lumen_layout::install_scroll_hints(lumen_layout::ScrollHints {
+                    offsets: offsets.clone(),
+                    page: (0.0, 0.0),
+                    edges,
+                });
+                let mut l = lumen_layout::layout_measured_hyp(
+                    &doc,
+                    &parsed.stylesheet,
+                    vp,
+                    &parsed.measurer,
+                    &NullHyphenationProvider,
+                    false,
+                );
+                lumen_layout::restore_scroll_positions(&mut l, &offsets);
+                l
+            };
+            drop(doc);
+            parsed.layout = new_layout;
         }
     }
 

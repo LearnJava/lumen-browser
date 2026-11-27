@@ -598,11 +598,24 @@ pub(crate) fn install_point_hit_test(
                 lumen_paint::hit_test(p, &root)
             };
             match hit {
-                Some(h) => vec![
-                    f64::from(h.node.raw()),
-                    f64::from(h.source_node.raw()),
-                    h.inline_source.map_or(-1.0, |n| f64::from(n.raw())),
-                ],
+                Some(h) => {
+                    // Элементы 4–5 — псевдоэлементный hit (CSS Overflow L5
+                    // scroll-маркеры/кнопки): вид `PseudoKind` как u8 и
+                    // `origin.node` (target/владелец), оба -1 для обычных
+                    // элементов. Нужны shell-активации `::scroll-marker` —
+                    // DOM-узла у псевдоэлемента нет.
+                    let (pk, po) = match h.pseudo {
+                        Some(p) => (p.kind as u8 as f64, f64::from(p.origin.raw())),
+                        None => (-1.0, -1.0),
+                    };
+                    vec![
+                        f64::from(h.node.raw()),
+                        f64::from(h.source_node.raw()),
+                        h.inline_source.map_or(-1.0, |n| f64::from(n.raw())),
+                        pk,
+                        po,
+                    ]
+                }
                 None => Vec::new(),
             }
         });
