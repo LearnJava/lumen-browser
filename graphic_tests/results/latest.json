@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-11-26T23:52:24",
+  "timestamp": "2026-11-27T03:53:00",
   "git": {
-    "commit": "79582257b3",
+    "commit": "3ce46f112e",
     "branch": "bug-1853-fix",
-    "subject": "Влить ветку bug-1853-portal-visuals: заведён BUG-1853 — визуальные дефекты портала"
+    "subject": "BUG-1853 срез: проигрывание анимированного WebP и arc-флаги svg_path"
   },
   "crop_offset": [
     8,
