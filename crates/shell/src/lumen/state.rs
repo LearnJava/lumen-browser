@@ -1840,6 +1840,14 @@ pub(crate) struct Lumen {
     /// automation combine `--deterministic` with `graphic_tests`'s fixed
     /// 1024×720 crop-calibration contract.
     pub(crate) viewport_override: Option<(f32, f32)>,
+    /// Emulated page viewport, CSS px (MCP-TOTAL-S4a, `set_viewport` /
+    /// BiDi `browsingContext.setViewport`): what layout, `innerWidth`/
+    /// `innerHeight` and media queries see while the OS window keeps its real
+    /// size. Each `None` dimension follows the real window; the whole `None`
+    /// clears the emulation. Resolved against the live window in
+    /// `emulated_content_viewport` and applied in `relayout_viewport` +
+    /// `viewport_height_css`/`viewport_width_css`.
+    pub(crate) emulated_viewport: Option<(Option<f32>, Option<f32>)>,
     /// DevTools JS console panel (§7E.5).
     ///
     /// Captures `console.log/warn/error` output from the active page's JS runtime.

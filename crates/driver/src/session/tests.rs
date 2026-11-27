@@ -720,6 +720,8 @@ fn live_window_only_trait_defaults_are_honest_errors() {
         ("set_offline", s.set_offline(true).is_err()),
         ("set_timezone", s.set_timezone(Some("UTC")).is_err()),
         ("set_permission", s.set_permission("geolocation", "granted").is_err()),
+        // MCP-TOTAL-S4a: эмуляция viewport — тоже только живого окна.
+        ("set_viewport", s.set_viewport(Some(375.0), Some(667.0)).is_err()),
         ("computed_a11y", s.computed_a11y(&selectors).is_err()),
         ("add_intercept", s.add_intercept("id", &[], &[]).is_err()),
         ("remove_intercept", s.remove_intercept("id").is_err()),

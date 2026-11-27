@@ -794,6 +794,71 @@ fn browsing_context_reload_and_traverse_history_replay_to_live_window() {
     assert_eq!(v.get("error").and_then(|x| x.as_str()), Some("no such history entry"));
 }
 
+/// MCP-TOTAL-S4a: `browsingContext.setViewport` replays the emulation into
+/// the live window (each dimension separately, reset on omitted `viewport`),
+/// the state records full pairs, and a non-number dimension is an
+/// `invalid argument`.
+#[test]
+fn browsing_context_set_viewport_replays_to_live_window() {
+    use lumen_driver::{AutomationCommand, AutomationHandle, AutomationReply};
+    let got = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let (tx, rx) = std::sync::mpsc::channel::<lumen_driver::AutomationRequest>();
+    let rec = std::sync::Arc::clone(&got);
+    std::thread::spawn(move || {
+        for (cmd, reply_tx) in rx {
+            let reply = if let AutomationCommand::SetViewport { width, height } = cmd {
+                *rec.lock().unwrap() = Some((width, height));
+                AutomationReply::Ack
+            } else {
+                AutomationReply::Error("unsupported".into())
+            };
+            let _ = reply_tx.send(reply);
+        }
+    });
+    let mut state = BidiState::with_live_session(LiveWindowSession::new(AutomationHandle::new(tx)), None);
+    let cid = new_session_ctx(&mut state);
+
+    let r = dispatch(
+        &format!(
+            r#"{{"id":1,"method":"browsingContext.setViewport","params":{{"context":"{cid}","viewport":{{"width":375,"height":667}}}}}}"#
+        ),
+        &mut state,
+    );
+    assert!(r.frames[0].contains("success"), "got: {}", r.frames[0]);
+    assert_eq!(*got.lock().unwrap(), Some((Some(375.0), Some(667.0))));
+    assert_eq!(state.viewport_for(&cid), Some((375, 667)));
+
+    // Partial emulation reaches the window dimension-by-dimension.
+    let r = dispatch(
+        &format!(
+            r#"{{"id":2,"method":"browsingContext.setViewport","params":{{"context":"{cid}","viewport":{{"width":800}}}}}}"#
+        ),
+        &mut state,
+    );
+    assert!(r.frames[0].contains("success"), "got: {}", r.frames[0]);
+    assert_eq!(*got.lock().unwrap(), Some((Some(800.0), None)));
+
+    // Omitted `viewport` — the reset form.
+    let r = dispatch(
+        &format!(r#"{{"id":3,"method":"browsingContext.setViewport","params":{{"context":"{cid}"}}}}"#),
+        &mut state,
+    );
+    assert!(r.frames[0].contains("success"), "got: {}", r.frames[0]);
+    assert_eq!(*got.lock().unwrap(), Some((None, None)));
+    assert_eq!(state.viewport_for(&cid), None);
+
+    // A non-number dimension is rejected before reaching the window.
+    let r = dispatch(
+        &format!(
+            r#"{{"id":4,"method":"browsingContext.setViewport","params":{{"context":"{cid}","viewport":{{"width":"wide","height":600}}}}}}"#
+        ),
+        &mut state,
+    );
+    let v = parse(&r.frames[0]);
+    assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("error"));
+    assert_eq!(v.get("error").and_then(|x| x.as_str()), Some("invalid argument"));
+}
+
 #[test]
 fn session_status_ready_before_session() {
     let mut state = BidiState::new();

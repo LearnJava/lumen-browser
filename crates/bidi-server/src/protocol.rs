@@ -2298,8 +2298,12 @@ fn bc_handle_user_prompt(
 /// `browsingContext.setViewport` — set the viewport dimensions of a context (BiDi §6.6.9).
 ///
 /// Params: `context` (required), `viewport: {width, height}` (optional), `devicePixelRatio` (ignored, Phase 1).
-/// Phase 1: stores dimensions in state; emits `browsingContext.viewportChanged` if subscribed.
-/// Actual window resize is an 8H.3 handoff to the shell windowing layer.
+/// With a live window the emulation is real (MCP-TOTAL-S4a): layout,
+/// `innerWidth`/`innerHeight` and media queries follow the emulated size, the
+/// OS window keeps its own; each missing/null dimension follows the real
+/// window. Without one — Phase 1 behavior: store dimensions in state, emit
+/// `browsingContext.viewportChanged` if subscribed. Actual window resize is
+/// not part of either path.
 fn bc_set_viewport(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
     let Some(cid) = params.get("context").and_then(|v| v.as_str()).map(str::to_owned) else {
         return DispatchResult::single(make_error(Some(id), "invalid argument", "missing context"));
@@ -2312,13 +2316,47 @@ fn bc_set_viewport(id: i64, params: &JsonValue, state: &mut BidiState) -> Dispat
         ));
     }
 
-    // Extract viewport {width, height}; absence means "no viewport override" (reset to None).
-    let new_viewport = params.get("viewport").and_then(|vp| {
-        let w = vp.get("width").and_then(|v| v.as_number()).map(|n| n as u32)?;
-        let h = vp.get("height").and_then(|v| v.as_number()).map(|n| n as u32)?;
-        Some((w, h))
-    });
+    // Extract viewport {width, height}: the whole `viewport` absent (or null)
+    // means reset; each dimension independently — absent/null follows the
+    // real window, a non-number is an invalid argument.
+    let dim = |vp: &JsonValue, key: &str| -> Result<Option<u32>, String> {
+        match vp.get(key) {
+            None | Some(JsonValue::Null) => Ok(None),
+            Some(v) => match v.as_number() {
+                Some(n) if n >= 0.0 => Ok(Some(n as u32)),
+                _ => Err(format!("{key} must be a non-negative number or null")),
+            },
+        }
+    };
+    let parsed: Result<(Option<u32>, Option<u32>), String> = match params.get("viewport") {
+        None | Some(JsonValue::Null) => Ok((None, None)),
+        Some(vp) => dim(vp, "width").and_then(|w| dim(vp, "height").map(|h| (w, h))),
+    };
+    let (new_w, new_h) = match parsed {
+        Ok(v) => v,
+        Err(e) => {
+            return DispatchResult::single(make_error(Some(id), "invalid argument", &e));
+        }
+    };
 
+    // Live window: real emulation. Errors here are honest — the state below
+    // is only updated when the shell accepted the size.
+    if let Some(live) = &mut state.live
+        && let Err(e) = live.set_viewport(new_w.map(|n| n as f32), new_h.map(|n| n as f32))
+    {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "unknown error",
+            &format!("setViewport: {e}"),
+        ));
+    }
+
+    let new_viewport = match (new_w, new_h) {
+        (Some(w), Some(h)) => Some((w, h)),
+        // A partial emulation (one dimension follows the window) has no
+        // single pair to report — the state records full overrides only.
+        _ => None,
+    };
     if let Some(ctx) = state.contexts.iter_mut().find(|c| c.id == cid) {
         ctx.viewport = new_viewport;
     }

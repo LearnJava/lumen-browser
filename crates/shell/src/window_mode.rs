@@ -838,6 +838,7 @@ fn run_window_mode_inner(
         cache_registry: lumen_core::ext::CacheRegistry::new(),
         deterministic,
         viewport_override,
+        emulated_viewport: None,
         devtools_console: devtools::console_panel::ConsolePanel::new(),
         dom_inspector: devtools::inspector::DomInspectorPanel::new(),
         network_panel: devtools::network_panel::NetworkPanel::new(std::sync::Arc::clone(

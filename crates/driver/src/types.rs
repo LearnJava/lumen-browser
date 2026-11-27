@@ -756,6 +756,18 @@ pub enum AutomationCommand {
         /// `granted`, `denied` or `prompt`.
         state: String,
     },
+    /// Emulate the page viewport in CSS px (MCP-TOTAL-S4a, WebDriver BiDi
+    /// `browsingContext.setViewport`): layout, `innerWidth`/`innerHeight` and
+    /// media queries follow the emulated size while the OS window keeps its
+    /// real size — the page paints into the top-left corner of the content
+    /// region. A `None` dimension follows the real window; both `None` clear
+    /// the emulation. Reply: `Ack`.
+    SetViewport {
+        /// Emulated viewport width, CSS px.
+        width: Option<f32>,
+        /// Emulated viewport height, CSS px.
+        height: Option<f32>,
+    },
     /// Role and accessible name of the element addressed by a selector chain
     /// (BUG-1014, WebDriver `Get Computed Role`/`Label`): the chain runs from
     /// the outermost document down, each next selector inside the previous

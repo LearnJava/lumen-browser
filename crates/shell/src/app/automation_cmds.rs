@@ -799,6 +799,29 @@ impl Lumen {
                     }
                     let _ = reply_tx.send(AutomationReply::Eval(accepted.to_string()));
                 }
+                AutomationCommand::SetViewport { width, height } => {
+                    // MCP-TOTAL-S4a (`set_viewport`, BiDi
+                    // `browsingContext.setViewport`): store the emulation,
+                    // then the same tail a real resize runs — relayout (full
+                    // rebuild; `snapshot.viewport` feeds
+                    // `update_viewport_size`, so `innerWidth`/`innerHeight`
+                    // and matchMedia follow), ResizeObserver delivery, the
+                    // top-level `resize` event — minus the renderer/OS-window
+                    // resize, which is the whole point of the emulation.
+                    self.emulated_viewport = match (width, height) {
+                        (None, None) => None,
+                        (w, h) => Some((w, h)),
+                    };
+                    self.relayout();
+                    self.runtime
+                        .deliver_observer_records(runtime::ObserverKind::Resize);
+                    #[cfg(feature = "v8")]
+                    route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                        j.fire_window_resize();
+                    });
+                    self.request_redraw();
+                    let _ = reply_tx.send(AutomationReply::Ack);
+                }
                 AutomationCommand::AddIntercept { id, phases, url_patterns } => {
                     // BUG-295 remainder (`network.addIntercept`): synced into
                     // `lumen_network`'s process-global registry, consulted at
