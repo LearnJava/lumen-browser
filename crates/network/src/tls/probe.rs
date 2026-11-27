@@ -449,7 +449,8 @@ mod tests {
     #[test]
     fn untrusted_chain_is_recorded_not_lost() {
         use std::io::Write;
-        let certs_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/wpt/certs");
+        // Вендорены в крейт (tests/fixtures/): CI исключает `tests/wpt` из чекаута.
+        let certs_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
         let cert_pem = std::fs::read(certs_dir.join("host-cert.pem")).expect("host-cert.pem");
         let key_pem = std::fs::read(certs_dir.join("host-key.pem")).expect("host-key.pem");
         let chain: Vec<_> = rustls_pemfile::certs(&mut cert_pem.as_slice()).filter_map(Result::ok).collect();

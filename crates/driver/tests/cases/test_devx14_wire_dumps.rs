@@ -135,12 +135,32 @@ fn live_window_network_log_round_trips_through_automation_channel() {
         method: "GET".to_string(),
         status: 200,
         size_bytes: 0,
+        // MCP-TOTAL-S5a: blocked/failed/reason/duration_ms ride the same wire.
+        blocked: false,
+        failed: false,
+        reason: None,
+        duration_ms: Some(42),
     }];
     let session = fake_live_session(Vec::new(), entries);
     let got = session.network_log().expect("network_log failed");
     assert_eq!(got.len(), 1);
     assert_eq!(got[0].url, "https://example.com/");
     assert_eq!(got[0].status, 200);
+    assert_eq!(got[0].duration_ms, Some(42));
+}
+
+/// MCP-TOTAL-S5a: wire payloads recorded before the new fields existed (and
+/// headless sessions that never fill them) deserialize with serde defaults.
+#[test]
+fn network_entry_deserializes_without_the_new_fields() {
+    let entry: NetworkEntry = serde_json::from_str(
+        r#"{"url":"https://example.com/","method":"GET","status":200,"size_bytes":10}"#,
+    )
+    .expect("old wire payload must deserialize");
+    assert!(!entry.blocked);
+    assert!(!entry.failed);
+    assert_eq!(entry.reason, None);
+    assert_eq!(entry.duration_ms, None);
 }
 
 /// MCP-TOTAL-S2b: both display-list reads round-trip through the automation

@@ -137,6 +137,10 @@ pub(crate) fn run_window_mode(
 }
 
 /// Где крутится цикл: на главном потоке (прежняя схема) или на потоке браузера.
+// Размеры вариантов платформенно разные: winit `EventLoop` на linux/macOS
+// крупнее, чем на Windows, а clippy workspace идёт только по ubuntu/macOS —
+// large_enum_variant гасим локально, код не трогаем.
+#[allow(clippy::large_enum_variant)]
 enum LoopMode {
     Direct(EventLoop<LoadEvent>),
     Thread(std::sync::mpsc::Receiver<browser_thread::UiMsg>),

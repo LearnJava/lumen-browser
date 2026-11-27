@@ -1,11 +1,13 @@
 //! WOFF2 conformance: containers the W3C WOFF2 spec says MUST be rejected
-//! (BUG-1404). Fixtures are the WPT `css/WOFF2/support/*.woff2` files.
+//! (BUG-1404). Fixtures are the WPT `css/WOFF2/support/*.woff2` files,
+//! vendored into the crate (`tests/fixtures/woff2/`): CI excludes `tests/wpt`
+//! from its checkout — see conventions.md «Test fixtures live in their crate».
 
 use std::path::PathBuf;
 
 fn support(name: &str) -> Vec<u8> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../tests/wpt/css/WOFF2/support")
+        .join("tests/fixtures/woff2")
         .join(name);
     std::fs::read(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()))
 }
