@@ -380,6 +380,26 @@ impl Lumen {
                             self.frame_mouse_event(f, nid, "mousedown", at, (0, 1));
                         }
                     }
+                    // MCP-TOTAL-S3a: HTML5 DnD (PH3-9 / HTML LS §9.3.3) — arm
+                    // the drag candidate exactly like the real press
+                    // (`MouseInput(Pressed)`): draggable hovered node →
+                    // `DndState`; activation waits for a move past the OS
+                    // drag zone, already handled inside `on_cursor_moved`.
+                    #[cfg(feature = "v8")]
+                    if let Some(hov) = self.hovered_nid
+                        && let Some(ls) = self.layout_source.as_ref()
+                    {
+                        let doc = ls.document.lock().unwrap_or_else(|e| e.into_inner());
+                        if lumen_dom::is_element_draggable(&doc, hov) {
+                            self.dnd_state = Some(DndState {
+                                src_nid: hov,
+                                press_x: wx,
+                                press_y: wy,
+                                active: false,
+                                over_nid: None,
+                            });
+                        }
+                    }
                     self.automation_button_down = Some((wx, wy));
                     self.begin_text_drag_select(wx, wy);
                     self.begin_doc_select(wx, wy);
@@ -1142,6 +1162,18 @@ impl Lumen {
                     let nid = n.index() as u32;
                     self.frame_pointer_event(f, nid, "pointerup", at, (0, 0));
                     self.frame_mouse_event(f, nid, "mouseup", at, (0, 0));
+                }
+                // MCP-TOTAL-S3a: HTML5 DnD release half (HTML LS §9.3.3) —
+                // the same tail as the real `MouseInput(Released)`:
+                // `drop` on the node under the cursor, then `dragend` on
+                // the source. Nothing fires when the drag never activated.
+                if let Some(dnd) = self.dnd_state.take() && dnd.active {
+                    // drop fires on the element under the cursor (if any).
+                    if let Some(ov) = dnd.over_nid {
+                        self.js_drag_event(ov.index() as u32, "drop", xu, yu);
+                    }
+                    // dragend always fires on the source element.
+                    self.js_drag_event(dnd.src_nid.index() as u32, "dragend", xu, yu);
                 }
             }
             // The click half — focus move, `click` dispatch,
