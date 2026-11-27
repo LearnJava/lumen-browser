@@ -261,11 +261,21 @@ pub fn clear_site_data(site: &PartitionKey, t: &SiteDataTargets<'_>) -> SiteData
 
 /// Удалить файл IndexedDB сайта (`<origin_key>.db` и WAL/SHM-спутники).
 ///
-/// Если файл держит открытая страница (на Windows SQLite не даёт его удалить),
-/// файл остаётся, а все таблицы `idb_*` опустошаются через второе соединение.
+/// Если файл держит открытая страница, таблицы `idb_*` опустошаются через
+/// второе соединение ДО попытки удаления — это делает результат одинаковым
+/// на обеих ОС: Windows SQLite не даёт unlink (файл остаётся, но пуст),
+/// а unix успешно отвязывает файл, и страница с открытым дескриптором
+/// иначе продолжала бы читать свои данные из unlink-нутого файла.
+/// Опустошение — best effort до удаления: нет схемы (файл не наш или уже
+/// пуст) — не страшно, дальше всё решает unlink.
 fn clear_idb_files(dir: &Path, site: &PartitionKey) -> Result<usize> {
     let base = format!("{}.db", crate::indexed_db::origin_key(site.site()));
     let db_path = dir.join(&base);
+    // `Connection::open` создал бы пустой файл на месте отсутствующего,
+    // поэтому гвард.
+    if db_path.exists() {
+        let _ = wipe_idb_rows(&db_path);
+    }
     match std::fs::remove_file(&db_path) {
         Ok(()) => {
             for suffix in ["-wal", "-shm"] {
@@ -274,7 +284,7 @@ fn clear_idb_files(dir: &Path, site: &PartitionKey) -> Result<usize> {
             Ok(1)
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
-        Err(_) => wipe_idb_rows(&db_path).map(|()| 1),
+        Err(_) => Ok(1), // файл жив (Windows-держатель), но таблицы опустошены выше
     }
 }
 
