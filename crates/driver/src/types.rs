@@ -533,6 +533,24 @@ pub enum AutomationCommand {
     Navigate(String),
     /// Open a new tab (it becomes active) and navigate it to a URL.
     NewTab(String),
+    /// Reload the active tab (MCP-TOTAL-S7e, BiDi `browsingContext.reload`):
+    /// the current source is fetched and rendered again. Reply:
+    /// [`AutomationReply::Navigation`].
+    Reload {
+        /// Requested cache bypass (BiDi `ignoreCache`). The current reload
+        /// pipeline has no cache-bypass mode — the flag is accepted but not
+        /// honored (shortcut: upgrade when the engine grows a hard-reload path).
+        ignore_cache: bool,
+    },
+    /// Traverse the session history by `delta` entries (MCP-TOTAL-S7e, BiDi
+    /// `browsingContext.traverseHistory`): negative — back, positive —
+    /// forward, `0` — reload of the current entry (HTML LS §7.8.3). A delta
+    /// pointing outside the history is an `Error` reply. Reply:
+    /// [`AutomationReply::Navigation`].
+    TraverseHistory {
+        /// Signed history step count.
+        delta: i32,
+    },
     /// List the tabs of the live window (COMPAT-CORPUS-3-TABS). Reply:
     /// [`AutomationReply::Tabs`].
     ListTabs,
@@ -794,6 +812,19 @@ pub struct AutomationDownload {
     pub path: String,
 }
 
+/// Where a navigation command (`Reload`, `TraverseHistory`) left the active
+/// tab (MCP-TOTAL-S7e): the current address and the can-go-back/forward
+/// flags of its session history.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NavigationSnapshot {
+    /// Address of the current page (display URL), `""` when nothing is loaded.
+    pub url: String,
+    /// `true` when a session-history entry exists behind the current one.
+    pub can_go_back: bool,
+    /// `true` when a session-history entry exists ahead of the current one.
+    pub can_go_forward: bool,
+}
+
 /// The open JS dialog of the live window, as [`AutomationCommand::UserPrompt`]
 /// reports it (MCP-TOTAL-S7a).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -866,4 +897,7 @@ pub enum AutomationReply {
     /// `StartDownload` result: the id of the new download entry
     /// (MCP-TOTAL-S7c).
     DownloadId(u32),
+    /// `Reload`/`TraverseHistory` result: the address and history flags of
+    /// the active tab after the navigation (MCP-TOTAL-S7e).
+    Navigation(NavigationSnapshot),
 }

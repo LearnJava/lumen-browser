@@ -235,6 +235,32 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                 experimental: false,
             },
             McpTool {
+                name: "reload".to_string(),
+                description: "Reload the active tab: the current page is fetched and rendered again. Returns {url, can_go_back, can_go_forward}. Navigation starts, not finishes: follow with `wait` (document_ready or network_idle) before reading the DOM. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "ignore_cache": {
+                            "type": "boolean",
+                            "description": "Request a cache-bypassing reload; the engine does not distinguish it from a normal reload yet"
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "go_back".to_string(),
+                description: "One step back in the active tab's session history. Returns {url, can_go_back, can_go_forward}; an error at the first history entry. Follow with `wait` before reading the DOM. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({ "type": "object", "properties": {} }),
+                experimental: false,
+            },
+            McpTool {
+                name: "go_forward".to_string(),
+                description: "One step forward in the active tab's session history. Returns {url, can_go_back, can_go_forward}; an error at the newest entry. Follow with `wait` before reading the DOM. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({ "type": "object", "properties": {} }),
+                experimental: false,
+            },
+            McpTool {
                 name: "list_tabs".to_string(),
                 description: "List the open tabs of the live window in strip order. Returns {tabs: [{id, url, title, active}]}. `id` is stable for the session and is what `switch_tab` / `close_tab` take. A popup opened by `window.open()` or a `target=_blank` link shows up here as a new tab; the opener stays the target of the tools until you `switch_tab`.".to_string(),
                 input_schema: json!({ "type": "object", "properties": {} }),
@@ -1126,6 +1152,23 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                     Err(e) => return McpResponse::err(id.clone(), -32603, format!("NewTab error: {e}")),
                 }
             }
+            // MCP-TOTAL-S7e: navigation through the tab's own session history;
+            // the arm answers the address and the can-go-back/forward flags.
+            "reload" => {
+                let ignore_cache = args.get("ignore_cache").and_then(|v| v.as_bool()).unwrap_or(false);
+                match self.session.reload(ignore_cache) {
+                    Ok(s) => json!({ "url": s.url, "can_go_back": s.can_go_back, "can_go_forward": s.can_go_forward }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("Reload error: {e}")),
+                }
+            }
+            "go_back" => match self.session.traverse_history(-1) {
+                Ok(s) => json!({ "url": s.url, "can_go_back": s.can_go_back, "can_go_forward": s.can_go_forward }),
+                Err(e) => return McpResponse::err(id.clone(), -32603, format!("GoBack error: {e}")),
+            },
+            "go_forward" => match self.session.traverse_history(1) {
+                Ok(s) => json!({ "url": s.url, "can_go_back": s.can_go_back, "can_go_forward": s.can_go_forward }),
+                Err(e) => return McpResponse::err(id.clone(), -32603, format!("GoForward error: {e}")),
+            },
             "list_tabs" => match self.session.list_tabs() {
                 Ok(tabs) => json!({
                     "tabs": tabs.iter().map(|t| json!({
@@ -2095,16 +2138,19 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_forty_eight_tools() {
+    fn tools_list_returns_fifty_one_tools() {
         let mut server = McpServer::new(MockSession, VecTransport::new());
         let req = make_request("tools/list", serde_json::json!({}));
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_none());
         let tools = resp.result.unwrap()["tools"].as_array().cloned().unwrap_or_default();
-        assert_eq!(tools.len(), 48);
+        assert_eq!(tools.len(), 51);
         let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap_or("")).collect();
         assert!(names.contains(&"navigate"));
         assert!(names.contains(&"new_tab"));
+        assert!(names.contains(&"reload"));
+        assert!(names.contains(&"go_back"));
+        assert!(names.contains(&"go_forward"));
         assert!(names.contains(&"list_tabs"));
         assert!(names.contains(&"switch_tab"));
         assert!(names.contains(&"close_tab"));
@@ -2189,6 +2235,10 @@ mod tests {
             ("key_down", serde_json::json!({ "key": "Escape" })),
             ("key_up", serde_json::json!({ "key": "Escape" })),
             ("type_focused", serde_json::json!({ "text": "hi" })),
+            // MCP-TOTAL-S7e: навигация по истории — тоже только живого окна.
+            ("reload", serde_json::json!({})),
+            ("go_back", serde_json::json!({})),
+            ("go_forward", serde_json::json!({})),
             // MCP-TOTAL-S7d: release_actions и колесо — тоже только живого окна.
             ("release_actions", serde_json::json!({})),
             ("wheel", serde_json::json!({ "x": 10.0, "y": 20.0, "delta_y": 120.0 })),

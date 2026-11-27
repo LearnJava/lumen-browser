@@ -28,7 +28,7 @@ use lumen_core::error::{Error, Result};
 use crate::{
     A11yNode, AutomationCommand, AutomationCookie, AutomationDialog, AutomationDownload, AutomationHandle, AutomationReply, AxQuery, BoxModel,
     BrowserSession, ComputedProperties, ComputedStyleSnapshot, ConsoleEntry, ExplainElement,
-    ExplainPage, FingerprintProfile, InterceptedRequest, NetworkEntry, NodeRef, ScrollDelta, TabInfo,
+    ExplainPage, FingerprintProfile, InterceptedRequest, NavigationSnapshot, NetworkEntry, NodeRef, ScrollDelta, TabInfo,
     Target, WaitCondition,
 };
 
@@ -238,6 +238,24 @@ impl BrowserSession for LiveWindowSession {
             *cur = url.to_owned();
         }
         Ok(())
+    }
+
+    /// MCP-TOTAL-S7e: reload the current source; the arm answers with the
+    /// address and the history flags of the tab.
+    fn reload(&self, ignore_cache: bool) -> Result<NavigationSnapshot> {
+        match self.execute(AutomationCommand::Reload { ignore_cache })? {
+            AutomationReply::Navigation(snap) => Ok(snap),
+            other => Err(unexpected_reply("Navigation", &other)),
+        }
+    }
+
+    /// MCP-TOTAL-S7e: a step through the session history; a delta outside
+    /// the history bounds is the arm's `Error`.
+    fn traverse_history(&self, delta: i32) -> Result<NavigationSnapshot> {
+        match self.execute(AutomationCommand::TraverseHistory { delta })? {
+            AutomationReply::Navigation(snap) => Ok(snap),
+            other => Err(unexpected_reply("Navigation", &other)),
+        }
     }
 
     fn list_tabs(&self) -> Result<Vec<TabInfo>> {

@@ -40,7 +40,7 @@ pub mod gpu_session;
 pub use types::{
     A11yBounds, A11yNode, A11yState, AxQuery, AutomationCommand, AutomationReply, AutomationDialog, AutomationDownload, BoxModel, ComputedProperties, ConsoleEntry, ConsoleLevel,
     AutomationCookie, ExplainElement, ExplainPage, ExplainPagePhaseTimings, FingerprintProfile, InputCommand, InterceptedRequest,
-    InvariantViolationCounts, NetworkEntry, NodeRef, ScrollDelta, TabInfo, Target, WaitCondition,
+    InvariantViolationCounts, NavigationSnapshot, NetworkEntry, NodeRef, ScrollDelta, TabInfo, Target, WaitCondition,
 };
 pub use automation::{AutomationHandle, AutomationRequest};
 pub use live_session::LiveWindowSession;
@@ -207,6 +207,31 @@ pub trait BrowserSession {
     /// откатываются к обычному [`BrowserSession::navigate`] в текущем документе.
     fn new_tab(&mut self, url: &str) -> Result<()> {
         self.navigate(url)
+    }
+
+    /// Перезагрузить активную вкладку (MCP-TOTAL-S7e, BiDi
+    /// `browsingContext.reload`): текущий источник грузится заново;
+    /// `ignore_cache` — запрос обхода HTTP-кэша (движок его пока не
+    /// различает). Ответ — [`NavigationSnapshot`]: адрес и флаги истории.
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — команду исполняет только живое окно.
+    fn reload(&self, ignore_cache: bool) -> Result<NavigationSnapshot> {
+        let _ = ignore_cache;
+        Err(lumen_core::error::Error::Other("reload: только для живого окна (--mcp-live-port)".into()))
+    }
+
+    /// Шаг по истории сессии (MCP-TOTAL-S7e, BiDi
+    /// `browsingContext.traverseHistory`): минус — назад, плюс — вперёд,
+    /// `0` — перезагрузка текущей записи (HTML LS §7.8.3). Ответ —
+    /// [`NavigationSnapshot`].
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — команду исполняет только живое окно; у живого
+    /// окна — выход за границы истории.
+    fn traverse_history(&self, delta: i32) -> Result<NavigationSnapshot> {
+        let _ = delta;
+        Err(lumen_core::error::Error::Other("traverse_history: только для живого окна (--mcp-live-port)".into()))
     }
 
     /// Открытые вкладки в порядке таб-стрипа (COMPAT-CORPUS-3-TABS).

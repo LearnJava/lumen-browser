@@ -52,6 +52,57 @@ impl Lumen {
                     self.automation_tab = Some(self.tab_strip.tabs[self.tab_strip.active].id);
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
+                // MCP-TOTAL-S7e: reload of the active tab. `ignore_cache` asks
+                // for a cache bypass the current reload pipeline does not
+                // distinguish (no hard-reload path in the engine yet).
+                AutomationCommand::Reload { .. } => {
+                    // Адрес и флаги читаются до `reload`: перезагрузка их не
+                    // меняет, а её асинхронная загрузка может обнулить
+                    // `source`/`display_url` до ответа (U-1).
+                    let reply = AutomationReply::Navigation(NavigationSnapshot {
+                        url: automation_current_url(self),
+                        can_go_back: !self.nav_back.is_empty(),
+                        can_go_forward: !self.nav_fwd.is_empty(),
+                    });
+                    self.reload();
+                    let _ = reply_tx.send(reply);
+                }
+                // MCP-TOTAL-S7e: a step through the session history. Outside
+                // the bounds — an honest error (`navigate_by` would silently
+                // no-op it); delta 0 reloads the current entry (HTML LS §7.8.3).
+                // The reply's address is the traversal TARGET entry: the shell's
+                // own `source`/`display_url` stay empty until the (async, U-1)
+                // incoming page commits, so reading them here answers "".
+                AutomationCommand::TraverseHistory { delta } => {
+                    let steps = delta.unsigned_abs() as usize;
+                    let out_of_range = delta < 0 && self.nav_back.len() < steps
+                        || delta > 0 && self.nav_fwd.len() < steps;
+                    let reply = if out_of_range {
+                        AutomationReply::Error(format!(
+                            "traverse_history: нет записи истории на {delta} шаг(ов) от текущей"
+                        ))
+                    } else {
+                        // Адрес ответа — цель обхода (текущие `source`/`display_url`
+                        // пусты до коммита асинхронной загрузки — U-1).
+                        let url = if delta == 0 {
+                            automation_current_url(self)
+                        } else {
+                            let stack = if delta < 0 { &self.nav_back } else { &self.nav_fwd };
+                            automation_entry_url(&stack[stack.len() - steps])
+                        };
+                        if delta == 0 {
+                            self.reload();
+                        } else {
+                            self.navigate_by(delta);
+                        }
+                        AutomationReply::Navigation(NavigationSnapshot {
+                            url,
+                            can_go_back: !self.nav_back.is_empty(),
+                            can_go_forward: !self.nav_fwd.is_empty(),
+                        })
+                    };
+                    let _ = reply_tx.send(reply);
+                }
                 AutomationCommand::ListTabs => {
                     let _ = reply_tx.send(AutomationReply::Tabs(self.automation_tab_list()));
                 }
@@ -1052,6 +1103,33 @@ pub(crate) fn eval_outcome_reply(outcome: EvalOutcome, loading: bool) -> Automat
         }
         None => AutomationReply::Error("JS context not available".to_string()),
     }
+}
+
+/// Адрес активной вкладки (`display_url`, иначе URL источника, иначе пусто) —
+/// ответ навигационных команд истории (MCP-TOTAL-S7e).
+fn automation_current_url(lumen: &Lumen) -> String {
+    let url = lumen.current_display_url();
+    if !url.is_empty() {
+        return url.to_owned();
+    }
+    match &lumen.source {
+        // Файловый источник не отвечает `url_str()` — собираем `file://` из пути.
+        PageSource::File(p) => crate::resource_base::path_to_file_url(p),
+        _ => String::new(),
+    }
+}
+
+/// Адрес записи истории сессии — тот же фолбэк, что у
+/// [`automation_current_url`] для файловых источников.
+fn automation_entry_url(entry: &NavEntry) -> String {
+    entry
+        .display_url
+        .clone()
+        .or_else(|| entry.source.url_str().map(str::to_owned))
+        .unwrap_or_else(|| match &entry.source {
+            PageSource::File(p) => crate::resource_base::path_to_file_url(p),
+            _ => String::new(),
+        })
 }
 
 /// Текст отказа по сроку: сколько ждали и, если известно, чем занят поток.
