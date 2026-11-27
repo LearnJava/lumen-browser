@@ -735,6 +735,53 @@ fn input_wheel_scroll_and_release_actions_replay_to_live_window() {
     assert!(seen.iter().any(|c| c.contains("ReleaseActions")), "{seen:?}");
 }
 
+/// MCP-TOTAL-S3b: a `pointerDown` → `pointerMove`(s) → `pointerUp` chain
+/// replays as the same pointer primitives the MCP `pointer_*` tools send —
+/// and the shell arms those with the real drag state machine
+/// (MCP-TOTAL-S3a), so BiDi drag needs no replay code of its own. A `pause`
+/// action between the moves is executed as a real sleep on this thread.
+#[test]
+fn input_perform_actions_drag_chain_replays_pointer_primitives() {
+    let (live, log) = recording_live_session();
+    let mut state = BidiState::with_live_session(live, None);
+    let cid = new_session_ctx(&mut state);
+    let cmd = format!(
+        r#"{{"id":1,"method":"input.performActions","params":{{"context":"{cid}","actions":[
+                {{"type":"pointer","id":"m","actions":[
+                    {{"type":"pointerMove","x":10,"y":20}},
+                    {{"type":"pointerDown","button":0}},
+                    {{"type":"pause","duration":5}},
+                    {{"type":"pointerMove","x":120,"y":80}},
+                    {{"type":"pointerUp","button":0}}
+                ]}}
+            ]}}}}"#
+    );
+    let started = std::time::Instant::now();
+    let r = dispatch(&cmd, &mut state);
+    assert!(r.frames[0].contains("success"), "got: {}", r.frames[0]);
+    assert!(
+        started.elapsed() >= std::time::Duration::from_millis(5),
+        "pause action was not executed"
+    );
+    let seen: Vec<String> = log.try_iter().collect();
+    // Hover, press (arms the drag), move past the OS threshold, release
+    // (drop + dragend) — exactly the primitive order, nothing compound.
+    let order: Vec<String> = seen
+        .iter()
+        .filter_map(|c| c.split([' ', '{']).next().map(str::to_owned))
+        .filter(|name| name.starts_with("Pointer"))
+        .collect();
+    assert_eq!(
+        order,
+        vec!["PointerMove", "PointerDown", "PointerMove", "PointerUp"],
+        "{seen:?}"
+    );
+    assert!(
+        !seen.iter().any(|c| c.contains("Click") || c.contains("Type(")),
+        "drag chain leaked a compound click/type: {seen:?}"
+    );
+}
+
 /// MCP-TOTAL-S7e: `browsingContext.reload` answers in the NavigateResult
 /// shape with the live-reported address, `browsingContext.traverseHistory`
 /// answers EmptyResult — and a delta outside the session history is

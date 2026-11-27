@@ -55,7 +55,7 @@
 //! connection = one [`BidiState`].
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use lumen_core::json::{parse as parse_json, JsonValue};
 use lumen_driver::{
@@ -2674,8 +2674,9 @@ fn download_event_params(
 
 /// `input.performActions` — execute a sequence of input actions (BiDi §15.7.3).
 ///
-/// Phase 1 stub: validates `context` and `actions` parameters, returns ACK.
-/// Actual action dispatch to the windowing layer requires 8H.3.
+/// Validates `context` and `actions`, then replays the supported subset to
+/// the live window (`replay_input_actions`); without one — plain ACK after
+/// validation.
 fn input_perform_actions(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
     // Validate context if provided.
     if let Some(ctx_id) = params.get("context").and_then(|v| v.as_str())
@@ -2776,10 +2777,20 @@ fn char_dom_code(ch: char) -> String {
 /// into the already focused element, without a click; a `"wheel"` source's
 /// `scroll {x, y, deltaX, deltaY}` (MCP-TOTAL-S7d) is a wheel notch at the
 /// point — trusted `wheel` event, then the real scroll routing, with the
-/// modifiers a preceding key source still holds (Ctrl+wheel zooms).
-/// NOT modeled: pauses, multi-touch sources, drag gestures, or
-/// `pointerUp`-gated release semantics - full W3C Actions fidelity is future
-/// work.
+/// modifiers a preceding key source still holds (Ctrl+wheel zooms); a
+/// `pause {duration}` action sleeps this per-connection dispatch thread for
+/// the requested time (the reader thread keeps answering pings, BUG-981),
+/// clamped at 60 s; a `"none"` source carries only pauses. Drag needs no
+/// replay code of its own (MCP-TOTAL-S3b): the chain `pointerDown` →
+/// `pointerMove`(s) → `pointerUp` reaches the shell as the same pointer
+/// primitives the MCP `pointer_*` tools send, and those arms carry the real
+/// drag state machine (MCP-TOTAL-S3a) — press over a draggable arms it,
+/// the moves past the OS threshold fire `dragstart`/`drag`/`dragenter`/
+/// `dragover`, the release drops on the node under the cursor.
+/// NOT modeled: multi-touch sources, or `pointerUp`-gated release semantics
+/// — every replayed action takes effect immediately (a `pointerDown` holds
+/// until a `pointerUp` in the chain or a later `input.releaseActions`),
+/// whereas full W3C Actions fidelity is future work.
 fn replay_input_actions(live: &mut LiveWindowSession, sources: &[JsonValue]) {
     let mut last_point: Option<Target> = None;
     // Modifier mask mirrored locally (bits match `AutomationCommand::Key`'s
@@ -2816,6 +2827,7 @@ fn replay_input_actions(live: &mut LiveWindowSession, sources: &[JsonValue]) {
                         Some("pointerUp") => {
                             let _ = live.pointer_up();
                         }
+                        Some("pause") => replay_pause(action),
                         _ => {}
                     }
                 }
@@ -2826,6 +2838,10 @@ fn replay_input_actions(live: &mut LiveWindowSession, sources: &[JsonValue]) {
                     let down = match action.get("type").and_then(|v| v.as_str()) {
                         Some("keyDown") => true,
                         Some("keyUp") => false,
+                        Some("pause") => {
+                            replay_pause(action);
+                            continue;
+                        }
                         _ => continue,
                     };
                     let Some(value) = action.get("value").and_then(|v| v.as_str()) else { continue };
@@ -2881,7 +2897,12 @@ fn replay_input_actions(live: &mut LiveWindowSession, sources: &[JsonValue]) {
             // zooms, Shift+wheel scrolls horizontally).
             "wheel" => {
                 for action in actions {
-                    if action.get("type").and_then(|v| v.as_str()) != Some("scroll") {
+                    let ty = action.get("type").and_then(|v| v.as_str());
+                    if ty == Some("pause") {
+                        replay_pause(action);
+                        continue;
+                    }
+                    if ty != Some("scroll") {
                         continue;
                     }
                     let x = action.get("x").and_then(|v| v.as_number()).unwrap_or(0.0) as f32;
@@ -2891,9 +2912,24 @@ fn replay_input_actions(live: &mut LiveWindowSession, sources: &[JsonValue]) {
                     let _ = live.wheel(x, y, delta_x, delta_y, held_mods);
                 }
             }
+            // A "none" source carries only `pause` actions (BiDi §15.7.1).
+            "none" => {
+                for action in actions {
+                    replay_pause(action);
+                }
+            }
             _ => {}
         }
     }
+}
+
+/// A `pause` action sleeps the per-connection dispatch thread — its other
+/// commands already block this thread on round-trips, and the reader thread
+/// keeps answering WebSocket pings meanwhile (BUG-981). Clamped at 60 s so a
+/// runaway duration cannot pin the connection forever.
+fn replay_pause(action: &JsonValue) {
+    let ms = action.get("duration").and_then(|v| v.as_number()).unwrap_or(0.0);
+    std::thread::sleep(Duration::from_millis(ms.clamp(0.0, 60_000.0) as u64));
 }
 
 /// Type the characters collected from consecutive `keyDown` actions and clear
