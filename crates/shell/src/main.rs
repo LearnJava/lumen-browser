@@ -354,7 +354,7 @@ use lumen_paint::{
 use lumen_driver::{
     AutomationCommand, AutomationDialog, AutomationDownload, AutomationHandle, AutomationReply, AutomationRequest, BoxModel, ConsoleEntry,
     ConsoleLevel as DriverConsoleLevel, InterceptedRequest, NavigationSnapshot, NetworkEntry as DriverNetworkEntry,
-    WaitCondition,
+    WaitCondition, WindowRect,
 };
 use browser_thread::MainHandle;
 use winit::application::ApplicationHandler;

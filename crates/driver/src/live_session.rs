@@ -29,7 +29,7 @@ use crate::{
     A11yNode, AutomationCommand, AutomationCookie, AutomationDialog, AutomationDownload, AutomationHandle, AutomationReply, AxQuery, BoxModel,
     BrowserSession, ComputedProperties, ComputedStyleSnapshot, ConsoleEntry, ExplainElement,
     ExplainPage, FingerprintProfile, InterceptedRequest, NavigationSnapshot, NetworkEntry, NodeRef, ScrollDelta, TabInfo,
-    Target, WaitCondition,
+    Target, WaitCondition, WindowRect,
 };
 
 /// Default timeout for a single automation round-trip to the live window.
@@ -293,6 +293,26 @@ impl BrowserSession for LiveWindowSession {
     fn set_viewport(&mut self, width: Option<f32>, height: Option<f32>) -> Result<()> {
         self.execute(AutomationCommand::SetViewport { width, height })?;
         Ok(())
+    }
+
+    /// MCP-TOTAL-S4b: toggle the OS fullscreen of the live window.
+    fn set_fullscreen(&self, enabled: bool) -> Result<()> {
+        self.execute(AutomationCommand::SetFullscreen { enabled })?;
+        Ok(())
+    }
+
+    /// MCP-TOTAL-S4b: bring the live window to the foreground.
+    fn focus_window(&self) -> Result<()> {
+        self.execute(AutomationCommand::FocusWindow)?;
+        Ok(())
+    }
+
+    /// MCP-TOTAL-S4b: the live window's rect and state flags.
+    fn get_window_rect(&self) -> Result<WindowRect> {
+        match self.execute(AutomationCommand::GetWindowRect)? {
+            AutomationReply::WindowRect(rect) => Ok(rect),
+            other => Err(unexpected_reply("WindowRect", &other)),
+        }
     }
 
     fn switch_tab(&mut self, id: usize) -> Result<()> {

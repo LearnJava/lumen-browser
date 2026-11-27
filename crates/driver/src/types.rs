@@ -877,6 +877,21 @@ pub enum AutomationCommand {
         /// Download id from `list_downloads` / `start_download`.
         id: u32,
     },
+    /// Toggle the OS fullscreen of the live window (MCP-TOTAL-S4b): the same
+    /// winit `set_fullscreen` the Fullscreen API path runs, plus the same
+    /// BUG-167 resize arming — the page viewport follows once the OS applies
+    /// the new size. Unlike the Fullscreen API, no element is involved (no
+    /// `fullscreen_nid`, no `fullscreenchange`). Reply: `Ack`.
+    SetFullscreen {
+        /// `true` — enter fullscreen, `false` — leave it.
+        enabled: bool,
+    },
+    /// Bring the live window to the foreground (MCP-TOTAL-S4b, BiDi
+    /// `browsingContext.activate`). Reply: `Ack`.
+    FocusWindow,
+    /// Geometry and state flags of the live window (MCP-TOTAL-S4b). Reply:
+    /// [`AutomationReply::WindowRect`].
+    GetWindowRect,
 }
 
 /// One entry of the live window's download manager, as
@@ -900,6 +915,25 @@ pub struct AutomationDownload {
     pub total_bytes: u64,
     /// Absolute path on disk the file is (or will be) written to.
     pub path: String,
+}
+
+/// Window rect of the live window, as [`AutomationCommand::GetWindowRect`]
+/// reports it (MCP-TOTAL-S4b, BiDi `getWindowRect` shape). Position and size
+/// are in CSS px (logical), the same unit every other automation rect uses.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct WindowRect {
+    /// Window's left edge in screen coordinates, CSS px.
+    pub x: f32,
+    /// Window's top edge in screen coordinates, CSS px.
+    pub y: f32,
+    /// Outer width of the window, CSS px.
+    pub width: f32,
+    /// Outer height of the window, CSS px.
+    pub height: f32,
+    /// Whether the window is currently maximized.
+    pub maximized: bool,
+    /// Whether the window is currently minimized.
+    pub minimized: bool,
 }
 
 /// Where a navigation command (`Reload`, `TraverseHistory`) left the active
@@ -1000,4 +1034,7 @@ pub enum AutomationReply {
     /// `Reload`/`TraverseHistory` result: the address and history flags of
     /// the active tab after the navigation (MCP-TOTAL-S7e).
     Navigation(NavigationSnapshot),
+    /// `GetWindowRect` result: the live window's rect and state flags
+    /// (MCP-TOTAL-S4b).
+    WindowRect(WindowRect),
 }

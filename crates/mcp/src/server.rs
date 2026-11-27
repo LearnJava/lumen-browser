@@ -35,7 +35,7 @@ pub struct McpServer<S: BrowserSession, T: Transport> {
 }
 
 /// Инструкция для ИИ-агента, отдаётся в `initialize` (MCP §Lifecycle, `instructions`).
-const SERVER_INSTRUCTIONS: &str = "Lumen is a browser you drive and inspect. Workflow: (1) `navigate` (current tab) or `new_tab` with a URL; (2) `wait` with condition document_ready, or network_idle for script-heavy pages — navigation returns before the page has finished loading; (3) read the page with `query` (CSS selector -> nodes with node_id, text, rect) or `eval` (JavaScript; the result is a string, so use JSON.stringify for structured data); (4) interact with `click` / `type` / `scroll`, then `wait` again. Raw input primitives — `pointer_move`, `pointer_down`, `pointer_up`, `key_down`, `key_up`, `type_focused`, `release_actions` (releases everything the input tools hold pressed), `wheel` (a wheel notch at a point: trusted wheel event, then the real scroll routing) — drive the live window directly and work only there (`--mcp-live-port`); a headless session answers an error. `set_files {target, paths}` fills an `<input type=file>` with real files so the page sees a FileList with readable content plus input/change events while the paths stay on the automation side — live window only too. JS dialogs (`alert`/`confirm`/`prompt`) block the page's JS thread until answered: `user_prompt` reads the open dialog, `handle_user_prompt {accept, user_text?}` answers it — both live window only, and `eval` answers busy while a dialog is open. Emulation tools flip what the page sees without touching its DOM — `set_offline`, `set_user_agent`, `set_timezone`, `set_permission` are process-global overrides (network, UA header + `navigator.userAgent`, `Intl`/`Date` timezone, permission states), `set_viewport {width?, height?}` emulates the page viewport in CSS px (layout, `innerWidth`/`innerHeight` and media queries follow it, the OS window keeps its real size; no arguments clears it) and `computed_a11y` reads an element's computed accessibility role and name; they work only in the live window except `set_user_agent`, which a headless session also accepts. Network interception, cookies and preload scripts are live window only (`--mcp-live-port`; a headless session answers an error): `add_intercept {phases, url_patterns, id?}` pauses matching requests at `beforeRequestSent`/`responseStarted` until `resolve_intercept {request_id, continue}` decides them, `poll_intercepts` lists the requests paused since the last call, and `add_preload_script {function_declaration, id?}` runs a function in every document created from now on before its own scripts; `list_cookies` / `set_cookie` / `delete_cookie` read and write the active profile's real cookie jar — what `document.cookie` and requests see. Downloads (live window only): `start_download {url}` fetches a URL into the OS Downloads directory and returns its id, `list_downloads` reports every entry (`state` is pending / in_progress / completed / failed / cancelled; a completed entry's `path` holds where the file was written), `cancel_download {id}` aborts one. A popup (`window.open`, `target=_blank`) opens as a new tab but does not take over the tools: `list_tabs`, then `switch_tab` to it, and `close_tab` / `switch_tab` back when done. `target` of click/type/scroll is a CSS selector string, {selector}, {node_id} or {point: {x, y}}. `screenshot` and the accessibility, layout, console and network resources help to verify what is shown. `eval` may time out on a busy page: raise `timeout_ms`. Tools prefixed `x-` are experimental (ADR-024): causal explanation of styles and layout (`x-computed-style`, `x-explain-element`, `x-explain-page`, `x-scope-layout`), their output format may change. Errors come back as JSON-RPC errors with a message; a failed tool does not close the session.";
+const SERVER_INSTRUCTIONS: &str = "Lumen is a browser you drive and inspect. Workflow: (1) `navigate` (current tab) or `new_tab` with a URL; (2) `wait` with condition document_ready, or network_idle for script-heavy pages — navigation returns before the page has finished loading; (3) read the page with `query` (CSS selector -> nodes with node_id, text, rect) or `eval` (JavaScript; the result is a string, so use JSON.stringify for structured data); (4) interact with `click` / `type` / `scroll`, then `wait` again. Raw input primitives — `pointer_move`, `pointer_down`, `pointer_up`, `key_down`, `key_up`, `type_focused`, `release_actions` (releases everything the input tools hold pressed), `wheel` (a wheel notch at a point: trusted wheel event, then the real scroll routing) — drive the live window directly and work only there (`--mcp-live-port`); a headless session answers an error. `set_files {target, paths}` fills an `<input type=file>` with real files so the page sees a FileList with readable content plus input/change events while the paths stay on the automation side — live window only too. JS dialogs (`alert`/`confirm`/`prompt`) block the page's JS thread until answered: `user_prompt` reads the open dialog, `handle_user_prompt {accept, user_text?}` answers it — both live window only, and `eval` answers busy while a dialog is open. Emulation tools flip what the page sees without touching its DOM — `set_offline`, `set_user_agent`, `set_timezone`, `set_permission` are process-global overrides (network, UA header + `navigator.userAgent`, `Intl`/`Date` timezone, permission states), `set_viewport {width?, height?}` emulates the page viewport in CSS px (layout, `innerWidth`/`innerHeight` and media queries follow it, the OS window keeps its real size; no arguments clears it) and `computed_a11y` reads an element's computed accessibility role and name; they work only in the live window except `set_user_agent`, which a headless session also accepts. Window management is live window only too: `set_fullscreen {enabled}` toggles OS fullscreen, `focus_window` raises the window, `get_window_rect` reports its {x, y, width, height, maximized, minimized}. Network interception, cookies and preload scripts are live window only (`--mcp-live-port`; a headless session answers an error): `add_intercept {phases, url_patterns, id?}` pauses matching requests at `beforeRequestSent`/`responseStarted` until `resolve_intercept {request_id, continue}` decides them, `poll_intercepts` lists the requests paused since the last call, and `add_preload_script {function_declaration, id?}` runs a function in every document created from now on before its own scripts; `list_cookies` / `set_cookie` / `delete_cookie` read and write the active profile's real cookie jar — what `document.cookie` and requests see. Downloads (live window only): `start_download {url}` fetches a URL into the OS Downloads directory and returns its id, `list_downloads` reports every entry (`state` is pending / in_progress / completed / failed / cancelled; a completed entry's `path` holds where the file was written), `cancel_download {id}` aborts one. A popup (`window.open`, `target=_blank`) opens as a new tab but does not take over the tools: `list_tabs`, then `switch_tab` to it, and `close_tab` / `switch_tab` back when done. `target` of click/type/scroll is a CSS selector string, {selector}, {node_id} or {point: {x, y}}. `screenshot` and the accessibility, layout, console and network resources help to verify what is shown. `eval` may time out on a busy page: raise `timeout_ms`. Tools prefixed `x-` are experimental (ADR-024): causal explanation of styles and layout (`x-computed-style`, `x-explain-element`, `x-explain-page`, `x-scope-layout`), their output format may change. Errors come back as JSON-RPC errors with a message; a failed tool does not close the session.";
 
 impl<S: BrowserSession, T: Transport> McpServer<S, T> {
     /// Создать новый MCP сервер без обязательной аутентификации (stdio-режим
@@ -712,6 +712,39 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                             "description": "Emulated viewport height in CSS px; omit or null to follow the real window"
                         }
                     }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "set_fullscreen".to_string(),
+                description: "Toggle the OS fullscreen of the live window: the page viewport follows the screen size the same way the Fullscreen API drives it (layout and `innerWidth`/`innerHeight` catch up once the OS applies the size). `enabled: false` returns the window to its previous size. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["enabled"],
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "description": "true to enter fullscreen, false to leave it"
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "focus_window".to_string(),
+                description: "Bring the browser window to the foreground (the same call `browsingContext.activate` makes). Whether the OS actually grants focus depends on foreground privileges of the calling process. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "get_window_rect".to_string(),
+                description: "Read the live window's rect and state flags: {x, y, width, height, maximized, minimized}. Position and size are in CSS px of the window's outer bounds (fullscreen reports the screen size); this is the real OS window, unlike `set_viewport`'s emulated page viewport. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {}
                 }),
                 experimental: false,
             },
@@ -1547,6 +1580,27 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                     Err(e) => return McpResponse::err(id.clone(), -32603, format!("SetViewport error: {e}")),
                 }
             }
+            "set_fullscreen" => {
+                let Some(enabled) = args.get("enabled").and_then(|v| v.as_bool()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing enabled argument");
+                };
+                match self.session.set_fullscreen(enabled) {
+                    Ok(()) => json!({ "success": true, "fullscreen": enabled }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("SetFullscreen error: {e}")),
+                }
+            }
+            "focus_window" => match self.session.focus_window() {
+                Ok(()) => json!({ "success": true }),
+                Err(e) => return McpResponse::err(id.clone(), -32603, format!("FocusWindow error: {e}")),
+            },
+            "get_window_rect" => match self.session.get_window_rect() {
+                Ok(rect) => json!({
+                    "x": rect.x, "y": rect.y,
+                    "width": rect.width, "height": rect.height,
+                    "maximized": rect.maximized, "minimized": rect.minimized,
+                }),
+                Err(e) => return McpResponse::err(id.clone(), -32603, format!("GetWindowRect error: {e}")),
+            },
             "computed_a11y" => {
                 let Some(selectors) = args.get("selectors").and_then(|v| v.as_array()) else {
                     return McpResponse::err(id.clone(), -32602, "Missing selectors argument");
@@ -2203,13 +2257,13 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_fifty_two_tools() {
+    fn tools_list_returns_fifty_five_tools() {
         let mut server = McpServer::new(MockSession, VecTransport::new());
         let req = make_request("tools/list", serde_json::json!({}));
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_none());
         let tools = resp.result.unwrap()["tools"].as_array().cloned().unwrap_or_default();
-        assert_eq!(tools.len(), 52);
+        assert_eq!(tools.len(), 55);
         let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap_or("")).collect();
         assert!(names.contains(&"navigate"));
         assert!(names.contains(&"new_tab"));
@@ -2241,6 +2295,9 @@ mod tests {
         assert!(names.contains(&"set_timezone"));
         assert!(names.contains(&"set_permission"));
         assert!(names.contains(&"set_viewport"));
+        assert!(names.contains(&"set_fullscreen"));
+        assert!(names.contains(&"focus_window"));
+        assert!(names.contains(&"get_window_rect"));
         assert!(names.contains(&"computed_a11y"));
         assert!(names.contains(&"wait"));
         assert!(names.contains(&"eval"));
@@ -2288,10 +2345,10 @@ mod tests {
         }
     }
 
-    /// Инструменты ввода, файлового input, JS-диалогов и загрузок — только
-    /// для живого окна: сессия без живого окна отвечает `isError: true` с
-    /// честным текстом дефолта трейта (MCP-TOTAL-S1b, S7a, S7b, S7c, S7d), а
-    /// не молчаливым успехом.
+    /// Инструменты ввода, файлового input, JS-диалогов, загрузок и оконных
+    /// вызовов — только для живого окна: сессия без живого окна отвечает
+    /// `isError: true` с честным текстом дефолта трейта (MCP-TOTAL-S1b, S7a,
+    /// S7b, S7c, S7d, S4b), а не молчаливым успехом.
     #[test]
     fn input_tools_error_without_a_live_window() {
         let calls = [
@@ -2317,6 +2374,11 @@ mod tests {
             ("list_downloads", serde_json::json!({})),
             ("start_download", serde_json::json!({ "url": "file:///tmp/a.bin" })),
             ("cancel_download", serde_json::json!({ "id": 1 })),
+            // MCP-TOTAL-S4b: fullscreen, фокус и rect окна — тоже только
+            // живого окна.
+            ("set_fullscreen", serde_json::json!({ "enabled": true })),
+            ("focus_window", serde_json::json!({})),
+            ("get_window_rect", serde_json::json!({})),
         ];
         for (name, args) in calls {
             let mut server = McpServer::new(MockSession, VecTransport::new());
