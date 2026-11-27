@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Loaded in full at the start of every session, so it holds **routing and invariants only** — every line is paid for on every task. A rule that needs more than three lines, or that bites only in one area, goes into a linked file or a nested `CLAUDE.md` (`crates/js/`, `crates/engine/paint/`, `graphic_tests/` — Claude Code loads those only when you work there). English only. Size cap enforced by `scripts/check_claude_md.py`.
+Loaded in full at the start of every session, so it holds **routing and invariants only** — every line is paid for on every task. A rule that needs more than three lines, or that bites only in one area, goes into a linked file or a nested `CLAUDE.md` (`crates/js/`, `crates/engine/paint/`, `graphic_tests/` — loaded only when you work there). English only. Size cap enforced by `scripts/check_claude_md.py`.
 
 ## What is this
 
@@ -23,7 +23,7 @@ Loaded in full at the start of every session, so it holds **routing and invarian
 
 ## Working boundary
 
-Write only inside the repository and its worktrees under `.claude/worktrees/`. Nothing outside it — dotfiles, `~/.config`, sibling projects, `../lumen-*` worktrees: describe the external change and wait for approval. Exception: Claude memory under `~/.claude/projects/`.
+Write only inside the repository and its worktrees under `.claude/worktrees/`. Nothing outside it — dotfiles, `~/.config`, sibling projects, `../lumen-*` worktrees: describe the change and wait for approval. Exception: Claude memory under `~/.claude/projects/`.
 
 ## Session start and git
 
@@ -37,7 +37,7 @@ Protocol — [`docs/git-workflow.md`](docs/git-workflow.md). Closing a task — 
 
 ## Gates
 
-- Gate once, before the closing commit (not WIP), by the diff — matrix in [`docs/commands.md`](docs/commands.md) §Gate discipline: one crate without a public-API change → `cargo clippy -p <crate> --all-targets -- -D warnings` + `cargo test -p <crate>`; a public-API change or several crates → clippy per crate + `scripts/scoped-test.sh`; a workspace-level change → `clippy --workspace` + scoped tests. While iterating `cargo check` only, `dev-release` only for a binary you need ([`docs/commands.md`](docs/commands.md) §Build cost). Lints live in `[workspace.lints]`, rules in [`docs/conventions.md`](docs/conventions.md); a new crate needs `[lints] workspace = true`.
+- Gate once, before the closing commit (not WIP), by the diff — matrix in [`docs/commands.md`](docs/commands.md) §Gate discipline (which clippy/test run for which diff). While iterating `cargo check` only, `dev-release` only for a binary you need (§Build cost). Lints live in `[workspace.lints]`, rules in [`docs/conventions.md`](docs/conventions.md); a new crate needs `[lints] workspace = true`.
 - Anything that can move pixels → full `python graphic_tests/run.py --continue-on-fail` and regenerated goldens **in the same commit** ([`docs/graphic-tests.md`](docs/graphic-tests.md)). `python graphic_tests/dump_golden.py` — when the diff can alter the display list or the layout dump (render-path crates); network, JS, tooling and docs run neither.
 - A new dependency needs `**Why this dependency:** <permanent/provisional, trait-anchor, graduation criterion>` in the commit body ([ADR-027](docs/decisions/ADR-027-own-vs-vendored-boundary.md)).
 - Live real-site testing runs `--maximized` with the ad-block off (`LUMEN_NO_ADBLOCK=1`) — [`docs/automation.md`](docs/automation.md) §Flags.
@@ -47,7 +47,7 @@ Protocol — [`docs/git-workflow.md`](docs/git-workflow.md). Closing a task — 
 
 - **Reply in Russian**, technical tone, no emoji unless the user uses them, no marketing text. Files as clickable markdown links labelled `path:line`.
 - Banned word: "Wikipedia" / "Википедия" — say "reference article" / "external page".
-- **Every turn ends either with the task declared done or with an ```` ```ask-user ```` block** — never a plain-text question ("confirm and I start"), and never a bare explanation while a decision is pending: after answering "what's the difference?" re-ask the open question as `ask-user`. Otherwise the session manager reads the turn as "stopped without declaring done", restarts the session and the user's answer is lost.
+- **Every turn ends either with the task declared done or with an ```` ```ask-user ```` block** — never a plain-text question: the session manager otherwise reads the turn as "stopped without declaring done", restarts the session and the user's answer is lost. After answering "what's the difference?" re-ask the open question as `ask-user`.
 
 ## Known gotchas — only traps that bite whatever the task is
 
@@ -55,4 +55,4 @@ Protocol — [`docs/git-workflow.md`](docs/git-workflow.md). Closing a task — 
 - **A fresh or interrupted worktree can have the whole repo staged as deleted** — `git status --short` before the first `git add`, `git diff --cached --stat` before every commit there ([`docs/git-workflow.md`](docs/git-workflow.md) §Worktree isolation).
 - **sccache must be ≥ 0.17.0** — `.cargo/config.toml` wraps every compiler call in it, and an older one kills each `rustc`/`clippy-driver` with `0xc0000409`.
 
-Area-specific traps go to `subsystems/<crate>.md`, `docs/engine-gaps.md` or a nested `CLAUDE.md`; a trap whose defect is fixed is deleted. **If no source answers the question — ask the user, don't assume.**
+Area-specific traps go to `subsystems/<crate>.md`, `docs/engine-gaps.md` or a nested `CLAUDE.md`; a fixed trap is deleted. **If no source answers the question — ask the user, don't assume.**
