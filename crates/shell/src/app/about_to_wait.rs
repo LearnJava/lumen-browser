@@ -1091,13 +1091,21 @@ impl Lumen {
             let now = std::time::Instant::now();
             let engine = self.engine_thread.as_ref();
             let loading = self.nav_start.is_some();
+            let mut relayout_needed = false;
             self.pending_evals.retain(|pending| match pending.poll(now, loading, || engine.and_then(|e| e.busy())) {
                 Some(reply) => {
+                    // MCP-TOTAL-S2e: `EvalScoped` relayouts at the reply point,
+                    // and only on a successful eval — same rule as headless.
+                    relayout_needed |= pending.relayout && matches!(reply, AutomationReply::Eval(_));
                     let _ = pending.reply_tx.send(reply);
                     false
                 }
                 None => true,
             });
+            if relayout_needed {
+                self.relayout();
+                self.request_redraw();
+            }
             if let Some(deadline) = self.pending_evals.iter().map(PendingEval::deadline).min() {
                 match event_loop.control_flow() {
                     ControlFlow::Poll => {}

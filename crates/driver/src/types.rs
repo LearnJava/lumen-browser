@@ -705,6 +705,36 @@ pub enum AutomationCommand {
     /// DEVX-11 page-level aggregate (MCP-TOTAL-S2d, wires `x-explain-page` to
     /// the live window). Reply: [`AutomationReply::ExplainPage`].
     ExplainPage,
+    /// PNG of `selector`'s subtree only (MCP-TOTAL-S2e, wires
+    /// `x-scope-screenshot` to the live window) — the live window's CPU render
+    /// cropped to the matched element's border box. A selector matching
+    /// nothing, or an element fully outside the rendered viewport, is an
+    /// [`AutomationReply::Error`]. Reply: [`AutomationReply::Screenshot`].
+    ScreenshotScoped {
+        /// CSS selector to match.
+        selector: String,
+    },
+    /// Recompute layout after a DOM/style mutation (MCP-TOTAL-S2e, wires
+    /// `x-scope-relayout` to the live window). The live window's canonical
+    /// relayout is a full rebuild from the shared `Document` — the headless
+    /// subtree-only machinery has nothing to attach to — so `selector` acts as
+    /// the honest "not found" gate and the pass itself is the standard one.
+    /// Reply: [`AutomationReply::Ack`].
+    RelayoutScoped {
+        /// CSS selector to match.
+        selector: String,
+    },
+    /// Evaluate JavaScript, then relayout before the reply (MCP-TOTAL-S2e,
+    /// wires `x-scope-eval` to the live window) — so the caller's next read
+    /// already sees the script's geometry, the headless contract. A selector
+    /// matching nothing is an [`AutomationReply::Error`]. Reply:
+    /// [`AutomationReply::Eval`].
+    EvalScoped {
+        /// CSS selector of the subtree the relayout answers for.
+        selector: String,
+        /// Script to evaluate.
+        code: String,
+    },
     /// Enable/disable offline-network simulation (BUG-295, WebDriver BiDi
     /// `network.setOfflineStatus`) on the live window.
     SetOffline(bool),

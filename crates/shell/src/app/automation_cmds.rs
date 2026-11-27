@@ -546,33 +546,7 @@ impl Lumen {
                     let _ = reply_tx.send(eval_outcome_reply(outcome, false));
                 }
                 AutomationCommand::Eval(js, timeout_ms) => {
-                    // BUG-1145: с движковым потоком eval уходит `Task`-ом (по
-                    // порядку за уже отправленными `task`) и ждёт в
-                    // `pending_evals`, не блокируя UI-поток; срок — из запроса.
-                    // Без потока — синхронно по UI-хэндлу, как раньше.
-                    match self.engine_thread.as_ref() {
-                        Some(engine) => {
-                            let (result_tx, result_rx) = std::sync::mpsc::sync_channel::<EvalOutcome>(1);
-                            let wake = self.load_proxy.clone();
-                            engine.task(move |state| {
-                                let outcome = state.js.as_ref().map(|j| j.eval_js_value(&js));
-                                // Клиент уже получил отказ по сроку — будить некого.
-                                if result_tx.send(outcome).is_ok() {
-                                    let _ = wake.send_event(LoadEvent::AutomationWake);
-                                }
-                            });
-                            self.pending_evals.push(PendingEval {
-                                result_rx,
-                                started: std::time::Instant::now(),
-                                timeout: PendingEval::timeout_from_ms(timeout_ms),
-                                reply_tx,
-                            });
-                        }
-                        None => {
-                            let outcome = self.js_ctx.as_ref().map(|j| j.eval_js_value(&js));
-                            let _ = reply_tx.send(eval_outcome_reply(outcome, self.nav_start.is_some()));
-                        }
-                    }
+                    self.automation_eval(&js, timeout_ms, reply_tx, false);
                 }
                 AutomationCommand::Screenshot => {
                     match self.render_current_page_to_png() {
@@ -675,6 +649,43 @@ impl Lumen {
                 AutomationCommand::QueryScoped { root_selector, selector } => {
                     let nodes = self.automation_query_scoped(&root_selector, &selector);
                     let _ = reply_tx.send(AutomationReply::Query(nodes));
+                }
+                AutomationCommand::ScreenshotScoped { selector } => {
+                    match self.automation_screenshot_scoped(&selector) {
+                        Ok(png) => {
+                            let _ = reply_tx.send(AutomationReply::Screenshot(png));
+                        }
+                        Err(e) => {
+                            let _ = reply_tx.send(AutomationReply::Error(e));
+                        }
+                    }
+                }
+                AutomationCommand::RelayoutScoped { selector } => {
+                    // MCP-TOTAL-S2e: honest "not found" first; the pass itself
+                    // is the live window's standard relayout — it always
+                    // rebuilds the tree from the shared `Document` (BUG-1573),
+                    // so the headless subtree-only machinery has nothing to
+                    // attach to. Synchronous, like the reply.
+                    if self.automation_selector_matches(&selector) {
+                        self.relayout();
+                        self.request_redraw();
+                        let _ = reply_tx.send(AutomationReply::Ack);
+                    } else {
+                        let _ = reply_tx.send(AutomationReply::Error(format!(
+                            "relayout_scoped: селектор не найден: {selector}"
+                        )));
+                    }
+                }
+                AutomationCommand::EvalScoped { selector, code } => {
+                    // MCP-TOTAL-S2e: same gate, then the `Eval` machinery with
+                    // the relayout slotted in before the reply.
+                    if self.automation_selector_matches(&selector) {
+                        self.automation_eval(&code, None, reply_tx, true);
+                    } else {
+                        let _ = reply_tx.send(AutomationReply::Error(format!(
+                            "eval_scoped: селектор не найден: {selector}"
+                        )));
+                    }
                 }
                 AutomationCommand::ComputedStyle { selector } => {
                     let props = self.automation_computed_style(&selector);
@@ -965,6 +976,53 @@ impl Lumen {
         }
     }
 
+    /// The `AutomationCommand::Eval` machinery (BUG-1145): eval goes to the
+    /// engine thread as a `Task` (the UI thread never blocks; the reply waits
+    /// in `pending_evals`), synchronously on `js_ctx` when there is no thread.
+    /// `EvalScoped` (MCP-TOTAL-S2e) reuses this with `relayout` set — the
+    /// relayout then lands at the reply point (see `PendingEval::poll`'s
+    /// drain), so the caller's next read already sees the script's geometry,
+    /// the headless contract.
+    fn automation_eval(
+        &mut self,
+        js: &str,
+        timeout_ms: Option<u64>,
+        reply_tx: std::sync::mpsc::Sender<AutomationReply>,
+        relayout: bool,
+    ) {
+        match self.engine_thread.as_ref() {
+            Some(engine) => {
+                let (result_tx, result_rx) = std::sync::mpsc::sync_channel::<EvalOutcome>(1);
+                let wake = self.load_proxy.clone();
+                let js = js.to_owned();
+                engine.task(move |state| {
+                    let outcome = state.js.as_ref().map(|j| j.eval_js_value(&js));
+                    // Клиент уже получил отказ по сроку — будить некого.
+                    if result_tx.send(outcome).is_ok() {
+                        let _ = wake.send_event(LoadEvent::AutomationWake);
+                    }
+                });
+                self.pending_evals.push(PendingEval {
+                    result_rx,
+                    started: std::time::Instant::now(),
+                    timeout: PendingEval::timeout_from_ms(timeout_ms),
+                    reply_tx,
+                    relayout,
+                });
+            }
+            None => {
+                let outcome = self.js_ctx.as_ref().map(|j| j.eval_js_value(js));
+                let ok = matches!(outcome, Some(Ok(_)));
+                // Only on success — same rule as the headless `eval_scoped`.
+                if relayout && ok {
+                    self.relayout();
+                    self.request_redraw();
+                }
+                let _ = reply_tx.send(eval_outcome_reply(outcome, self.nav_start.is_some()));
+            }
+        }
+    }
+
     /// The release half of `PointerUp`/`ReleaseActions` (MCP-TOTAL-S7d):
     /// `pointerup`/`mouseup` under the cursor, the click half, `:active`
     /// cleared, selection drags ended. Verbatim the old `PointerUp` arm body.
@@ -1094,6 +1152,10 @@ pub(crate) struct PendingEval {
     pub(crate) timeout: std::time::Duration,
     /// Куда ответить клиенту автоматизации.
     pub(crate) reply_tx: std::sync::mpsc::Sender<AutomationReply>,
+    /// MCP-TOTAL-S2e (`EvalScoped`): relayout before the reply lands — the
+    /// script's geometry is already recomputed when the caller's next command
+    /// reads the layout (the headless `eval_scoped` contract).
+    pub(crate) relayout: bool,
 }
 
 impl PendingEval {
