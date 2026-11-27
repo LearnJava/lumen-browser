@@ -1,5 +1,6 @@
 //! AVIF: декодирование через `avif-parse` + `rav1d` против эталона ffmpeg (libdav1d/libaom).
 
+#[cfg(not(target_os = "macos"))]
 use lumen_image::decode_avif;
 
 fn max_channel_diff(a: &[u8], b: &[u8]) -> u8 {
