@@ -561,11 +561,12 @@ mod tests {
         }
     }
 
-    /// Текст cue из фикстуры WPT: файл читается из checkout-а, в котором
-    /// компилировался крейт (`CARGO_MANIFEST_DIR`), — не из cwd теста.
+    /// Текст cue из фикстуры WPT (`webvtt/rendering/cues-with-video`, вендорена
+    /// в крейт: CI исключает `tests/wpt` из чекаута — см. conventions.md
+    /// «Test fixtures live in their crate»). Каталог фикстур рядом с крейтом.
     fn first_fixture_cue_text(file: &str) -> String {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/wpt/webvtt/rendering/cues-with-video/processing-model/support")
+            .join("tests/fixtures/webvtt")
             .join(file);
         let cues = crate::parse_vtt(&std::fs::read_to_string(path).unwrap()).unwrap();
         assert_eq!(cues.len(), 1, "в {file} ожидается один cue");
