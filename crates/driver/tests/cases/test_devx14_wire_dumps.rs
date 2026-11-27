@@ -92,3 +92,28 @@ fn live_window_network_log_round_trips_through_automation_channel() {
     assert_eq!(got[0].url, "https://example.com/");
     assert_eq!(got[0].status, 200);
 }
+
+/// MCP-TOTAL-S2a: the eight silent x-surface stubs (`Ok(пусто)`/`Ok(None)`)
+/// answer an honest `Err` instead. The receiver half is dropped, so a stub
+/// that still tried an automation round-trip would fail on `send` — the only
+/// `Err` these methods can return is their own.
+#[test]
+fn live_window_x_surface_stubs_are_honest_errors() {
+    let (tx, rx) = std::sync::mpsc::channel::<lumen_driver::AutomationRequest>();
+    drop(rx);
+    let session = LiveWindowSession::new(AutomationHandle::new(tx));
+
+    let check = |r: lumen_core::error::Result<()>| {
+        let msg = r.expect_err("stub must answer Err").to_string();
+        assert!(msg.contains("не реализовано для LiveWindowSession"), "wrong stub error: {msg}");
+    };
+    check(session.layout_snapshot_scoped("#a").map(drop));
+    check(session.screenshot_scoped("#a").map(drop));
+    check(session.computed_style("#a").map(drop));
+    check(session.computed_style_snapshot("#a").map(drop));
+    check(session.layout_box_by_selector("#a").map(drop));
+    check(session.all_layout_boxes_by_selector("#a").map(drop));
+    check(session.explain_element("#a").map(drop));
+    check(session.explain_page().map(drop));
+    check(session.query_scoped("#a", "p").map(drop));
+}

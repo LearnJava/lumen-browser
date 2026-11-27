@@ -115,16 +115,16 @@ impl BrowserSession for LiveWindowSession {
 
     /// Not yet wired to the live window: `AutomationCommand` has no scoped
     /// layout-snapshot variant yet (SDC-2 MVP scope, DEVX-14 wired the
-    /// whole-page `layout_snapshot` but not this) — always empty.
+    /// whole-page `layout_snapshot` but not this) — always `Err`
+    /// (MCP-TOTAL-S2a), see `screenshot_scoped`.
     fn layout_snapshot_scoped(&self, _selector: &str) -> Result<Vec<BoxModel>> {
-        Ok(Vec::new())
+        Err(Error::Other("layout_snapshot_scoped: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
     }
 
     /// Not yet wired to the live window (SDC-2 MVP scope) — always `Err`
-    /// (unlike the other scoped reads, an empty screenshot/dump isn't a
-    /// meaningfully distinct "not found" answer, so this mirrors
-    /// `screenshot_scoped`'s own not-found error rather than silently
-    /// returning nothing).
+    /// (an empty screenshot/dump isn't a meaningfully distinct "not found"
+    /// answer); since MCP-TOTAL-S2a every silent x-surface stub here mirrors
+    /// this shape instead of silently returning nothing.
     fn screenshot_scoped(&self, _selector: &str) -> Result<Vec<u8>> {
         Err(Error::Other("screenshot_scoped: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
     }
@@ -147,39 +147,44 @@ impl BrowserSession for LiveWindowSession {
         Err(Error::Other("display_list: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
     }
 
-    /// Not yet wired to the live window (SDC-2 MVP scope) — always `None`.
+    /// Not yet wired to the live window (SDC-2 MVP scope) — always `Err`
+    /// (MCP-TOTAL-S2a), see `screenshot_scoped`.
     fn computed_style(&self, _selector: &str) -> Result<Option<ComputedProperties>> {
-        Ok(None)
+        Err(Error::Other("computed_style: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
     }
 
-    /// Not yet wired to the live window (SDC-2 MVP scope) — always `None`.
+    /// Not yet wired to the live window (SDC-2 MVP scope) — always `Err`
+    /// (MCP-TOTAL-S2a), see `screenshot_scoped`.
     fn computed_style_snapshot(&self, _selector: &str) -> Result<Option<ComputedStyleSnapshot>> {
-        Ok(None)
+        Err(Error::Other("computed_style_snapshot: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
     }
 
-    /// Not yet wired to the live window (SDC-2 MVP scope) — always `None`.
+    /// Not yet wired to the live window (SDC-2 MVP scope) — always `Err`
+    /// (MCP-TOTAL-S2a), see `screenshot_scoped`.
     fn layout_box_by_selector(&self, _selector: &str) -> Result<Option<BoxModel>> {
-        Ok(None)
+        Err(Error::Other("layout_box_by_selector: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
     }
 
-    /// Not yet wired to the live window (SDC-2 MVP scope) — always empty.
+    /// Not yet wired to the live window (SDC-2 MVP scope) — always `Err`
+    /// (MCP-TOTAL-S2a), see `screenshot_scoped`.
     fn all_layout_boxes_by_selector(&self, _selector: &str) -> Result<Vec<BoxModel>> {
-        Ok(Vec::new())
+        Err(Error::Other("all_layout_boxes_by_selector: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
     }
 
     /// Not yet wired to the live window (SDC-2 MVP scope, same gap as
-    /// `layout_box_by_selector`) — always the all-default `ExplainElement`
-    /// (`in_dom: false`), not an error: `explain_element` needs per-selector
+    /// `layout_box_by_selector`) — always `Err` (MCP-TOTAL-S2a), see
+    /// `screenshot_scoped`: `explain_element` needs per-selector
     /// layout/provenance data, which `AutomationCommand` still doesn't carry
     /// even after DEVX-14 wired the whole-page `layout_snapshot`.
     fn explain_element(&self, _selector: &str) -> Result<ExplainElement> {
-        Ok(ExplainElement::default())
+        Err(Error::Other("explain_element: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
     }
 
     /// Not yet wired to the live window (SDC-2 MVP scope, same gap as
-    /// `explain_element`) — always the all-default `ExplainPage`.
+    /// `explain_element`) — always `Err` (MCP-TOTAL-S2a), see
+    /// `screenshot_scoped`.
     fn explain_page(&self) -> Result<ExplainPage> {
-        Ok(ExplainPage::default())
+        Err(Error::Other("explain_page: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
     }
 
     /// Network request log since the last `navigate()` (DEVX-14) —
@@ -330,9 +335,10 @@ impl BrowserSession for LiveWindowSession {
     }
 
     /// Not yet wired to the live window (SDC-2 MVP scope): `AutomationCommand`
-    /// has no scoped-query variant yet — always empty.
+    /// has no scoped-query variant yet — always `Err` (MCP-TOTAL-S2a), see
+    /// `screenshot_scoped`.
     fn query_scoped(&self, _root_selector: &str, _selector: &str) -> Result<Vec<NodeRef>> {
-        Ok(Vec::new())
+        Err(Error::Other("query_scoped: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
     }
 
     /// Not yet wired to the live window (SDC-2 MVP scope, same gap as
