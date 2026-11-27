@@ -57,6 +57,7 @@ fn fake_live_session(boxes: Vec<BoxModel>, entries: Vec<NetworkEntry>) -> LiveWi
                 AutomationCommand::LayoutSnapshot => AutomationReply::LayoutSnapshot(boxes.clone()),
                 AutomationCommand::NetworkLog => AutomationReply::NetworkLog(entries.clone()),
                 AutomationCommand::DisplayList => AutomationReply::DisplayList("whole-page dump".into()),
+                AutomationCommand::MemReport => AutomationReply::MemReport("MEM_REPORT dl_cmds=0".into()),
                 AutomationCommand::DisplayListScoped { selector } => {
                     AutomationReply::DisplayList(format!("scoped [{selector}] dump"))
                 }
@@ -174,6 +175,22 @@ fn live_window_display_list_round_trips_through_automation_channel() {
         session.display_list_scoped("#b").expect("display_list_scoped failed"),
         "scoped [#b] dump"
     );
+}
+
+/// MCP-TOTAL-S5b: the memory report round-trips through the automation
+/// channel; a headless session answers the honest "live window only" error
+/// (the trait default — headless sessions collect no mem report).
+#[test]
+fn live_window_mem_report_round_trips_and_headless_errors() {
+    let session = fake_live_session(Vec::new(), Vec::new());
+    assert_eq!(
+        session.mem_report().expect("mem_report failed"),
+        "MEM_REPORT dl_cmds=0"
+    );
+
+    let headless = InProcessSession::new();
+    let err = headless.mem_report().expect_err("headless mem_report must be an error");
+    assert!(err.to_string().contains("только для живого окна"), "wrong error: {err}");
 }
 
 /// MCP-TOTAL-S2c: the scoped layout snapshot and the subtree-scoped query

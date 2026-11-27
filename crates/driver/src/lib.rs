@@ -193,6 +193,19 @@ pub trait BrowserSession {
     /// `Err`, если `selector` ничего не находит.
     fn display_list_scoped(&self, selector: &str) -> Result<String>;
 
+    /// Мем-отчёт живого окна (MCP-TOTAL-S5b, `resource://x-mem-report`): те
+    /// же числа, что печатает периодическая строка `MEM_REPORT …` под
+    /// `LUMEN_MEM_REPORT=1` — display list, кэши стилей/команд, картинки,
+    /// prefetch, web-шрифты, GIF, JS-куча — плюс сводные строки кадров и
+    /// relayout, когда те накоплены (`LUMEN_FRAME_LOG`).
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — сборщики диагностики живут в `Lumen` (UI-поток)
+    /// живого окна, headless-сессии отчёта не собирают.
+    fn mem_report(&self) -> Result<String> {
+        Err(lumen_core::error::Error::Other("mem_report: только для живого окна (--mcp-live-port)".into()))
+    }
+
     /// Журнал сетевых запросов с момента последней навигации.
     fn network_log(&self) -> Result<Vec<NetworkEntry>>;
 

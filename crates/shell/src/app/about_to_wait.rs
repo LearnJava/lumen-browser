@@ -83,42 +83,12 @@ impl Lumen {
             let now_s = self.epoch.elapsed().as_secs_f64();
             if now_s - self.last_mem_report_s >= 10.0 {
                 self.last_mem_report_s = now_s;
-                let wf_bytes: usize = self.web_fonts.iter().map(|f| f.bytes.len()).sum();
-                // BUG-272 срез 19: lazy GIFs hold encoded bytes + ~one decoded frame,
-                // not all N frames — `resident_bytes` reflects the real footprint.
-                let gif_bytes: usize = self
-                    .animated_gifs
-                    .values()
-                    .map(lumen_image::AnimatedImage::resident_bytes)
-                    .sum();
-                let (img_n, img_b) = image_cache::IMAGE_CACHE.debug_stats();
-                let (pf_n, pf_b) = prefetch::PREFETCH_CACHE.debug_stats();
-                // ADR-016 M2.2c-2d (20): direct `self.js_ctx` read → `route_query_js`.
-                // Flag-off (default) `js.map(...).unwrap_or((-1,-1))` = the old
-                // `map_or((-1,-1), ...)`; under the flag it is a blocking `query`.
-                let js_heap = self.drain_query_js(|j| j.debug_js_heap()).unwrap_or((-1, -1));
-                eprintln!(
-                    "MEM_REPORT dl_cmds={} prev_styles={} dl_cache={:.1}MB img_cache={}/{:.1}MB prefetch={}/{:.1}MB web_fonts={}/{:.1}MB gifs={}/{:.1}MB js_malloc={:.1}MB js_used={:.1}MB {}",
-                    self.display_list.len(),
-                    self.prev_styles.len(),
-                    self.display_list_cache.used_bytes() as f64 / 1e6,
-                    img_n, img_b as f64 / 1e6,
-                    pf_n, pf_b as f64 / 1e6,
-                    self.web_fonts.len(), wf_bytes as f64 / 1e6,
-                    self.animated_gifs.len(), gif_bytes as f64 / 1e6,
-                    js_heap.0 as f64 / 1e6, js_heap.1 as f64 / 1e6,
-                    self.renderer.as_ref().map_or(String::new(), |r| r.debug_mem_report()),
-                );
-                // M0.1 (ADR-016): периодическая сводка времён кадров — базовые
-                // числа, на которые будут ссылаться последующие стадии MT-рендера.
-                if let Some(summary) = self.frame_stats.summary() {
-                    eprintln!("{summary}");
-                }
-                // ADR-016 M2.0: periodic UI-thread relayout-cost summary alongside
-                // the frame summary — the baseline M2's engine-thread move improves.
-                if let Some(summary) = self.engine_stats.summary() {
-                    eprintln!("{}", summary.display_with("ENGINE_SUMMARY"));
-                }
+                // M0.1 (ADR-016): периодическая сводка времён кадров и
+                // ADR-016 M2.0 — сводка relayout-cost — печатаются сборщиком
+                // `automation_mem_report` рядом с основной строкой, тем же
+                // источником, что читает MCP-ресурс `resource://x-mem-report`
+                // (MCP-TOTAL-S5b).
+                eprintln!("{}", self.automation_mem_report());
             }
         }
         // HTML §8.1.4.2 «Processing model»: между событиями event-loop-а
