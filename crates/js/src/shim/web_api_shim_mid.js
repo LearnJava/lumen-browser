@@ -1426,6 +1426,24 @@ function _lumen_dispatch_mouse_event(start_nid, type, clientX, clientY, button, 
     return _lumen_dispatch_rich(start_nid, ev);
 }
 
+// Called from shell for wheel input (MCP-TOTAL-S7d, automation `wheel`):
+// trusted WheelEvent with pixel deltas (deltaMode 0); mod: same bit-mask as
+// _lumen_dispatch_mouse_event. A real OS wheel does not reach the page as a
+// DOM `wheel` event yet (the wheel router reserves that) — this dispatch is
+// the automation path only.
+function _lumen_dispatch_wheel_event(start_nid, clientX, clientY, deltaX, deltaY, mod) {
+    var ev = new WheelEvent('wheel', {
+        bubbles: true, cancelable: true, composed: true, isTrusted: true,
+        clientX: clientX, clientY: clientY,
+        screenX: clientX, screenY: clientY,
+        pageX:   clientX, pageY:   clientY,
+        deltaX: deltaX, deltaY: deltaY, deltaZ: 0, deltaMode: 0,
+        ctrlKey:  !!(mod & 1), shiftKey: !!(mod & 2),
+        altKey:   !!(mod & 4), metaKey:  !!(mod & 8)
+    });
+    return _lumen_dispatch_rich(start_nid, ev);
+}
+
 // Called from the shell right before it runs the form submission algorithm for
 // an activated submit button (HTML LS 4.10.21.4 step 11: fire a cancelable
 // event named 'submit' at the form). Returns false when a page handler called

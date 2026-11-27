@@ -673,6 +673,9 @@ fn live_window_only_trait_defaults_are_honest_errors() {
         ("pointer_up", s.pointer_up().is_err()),
         ("press_key", s.press_key("Escape", "Escape", true).is_err()),
         ("type_focused", s.type_focused("x").is_err()),
+        // MCP-TOTAL-S7d: release_actions и колесо — тоже только живого окна.
+        ("release_actions", s.release_actions().is_err()),
+        ("wheel", s.wheel(1.0, 2.0, 0.0, 120.0, 0).is_err()),
         ("get_cookies", s.get_cookies().is_err()),
         ("set_cookie", s.set_cookie(cookie).is_err()),
         ("delete_cookie", s.delete_cookie("example.test", "/", "n").is_err()),

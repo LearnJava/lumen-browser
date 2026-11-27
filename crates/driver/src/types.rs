@@ -592,6 +592,31 @@ pub enum AutomationCommand {
     /// Type characters into the currently focused element without clicking
     /// first (BUG-1194; `Type` always clicks its target).
     TypeFocused(String),
+    /// Release everything automation holds pressed (MCP-TOTAL-S7d, BiDi
+    /// `input.releaseActions`): the left button of [`Self::PointerDown`]
+    /// (the page gets `pointerup`/`mouseup`, `:active` clears) and every
+    /// modifier held by [`Self::Key`] (each gets its `keyup`). Idempotent.
+    /// Reply: `Ack`.
+    ReleaseActions,
+    /// A wheel notch at viewport CSS-pixel `(x, y)` (MCP-TOTAL-S7d): the page
+    /// gets a trusted `wheel` event with `delta_x`/`delta_y` (px, positive =
+    /// right/down), then the scroll follows the same routing as a real
+    /// `MouseWheel` — frame, overflow container, smooth page scroll;
+    /// Ctrl+wheel zooms, Shift+wheel scrolls horizontally. `modifiers` is the
+    /// `Key` bit-mask (bit0=ctrl, bit1=shift, bit2=alt, bit3=meta). Reply:
+    /// `Ack`.
+    Wheel {
+        /// Viewport X, CSS px.
+        x: f32,
+        /// Viewport Y, CSS px.
+        y: f32,
+        /// Wheel delta X, px (positive = right).
+        delta_x: f32,
+        /// Wheel delta Y, px (positive = down).
+        delta_y: f32,
+        /// Held modifiers: ctrl 1, shift 2, alt 4, meta 8.
+        modifiers: u8,
+    },
     /// Evaluate JavaScript in the active tab.
     ///
     /// The second field is how long (ms) the live window waits for its engine

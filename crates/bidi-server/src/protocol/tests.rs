@@ -701,6 +701,39 @@ fn input_perform_actions_text_without_pointer_does_not_click() {
     assert_eq!(seen, vec![r#"TypeFocused("ab")"#.to_owned()]);
 }
 
+/// MCP-TOTAL-S7d: a wheel source's `scroll` action is a wheel notch (the
+/// command carries the deltas), and `input.releaseActions` releases what a
+/// previous `pointerDown` holds.
+#[test]
+fn input_wheel_scroll_and_release_actions_replay_to_live_window() {
+    let (live, log) = recording_live_session();
+    let mut state = BidiState::with_live_session(live, None);
+    let cid = new_session_ctx(&mut state);
+    let cmd = format!(
+        r#"{{"id":1,"method":"input.performActions","params":{{"context":"{cid}","actions":[
+                {{"type":"wheel","id":"w","actions":[{{"type":"scroll","x":10,"y":20,"deltaX":0,"deltaY":120}}]}},
+                {{"type":"pointer","id":"m","actions":[
+                    {{"type":"pointerMove","x":10,"y":20}},
+                    {{"type":"pointerDown","button":0}}
+                ]}}
+            ]}}}}"#
+    );
+    let r = dispatch(&cmd, &mut state);
+    assert!(r.frames[0].contains("success"), "got: {}", r.frames[0]);
+    let r = dispatch(
+        &format!(r#"{{"id":2,"method":"input.releaseActions","params":{{"context":"{cid}"}}}}"#),
+        &mut state,
+    );
+    assert!(r.frames[0].contains("success"), "got: {}", r.frames[0]);
+    let seen: Vec<String> = log.try_iter().collect();
+    assert!(
+        seen.iter().any(|c| c.contains("Wheel") && c.contains("delta_y: 120.0")),
+        "{seen:?}"
+    );
+    assert!(seen.iter().any(|c| c.contains("PointerDown")), "{seen:?}");
+    assert!(seen.iter().any(|c| c.contains("ReleaseActions")), "{seen:?}");
+}
+
 #[test]
 fn session_status_ready_before_session() {
     let mut state = BidiState::new();

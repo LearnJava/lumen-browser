@@ -356,6 +356,19 @@ impl BrowserSession for LiveWindowSession {
         Ok(())
     }
 
+    /// MCP-TOTAL-S7d: release everything automation holds pressed.
+    fn release_actions(&self) -> Result<()> {
+        self.execute(AutomationCommand::ReleaseActions)?;
+        Ok(())
+    }
+
+    /// MCP-TOTAL-S7d: a wheel notch at the point; the shell runs the same
+    /// `MouseWheel` handler a real wheel event takes.
+    fn wheel(&self, x: f32, y: f32, delta_x: f32, delta_y: f32, modifiers: u8) -> Result<()> {
+        self.execute(AutomationCommand::Wheel { x, y, delta_x, delta_y, modifiers })?;
+        Ok(())
+    }
+
     fn get_cookies(&self) -> Result<Vec<AutomationCookie>> {
         match self.execute(AutomationCommand::GetCookies)? {
             AutomationReply::Cookies(cookies) => Ok(cookies),
