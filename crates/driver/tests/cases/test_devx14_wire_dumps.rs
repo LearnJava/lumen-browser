@@ -78,6 +78,25 @@ fn fake_live_session(boxes: Vec<BoxModel>, entries: Vec<NetworkEntry>) -> LiveWi
                         bounding_rect: lumen_core::geom::Rect::ZERO,
                     }])
                 }
+                // MCP-TOTAL-S2d: canned answers echoing the selector through,
+                // so the round-trip test sees both the selector and the
+                // payload survive the channel.
+                AutomationCommand::ComputedStyle { selector } => {
+                    AutomationReply::ComputedStyle(Some(lumen_driver::ComputedProperties {
+                        properties: [("color".to_string(), format!("scoped [{selector}]"))].into(),
+                    }))
+                }
+                AutomationCommand::ExplainElement { selector } => {
+                    AutomationReply::ExplainElement(lumen_driver::ExplainElement {
+                        in_dom: true,
+                        heuristic: Some(format!("scoped [{selector}]")),
+                        ..Default::default()
+                    })
+                }
+                AutomationCommand::ExplainPage => AutomationReply::ExplainPage(lumen_driver::ExplainPage {
+                    box_count: 5,
+                    ..Default::default()
+                }),
                 _ => AutomationReply::Error("unsupported in fake_live_session".into()),
             };
             let _ = reply_tx.send(reply);
@@ -143,11 +162,26 @@ fn live_window_scoped_layout_and_query_round_trip_through_automation_channel() {
     assert_eq!(nodes[0].text_content, "matched [a]");
 }
 
-/// MCP-TOTAL-S2a: the six remaining silent x-surface stubs (`Ok(пусто)`/
+/// MCP-TOTAL-S2d: computed style and both explain reads round-trip through
+/// the automation channel, carrying the selector through to the arm.
+#[test]
+fn live_window_computed_style_and_explain_round_trip_through_automation_channel() {
+    let session = fake_live_session(Vec::new(), Vec::new());
+    let props = session.computed_style("#box").expect("computed_style failed").expect("Some");
+    assert_eq!(props.properties["color"], "scoped [#box]");
+    let chain = session.explain_element("#box").expect("explain_element failed");
+    assert!(chain.in_dom);
+    assert_eq!(chain.heuristic.as_deref(), Some("scoped [#box]"));
+    let page = session.explain_page().expect("explain_page failed");
+    assert_eq!(page.box_count, 5);
+}
+
+/// MCP-TOTAL-S2a: the four remaining silent x-surface stubs (`Ok(пусто)`/
 /// `Ok(None)`) answer an honest `Err` instead. The receiver half is dropped,
 /// so a stub that still tried an automation round-trip would fail on `send` —
 /// the only `Err` these methods can return is their own. (S2c un-stubbed
-/// `layout_snapshot_scoped`/`query_scoped`, S2b `display_list*`.)
+/// `layout_snapshot_scoped`/`query_scoped`, S2b `display_list*`, S2d
+/// `computed_style`/`explain_element`/`explain_page`.)
 #[test]
 fn live_window_x_surface_stubs_are_honest_errors() {
     let (tx, rx) = std::sync::mpsc::channel::<lumen_driver::AutomationRequest>();
@@ -159,10 +193,7 @@ fn live_window_x_surface_stubs_are_honest_errors() {
         assert!(msg.contains("не реализовано для LiveWindowSession"), "wrong stub error: {msg}");
     };
     check(session.screenshot_scoped("#a").map(drop));
-    check(session.computed_style("#a").map(drop));
     check(session.computed_style_snapshot("#a").map(drop));
     check(session.layout_box_by_selector("#a").map(drop));
     check(session.all_layout_boxes_by_selector("#a").map(drop));
-    check(session.explain_element("#a").map(drop));
-    check(session.explain_page().map(drop));
 }

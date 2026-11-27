@@ -676,6 +676,24 @@ impl Lumen {
                     let nodes = self.automation_query_scoped(&root_selector, &selector);
                     let _ = reply_tx.send(AutomationReply::Query(nodes));
                 }
+                AutomationCommand::ComputedStyle { selector } => {
+                    let props = self.automation_computed_style(&selector);
+                    let _ = reply_tx.send(AutomationReply::ComputedStyle(props));
+                }
+                AutomationCommand::ExplainElement { selector } => {
+                    // An unmatched selector is the chain's own all-default
+                    // answer (headless shape), so only "no page" lands here.
+                    let chain = self.automation_explain_element(&selector).unwrap_or_default();
+                    let _ = reply_tx.send(AutomationReply::ExplainElement(chain));
+                }
+                AutomationCommand::ExplainPage => match self.automation_explain_page() {
+                    Some(page) => {
+                        let _ = reply_tx.send(AutomationReply::ExplainPage(page));
+                    }
+                    None => {
+                        let _ = reply_tx.send(AutomationReply::Error("no page loaded".to_string()));
+                    }
+                },
                 AutomationCommand::SetOffline(offline) => {
                     // BUG-295 (`network.setOfflineStatus`): process-global flag
                     // consulted at the one `fetch_with_redirect` chokepoint every

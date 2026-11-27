@@ -152,10 +152,14 @@ impl BrowserSession for LiveWindowSession {
         }
     }
 
-    /// Not yet wired to the live window (SDC-2 MVP scope) — always `Err`
-    /// (MCP-TOTAL-S2a), see `screenshot_scoped`.
-    fn computed_style(&self, _selector: &str) -> Result<Option<ComputedProperties>> {
-        Err(Error::Other("computed_style: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
+    /// MCP-TOTAL-S2d: the computed-style map round-trips through
+    /// [`AutomationCommand::ComputedStyle`]; `None` — no page or no match,
+    /// the same shape the headless sessions answer.
+    fn computed_style(&self, selector: &str) -> Result<Option<ComputedProperties>> {
+        match self.execute(AutomationCommand::ComputedStyle { selector: selector.to_owned() })? {
+            AutomationReply::ComputedStyle(props) => Ok(props),
+            other => Err(unexpected_reply("ComputedStyle", &other)),
+        }
     }
 
     /// Not yet wired to the live window (SDC-2 MVP scope) — always `Err`
@@ -176,20 +180,26 @@ impl BrowserSession for LiveWindowSession {
         Err(Error::Other("all_layout_boxes_by_selector: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
     }
 
-    /// Not yet wired to the live window (SDC-2 MVP scope, same gap as
-    /// `layout_box_by_selector`) — always `Err` (MCP-TOTAL-S2a), see
-    /// `screenshot_scoped`: `explain_element` needs per-selector
-    /// layout/provenance data, which `AutomationCommand` still doesn't carry
-    /// even after DEVX-14 wired the whole-page `layout_snapshot`.
-    fn explain_element(&self, _selector: &str) -> Result<ExplainElement> {
-        Err(Error::Other("explain_element: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
+    /// MCP-TOTAL-S2d: the DEVX-10 chain round-trips through
+    /// [`AutomationCommand::ExplainElement`] — the arm runs the same
+    /// session-agnostic `lumen_driver::explain` path the headless sessions
+    /// use.
+    fn explain_element(&self, selector: &str) -> Result<ExplainElement> {
+        match self.execute(AutomationCommand::ExplainElement { selector: selector.to_owned() })? {
+            AutomationReply::ExplainElement(chain) => Ok(chain),
+            other => Err(unexpected_reply("ExplainElement", &other)),
+        }
     }
 
-    /// Not yet wired to the live window (SDC-2 MVP scope, same gap as
-    /// `explain_element`) — always `Err` (MCP-TOTAL-S2a), see
-    /// `screenshot_scoped`.
+    /// MCP-TOTAL-S2d: the DEVX-11 aggregate round-trips through
+    /// [`AutomationCommand::ExplainPage`]; `relayout_count` stays `None` —
+    /// the live window doesn't track layout passes (documented gap, same as
+    /// [`crate::WinitSession`]).
     fn explain_page(&self) -> Result<ExplainPage> {
-        Err(Error::Other("explain_page: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
+        match self.execute(AutomationCommand::ExplainPage)? {
+            AutomationReply::ExplainPage(page) => Ok(page),
+            other => Err(unexpected_reply("ExplainPage", &other)),
+        }
     }
 
     /// Network request log since the last `navigate()` (DEVX-14) —
