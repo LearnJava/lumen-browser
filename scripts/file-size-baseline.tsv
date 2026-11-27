@@ -4,7 +4,7 @@
 # Число может ехать ВНИЗ свободно, ВВЕРХ — только осознанно, тем же
 # коммитом, что и рост, и с объяснением в теле коммита.
 
-12629	crates/network/src/lib.rs
+12633	crates/network/src/lib.rs
 6225	crates/engine/html-parser/src/tree_builder.rs
 5771	crates/engine/paint/src/backends/femtovg_backend.rs
 5674	crates/engine/paint/src/renderer.rs
@@ -15,8 +15,8 @@
 3902	crates/js/src/worker.rs
 3680	crates/chrome/src/model.rs
 3358	crates/shell/src/page_load.rs
+3041	crates/bidi-server/src/protocol.rs
 3024	crates/mcp/src/server.rs
-3005	crates/bidi-server/src/protocol.rs
 2893	crates/engine/layout/src/selector_query.rs
 2885	crates/js/src/sw_worker.rs
 2763	crates/network/src/h3/conn_connect.rs
