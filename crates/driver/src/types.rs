@@ -168,6 +168,19 @@ pub struct NetworkEntry {
     pub status: u16,
     /// Размер тела ответа в байтах.
     pub size_bytes: usize,
+    /// Запрос заблокирован контент-фильтром и не отправлялся.
+    #[serde(default)]
+    pub blocked: bool,
+    /// Запрос упал на сетевом уровне (DNS/TCP/TLS/чтение) до HTTP-ответа.
+    #[serde(default)]
+    pub failed: bool,
+    /// Для блокировки — сработавшее правило фильтра; для сбоя —
+    /// `"<стадия>: <причина>"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Длительность запроса в мс (`None` — не завершён).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
 }
 
 /// A network request paused by an active intercept, not yet reported to the

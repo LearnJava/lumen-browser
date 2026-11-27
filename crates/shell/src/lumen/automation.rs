@@ -500,6 +500,10 @@ impl Lumen {
                     method: e.method.clone(),
                     status: e.status.unwrap_or(0),
                     size_bytes: 0,
+                    blocked: e.blocked,
+                    failed: e.failed,
+                    reason: e.reason.clone(),
+                    duration_ms: e.duration_ms,
                 })
                 .collect()
         }
