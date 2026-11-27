@@ -113,7 +113,8 @@ fn fake_live_session_load_settled_error() -> LiveWindowSession {
 /// A fake "live window" that emulates V8's `awaitPromise` two-round-trip
 /// dance for BUG-319: the round-1 setup eval (`Promise.resolve(...).then`)
 /// is answered `"pending"`, and the round-2 read of
-/// `globalThis.__lumen_bidi_await` returns `settled` — the canned JSON a
+/// `globalThis.__lumen_await` (the shared driver global, MCP-TOTAL-S7f)
+/// returns `settled` — the canned JSON a
 /// real page's settle handler would have left after the microtask
 /// checkpoint (`{state:"fulfilled",value:..}` / `{state:"rejected",..}` /
 /// `{state:"pending"}`).

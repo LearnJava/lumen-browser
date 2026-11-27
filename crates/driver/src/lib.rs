@@ -58,6 +58,17 @@ pub use lumen_layout::ComputedStyleSnapshot;
 
 use lumen_core::error::Result;
 
+/// Результат [`BrowserSession::eval_await_promise`] (MCP-TOTAL-S7f): итог
+/// ожидания промисного выражения.
+#[derive(Debug, PartialEq)]
+pub enum AwaitedPromise {
+    /// Промис исполнен: `Some` — значение как JSON-строка, `None` — исполнен
+    /// с `undefined` (JSON его не переносит).
+    Fulfilled(Option<String>),
+    /// Промис не осел на микротасках (макротаск/IO) — остался pending.
+    Pending,
+}
+
 /// Программный интерфейс к браузерному сеансу.
 ///
 /// Разделён на **ресурсы** (read-only снимки текущего состояния) и
@@ -291,6 +302,61 @@ pub trait BrowserSession {
     fn eval_with_timeout(&mut self, js: &str, timeout_ms: u64) -> Result<String> {
         let _ = timeout_ms;
         self.eval(js)
+    }
+
+    /// Ождать промисное выражение (MCP-TOTAL-S7f): выражение, значением
+    /// которого является промис, → его осевшее значение. Отклонение — `Err`
+    /// с текстом причины («uncaught (in promise): …»).
+    ///
+    /// `Self::eval` синхронен и снимает значение выражения до опустошения
+    /// очереди микротасков, поэтому промисное выражение без ожидания даёт
+    /// неосевший промис-объект. V8 при этом выполняет микротаск-чекпоинт в
+    /// конце каждого eval, так что хватает двух заходов:
+    ///
+    /// 1. обернуть выражение в `Promise.resolve(...)` и навесить обработчик
+    ///    оседания, записывающий `{state, value|error}` в well-known глобал;
+    ///    чекпоинт исполняет обработчик до возврата из первого захода.
+    /// 2. прочитать глобал обратно.
+    ///
+    /// Оседают только промисы на микротасках; промис, ждущий макротаска/IO,
+    /// возвращает [`AwaitedPromise::Pending`] — вызывающий отступает к
+    /// промис-объекту, как без ожидания.
+    fn eval_await_promise(&mut self, expr: &str) -> Result<AwaitedPromise> {
+        // Заход 1: исполнить выражение, записать исход оседания в глобал.
+        let setup = format!(
+            "(function(){{\
+                 globalThis.__lumen_await = {{ state: \"pending\" }};\
+                 try {{\
+                     Promise.resolve(({expr})).then(\
+                         function(v){{ globalThis.__lumen_await = (v === undefined) ? {{ state: \"fulfilled\" }} : {{ state: \"fulfilled\", value: v }}; }},\
+                         function(e){{ globalThis.__lumen_await = {{ state: \"rejected\", error: (e && e.message !== undefined) ? String(e.message) : String(e) }}; }}\
+                     );\
+                 }} catch (e) {{\
+                     globalThis.__lumen_await = {{ state: \"rejected\", error: (e && e.message !== undefined) ? String(e.message) : String(e) }};\
+                 }}\
+                 return \"pending\";\
+             }})()"
+        );
+        self.eval(&setup).map_err(|e| lumen_core::error::Error::Other(format!("eval: {e}")))?;
+
+        // Заход 2: прочитать исход, оставленный микротаск-чекпоинтом.
+        let read = "(function(){ var r = globalThis.__lumen_await; \
+             try { delete globalThis.__lumen_await; } catch (e) {} return r; })()";
+        let raw = self.eval(read).map_err(|e| lumen_core::error::Error::Other(format!("eval: {e}")))?;
+
+        let outcome: serde_json::Value = serde_json::from_str(&raw)
+            .map_err(|e| lumen_core::error::Error::Other(format!("eval: {e}")))?;
+        match outcome.get("state").and_then(|v| v.as_str()) {
+            Some("fulfilled") => Ok(AwaitedPromise::Fulfilled(
+                outcome.get("value").map(|v| v.to_string()),
+            )),
+            Some("rejected") => Err(lumen_core::error::Error::Other(format!(
+                "uncaught (in promise): {}",
+                outcome.get("error").and_then(|v| v.as_str()).unwrap_or("")
+            ))),
+            // Ещё pending (ждёт макротаска/IO).
+            _ => Ok(AwaitedPromise::Pending),
+        }
     }
 
     /// Найти DOM-узлы по CSS-селектору. Возвращает пустой вектор, если

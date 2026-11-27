@@ -2,7 +2,7 @@
 
 use serde_json::{json, Value};
 
-use lumen_driver::BrowserSession;
+use lumen_driver::{AwaitedPromise, BrowserSession};
 use lumen_core::error::Result;
 
 use crate::protocol::{McpMessage, McpRequest, McpResource, McpResponse, McpTool};
@@ -597,7 +597,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
             },
             McpTool {
                 name: "eval".to_string(),
-                description: "Run JavaScript in the page and return {success, result}, where `result` is a string. Evaluate an expression and serialize structured data yourself, e.g. `JSON.stringify(...)`, then parse it. Errors carry the JS exception text. In the live window a busy engine thread makes the call fail after `timeout_ms` (default 5000).".to_string(),
+                description: "Run JavaScript in the page and return {success, result}, where `result` is a string. Evaluate an expression and serialize structured data yourself, e.g. `JSON.stringify(...)`, then parse it. With `await_promise: true` a promise-valued expression resolves to its settled value instead of the promise object (`{}`); a rejected promise answers an error carrying the reason. Errors carry the JS exception text. In the live window a busy engine thread makes the call fail after `timeout_ms` (default 5000; not applied with `await_promise`).".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "required": ["code"],
@@ -605,6 +605,10 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                         "code": {
                             "type": "string",
                             "description": "JavaScript code to execute"
+                        },
+                        "await_promise": {
+                            "type": "boolean",
+                            "description": "Await a promise-valued expression and return its settled value. Promises that settle on microtasks (Promise.resolve, sync async functions) resolve; one still pending on a timer/IO falls back to the promise object `{}`"
                         },
                         "timeout_ms": {
                             "type": "integer",
@@ -1276,11 +1280,25 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                     Some(c) => c,
                     None => return McpResponse::err(id.clone(), -32602, "Missing code argument"),
                 };
-                // BUG-1145: без `timeout_ms` — прежний путь с таймаутом живого
-                // окна по умолчанию.
-                let result = match args.get("timeout_ms").and_then(|v| v.as_u64()) {
-                    Some(ms) => self.session.eval_with_timeout(code, ms),
-                    None => self.session.eval(code),
+                // MCP-TOTAL-S7f: `await_promise` ждёт промисное выражение через
+                // общий `BrowserSession::eval_await_promise` (тот же приём, что
+                // у BiDi `awaitPromise`); без флага — прежний путь.
+                let result = if args.get("await_promise").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    self.session.eval_await_promise(code).map(|awaited| match awaited {
+                        AwaitedPromise::Fulfilled(Some(json)) => json,
+                        // Исполнен с `undefined` / ещё pending — тот же текст,
+                        // что у eval без флага (`to_json_string` undefined —
+                        // `null`, промис-объект — `{}`).
+                        AwaitedPromise::Fulfilled(None) => "null".to_string(),
+                        AwaitedPromise::Pending => "{}".to_string(),
+                    })
+                } else {
+                    // BUG-1145: без `timeout_ms` — прежний путь с таймаутом живого
+                    // окна по умолчанию.
+                    match args.get("timeout_ms").and_then(|v| v.as_u64()) {
+                        Some(ms) => self.session.eval_with_timeout(code, ms),
+                        None => self.session.eval(code),
+                    }
                 };
                 match result {
                     Ok(result) => json!({ "success": true, "result": result }),
@@ -1985,8 +2003,14 @@ mod tests {
             Ok(())
         }
 
-        fn eval(&mut self, _js: &str) -> lumen_core::error::Result<String> {
-            Ok("null".to_string())
+        fn eval(&mut self, js: &str) -> lumen_core::error::Result<String> {
+            // MCP-TOTAL-S7f: второй заход `eval_await_promise` читает глобал с
+            // осевшим исходом — отвечаем исполнением с значением 42.
+            if js.contains("__lumen_await") {
+                Ok("{\"state\":\"fulfilled\",\"value\":42}".to_string())
+            } else {
+                Ok("null".to_string())
+            }
         }
 
         fn eval_with_timeout(&mut self, _js: &str, timeout_ms: u64) -> lumen_core::error::Result<String> {
@@ -2768,6 +2792,40 @@ mod tests {
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_none());
         assert_eq!(resp.result.unwrap()["result"], "\"waited 30000\"");
+    }
+
+    #[test]
+    fn tool_eval_await_promise_returns_settled_value() {
+        // MCP-TOTAL-S7f: `await_promise` идёт через `eval_await_promise`, а не
+        // через обычный eval — MockSession отвечает на чтение исхода 42.
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({
+                "name": "eval",
+                "arguments": { "code": "Promise.resolve(41 + 1)", "await_promise": true }
+            }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
+        // Контракт eval: `result` — строка (сериализация значения), «42».
+        assert_eq!(resp.result.unwrap()["result"], "42");
+    }
+
+    #[test]
+    fn tool_eval_without_await_promise_unchanged() {
+        // Без флага — прежний путь: обычный eval, никакого ожидания промиса.
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({
+                "name": "eval",
+                "arguments": { "code": "Promise.resolve(42)" }
+            }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
+        assert_eq!(resp.result.unwrap()["result"], "null");
     }
 
     #[test]
