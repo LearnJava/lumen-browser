@@ -734,6 +734,65 @@ fn input_wheel_scroll_and_release_actions_replay_to_live_window() {
     assert!(seen.iter().any(|c| c.contains("ReleaseActions")), "{seen:?}");
 }
 
+/// MCP-TOTAL-S7e: `browsingContext.reload` answers in the NavigateResult
+/// shape with the live-reported address, `browsingContext.traverseHistory`
+/// answers EmptyResult — and a delta outside the session history is
+/// `no such history entry`, not a silent success.
+#[test]
+fn browsing_context_reload_and_traverse_history_replay_to_live_window() {
+    use lumen_driver::{AutomationCommand, AutomationHandle, AutomationReply, NavigationSnapshot};
+    let (tx, rx) = std::sync::mpsc::channel::<lumen_driver::AutomationRequest>();
+    std::thread::spawn(move || {
+        for (cmd, reply_tx) in rx {
+            let reply = match cmd {
+                AutomationCommand::TraverseHistory { delta } if delta.abs() > 1 => {
+                    AutomationReply::Error("traverse_history: нет записи истории".to_owned())
+                }
+                AutomationCommand::Reload { .. } | AutomationCommand::TraverseHistory { .. } => {
+                    AutomationReply::Navigation(NavigationSnapshot {
+                        url: "http://back.test/".to_owned(),
+                        can_go_back: true,
+                        can_go_forward: false,
+                    })
+                }
+                _ => AutomationReply::Ack,
+            };
+            let _ = reply_tx.send(reply);
+        }
+    });
+    let mut state = BidiState::with_live_session(LiveWindowSession::new(AutomationHandle::new(tx)), None);
+    let cid = new_session_ctx(&mut state);
+
+    let r = dispatch(
+        &format!(r#"{{"id":1,"method":"browsingContext.reload","params":{{"context":"{cid}","ignoreCache":true}}}}"#),
+        &mut state,
+    );
+    let v = parse(&r.frames[0]);
+    assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("success"));
+    let result = v.get("result").expect("reload must answer a result");
+    assert_eq!(result.get("url").and_then(|u| u.as_str()), Some("http://back.test/"));
+    assert!(result.get("navigation").is_some(), "reload must answer the NavigateResult shape");
+
+    let r = dispatch(
+        &format!(r#"{{"id":2,"method":"browsingContext.traverseHistory","params":{{"context":"{cid}","delta":-1}}}}"#),
+        &mut state,
+    );
+    let v = parse(&r.frames[0]);
+    assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("success"));
+    assert!(
+        v.get("result").and_then(|r| r.as_object()).is_some_and(|o| o.is_empty()),
+        "traverseHistory must answer EmptyResult"
+    );
+
+    let r = dispatch(
+        &format!(r#"{{"id":3,"method":"browsingContext.traverseHistory","params":{{"context":"{cid}","delta":5}}}}"#),
+        &mut state,
+    );
+    let v = parse(&r.frames[0]);
+    assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("error"));
+    assert_eq!(v.get("error").and_then(|x| x.as_str()), Some("no such history entry"));
+}
+
 #[test]
 fn session_status_ready_before_session() {
     let mut state = BidiState::new();

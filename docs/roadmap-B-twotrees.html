@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-11-26",
+ "generated": "2026-11-27",
  "counts": {
-  "open": 305,
+  "open": 310,
   "fixed": 1474,
   "inprogress": 0,
   "wontfix": 8
  },
- "total_bugs": 1787,
+ "total_bugs": 1792,
  "phases": [
   {
    "id": "P0",
@@ -11980,6 +11980,41 @@
    "date": null,
    "debtor": false
   },
+  "BUG-1853": {
+   "status": "open",
+   "title": "portal.nextera.ru, домашний экран, живое сравнение с Chrome 158 при 1920×845: (1) WebP-логотип `logo-balls-c-*.webp` (448×58) рисуется тёмными пятнами — метадан…",
+   "component": "paint (WebP-декод, маленькие inline-SVG), layout (ширина центральной колонки главной — семейство BUG-1846)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1854": {
+   "status": "open",
+   "title": "Кросс-процессная гонка теста: `FindWindowW` ищет окно класса `LumenOsParamsWatcher` по всему десктопу без фильтра по pid — при двух параллельных прогонах тест-б…",
+   "component": "shell (тест `platform::os_params::windows::watcher_window_receives_settingchange`; прод-watcher не трогается)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1855": {
+   "status": "open",
+   "title": "Живлока: квота узлов не бросает `QuotaExceededError`, 4 теста наполняют DOM вечно — соло `--test-threads=1` висит детерминированно, в полном прогоне весь бинарь…",
+   "component": "js (тесты `dom::tests::v8_perf_typedom_node`; прод-код квоты/trampoline — под бисектом)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1856": {
+   "status": "open",
+   "title": "5 тестов `document_pip` детерминированно падают: `Cannot assign to read only property 'documentPictureInPicture' of object '#<Window>'` — свойство окна создаётс…",
+   "component": "js (`crates/js/src/document_pip.rs` — инсталляция API в `window`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1857": {
+   "status": "open",
+   "title": "Флейк: сырой бинд `127.0.0.1:0` мок-сервера получил от ОС 5061 (bad-port, sips) — навигация на мок-URL честно блокируется (`blocked port: 5061`), тест красен. К…",
+   "component": "network (тест-инфра `tests/cases/nav_post_body.rs:38`; прод-код не трогается)",
+   "date": null,
+   "debtor": false
+  },
   "BUG-001": {
    "status": "fixed",
    "title": "display:none on inline elements not working",
@@ -22847,6 +22882,9 @@
   "js (`crates/js/src/credentials.rs` — `CREDENTIALS_SHIM`) + network (`crates/network/src/webauthn.rs` — `VirtualAuthenticator`)": [
    "BUG-709"
   ],
+  "js (`crates/js/src/document_pip.rs` — инсталляция API в `window`)": [
+   "BUG-1856"
+  ],
   "js (`crates/js/src/dom.rs:10537-10543` — `MediaQueryList` конструктор)": [
    "BUG-526"
   ],
@@ -23769,6 +23807,9 @@
   ],
   "js (тесты `crates/js/src/dom/tests/v8_webworker.rs`, `crates/js/src/worker.rs::tests_v8` — фиксированный `sleep` вместо опроса с дедлайном)": [
    "BUG-1111"
+  ],
+  "js (тесты `dom::tests::v8_perf_typedom_node`; прод-код квоты/trampoline — под бисектом)": [
+   "BUG-1855"
   ],
   "js (установка API на `Window` — `document_pip.rs`; тесты `document_pip.rs`, `v8_events_cache.rs`, `v8_form_constraint_validation.rs`, `v8_idle_message_clipboard.rs`)": [
    "BUG-1848"
@@ -25132,6 +25173,9 @@
   "network (резолвер)": [
    "BUG-304"
   ],
+  "network (тест-инфра `tests/cases/nav_post_body.rs:38`; прод-код не трогается)": [
+   "BUG-1857"
+  ],
   "network (тестовый хелпер `crates/network/src/http_cache.rs`, `mod tests`)": [
    "BUG-632"
   ],
@@ -25224,6 +25268,9 @@
    "BUG-225",
    "BUG-226",
    "BUG-227"
+  ],
+  "paint (WebP-декод, маленькие inline-SVG), layout (ширина центральной колонки главной — семейство BUG-1846)": [
+   "BUG-1853"
   ],
   "paint (WgpuBackend/Renderer) / shell (streaming первого кадра)": [
    "BUG-274"
@@ -25732,6 +25779,9 @@
   ],
   "shell (навигация)": [
    "BUG-308"
+  ],
+  "shell (тест `platform::os_params::windows::watcher_window_receives_settingchange`; прод-watcher не трогается)": [
+   "BUG-1854"
   ],
   "shell / bidi-server (навигация верхнего контекста после `blob:`/`window.open`, не локализовано)": [
    "BUG-1268"

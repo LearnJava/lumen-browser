@@ -353,7 +353,7 @@ use lumen_paint::{
 };
 use lumen_driver::{
     AutomationCommand, AutomationDialog, AutomationDownload, AutomationHandle, AutomationReply, AutomationRequest, BoxModel, ConsoleEntry,
-    ConsoleLevel as DriverConsoleLevel, InterceptedRequest, NetworkEntry as DriverNetworkEntry,
+    ConsoleLevel as DriverConsoleLevel, InterceptedRequest, NavigationSnapshot, NetworkEntry as DriverNetworkEntry,
     WaitCondition,
 };
 use browser_thread::MainHandle;

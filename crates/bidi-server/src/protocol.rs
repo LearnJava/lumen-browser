@@ -805,6 +805,8 @@ pub fn dispatch(message: &str, state: &mut BidiState) -> DispatchResult {
         "browsingContext.create" => bc_create(id, &params, state),
         "browsingContext.close" => bc_close(id, &params, state),
         "browsingContext.navigate" => bc_navigate(id, &params, state),
+        "browsingContext.reload" => bc_reload(id, &params, state),
+        "browsingContext.traverseHistory" => bc_traverse_history(id, &params, state),
         "browsingContext.activate" => bc_activate(id, &params, state),
         "browsingContext.getTree" => {
             DispatchResult::single(make_success(id, browsing_context_tree(state)))
@@ -1166,6 +1168,118 @@ fn bc_navigate(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchRe
 /// clock is set before the Unix epoch, which never happens in practice.
 fn unix_timestamp_ms() -> f64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64() * 1000.0).unwrap_or(0.0)
+}
+
+/// MCP-TOTAL-S7e: the common tail of the live-window navigation commands
+/// (`browsingContext.reload`, `browsingContext.traverseHistory`) — update the
+/// context's URL, answer `{navigation, url}` (the shape of
+/// `browsingContext.NavigateResult`, which `ReloadResult` reuses) and emit
+/// `browsingContext.load` to subscribers, exactly as `bc_navigate` does.
+fn bc_navigated_result(id: i64, cid: &str, state: &mut BidiState, url: String) -> DispatchResult {
+    let navigation_id = state.next_id(0x4a71);
+    if let Some(ctx) = state.contexts.iter_mut().find(|c| c.id == cid) {
+        ctx.url = url.clone();
+    }
+    let mut result = BTreeMap::new();
+    result.insert("navigation".into(), JsonValue::String(navigation_id.clone()));
+    result.insert("url".into(), JsonValue::String(url.clone()));
+    let mut frames = vec![make_success(id, JsonValue::Object(result))];
+    if state.is_subscribed("browsingContext.load") {
+        let mut ev = BTreeMap::new();
+        ev.insert("context".into(), JsonValue::String(cid.to_owned()));
+        ev.insert("navigation".into(), JsonValue::String(navigation_id));
+        ev.insert("url".into(), JsonValue::String(url));
+        ev.insert("timestamp".into(), JsonValue::Number(unix_timestamp_ms()));
+        frames.push(make_event("browsingContext.load", JsonValue::Object(ev)));
+    }
+    DispatchResult { frames, close: false }
+}
+
+/// `browsingContext.reload` (BiDi §7.3.3.10, MCP-TOTAL-S7e) — перезагрузка
+/// контекста. Валидирует `context`; исполнение — только в живом окне
+/// (`ReloadResult` = `NavigateResult`, ожидание загрузки — как в navigate).
+fn bc_reload(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
+    let Some(cid) = params.get("context").and_then(|v| v.as_str()).map(str::to_owned) else {
+        return DispatchResult::single(make_error(Some(id), "invalid argument", "missing context"));
+    };
+    let ignore_cache = params.get("ignoreCache").and_then(|v| v.as_bool()).unwrap_or(false);
+    if state.find(&cid).is_none() {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "no such frame",
+            &format!("no such context: {cid}"),
+        ));
+    }
+    let Some(live) = &mut state.live else {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "unknown error",
+            "reload requires a live window (--bidi-port with an open window)",
+        ));
+    };
+    let url = match live.reload(ignore_cache) {
+        Ok(snap) => snap.url,
+        Err(e) => {
+            return DispatchResult::single(make_error(Some(id), "unknown error", &format!("reload: {e}")))
+        }
+    };
+    if let Err(e) = live.wait(WaitCondition::DocumentReady, NAVIGATE_LOAD_TIMEOUT_MS) {
+        return DispatchResult::single(make_error(Some(id), "unknown error", &format!("reload: {e}")));
+    }
+    bc_navigated_result(id, &cid, state, url)
+}
+
+/// `browsingContext.traverseHistory` (BiDi §7.3.3.15, MCP-TOTAL-S7e) — шаг по
+/// истории сессии: минус — назад, плюс — вперёд, `0` — перезагрузка текущей
+/// записи (HTML LS §7.8.3). Результат — `EmptyResult`; выход за границы
+/// истории живого окна — `no such history entry`.
+fn bc_traverse_history(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
+    let Some(cid) = params.get("context").and_then(|v| v.as_str()).map(str::to_owned) else {
+        return DispatchResult::single(make_error(Some(id), "invalid argument", "missing context"));
+    };
+    let Some(delta) = params.get("delta").and_then(|v| v.as_number()).map(|n| n as i64) else {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "invalid argument",
+            "missing or non-integer delta",
+        ));
+    };
+    let Ok(delta) = i32::try_from(delta) else {
+        return DispatchResult::single(make_error(Some(id), "invalid argument", "delta out of range"));
+    };
+    if state.find(&cid).is_none() {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "no such frame",
+            &format!("no such context: {cid}"),
+        ));
+    }
+    let Some(live) = &mut state.live else {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "unknown error",
+            "traverseHistory requires a live window (--bidi-port with an open window)",
+        ));
+    };
+    let url = match live.traverse_history(delta) {
+        Ok(snap) => snap.url,
+        Err(e) => {
+            return DispatchResult::single(make_error(
+                Some(id),
+                "no such history entry",
+                &format!("traverseHistory: {e}"),
+            ))
+        }
+    };
+    if let Err(e) = live.wait(WaitCondition::DocumentReady, NAVIGATE_LOAD_TIMEOUT_MS) {
+        return DispatchResult::single(make_error(Some(id), "unknown error", &format!("traverseHistory: {e}")));
+    }
+    if delta == 0 {
+        // Reload of the current entry: same result shape as `reload`.
+        bc_navigated_result(id, &cid, state, url)
+    } else {
+        DispatchResult::single(make_success(id, empty_obj()))
+    }
 }
 
 /// `browsingContext.activate` — пометить контекст активным (ACK).
