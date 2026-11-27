@@ -277,8 +277,8 @@ impl Lumen {
                     // Store frames in shell-side map (lumen_image dep stays in shell).
                     let cycle_ms: u64 = gif.total_cycle_ms();
                     let loop_count = match gif.loop_count {
-                        lumen_image::GifLoopCount::Infinite | lumen_image::GifLoopCount::Finite(0) => 0u32,
-                        lumen_image::GifLoopCount::Finite(n) => u32::from(n),
+                        lumen_image::LoopCount::Infinite | lumen_image::LoopCount::Finite(0) => 0u32,
+                        lumen_image::LoopCount::Finite(n) => u32::from(n),
                     };
                     self.video_gif_store
                         .playback

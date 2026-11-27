@@ -17,9 +17,12 @@ pub mod decode_cache;
 pub use decode_cache::{ImageDecodeCache, ImageHandle, ImageKey};
 pub use jpeg::{decode_jpeg, JpegError};
 pub use png::{decode_png, encode_png_rgba8};
-pub use webp::{WebpError, WebpImageDecoder, decode_webp, is_webp};
+pub use webp::{
+    AnimatedImage, AnimatedImageError, AnimatedWebp, WebpError, WebpImageDecoder, decode_webp,
+    decode_webp_animated, is_webp,
+};
 pub use bmp::{BmpError, decode_bmp, is_bmp};
-pub use gif::{decode_gif, decode_gif_animated, AnimatedGif, GifError, GifLoopCount, is_gif};
+pub use gif::{decode_gif, decode_gif_animated, AnimatedGif, GifError, is_gif};
 pub use avif::{AvifError, AvifImageDecoder, decode_avif, is_avif};
 pub use jxl::{JxlError, JxlImageDecoder, decode_jxl, is_jxl};
 pub use heic::{HeicError, decode_heic, is_heic};
@@ -894,6 +897,16 @@ pub enum PixelFormat {
     GrayAlpha8,
     Rgb8,
     Rgba8,
+}
+
+/// Количество повторений анимации (формат-нейтрально: GIF Netscape-loop,
+/// WebP ANIM-loop; BUG-1853 объединил типы под общим тиком shell).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoopCount {
+    /// Анимация воспроизводится ровно N раз (N ≥ 1).
+    Finite(u16),
+    /// Анимация воспроизводится бесконечно (loop-счётчик источника = 0).
+    Infinite,
 }
 
 impl PixelFormat {

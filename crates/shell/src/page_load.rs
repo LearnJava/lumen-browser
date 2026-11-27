@@ -174,7 +174,7 @@ impl Lumen {
                             self.pending_images.push((url.clone(), Arc::new(first)));
                         }
                         self.gif_last_frame.remove(&url);
-                        self.animated_gifs.insert(url, gif);
+                        self.animated_gifs.insert(url, lumen_image::AnimatedImage::Gif(gif));
                         route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
                             j.fire_image_load(nid, w, h);
                         });
@@ -221,6 +221,55 @@ impl Lumen {
                         continue;
                     }
                 }
+            }
+
+            // Animated WebP detection for lazy-loaded images (BUG-1853):
+            // многокадровый файл несёт анимацию под тем же контрактом, что GIF;
+            // однокадровый и битый заголовок проваливаются в статический декод
+            // ниже (первый кадр) — как и раньше.
+            if lumen_image::is_webp(&bytes)
+                && let Ok(anim) = lumen_image::decode_webp_animated(&bytes)
+                && anim.frame_count() > 1
+            {
+                let first = match anim.first_frame() {
+                    Ok(img) => img,
+                    Err(e) => {
+                        eprintln!("Lazy: не декодируется WebP {url}: {e}");
+                        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                            j.fire_image_error(nid);
+                        });
+                        continue;
+                    }
+                };
+                if let Some(src) = self.layout_source.as_ref() {
+                    let mut doc = src.document.lock().unwrap();
+                    let node_id = NodeId::from_index(nid as usize);
+                    if apply_intrinsic_size(&mut doc, node_id, first.width, first.height, self.relayout_viewport().unwrap_or(Size::new(0.0, 0.0))) {
+                        self.note_shell_attr_writes(vec![nid]);
+                    }
+                }
+                eprintln!(
+                    "Lazy WebP-анимация: {} ({}×{}, {} кадров)",
+                    url,
+                    anim.width,
+                    anim.height,
+                    anim.frame_count()
+                );
+                let (w, h) = (first.width, first.height);
+                if let Some(r) = self.renderer.as_mut() {
+                    let handle = self.image_cache.insert(lumen_image::ImageKey::new(&url), first);
+                    if let Err(e) = r.register_image(url.clone(), handle) {
+                        eprintln!("Lazy WebP: не зарегистрирована {url}: {e}");
+                    }
+                } else {
+                    self.pending_images.push((url.clone(), Arc::new(first)));
+                }
+                self.gif_last_frame.remove(&url);
+                self.animated_gifs.insert(url, lumen_image::AnimatedImage::Webp(anim));
+                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                    j.fire_image_load(nid, w, h);
+                });
+                continue;
             }
 
             let image = match lumen_image::decode(&bytes) {
@@ -2055,11 +2104,11 @@ impl Lumen {
                             animated: None,
                         });
                     }
-                    Some(image_cache::DecodedImage::Animated { first, gif }) => {
+                    Some(image_cache::DecodedImage::Animated { first, anim }) => {
                         let _ = proxy.send_event(LoadEvent::ImageDecoded {
                             src: req.url,
                             image: Box::new((*first).clone()),
-                            animated: Some(Box::new((*gif).clone())),
+                            animated: Some(Box::new((*anim).clone())),
                         });
                     }
                 }
@@ -3124,7 +3173,7 @@ pub(crate) enum LoadEvent {
     ImageDecoded {
         src: String,
         image: Box<lumen_image::Image>,
-        animated: Option<Box<lumen_image::AnimatedGif>>,
+        animated: Option<Box<lumen_image::AnimatedImage>>,
     },
     /// BUG-1048: the streaming/dynamic decode pipeline ([`Lumen::spawn_image_requests`])
     /// gave up on `src` (fetch or decode failure), same fork the eager pipeline

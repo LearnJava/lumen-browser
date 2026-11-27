@@ -1237,7 +1237,7 @@ pub(crate) struct Lumen {
     /// Multi-frame GIF animations keyed by the same src URL used in `DrawImage`.
     /// Populated at image-load time; cleared on page navigation.
     /// Single-frame GIFs are not stored here — handled as regular static images.
-    pub(crate) animated_gifs: HashMap<String, lumen_image::AnimatedGif>,
+    pub(crate) animated_gifs: HashMap<String, lumen_image::AnimatedImage>,
     /// Last rendered frame index per animated GIF URL. Avoids redundant GPU texture
     /// re-uploads when `frame_index_at(elapsed_ms)` returns the same frame as the
     /// previous tick. Cleared together with `animated_gifs` on navigation.

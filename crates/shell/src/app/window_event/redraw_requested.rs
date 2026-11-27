@@ -368,9 +368,9 @@ impl Lumen {
             // Request next redraw if any GIF still has more frames to show.
             let gif_animating = {
                 let gifs = &self.animated_gifs;
-                gifs.values().any(|gif| match gif.loop_count {
-                    lumen_image::GifLoopCount::Infinite => gif.frame_count() > 1,
-                    lumen_image::GifLoopCount::Finite(n) => {
+                gifs.values().any(|gif| match gif.loop_count() {
+                    lumen_image::LoopCount::Infinite => gif.frame_count() > 1,
+                    lumen_image::LoopCount::Finite(n) => {
                         let total_ms: u64 = gif.total_cycle_ms();
                         elapsed_ms < total_ms.saturating_mul(u64::from(n))
                     }

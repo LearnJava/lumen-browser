@@ -482,7 +482,7 @@ pub(crate) fn fetch_and_decode_images(
     defer_undecoded: bool,
 ) -> (
     Vec<(String, Arc<lumen_image::Image>)>,
-    Vec<(String, lumen_image::AnimatedGif)>,
+    Vec<(String, lumen_image::AnimatedImage)>,
     Vec<(u32, String)>,
     Vec<String>,
     Vec<String>,
@@ -526,10 +526,10 @@ pub(crate) fn fetch_and_decode_images(
             /// `self_origin`.
             cross_origin: bool,
         },
-        /// Многокадровый GIF: первый кадр + полная анимация.
+        /// Многокадровый GIF/WebP (BUG-1853): первый кадр + полная анимация.
         Animated {
             first: Arc<lumen_image::Image>,
-            gif: Box<lumen_image::AnimatedGif>,
+            anim: Box<lumen_image::AnimatedImage>,
             intrinsic: Option<(u32, u32)>,
             /// GAP-CANVASORIGIN — see [`ImgOutcome::Static::cross_origin`].
             cross_origin: bool,
@@ -653,16 +653,16 @@ pub(crate) fn fetch_and_decode_images(
                 let intrinsic = wants_intrinsic.then_some((img.width, img.height));
                 ImgOutcome::Static { image: img, intrinsic, cross_origin }
             }
-            Some(image_cache::DecodedImage::Animated { first, gif }) => {
+            Some(image_cache::DecodedImage::Animated { first, anim }) => {
                 let intrinsic = wants_intrinsic.then_some((first.width, first.height));
-                ImgOutcome::Animated { first, gif: Box::new((*gif).clone()), intrinsic, cross_origin }
+                ImgOutcome::Animated { first, anim: Box::new((*anim).clone()), intrinsic, cross_origin }
             }
         }
     });
 
     // Фаза 2 (последовательно): мутация `doc` + сборка результата в порядке DOM.
     let mut out: Vec<(String, Arc<lumen_image::Image>)> = Vec::new();
-    let mut anim_gifs: Vec<(String, lumen_image::AnimatedGif)> = Vec::new();
+    let mut anim_gifs: Vec<(String, lumen_image::AnimatedImage)> = Vec::new();
     let mut lazy_pairs: Vec<(u32, String)> = Vec::new();
     let mut blocked_by_img_src: Vec<String> = Vec::new();
     let mut cross_origin_urls: Vec<String> = Vec::new();
@@ -682,7 +682,7 @@ pub(crate) fn fetch_and_decode_images(
                 }
                 out.push((req.url, image));
             }
-            ImgOutcome::Animated { first, gif, intrinsic, cross_origin } => {
+            ImgOutcome::Animated { first, anim, intrinsic, cross_origin } => {
                 if let Some((w, h)) = intrinsic
                     && apply_intrinsic_size(doc, req.node_id, w, h, viewport)
                 {
@@ -692,7 +692,7 @@ pub(crate) fn fetch_and_decode_images(
                     cross_origin_urls.push(req.url.clone());
                 }
                 out.push((req.url.clone(), first));
-                anim_gifs.push((req.url, *gif));
+                anim_gifs.push((req.url, *anim));
             }
         }
     }
@@ -985,7 +985,7 @@ fn decode_image_bytes(
                         );
                         Some(DecodedImage::Animated {
                             first: Arc::new(first),
-                            gif: Arc::new(gif),
+                            anim: Arc::new(lumen_image::AnimatedImage::Gif(gif)),
                         })
                     }
                     Err(e) => {
@@ -1006,6 +1006,34 @@ fn decode_image_bytes(
             }
             Err(e) => {
                 eprintln!("Не декодируется GIF {raw_src}: {e}");
+                None
+            }
+        };
+    }
+
+    // Animated WebP (BUG-1853): многокадровый файл несёт анимацию дальше под
+    // тем же контрактом, что GIF. Ошибки заголовка и однокадровые файлы
+    // проваливаются в общий статический хвост ниже (первый кадр) — как и было.
+    if lumen_image::is_webp(&bytes)
+        && let Ok(anim) = lumen_image::decode_webp_animated(&bytes)
+        && anim.frame_count() > 1
+    {
+        return match anim.first_frame() {
+            Ok(first) => {
+                eprintln!(
+                    "Загружена WebP-анимация: {} ({}×{}, {} кадров)",
+                    raw_src,
+                    anim.width,
+                    anim.height,
+                    anim.frame_count()
+                );
+                Some(DecodedImage::Animated {
+                    first: Arc::new(first),
+                    anim: Arc::new(lumen_image::AnimatedImage::Webp(anim)),
+                })
+            }
+            Err(e) => {
+                eprintln!("Не декодируется WebP {raw_src}: {e}");
                 None
             }
         };

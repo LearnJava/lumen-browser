@@ -44,12 +44,12 @@ use std::sync::{Arc, Condvar, LazyLock, Mutex};
 pub enum DecodedImage {
     /// Static image (includes a single-frame GIF flattened to one image).
     Static(Arc<lumen_image::Image>),
-    /// Multi-frame animated GIF: first frame plus the full animation.
+    /// Multi-frame animated GIF/WebP (BUG-1853): first frame plus the full animation.
     Animated {
         /// First frame, used as the initial paint before the animation ticks.
         first: Arc<lumen_image::Image>,
-        /// Full decoded animation, ticked on the UI thread.
-        gif: Arc<lumen_image::AnimatedGif>,
+        /// Full decoded animation (GIF or WebP), ticked on the UI thread.
+        anim: Arc<lumen_image::AnimatedImage>,
     },
 }
 
@@ -101,9 +101,9 @@ impl DecodedImageCache {
             if let Some(Some(img)) = slot.state.lock().unwrap().as_ref() {
                 bytes += match img {
                     DecodedImage::Static(i) => i.data.len(),
-                    // BUG-272 срез 19: lazy GIF holds encoded bytes + ~one decoded frame.
-                    DecodedImage::Animated { first, gif } => {
-                        first.data.len() + gif.resident_bytes()
+                    // BUG-272 срез 19: lazy animation (GIF/WebP) holds encoded bytes + ~one frame.
+                    DecodedImage::Animated { first, anim } => {
+                        first.data.len() + anim.resident_bytes()
                     }
                 };
             }

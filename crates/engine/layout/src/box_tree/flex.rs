@@ -181,7 +181,17 @@ fn column_item_avail_cross(
     // fit-content, а не всю ширину — иначе двигать нечего.
     // A wrapped column sizes its lines by the items' fit-content widths; `finish_frame` stretches
     // the items to the final line width afterwards (Flexbox L1 §9.4 steps 7-11).
-    let used_cross = if auto_cross || aligned_cross || (wrapped && column_wrap_stretchable(item, s)) {
+    // Определённая ширина (включая проценты от контейнера — BUG-1853: портал
+    // nextera, `width:100%` + `margin:auto` сжимала элемент в его max-content)
+    // сильнее и авто-маргинов, и align-self: они лишь распределяют остаток
+    // (CSS Flexbox §8.1, §9.4 шаг 4 против шага 5), а не меняют размер. Сама
+    // ширина разрешается внутри layout элемента, у которого available и есть
+    // контейнер, — поэтому сюда идёт `avail_cross`, а не готовое значение
+    // (иначе проценты разрешаются дважды).
+    let definite_width = is.width.as_ref().and_then(|l| l.resolve(iem, Some(content_width), viewport)).is_some();
+    let used_cross = if definite_width {
+        avail_cross
+    } else if auto_cross || aligned_cross || (wrapped && column_wrap_stretchable(item, s)) {
         let max_c = max_content_outer_width(item, measurer, viewport);
         let min_c = min_content_outer_width(item, measurer, viewport);
         max_c.min(avail_cross).max(min_c).min(avail_cross).max(0.0)

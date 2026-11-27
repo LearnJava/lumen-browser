@@ -155,7 +155,7 @@ pub(crate) struct PageSnapshot {
     /// Instant at which the current navigation began (set in `reload()`).
     /// Used to compute `duration` for the W3C Navigation Timing entry.
     pub(crate) nav_start: Option<std::time::Instant>,
-    pub(crate) animated_gifs: HashMap<String, lumen_image::AnimatedGif>,
+    pub(crate) animated_gifs: HashMap<String, lumen_image::AnimatedImage>,
     pub(crate) gif_last_frame: HashMap<String, usize>,
     /// GIF-backed `<video>` frame keys: `"video:{nid}"` → current frame index.
     /// Parallel to `animated_gifs` but keyed by node ID, not URL.
