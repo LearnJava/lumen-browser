@@ -595,6 +595,13 @@ pub(crate) fn build_grid_init(
         if let Some(widths) = content_sized {
             col_widths = widths;
         } else {
+            // The flex factors must be known before the intrinsic pass: with a
+            // flexible track present, an `auto` track maximizes to its max-content
+            // contribution here (§12.4) instead of being zeroed by the fr pass.
+            let flex_early: Vec<Option<f32>> = (0..n_cols)
+                .map(|c| grid_track(c, eff_col_template, &s.grid_auto_columns).flex_factor())
+                .collect();
+            let total_fr_early: f32 = flex_early.iter().map(|f| f.unwrap_or(0.0)).sum();
             // CSS Grid L1 §11.5 — a `min-content` / `max-content` track is as wide as the
             // largest contribution of the items that sit in it alone (spanning items
             // contribute to several tracks and are left to the free-space pass).
@@ -603,6 +610,9 @@ pub(crate) fn build_grid_init(
                 let is_max = match kind {
                     GridTrackSize::MaxContent => true,
                     GridTrackSize::MinContent => false,
+                    // BUG-1846: с fr-дорожкой auto-дорожки фолбэка обнулялись —
+                    // fr забирал весь остаток, не оставив auto контентного вклада.
+                    GridTrackSize::Auto if total_fr_early > 0.0 => true,
                     _ => continue,
                 };
                 let mut w = 0.0_f32;
@@ -667,7 +677,9 @@ pub(crate) fn build_grid_init(
                             col_widths[c as usize] = (flex[c as usize].unwrap_or(0.0) * fr_width).max(col_widths[c as usize]);
                         }
                     }
-                    GridTrackSize::Auto => {
+                    // С fr-дорожкой auto уже несёт свой max-content вклад (§12.4),
+                    // записанный до find_fr_size — перезапись обнуляла его (BUG-1846).
+                    GridTrackSize::Auto if total_fr == 0.0 => {
                         col_widths[c as usize] = auto_col_width;
                     }
                     _ => {}

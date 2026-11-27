@@ -32,6 +32,11 @@ pub(super) enum Sizing {
     /// `fit-content(<length>)` (Grid L1 §7.2.3.3), max side only: the items' max-content, at most the
     /// length; like `minmax(auto, <length>)` it is not stretched past it.
     Fit(f32),
+    /// `<flex>` (`fr`, Grid L1 §7.2.3.2), max side only: the track's share of the free
+    /// space that the non-flexible tracks leave (§12.6/§12.7 with freezing). The base
+    /// size and growth limit of a flexible track stay at its min side, so items never
+    /// grow it on the §12.4 maximize pass.
+    Fr(f32),
 }
 
 /// Sizing function of one column track on this path: `min` gives the base size, `max` the
@@ -61,7 +66,7 @@ impl TrackKind {
 
     /// The growth limit is set by the items.
     fn grows_limit(&self) -> bool {
-        !matches!(self.max, Sizing::Fixed(_))
+        !matches!(self.max, Sizing::Fixed(_) | Sizing::Fr(_))
     }
 }
 
@@ -84,6 +89,7 @@ fn sizing_of(t: &GridTrackSize, resolve: &dyn Fn(&Length) -> Option<f32>) -> Opt
         GridTrackSize::Length(l) => Sizing::Fixed(resolve(l)?.max(0.0)),
         GridTrackSize::MinContent => Sizing::MinContent,
         GridTrackSize::MaxContent => Sizing::MaxContent,
+        GridTrackSize::Fr(f) => Sizing::Fr(*f),
         _ => return None,
     })
 }
@@ -121,7 +127,10 @@ pub(super) fn classify_all_col_tracks(
             },
             t => {
                 let z = sizing_of(t, resolve)?;
-                TrackKind { min: z, max: z }
+                // §7.2.3.2: lone `<flex>` implies `minmax(auto, <flex>)` — the min
+                // side stays intrinsic, only the max side is flexible.
+                let min = if matches!(z, Sizing::Fr(_)) { Sizing::Auto } else { z };
+                TrackKind { min, max: z }
             }
         });
     }
@@ -251,7 +260,7 @@ pub(super) fn base_and_limit(
     // What an item asks of one side of a track: `min-content` its minimum contribution,
     // `auto` its minimum (base) or maximum (limit), `max-content` its maximum.
     let ask = |z: Sizing, is_base: bool, c: &ColContribution| match z {
-        Sizing::Fixed(_) => None,
+        Sizing::Fixed(_) | Sizing::Fr(_) => None,
         Sizing::MinContent => Some(c.min),
         Sizing::MaxContent => Some(c.max),
         Sizing::Fit(l) => Some(c.max.min(l)),
@@ -330,14 +339,52 @@ pub(super) fn distribute_free_space(
         }
         free -= step * n;
     }
-    if free > EPS {
-        let autos: Vec<usize> = (0..w.len()).filter(|&t| kinds[t].max == Sizing::Auto).collect();
-        if !autos.is_empty() {
-            let share = free / autos.len() as f32;
-            for t in autos {
-                w[t] += share;
+    // CSS Grid L1 §12.6/§12.7 — expand the flexible tracks with the remaining free
+    // space (find-the-size-of-an-fr with freezing). A flexible track's base and
+    // growth limit stay at its min side (§12.5), so the maximize pass above never
+    // grew it; its width here is its factor's share of what the §12.4-sized
+    // non-flexible tracks leave. An `auto` max side does not stretch past its
+    // max-content once a flexible track exists — before this branch the whole
+    // template fell back to the legacy path, which zeroed every `auto` track
+    // (BUG-1846: композер чата portal.nextera.ru, `auto auto minmax(0,1fr) auto
+    // auto auto auto` — кнопки схлопнулись в ноль, заголовок чата невидим).
+    let mut live: Vec<(usize, f32)> = (0..kinds.len())
+        .filter_map(|t| if let Sizing::Fr(f) = kinds[t].max { Some((t, f)) } else { None })
+        .collect();
+    if live.is_empty() {
+        if free > EPS {
+            let autos: Vec<usize> = (0..w.len()).filter(|&t| kinds[t].max == Sizing::Auto).collect();
+            if !autos.is_empty() {
+                let share = free / autos.len() as f32;
+                for t in autos {
+                    w[t] += share;
+                }
             }
         }
+        return w;
+    }
+    loop {
+        let live_factors: f32 = live.iter().map(|(_, f)| f).sum();
+        if live_factors <= EPS {
+            break;
+        }
+        let fr_tracks: Vec<usize> = live.iter().map(|&(t, _)| t).collect();
+        let nonflex: f32 = (0..w.len()).filter(|&t| !fr_tracks.contains(&t)).map(|t| w[t]).sum();
+        let fr = (available - nonflex - gaps).max(0.0) / live_factors;
+        // §12.7: a flexible track whose share would fall below its base size
+        // freezes at the base and its factor leaves the pool.
+        let frozen: Vec<usize> = live
+            .iter()
+            .filter(|&&(t, f)| f * fr < w[t] - EPS)
+            .map(|&(t, _)| t)
+            .collect();
+        if frozen.is_empty() {
+            for &(t, f) in &live {
+                w[t] = (f * fr).max(w[t]);
+            }
+            break;
+        }
+        live.retain(|&(t, _)| !frozen.contains(&t));
     }
     w
 }
@@ -399,6 +446,17 @@ pub(super) fn content_sized_col_widths(
     let kinds = classify_col_tracks(eff_col_template, &s.grid_auto_columns, n_cols, &|l| {
         l.resolve(em, Some(content_width), viewport)
     })?;
+    // §12.6 distributes a DEFINITE inline size. An auto-width inline grid with a
+    // flexible track is instead sized by its contents (§12.8 — a flexible track's
+    // used flex fraction is its own contribution over its factor), which this
+    // path does not model; before fr support landed here such templates simply
+    // fell back to the legacy path, and the WPT `half_fr` inline-grid case still
+    // relies on its indefinite answer. Fr-less templates keep the new path: it
+    // already sized them correctly on indefinite inline grids.
+    let has_flexible = kinds.iter().any(|k| matches!(k.max, Sizing::Fr(_)));
+    if has_flexible && s.width.is_none() && matches!(s.display, Display::InlineGrid) {
+        return None;
+    }
     if n_cols < 2 && kinds.iter().all(|k| k.is_fixed() || *k == TrackKind::AUTO) {
         return None;
     }
