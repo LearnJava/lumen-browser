@@ -156,6 +156,16 @@ impl BrowserSession for LiveWindowSession {
         }
     }
 
+    /// MCP-TOTAL-S5b: the memory report round-trips through
+    /// [`AutomationCommand::MemReport`] — the arm rebuilds the same numbers
+    /// the periodic `LUMEN_MEM_REPORT` log line prints.
+    fn mem_report(&self) -> Result<String> {
+        match self.execute(AutomationCommand::MemReport)? {
+            AutomationReply::MemReport(text) => Ok(text),
+            other => Err(unexpected_reply("MemReport", &other)),
+        }
+    }
+
     /// MCP-TOTAL-S2d: the computed-style map round-trips through
     /// [`AutomationCommand::ComputedStyle`]; `None` — no page or no match,
     /// the same shape the headless sessions answer.

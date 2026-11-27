@@ -650,6 +650,10 @@ impl Lumen {
                     let dump = self.automation_display_list();
                     let _ = reply_tx.send(AutomationReply::DisplayList(dump));
                 }
+                AutomationCommand::MemReport => {
+                    let report = self.automation_mem_report();
+                    let _ = reply_tx.send(AutomationReply::MemReport(report));
+                }
                 AutomationCommand::DisplayListScoped { selector } => {
                     match self.automation_display_list_scoped(&selector) {
                         Some(dump) => {

@@ -192,6 +192,16 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                 mime_type: "text/plain".to_string(),
                 experimental: true,
             },
+            // ADR-024 L1 (`x-` prefix + `experimental: true`, MCP-TOTAL-S5b):
+            // the live window's memory report — the same numbers the periodic
+            // `LUMEN_MEM_REPORT=1` log line prints. Live window only.
+            McpResource {
+                uri: "resource://x-mem-report".to_string(),
+                name: "x-mem-report".to_string(),
+                description: "Memory report of the live window (display list, caches, fonts, GIFs, JS heap)".to_string(),
+                mime_type: "text/plain".to_string(),
+                experimental: true,
+            },
         ];
 
         let response = json!({
@@ -1136,6 +1146,12 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                     Err(e) => McpResponse::err(id.clone(), -32603, format!("Display list error: {e}")),
                 }
             }
+            "resource://x-mem-report" => {
+                match self.session.mem_report() {
+                    Ok(report) => McpResponse::ok(id.clone(), json!({ "contents": [{ "type": "text", "text": report, "mimeType": "text/plain" }] })),
+                    Err(e) => McpResponse::err(id.clone(), -32603, format!("Mem report error: {e}")),
+                }
+            }
             _ => McpResponse::err(id.clone(), -32602, format!("Unknown resource: {uri}")),
         }
     }
@@ -2037,6 +2053,10 @@ mod tests {
             Ok(String::new())
         }
 
+        fn mem_report(&self) -> lumen_core::error::Result<String> {
+            Ok("MEM_REPORT dl_cmds=0".to_string())
+        }
+
         fn computed_style(&self, _sel: &str) -> lumen_core::error::Result<Option<lumen_driver::ComputedProperties>> {
             Ok(None)
         }
@@ -2218,13 +2238,13 @@ mod tests {
     }
 
     #[test]
-    fn resources_list_returns_six_resources() {
+    fn resources_list_returns_seven_resources() {
         let mut server = McpServer::new(MockSession, VecTransport::new());
         let req = make_request("resources/list", serde_json::json!({}));
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_none());
         let resources = resp.result.unwrap()["resources"].as_array().cloned().unwrap_or_default();
-        assert_eq!(resources.len(), 6);
+        assert_eq!(resources.len(), 7);
         let uris: Vec<_> = resources.iter().map(|r| r["uri"].as_str().unwrap_or("")).collect();
         assert!(uris.contains(&"resource://screenshot"));
         assert!(uris.contains(&"resource://a11y_tree"));
@@ -2232,6 +2252,7 @@ mod tests {
         assert!(uris.contains(&"resource://console"));
         assert!(uris.contains(&"resource://network"));
         assert!(uris.contains(&"resource://x-display-list"));
+        assert!(uris.contains(&"resource://x-mem-report"));
     }
 
     /// ADR-024 L1: `resource://x-display-list` must carry `"experimental": true`
@@ -2674,6 +2695,20 @@ mod tests {
         assert!(resp.error.is_none());
         let contents = &resp.result.unwrap()["contents"];
         assert_eq!(contents[0]["mimeType"], "text/plain");
+    }
+
+    #[test]
+    fn resources_read_x_mem_report_ok() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "resources/read",
+            serde_json::json!({ "uri": "resource://x-mem-report" }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
+        let contents = &resp.result.unwrap()["contents"];
+        assert_eq!(contents[0]["mimeType"], "text/plain");
+        assert_eq!(contents[0]["text"], "MEM_REPORT dl_cmds=0");
     }
 
     #[test]

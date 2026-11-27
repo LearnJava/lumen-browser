@@ -341,6 +341,53 @@ impl Lumen {
             lumen_paint::serialize_display_list(&self.display_list)
         }
 
+        /// Мем-отчёт живого окна для `AutomationCommand::MemReport`
+        /// (MCP-TOTAL-S5b, wires `resource://x-mem-report` to the live
+        /// window) — те же числа, что печатает периодическая строка
+        /// `MEM_REPORT …` под `LUMEN_MEM_REPORT=1`, плюс сводные строки
+        /// кадров/relayout, когда те накоплены (`LUMEN_FRAME_LOG`).
+        ///
+        /// Один источник для журнала и ресурса: periodic-печать в
+        /// `about_to_wait` вызывает этот же метод, поэтому расхождение
+        /// чисел между журналом и ресурсом невозможно by construction.
+        pub(crate) fn automation_mem_report(&self) -> String {
+            let wf_bytes: usize = self.web_fonts.iter().map(|f| f.bytes.len()).sum();
+            // BUG-272 срез 19: lazy GIFs hold encoded bytes + ~one decoded frame,
+            // not all N frames — `resident_bytes` reflects the real footprint.
+            let gif_bytes: usize = self
+                .animated_gifs
+                .values()
+                .map(lumen_image::AnimatedImage::resident_bytes)
+                .sum();
+            let (img_n, img_b) = image_cache::IMAGE_CACHE.debug_stats();
+            let (pf_n, pf_b) = prefetch::PREFETCH_CACHE.debug_stats();
+            // ADR-016 M2.2c-2d (20): direct `js_ctx` read → `route_query_js`.
+            // Flag-off (default) `js.map(...).unwrap_or((-1,-1))` = the old
+            // `map_or((-1,-1), ...)`; under the flag it is a blocking `query`.
+            let js_heap = self.drain_query_js(|j| j.debug_js_heap()).unwrap_or((-1, -1));
+            let mut report = format!(
+                "MEM_REPORT dl_cmds={} prev_styles={} dl_cache={:.1}MB img_cache={}/{:.1}MB prefetch={}/{:.1}MB web_fonts={}/{:.1}MB gifs={}/{:.1}MB js_malloc={:.1}MB js_used={:.1}MB {}",
+                self.display_list.len(),
+                self.prev_styles.len(),
+                self.display_list_cache.used_bytes() as f64 / 1e6,
+                img_n, img_b as f64 / 1e6,
+                pf_n, pf_b as f64 / 1e6,
+                self.web_fonts.len(), wf_bytes as f64 / 1e6,
+                self.animated_gifs.len(), gif_bytes as f64 / 1e6,
+                js_heap.0 as f64 / 1e6, js_heap.1 as f64 / 1e6,
+                self.renderer.as_ref().map_or(String::new(), |r| r.debug_mem_report()),
+            );
+            if let Some(summary) = self.frame_stats.summary() {
+                report.push('\n');
+                report.push_str(&summary.to_string());
+            }
+            if let Some(summary) = self.engine_stats.summary() {
+                report.push('\n');
+                report.push_str(&summary.display_with("ENGINE_SUMMARY").to_string());
+            }
+            report
+        }
+
         /// Display-list commands of `selector`'s subtree for
         /// `AutomationCommand::DisplayListScoped` (MCP-TOTAL-S2b) — rebuilt
         /// from the layout tree via DEVX-7 provenance, the same

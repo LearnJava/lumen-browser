@@ -681,6 +681,11 @@ pub enum AutomationCommand {
         /// CSS selector of the subtree root.
         selector: String,
     },
+    /// Text dump of the live window's memory report (MCP-TOTAL-S5b, wires
+    /// `resource://x-mem-report` to the live window) — the same numbers the
+    /// periodic `LUMEN_MEM_REPORT=1` log line carries. Reply:
+    /// [`AutomationReply::MemReport`].
+    MemReport,
     /// Box-model snapshot of `selector`'s subtree only (MCP-TOTAL-S2c, wires
     /// `x-scope-layout` to the live window). A selector matching nothing is an
     /// empty snapshot — the same shape the headless sessions answer.
@@ -1020,6 +1025,9 @@ pub enum AutomationReply {
     /// `DisplayList`/`DisplayListScoped` result: the display-list text dump
     /// (MCP-TOTAL-S2b).
     DisplayList(String),
+    /// `MemReport` result: the live window's memory-report text
+    /// (MCP-TOTAL-S5b).
+    MemReport(String),
     /// `ComputedStyle` result: the computed-style property map, `None` when
     /// the selector matched nothing (MCP-TOTAL-S2d).
     ComputedStyle(Option<ComputedProperties>),
