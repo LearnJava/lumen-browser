@@ -21,7 +21,7 @@ use lumen_dom::{Document, NodeData};
 use lumen_layout::{LayoutBox, PaintOrder, StackingTree};
 use lumen_paint::ProvenanceIndex;
 
-use crate::BoxModel;
+use crate::{BoxModel, ComputedProperties};
 
 /// Recursively flatten `lb`'s subtree into `out` as [`BoxModel`]s (DEVX-14).
 ///
@@ -55,6 +55,70 @@ pub fn collect_boxes(lb: &LayoutBox, doc: &Document, out: &mut Vec<BoxModel>) {
     });
     for child in &lb.children {
         collect_boxes(child, doc, out);
+    }
+}
+
+/// Computed-style property map of one [`lumen_layout::ComputedStyle`]
+/// ([`crate::BrowserSession::computed_style`]) — the `style_to_properties`
+/// conversion `InProcessSession` and `WinitSession` each carried privately,
+/// pulled out here (same rationale as [`collect_boxes`]) so the live-window
+/// automation arm (MCP-TOTAL-S2d) reuses the exact same shape instead of a
+/// third copy.
+pub fn style_to_properties(style: &lumen_layout::ComputedStyle) -> ComputedProperties {
+    let mut m = std::collections::HashMap::new();
+
+    m.insert("display".into(), format!("{:?}", style.display).to_lowercase());
+    m.insert("color".into(), format_color(&style.color));
+    m.insert(
+        "background-color".into(),
+        style
+            .background_color
+            .as_ref()
+            .and_then(|c| (*c).to_color_opt())
+            .map(|c| format!("rgba({},{},{},{})", c.r, c.g, c.b, c.a))
+            .unwrap_or_else(|| "transparent".into()),
+    );
+    m.insert("font-size".into(), format!("{:.2}px", style.font_size));
+    m.insert("font-weight".into(), style.font_weight.serialize());
+    m.insert("width".into(), format_opt_length(style.width.as_ref()));
+    m.insert("height".into(), format_opt_length(style.height.as_ref()));
+    m.insert("margin-top".into(), format_length_or_auto(&style.margin_top));
+    m.insert("margin-right".into(), format_length_or_auto(&style.margin_right));
+    m.insert("margin-bottom".into(), format_length_or_auto(&style.margin_bottom));
+    m.insert("margin-left".into(), format_length_or_auto(&style.margin_left));
+    m.insert("padding-top".into(), format_length(&style.padding_top));
+    m.insert("padding-right".into(), format_length(&style.padding_right));
+    m.insert("padding-bottom".into(), format_length(&style.padding_bottom));
+    m.insert("padding-left".into(), format_length(&style.padding_left));
+
+    ComputedProperties { properties: m }
+}
+
+fn format_color(c: &lumen_layout::Color) -> String {
+    format!("rgba({},{},{},{})", c.r, c.g, c.b, c.a)
+}
+
+fn format_length(l: &lumen_layout::Length) -> String {
+    match l {
+        lumen_layout::Length::Px(v) => format!("{:.2}px", v),
+        lumen_layout::Length::Percent(v) => format!("{:.2}%", v),
+        lumen_layout::Length::Em(v) => format!("{:.2}em", v),
+        lumen_layout::Length::Rem(v) => format!("{:.2}rem", v),
+        other => format!("{other:?}"),
+    }
+}
+
+fn format_opt_length(l: Option<&lumen_layout::Length>) -> String {
+    match l {
+        None => "auto".into(),
+        Some(len) => format_length(len),
+    }
+}
+
+fn format_length_or_auto(l: &lumen_layout::LengthOrAuto) -> String {
+    match l {
+        lumen_layout::LengthOrAuto::Auto => "auto".into(),
+        lumen_layout::LengthOrAuto::Length(len) => format_length(len),
     }
 }
 

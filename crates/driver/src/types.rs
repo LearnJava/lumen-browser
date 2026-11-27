@@ -686,6 +686,25 @@ pub enum AutomationCommand {
         /// CSS selector to match within the subtree.
         selector: String,
     },
+    /// Computed-style property map of `selector`'s first match (MCP-TOTAL-S2d,
+    /// wires `x-computed-style` to the live window). `None` when the selector
+    /// matches nothing or the element has no layout box.
+    /// Reply: [`AutomationReply::ComputedStyle`].
+    ComputedStyle {
+        /// CSS selector to match.
+        selector: String,
+    },
+    /// DEVX-10 causal chain for `selector`'s first match (MCP-TOTAL-S2d, wires
+    /// `x-explain-element` to the live window). An unmatched selector is the
+    /// all-default chain — the same shape the headless sessions answer.
+    /// Reply: [`AutomationReply::ExplainElement`].
+    ExplainElement {
+        /// CSS selector to match.
+        selector: String,
+    },
+    /// DEVX-11 page-level aggregate (MCP-TOTAL-S2d, wires `x-explain-page` to
+    /// the live window). Reply: [`AutomationReply::ExplainPage`].
+    ExplainPage,
     /// Enable/disable offline-network simulation (BUG-295, WebDriver BiDi
     /// `network.setOfflineStatus`) on the live window.
     SetOffline(bool),
@@ -912,6 +931,13 @@ pub enum AutomationReply {
     /// `DisplayList`/`DisplayListScoped` result: the display-list text dump
     /// (MCP-TOTAL-S2b).
     DisplayList(String),
+    /// `ComputedStyle` result: the computed-style property map, `None` when
+    /// the selector matched nothing (MCP-TOTAL-S2d).
+    ComputedStyle(Option<ComputedProperties>),
+    /// `ExplainElement` result: the DEVX-10 causal chain (MCP-TOTAL-S2d).
+    ExplainElement(ExplainElement),
+    /// `ExplainPage` result: the DEVX-11 page-level aggregate (MCP-TOTAL-S2d).
+    ExplainPage(ExplainPage),
     /// `ResolveIntercept` result: whether `request_id` matched a pending pause.
     InterceptResolved(bool),
     /// `PollIntercepts` result: requests newly paused since the last poll.

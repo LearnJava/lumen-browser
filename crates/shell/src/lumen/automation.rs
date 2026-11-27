@@ -410,6 +410,42 @@ impl Lumen {
                 .collect()
         }
 
+        /// Computed-style property map of `selector`'s first match for
+        /// `AutomationCommand::ComputedStyle` (MCP-TOTAL-S2d, wires
+        /// `x-computed-style` to the live window) — the same lookup, and the
+        /// same shared `lumen_driver::scope::style_to_properties` conversion,
+        /// the headless sessions use. `None` = no page, no layout tree, or no
+        /// match with a layout box.
+        pub(crate) fn automation_computed_style(&self, selector: &str) -> Option<lumen_driver::ComputedProperties> {
+            let lb = self.layout_box.as_ref()?;
+            let source = self.layout_source.as_ref()?;
+            let doc = source.document.lock().ok()?;
+            let node = lumen_layout::find_first_dom_node_by_selector(&doc, selector)?;
+            let style = &lumen_layout::find_box_by_node(lb, node)?.style;
+            Some(lumen_driver::scope::style_to_properties(style))
+        }
+
+        /// DEVX-10 causal chain of `selector`'s first match for
+        /// `AutomationCommand::ExplainElement` (MCP-TOTAL-S2d, wires
+        /// `x-explain-element` to the live window) — `lumen_driver::explain`,
+        /// the same session-agnostic path the headless sessions run. The
+        /// chain's own all-default answer covers "no page"/"no match".
+        pub(crate) fn automation_explain_element(&self, selector: &str) -> Option<lumen_driver::ExplainElement> {
+            let lb = self.layout_box.as_ref()?;
+            let source = self.layout_source.as_ref()?;
+            let doc = source.document.lock().ok()?;
+            Some(lumen_driver::explain::explain_element(lb, &doc, selector))
+        }
+
+        /// DEVX-11 page-level aggregate for `AutomationCommand::ExplainPage`
+        /// (MCP-TOTAL-S2d, wires `x-explain-page` to the live window) — same
+        /// session-agnostic path as [`Self::automation_explain_element`].
+        /// `None` = no page or no layout tree.
+        pub(crate) fn automation_explain_page(&self) -> Option<lumen_driver::ExplainPage> {
+            let lb = self.layout_box.as_ref()?;
+            Some(lumen_driver::explain::explain_page(lb))
+        }
+
         /// Network request log for `AutomationCommand::NetworkLog` (DEVX-14,
         /// wires `resource://network` to the live window) — reads the same
         /// shared `NetworkLog` the DevTools network panel renders from,
