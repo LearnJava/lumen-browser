@@ -871,8 +871,8 @@
     /// подчёркивания, меняющиеся с осью `UNDO`; шрифт без регистрации метрик не отдаёт.
     #[test]
     fn underline_metrics_follow_variation_axis() {
-        static VF: &[u8] =
-            include_bytes!("../../../../tests/wpt/css/css-text-decor/resources/UnderlineTest-VF.ttf");
+        // Вендорена в крейт: CI исключает `tests/wpt` из чекаута.
+        static VF: &[u8] = include_bytes!("../tests/data/UnderlineTest-VF.ttf");
         let font = inter_font();
         let mut m = MultiFontMeasurer::new(&font).unwrap();
         m.register_family("underline-variable", VF.to_vec());

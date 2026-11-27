@@ -1364,9 +1364,9 @@ use crate::style::values::named_colors::NAMED_COLORS;
     // ── color() через загруженный `@color-profile` (CSS Color L5 §5.3) ─────────
 
     /// sRGB-профиль, у которого красный и зелёный колорант поменяны местами
-    /// (WPT `css-color/support/swapped.icc`, тест `at-color-profile-001`).
-    const SWAPPED_ICC: &[u8] =
-        include_bytes!("../../../../../../tests/wpt/css/css-color/support/swapped.icc");
+    /// (WPT `css-color/support/swapped.icc`, тест `at-color-profile-001`; вендорена
+    /// в крейт — CI исключает `tests/wpt` из чекаута).
+    const SWAPPED_ICC: &[u8] = include_bytes!("../../../tests/data/swapped.icc");
 
     /// Лист с `@color-profile` из `rules`, байты профилей подставлены `icc`
     /// (`None` — «не загрузился»).
