@@ -11,7 +11,8 @@ use super::*;
 const AV1_VORBIS: &[u8] = include_bytes!("../tests/data/av1-vorbis.webm");
 const AV1_MP4: &[u8] = include_bytes!("../../media-demux/tests/data/av1.mp4");
 const HEVC_MP4: &[u8] = include_bytes!("../../media-demux/tests/data/hevc.mp4");
-const VP9_WEBM: &[u8] = include_bytes!("../../../../tests/wpt/media/video.webm");
+// Вендорена в крейт: CI исключает `tests/wpt` из чекаута.
+const VP9_WEBM: &[u8] = include_bytes!("../tests/data/video.webm");
 
 fn open(bytes: &[u8]) -> Box<dyn VideoDecodeSession> {
     NativeVideoDecoder::default().open(bytes).unwrap()

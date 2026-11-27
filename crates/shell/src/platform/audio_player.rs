@@ -541,7 +541,8 @@ mod tests {
     #[test]
     fn probe_duration_mp3_is_finite() {
         // BUG-1105: minimp3 не отдаёт total_duration() — считаем проходом.
-        let bytes = include_bytes!("../../../../tests/wpt/media/sine440.mp3");
+        // Фикстура вендорена в крейт: CI исключает `tests/wpt` из чекаута.
+        let bytes = include_bytes!("../../tests/fixtures/sine440.mp3");
         let d = probe_duration(bytes);
         assert!(d.is_finite() && d > 0.0, "duration = {d}");
     }
