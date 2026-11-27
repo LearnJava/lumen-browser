@@ -45,8 +45,23 @@ use lumen_dom::NodeId;
 use lumen_layout::style::WritingMode;
 use lumen_layout::{
     creates_stacking_context, forward_box_transform, owns_paint_layer, paint_child_order, BoxKind,
-    Cursor, Display, FormControlKind, InlineFrag, LayoutBox, Mat4, PointerEvents, UserSelect,
+    BoxRole, Cursor, Display, FormControlKind, InlineFrag, LayoutBox, Mat4, PseudoKind,
+    PointerEvents, UserSelect,
 };
+
+/// CSS Pseudo-Elements L4 identity of a hit pseudo-element box — `Some` only
+/// when the topmost box is generated content (`::scroll-marker`,
+/// `::scroll-button()`, …), never for a real element's box.
+///
+/// `origin` is the box's `BoxOrigin::node`: for `::scroll-marker` the marker's
+/// TARGET element, for `::scroll-button()`/`::scroll-marker-group` the element
+/// the pseudo-element belongs to. The DOM has no node for the pseudo-element
+/// itself, so activation (scroll-to-target, focus) must go through `origin`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PseudoHit {
+    pub kind: PseudoKind,
+    pub origin: lumen_dom::NodeId,
+}
 
 /// Результат hit-теста.
 #[derive(Debug, Clone)]
@@ -81,6 +96,24 @@ pub struct HitTestResult {
     /// CSS `user-select` hit-узла — для запрета выделения текста (`None`)
     /// или принудительного выделения всего элемента (`All`).
     pub user_select: UserSelect,
+    /// Псевдоэлементный бокс под точкой (CSS Overflow L5 scroll-маркеры и
+    /// кнопки — у них есть activation behavior, которого у обычных
+    /// псевдоэлементов нет). `None` для обычных элементов.
+    pub pseudo: Option<PseudoHit>,
+}
+
+/// `Some` для бокса, чей `origin.role` — `BoxRole::Pseudo`: вид псевдо-
+/// элемента и его `origin.node` (target/владелец). Для маркеров это
+/// единственный способ узнать, КАКОЙ именно `::scroll-marker` попал под
+/// точку — DOM-узла у него нет.
+fn pseudo_hit_of(b: &LayoutBox) -> Option<PseudoHit> {
+    match b.origin.role {
+        BoxRole::Pseudo(kind) => Some(PseudoHit {
+            kind,
+            origin: b.origin.node.unwrap_or(b.node),
+        }),
+        _ => None,
+    }
 }
 
 /// Hit-тест точки в viewport-координатах. `root` — layout-дерево из
@@ -337,6 +370,7 @@ fn hit_test_box<'a>(
         path: vec![b.node],
         cursor: resolve_auto_cursor(css_cursor, b, text_frag),
         user_select: b.style.user_select,
+        pseudo: pseudo_hit_of(b),
     })
 }
 
@@ -424,6 +458,7 @@ fn hit_test_all_box<'a>(
         path: vec![b.node],
         cursor: resolve_auto_cursor(css_cursor, b, text_frag),
         user_select: b.style.user_select,
+        pseudo: pseudo_hit_of(b),
     })
 }
 

@@ -16,7 +16,9 @@
 
 use super::*;
 
-use crate::style::{ScrollMarkerGroupPlacement, WritingMode};
+use std::collections::HashMap;
+
+use crate::style::{Overflow, ScrollMarkerGroupPlacement, WritingMode};
 
 /// What the pass needs from the build context — the same values `build_box_inner` holds.
 pub(super) struct ScrollPseudoCx<'a> {
@@ -94,23 +96,45 @@ pub(super) fn inject_scroll_pseudos(
         let node = child.origin.node.unwrap_or(child.node);
         let mut before: Vec<LayoutBox> = Vec::new();
         let mut after: Vec<LayoutBox> = Vec::new();
+        let mut group_after = None;
+        let mut group_is_before = false;
         let group = child
             .style
             .scroll_marker_group
             .and_then(|g| {
                 build_group(cx, node, &child.style, &child.children, markers_styled).map(|b| (g.placement, b))
             });
-        if let Some((ScrollMarkerGroupPlacement::Before, g)) = group {
-            before.push(g);
-        } else if let Some((ScrollMarkerGroupPlacement::After, g)) = group {
-            after.push(g);
+        if let Some((placement, g)) = group {
+            match placement {
+                // `before`: группа — внешний бокс, кнопки между ней и элементом.
+                ScrollMarkerGroupPlacement::Before => {
+                    before.push(g);
+                    group_is_before = true;
+                }
+                ScrollMarkerGroupPlacement::After => group_after = Some(g),
+            }
         }
         if buttons {
-            for kind in BUTTONS {
-                if let Some(b) = build_button(cx, node, &child.style, kind) {
-                    before.push(b);
-                }
+            // CSS Overflow L5 §3.2 + WPT box-order (`relative-box-order-*`,
+            // `scroll-buttons-enabled-ref`): группа всегда внешний бокс —
+            // `before` даёт [group][buttons][el], `after`/нет группы —
+            // [el][buttons][group]. Кнопки идут в порядке block-start,
+            // inline-start, inline-end, block-end (`BUTTONS`).
+            let states = button_states(node, &child.style);
+            let _guard = crate::scroll_state::install_scroll_button_states(states);
+            let btns: Vec<LayoutBox> = BUTTONS
+                .iter()
+                .filter_map(|&kind| build_button(cx, node, &child.style, kind))
+                .collect();
+            drop(_guard);
+            if group_is_before {
+                before.extend(btns);
+            } else {
+                after.extend(btns);
             }
+        }
+        if let Some(g) = group_after {
+            after.push(g);
         }
         out.extend(group_inline_levels(cx.host, parent_style, before, blockify));
         out.push(child);
@@ -145,6 +169,8 @@ pub(super) fn inject_root_scroll_pseudos(cx: &ScrollPseudoCx, style: &ComputedSt
         }
     }
     if buttons {
+        let states = button_states(cx.host, style);
+        let _guard = crate::scroll_state::install_scroll_button_states(states);
         for kind in BUTTONS {
             if let Some(b) = build_button(cx, cx.host, style, kind) {
                 before.push(b);
@@ -205,10 +231,112 @@ pub(crate) fn button_keywords(kind: PseudoKind, style: &ComputedStyle) -> (&'sta
     }
 }
 
+/// CSS Overflow L5 §3.2 — is the `::scroll-button()` pseudo box `b` enabled,
+/// i.e. can its scroll container still scroll toward the button's direction?
+/// `edges` — [`crate::scroll_state::scroll_state_edges`] of the tree `b`
+/// belongs to (computed once by the caller). Used by focus navigation and
+/// activation to skip/ignore `:disabled` buttons: they are not focusable
+/// and do not scroll (WPT `scroll-button-disabled-no-focus`,
+/// `scroll-buttons-disabled-snapping`). Unknown data counts as enabled.
+pub fn scroll_button_box_enabled(
+    edges: &HashMap<u32, crate::style::EdgeFlags>,
+    b: &LayoutBox,
+) -> bool {
+    let Some(node) = b.origin.node else {
+        return true;
+    };
+    if !matches!(
+        b.origin.role,
+        BoxRole::Pseudo(
+            PseudoKind::ScrollButtonBlockStart
+                | PseudoKind::ScrollButtonInlineStart
+                | PseudoKind::ScrollButtonInlineEnd
+                | PseudoKind::ScrollButtonBlockEnd
+        )
+    ) {
+        return true;
+    }
+    let kind = match b.origin.role {
+        BoxRole::Pseudo(k) => k,
+        _ => return true,
+    };
+    let (_, physical) = button_keywords(kind, &b.style);
+    let Some(code) = crate::scroll_state::scroll_dir_code(physical) else {
+        return true;
+    };
+    let idx = match code {
+        crate::scroll_state::DIR_UP => 0,
+        crate::scroll_state::DIR_RIGHT => 1,
+        crate::scroll_state::DIR_DOWN => 2,
+        crate::scroll_state::DIR_LEFT => 3,
+        _ => return true,
+    };
+    edges.get(&node.raw()).map(|e| e.0[idx]).unwrap_or(true)
+}
+
+/// Та же проверка, что [`scroll_button_box_enabled`], но по аргументам —
+/// shell знает `kind`/container, но не сам псевдо-бокс (клик-диспетч).
+pub fn scroll_button_dir_enabled(
+    edges: &HashMap<u32, crate::style::EdgeFlags>,
+    node: lumen_dom::NodeId,
+    kind: PseudoKind,
+    style: &ComputedStyle,
+) -> bool {
+    let (_, physical) = button_keywords(kind, style);
+    let Some(code) = crate::scroll_state::scroll_dir_code(physical) else {
+        return true;
+    };
+    let idx = match code {
+        crate::scroll_state::DIR_UP => 0,
+        crate::scroll_state::DIR_RIGHT => 1,
+        crate::scroll_state::DIR_DOWN => 2,
+        crate::scroll_state::DIR_LEFT => 3,
+        _ => return true,
+    };
+    edges.get(&node.raw()).map(|e| e.0[idx]).unwrap_or(true)
+}
+
 /// The request string for a `::scroll-button()` box: every spelling it answers to.
 fn button_request(kind: PseudoKind, style: &ComputedStyle) -> String {
     let (logical, physical) = button_keywords(kind, style);
     format!("scroll-button({logical}|{physical})")
+}
+
+/// «Можно ли ещё прокрутить контейнер в сторону кнопки» для всех четырёх
+/// `::scroll-button()` узла — `(NodeId::raw(), направление)` → bool, для
+/// `install_scroll_button_states`. По подсказкам прошлой раскладки, когда
+/// они есть; без них — по `overflow` стиля (потенциально прокручиваемая ось).
+fn button_states(node: NodeId, style: &ComputedStyle) -> HashMap<(u32, u8), bool> {
+    let mut map = HashMap::with_capacity(BUTTONS.len());
+    for &kind in &BUTTONS {
+        let (_, physical) = button_keywords(kind, style);
+        let Some(code) = crate::scroll_state::scroll_dir_code(physical) else {
+            continue;
+        };
+        map.insert((node.raw(), code), button_can_scroll(node, physical, style));
+    }
+    map
+}
+
+/// Ещё ли есть куда прокручивать контейнер `node` в физическую сторону
+/// `physical` (`"up"`/`"down"`/`"left"`/`"right"`).
+fn button_can_scroll(node: NodeId, physical: &str, style: &ComputedStyle) -> bool {
+    if let Some(edges) = crate::scroll_state::hinted_scroll_edges(node) {
+        // EdgeFlags — [top, right, bottom, left].
+        let idx = match physical {
+            "up" => 0,
+            "right" => 1,
+            "down" => 2,
+            "left" => 3,
+            _ => return true,
+        };
+        return edges.0[idx];
+    }
+    let axis = match physical {
+        "up" | "down" => style.overflow_y,
+        _ => style.overflow_x,
+    };
+    matches!(axis, Overflow::Scroll | Overflow::Auto | Overflow::Hidden)
 }
 
 fn build_button(cx: &ScrollPseudoCx, node: NodeId, style: &ComputedStyle, kind: PseudoKind) -> Option<LayoutBox> {
@@ -316,7 +444,15 @@ fn pseudo_box(cx: &ScrollPseudoCx, node: NodeId, ps: ComputedStyle, kind: Pseudo
     );
     let mut children = extra;
     if !segs.is_empty() {
-        children.push(anon_inline_run(cx.host, &ps, segs, BoxRole::Pseudo(kind)));
+        // The run keeps `cx.host` as `node` (first-box lookups), but its
+        // `origin.node` is the pseudo-element's OWN originating element —
+        // for scroll controls that is the scroll target/container `node`,
+        // not the parent `host` the sibling pseudo box carries. Hit-testing
+        // reads `origin.node` for `PseudoHit.origin`, and activation
+        // (scroll-to-target, focus) must resolve the real originating node.
+        let mut run = anon_inline_run(cx.host, &ps, segs, BoxRole::Pseudo(kind));
+        run.origin.node = Some(node);
+        children.push(run);
     }
     LayoutBox {
         anchor_scroll: None, cv_hidden: Vec::new(),

@@ -78,6 +78,7 @@ pub(crate) struct PageSnapshot {
     /// matches the restored tree.
     pub(crate) page_prev_cascade_styles: Option<lumen_layout::CascadeStyles>,
     pub(crate) page_prev_interactive: (Option<NodeId>, Option<NodeId>, Option<NodeId>),
+    pub(crate) page_prev_pseudo_focus: Option<(u32, u8, u32)>,
     pub(crate) anim_frame: Option<lumen_layout::AnimationFrame>,
     pub(crate) layout_box: Option<lumen_layout::LayoutBox>,
     /// P3-webvtt срез 3: cues страницы — переезжают вместе с вкладкой.

@@ -569,6 +569,9 @@ impl Lumen {
         // `:active` ancestor propagation belongs to the pointing-device clause
         // (Selectors L4 §9.2) — a held Space/Enter marks only its element.
         lumen_layout::set_active_keyboard(self.active_from_keyboard);
+        // CSS Overflow L5 §3.3: `::scroll-marker:focus`/`::scroll-button():focus`
+        // and the element-level `:focus*` guards read this.
+        lumen_layout::set_pseudo_focus(self.pseudo_focus_env());
         // Forced Colors Mode (CSS Color Adjust L1 §3) — a11y preference drives
         // the forced system palette and the `(forced-colors: active)` media
         // feature for this layout pass.
@@ -620,9 +623,16 @@ impl Lumen {
         // (and un-scrolls the painted content) ~one relayout later. This used
         // to run only for sheets with `scroll-state()` queries; the scroll
         // hints that path also installs are inert without such queries.
-        let keep_scroll = self.layout_box.as_ref().map(lumen_layout::scroll_offsets);
+        let keep_scroll = self.layout_box.as_ref().map(|lb| {
+            (
+                lumen_layout::scroll_offsets(lb),
+                // Стороны, к которым контейнеры ещё можно прокрутить, — для
+                // `::scroll-button():enabled`/`:disabled` на новой раскладке.
+                lumen_layout::scroll_state_edges(lb, viewport),
+            )
+        });
         let (new_dl, lb) = match keep_scroll {
-            Some(offsets) => {
+            Some((offsets, edges)) => {
                 relayout_page_keeping_scroll(
                     src,
                     viewport,
@@ -631,6 +641,7 @@ impl Lumen {
                     &self.web_fonts,
                     offsets,
                     (self.scroll_x, self.scroll_y),
+                    edges,
                 )
             }
             None => relayout_page(src, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts),
@@ -687,6 +698,27 @@ impl Lumen {
     /// same contract as the debounced zoom (M2.2a). The chrome itself is drawn
     /// from its own state, so it updates on the immediately-requested redraw; only
     /// the page reflow underneath it is deferred.
+    /// CSS Overflow L5 §3.3 — `focused_pseudo` as `(origin, kind, container)`
+    /// node indices for `page_prev_pseudo_focus` comparisons and the JS-side
+    /// interactive snapshot. `None` = no scroll-control pseudo-element focus.
+    pub(crate) fn pseudo_focus_key(&self) -> Option<(u32, u8, u32)> {
+        self.focused_pseudo
+            .map(|(o, k, c)| (o.index() as u32, k, c.index() as u32))
+    }
+
+    /// [`Self::pseudo_focus_key`] in `lumen_layout::PseudoFocus` form for the
+    /// thread-local `set_pseudo_focus` installs on the layout pass.
+    fn pseudo_focus_env(&self) -> lumen_layout::PseudoFocus {
+        match self.pseudo_focus_key() {
+            Some((origin, kind, container)) => lumen_layout::PseudoFocus {
+                origin,
+                kind,
+                container,
+            },
+            None => lumen_layout::PseudoFocus::NONE,
+        }
+    }
+
     pub(crate) fn relayout_chrome(&mut self) {
         if !self.submit_relayout_job() {
             self.relayout();
@@ -839,6 +871,7 @@ impl Lumen {
         lumen_layout::set_interactive_state(self.hovered_nid, self.focused_node, self.active_nid);
         lumen_layout::set_keyboard_focus(self.focus_from_keyboard);
         lumen_layout::set_active_keyboard(self.active_from_keyboard);
+        lumen_layout::set_pseudo_focus(self.pseudo_focus_env());
         lumen_layout::set_forced_colors(self.a11y_store.forced_colors());
         lumen_layout::set_device_pixel_ratio(self.zoom_factor);
         lumen_layout::set_cv_scroll(self.scroll_x, self.scroll_y);
@@ -874,7 +907,12 @@ impl Lumen {
             (false, false) => "full=no-basis".to_string(),
             (false, true) => String::new(),
         };
+        // CSS Overflow L5 §3.3: pseudo-element `:focus*` rules sit outside the
+        // element restyle's dirty-root reach — any pseudo-focus transition
+        // (set, move between markers, or clear) takes the full cascade.
+        let pseudo_steady = self.pseudo_focus_key() == self.page_prev_pseudo_focus;
         let (new_dl, new_lb, fresh_cascade_styles, used_restyle) = if !touched.unattributed
+            && pseudo_steady
             && let Some(prev_styles) = self.page_prev_cascade_styles.take()
         {
             let (prev_hover, prev_focus, prev_active) = self.page_prev_interactive;
@@ -1070,6 +1108,7 @@ impl Lumen {
         // longer conditional on which branch ran.
         self.page_prev_cascade_styles = Some(fresh_cascade_styles);
         self.page_prev_interactive = new_interactive;
+        self.page_prev_pseudo_focus = self.pseudo_focus_key();
         let (doc_key, sheet_key) = self
             .layout_source
             .as_ref()
@@ -1765,6 +1804,7 @@ pub(crate) fn relayout_page(
 
 /// [`relayout_page`] для таблицы с `scroll-state()`: запросы читают смещения `offsets`, а
 /// готовое дерево получает их обратно до сборки списка отображения.
+#[allow(clippy::too_many_arguments)]  // keep-scroll hints grew the signature past 7
 pub(crate) fn relayout_page_keeping_scroll(
     src: &LayoutSource,
     viewport: Size,
@@ -1773,10 +1813,12 @@ pub(crate) fn relayout_page_keeping_scroll(
     web_fonts: &[LoadedWebFont],
     offsets: std::collections::HashMap<u32, [f32; 4]>,
     page_scroll: (f32, f32),
+    edges: std::collections::HashMap<u32, lumen_layout::EdgeFlags>,
 ) -> (DisplayList, lumen_layout::LayoutBox) {
     let _hints = lumen_layout::install_scroll_hints(lumen_layout::ScrollHints {
         offsets: offsets.clone(),
         page: page_scroll,
+        edges,
     });
     #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");

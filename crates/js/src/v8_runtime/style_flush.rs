@@ -110,6 +110,9 @@ pub(crate) struct FlushHandles {
     /// (e.g. `overflow` flipping to `clip`) sees the correctly reclamped
     /// value instead of silently losing a prior scroll position.
     pub(crate) scroll_states: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
+    /// CSS Overflow L5 §3.2: scrollability edges of the previous flush's tree —
+    /// `ScrollHints::edges` for `::scroll-button():enabled`/`:disabled`.
+    pub(crate) scroll_button_edges: Arc<Mutex<HashMap<u32, lumen_layout::EdgeFlags>>>,
     /// See [`super::runtime::V8JsRuntime::anchor_scrollers`].
     pub(crate) anchor_scrollers: Arc<Mutex<lumen_layout::AnchorScrollers>>,
     /// CQ-SCROLL-STATE-2: the page's scroll position as `window.scrollY`/`scrollX` read it —
@@ -140,6 +143,15 @@ pub(crate) struct FlushHandles {
     /// out via [`lumen_layout::set_keyboard_focus`], exactly as the focus
     /// mirror is.
     pub(crate) keyboard_focus: Arc<AtomicBool>,
+    /// CSS Overflow L5 §3.3: the engine thread's scroll-control pseudo-element
+    /// focus mirror (see [`super::runtime::V8JsRuntime::pseudo_focus`]) —
+    /// `(origin index, PseudoKind as u8, container index)`, installed via
+    /// [`lumen_layout::set_pseudo_focus`] before laying out.
+    pub(crate) pseudo_focus: Arc<Mutex<Option<(u32, u8, u32)>>>,
+    /// The pseudo-focus baked into the current snapshot — the twin of
+    /// [`Self::last_flushed_focus`], so a marker→marker focus move that keeps
+    /// the same container nid still triggers a flush.
+    pub(crate) last_flushed_pseudo_focus: Arc<Mutex<Option<(u32, u8, u32)>>>,
     /// The modality baked into the current snapshot — the twin of
     /// [`Self::last_flushed_focus`], so a keyboard↔pointer flip that moved no
     /// focus still triggers a flush.
@@ -352,6 +364,9 @@ pub(crate) struct IncrFlushBasis {
     /// CSS UI L4 §3.3: keyboard modality baked into `layout`/`cascade` — the
     /// `:focus-visible` input [`Self::focus`] alone cannot express.
     pub(crate) keyboard_focus: bool,
+    /// CSS Overflow L5 §3.3: scroll-control pseudo-element focus baked into
+    /// `layout`/`cascade` — `(origin, kind, container)` or `None`.
+    pub(crate) pseudo_focus: Option<(u32, u8, u32)>,
     /// BUG-1211: [`super::dom_touched::DomTouched::epoch`] at the moment this
     /// basis was produced — the watermark [`FlushHandles::
     /// try_incremental_flush`] diffs `touch_gen` against, since `touched.
@@ -602,12 +617,17 @@ impl FlushHandles {
         // CSS UI L4 §3.3: `:focus-visible`'s second input — a keyboard↔pointer
         // flip moves no focus nid, so it needs its own change signal here.
         let current_keyboard = self.keyboard_focus.load(Ordering::Relaxed);
+        // CSS Overflow L5 §3.3: marker→marker focus keeps the same container
+        // nid — the pseudo triple is its own change signal.
+        let current_pseudo = *self.pseudo_focus.lock().unwrap_or_else(|e| e.into_inner());
         // BUG-1458: the same for the pointer — `:hover` flips on a hit-test
         // change, which touches no DOM node either.
         let focus_changed = *self.last_flushed_focus.lock().unwrap_or_else(|e| e.into_inner())
             != current_focus
             || *self.last_flushed_hover.lock().unwrap_or_else(|e| e.into_inner()) != current_hover
-            || self.last_flushed_keyboard_focus.load(Ordering::Relaxed) != current_keyboard;
+            || self.last_flushed_keyboard_focus.load(Ordering::Relaxed) != current_keyboard
+            || *self.last_flushed_pseudo_focus.lock().unwrap_or_else(|e| e.into_inner())
+                != current_pseudo;
         // BUG-935 S34: gate on `flush_stale`, a dedicated flag set at every
         // same DOM-mutating call site as the scheduler's own `dom_dirty`
         // (`V8JsRuntime::dom_dirty`, a separate `Arc<AtomicBool>` this struct
@@ -728,6 +748,17 @@ impl FlushHandles {
         // "mouse focus" and the WPT `:focus-visible` ring never appeared on
         // keyboard-driven focus.
         lumen_layout::set_keyboard_focus(current_keyboard);
+        // CSS Overflow L5 §3.3: `::scroll-marker:focus`/`::scroll-button():focus`
+        // and the element-level `:focus*` guards read this — same-tick twin of
+        // the shell's `set_pseudo_focus` on the painted relayout.
+        lumen_layout::set_pseudo_focus(match current_pseudo {
+            Some((o, k, c)) => lumen_layout::PseudoFocus {
+                origin: o,
+                kind: k,
+                container: c,
+            },
+            None => lumen_layout::PseudoFocus::NONE,
+        });
         // BUG-1211: try the incremental restyle path first — a full
         // `layout_measured_with_counters` recomputes the *entire* tree's
         // cascade+layout on every same-tick accessor read after a mutation,
@@ -754,15 +785,20 @@ impl FlushHandles {
         // CQ-SCROLL-STATE-2: the fresh tree starts every scroller at offset 0 and gets the
         // offsets back only after the layout (`restore_scroll_positions` below) — the
         // `scroll-state()` queries of the layout itself read them from here.
-        let _scroll_hints = lumen_layout::sheet_has_scroll_state_queries(&sheet).then(|| {
+        // CSS Overflow L5 §3.2: `::scroll-button():enabled`/`:disabled` читают
+        // стороны прокрутки из тех же подсказок — по дереву ПРОШЛОГО флаша
+        // (см. `scroll_button_edges` ниже).
+        let need_scroll_edges = lumen_layout::sheet_has_scroll_button_state(&sheet);
+        let _scroll_hints = (lumen_layout::sheet_has_scroll_state_queries(&sheet) || need_scroll_edges).then(|| {
             lumen_layout::install_scroll_hints(lumen_layout::ScrollHints {
                 offsets: self.scroll_states.lock().unwrap_or_else(|e| e.into_inner()).clone(),
                 page: self.page_scroll(),
+                edges: self.scroll_button_edges.lock().unwrap_or_else(|e| e.into_inner()).clone(),
             })
         });
         let incr_scope_guard = lumen_core::profile::scope("flush.try_incremental");
         let incr = self.try_incremental_flush(
-            &doc_guard, &sheet, viewport, &measurer, current_focus, current_hover, current_keyboard, &touched, content_journal.as_ref(),
+            &doc_guard, &sheet, viewport, &measurer, current_focus, current_hover, current_keyboard, current_pseudo, &touched, content_journal.as_ref(),
         );
         // BUG-1211 (post-collectors): `incr_scope` is `Some((dirty_roots,
         // prev_node_ids))` only when the incremental cascade+layout path
@@ -1174,6 +1210,13 @@ impl FlushHandles {
                     .collect();
         }
         drop(scroll_collect_scope);
+        // CSS Overflow L5 §3.2: стороны прокрутки контейнеров по ГОТОВОМУ
+        // дереву — их прочитает `ScrollHints::edges` следующего флаша для
+        // `::scroll-button():enabled`/`:disabled`.
+        if need_scroll_edges {
+            *self.scroll_button_edges.lock().unwrap_or_else(|e| e.into_inner()) =
+                lumen_layout::scroll_state_edges(&layout_root, viewport);
+        }
         if verify_scope_prune() {
             self.verify_pruned(scoped_plan.as_ref(), &layout_root, &doc_guard, &counters, viewport, &sheet, &measurer);
         }
@@ -1200,6 +1243,7 @@ impl FlushHandles {
             focus: current_focus,
             hover: current_hover,
             keyboard_focus: current_keyboard,
+            pseudo_focus: current_pseudo,
             touch_epoch: touched.epoch,
             scroll_rollups: next_rollups,
             shadow_adopted_gen: doc_guard.shadow_adopted_gen(),
@@ -1216,6 +1260,10 @@ impl FlushHandles {
             .unwrap_or_else(|e| e.into_inner()) = current_focus;
         *self.last_flushed_hover.lock().unwrap_or_else(|e| e.into_inner()) = current_hover;
         self.last_flushed_keyboard_focus.store(current_keyboard, Ordering::Relaxed);
+        *self
+            .last_flushed_pseudo_focus
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = current_pseudo;
         // CSSOM-8 вариант C: `cssom_deltas` itself is never cleared — it is
         // replayed onto every future cascade rebuild too (see the field's doc
         // comment) — only the "has something changed since the last flush"
@@ -1430,6 +1478,7 @@ impl FlushHandles {
         current_focus: Option<u32>,
         current_hover: Option<u32>,
         current_keyboard: bool,
+        current_pseudo: Option<(u32, u8, u32)>,
         touched: &super::dom_touched::DomTouched,
         content_journal: Option<&std::collections::HashSet<lumen_dom::NodeId>>,
     ) -> Option<IncrFlushResult> {
@@ -1459,6 +1508,14 @@ impl FlushHandles {
         // датчик, как у `sheet_revision` для документного листа.
         if basis.shadow_adopted_gen != doc.shadow_adopted_gen() {
             declined("shadow adopted stylesheets changed");
+            return None;
+        }
+        // CSS Overflow L5 §3.3: pseudo-element `:focus*` rules live outside the
+        // element cascade the incremental path diffs — a marker→marker move
+        // (same container nid, different origin) is invisible to
+        // `focus_changed` here, so decline to the full path.
+        if basis.pseudo_focus != current_pseudo {
+            declined("pseudo focus changed");
             return None;
         }
         if basis.viewport != [viewport.width, viewport.height] {

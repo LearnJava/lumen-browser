@@ -1048,6 +1048,14 @@ pub(crate) trait PersistentJs: Send + Sync {
     #[allow(dead_code)]
     fn notify_keyboard_focus(&self, _keyboard: bool) {}
 
+    /// CSS Overflow L5 §3.3: the shell's scroll-control pseudo-element focus
+    /// changed — `(origin node index, PseudoKind as u8, container node index)`.
+    /// `None` = no marker/button focused. Mirrors `set_pseudo_focus` on the
+    /// painted relayout so `::scroll-marker:focus`/`:focus-visible` and the
+    /// element-level `:focus*` guards resolve same-tick.
+    #[allow(dead_code)]
+    fn notify_pseudo_focus(&self, _pf: Option<(u32, u8, u32)>) {}
+
     /// Whether a style snapshot pushed by a relayout job was computed under a
     /// different interactive state (hover/focus/active/modality) than this
     /// runtime's live mirrors — see
@@ -1814,6 +1822,9 @@ impl PersistentJs for V8PersistentJs {
     }
     fn notify_keyboard_focus(&self, keyboard: bool) {
         self.rt.set_keyboard_focus(keyboard);
+    }
+    fn notify_pseudo_focus(&self, pf: Option<(u32, u8, u32)>) {
+        self.rt.set_pseudo_focus(pf);
     }
     fn interactive_snapshot_stale(
         &self,

@@ -293,6 +293,29 @@ impl Lumen {
         cur
     }
 
+    /// `PseudoKind` обратно из u8 — зеркало `kind as u8` на стороне
+    /// `_lumen_hit_test_at_point` (fieldless enum, дискриминанты стабильны
+    /// внутри одного бинаря). `None`-дискриминант (0) в протоколе не
+    /// встречается: не-псевдо шлёт -1.
+    fn pseudo_kind_from_u8(v: u8) -> lumen_layout::PseudoKind {
+        use lumen_layout::PseudoKind as P;
+        match v {
+            0 => P::None,
+            1 => P::FirstLetter,
+            2 => P::Before,
+            3 => P::After,
+            4 => P::FirstLine,
+            5 => P::Marker,
+            6 => P::ScrollMarker,
+            7 => P::ScrollMarkerGroup,
+            8 => P::ScrollButtonBlockStart,
+            9 => P::ScrollButtonInlineStart,
+            10 => P::ScrollButtonInlineEnd,
+            11 => P::ScrollButtonBlockEnd,
+            _ => P::None,
+        }
+    }
+
     /// Fresh-layout hit-test override shared by the automation click and
     /// release halves — `layout_box` may lag a same-turn flush behind what
     /// the page sees.
@@ -308,6 +331,21 @@ impl Lumen {
         && let Ok(ids) = serde_json::from_str::<Vec<f64>>(&json)
         {
             self.automation_hit_override = Some(match ids.as_slice() {
+                // Элементы 4–5 (псевдо-вид `PseudoKind` и `origin.node`) —
+                // старый формат из 3 элементов читается как «без псевдо».
+                [n, s, i, k, o] | [n, s, i, k, o, ..] => Some(lumen_paint::HitTestResult {
+                    node: NodeId::from_raw(*n as u32),
+                    source_node: NodeId::from_raw(*s as u32),
+                    inline_source: (*i >= 0.0).then(|| NodeId::from_raw(*i as u32)),
+                    local_point: Point::new(0.0, 0.0),
+                    path: vec![NodeId::from_raw(*n as u32)],
+                    cursor: lumen_layout::Cursor::Auto,
+                    user_select: lumen_layout::UserSelect::Auto,
+                    pseudo: (*k >= 0.0 && *o >= 0.0).then(|| lumen_paint::PseudoHit {
+                        kind: Self::pseudo_kind_from_u8(*k as u8),
+                        origin: NodeId::from_raw(*o as u32),
+                    }),
+                }),
                 [n, s, i] => Some(lumen_paint::HitTestResult {
                     node: NodeId::from_raw(*n as u32),
                     source_node: NodeId::from_raw(*s as u32),
@@ -316,6 +354,7 @@ impl Lumen {
                     path: vec![NodeId::from_raw(*n as u32)],
                     cursor: lumen_layout::Cursor::Auto,
                     user_select: lumen_layout::UserSelect::Auto,
+                    pseudo: None,
                 }),
                 _ => None,
             });
@@ -858,27 +897,51 @@ impl Lumen {
         // hit box node focused the wrapping <div> instead — a non-focusable
         // element that swallows the `focus` event the page listens for on the
         // real target (WPT `focus-visible-003` et al.).
-        let new_focused = hit_result.as_ref().and_then(|r| {
-            self.layout_source.as_ref().and_then(|src| {
-                let doc = src.document.lock().unwrap_or_else(|e| e.into_inner());
-                let mut n = r.source_node;
-                while !matches!(doc.get(n).data, NodeData::Element { .. })
-                    && let Some(p) = doc.get(n).parent
-                {
-                    n = p;
-                }
-                loop {
-                    if focus_nav::click_focusable(&doc, n) {
-                        return Some(n);
+        // CSS Overflow L5 §3.3: клик по scroll-контролу (`::scroll-marker`,
+        // `::scroll-button()`) не фокусирует лежащий под ним элемент — фокус
+        // ставит активация в `click_activate` (scroll container становится
+        // `document.activeElement`, `:focus*` — на псевдоэлементе).
+        let pseudo_control_hit = hit_result
+            .as_ref()
+            .and_then(|r| r.pseudo)
+            .is_some_and(|p| {
+                matches!(
+                    p.kind,
+                    lumen_layout::PseudoKind::ScrollMarker
+                        | lumen_layout::PseudoKind::ScrollButtonBlockStart
+                        | lumen_layout::PseudoKind::ScrollButtonInlineStart
+                        | lumen_layout::PseudoKind::ScrollButtonInlineEnd
+                        | lumen_layout::PseudoKind::ScrollButtonBlockEnd
+                )
+            });
+        let new_focused = if pseudo_control_hit {
+            None
+        } else {
+            hit_result.as_ref().and_then(|r| {
+                self.layout_source.as_ref().and_then(|src| {
+                    let doc = src.document.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut n = r.source_node;
+                    while !matches!(doc.get(n).data, NodeData::Element { .. })
+                        && let Some(p) = doc.get(n).parent
+                    {
+                        n = p;
                     }
-                    match doc.get(n).parent {
-                        Some(p) => n = p,
-                        None => return None,
+                    loop {
+                        if focus_nav::click_focusable(&doc, n) {
+                            return Some(n);
+                        }
+                        match doc.get(n).parent {
+                            Some(p) => n = p,
+                            None => return None,
+                        }
                     }
-                }
+                })
             })
-        });
+        };
         let focus_changed = new_focused != self.focused_node;
+        // Клик мимо scroll-контрола снимает pseudo-element focus (§3.3.2);
+        // клик по самому контролу переустановит его в `click_activate`.
+        self.clear_pseudo_focus();
         self.focused_node = new_focused;
         // CSS UI L4 §3.3: a pointer press resets keyboard modality only when
         // it lands on a click-focusable element — presses on non-focusable
@@ -1145,6 +1208,32 @@ impl Lumen {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn click_activate(&mut self, pending: PendingClick) {
         let PendingClick { x_css, y_css, page_x, page_y, scroll_y, hit_result, click_log_hit, mods, .. } = pending;
+        // CSS Overflow L5 §scroll-marker-activation: клик по `::scroll-marker`
+        // скроллит его scroll container к target-элементу маркера (direction
+        // position `start` — блочный старт). У псевдоэлемента нет DOM-узла,
+        // поэтому активация идёт по `PseudoHit.origin`, а не по `node`;
+        // остальные ветки (форма/ссылка/details) к маркеру неприменимы.
+        if let Some(h) = hit_result.as_ref().and_then(|r| r.pseudo) {
+            match h.kind {
+                // CSS Overflow L5 §3.1.9: scroll markers scroll their target
+                // into view; DOM-узла у псевдоэлемента нет — активация идёт
+                // по `PseudoHit.origin` (target-элемент маркера).
+                lumen_layout::PseudoKind::ScrollMarker => {
+                    self.activate_scroll_marker(h.origin);
+                    return;
+                }
+                // §3.2: `::scroll-button()` скроллит свой scroll container
+                // (origin кнопки) на страницу в её направлении.
+                lumen_layout::PseudoKind::ScrollButtonBlockStart
+                | lumen_layout::PseudoKind::ScrollButtonInlineStart
+                | lumen_layout::PseudoKind::ScrollButtonInlineEnd
+                | lumen_layout::PseudoKind::ScrollButtonBlockEnd => {
+                    self.activate_scroll_button(h.origin, h.kind);
+                    return;
+                }
+                _ => {}
+            }
+        }
         let form_action: forms::FormClickAction =
             if let (Some(result), Some(src)) =
                 (hit_result.as_ref(), self.layout_source.as_ref())

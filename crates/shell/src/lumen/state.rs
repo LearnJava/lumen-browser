@@ -370,6 +370,12 @@ pub(crate) struct Lumen {
     /// next call's `restyle_root_set_for_state_change`. Only meaningful when
     /// `page_prev_cascade_styles` is `Some`.
     pub(crate) page_prev_interactive: (Option<NodeId>, Option<NodeId>, Option<NodeId>),
+    /// CSS Overflow L5 §3.3 — `focused_pseudo` as node indices at the moment
+    /// `page_prev_cascade_styles` was captured. Pseudo-element `:focus*`
+    /// styles live outside the element restyle's dirty-root reach, so a
+    /// pseudo-focus transition must force the full-cascade path; this is the
+    /// `prev` side of that comparison.
+    pub(crate) page_prev_pseudo_focus: Option<(u32, u8, u32)>,
     /// Последний вычисленный кадр анимаций. `None` — страница не загружена
     /// или нет активных анимаций.
     pub(crate) anim_frame: Option<lumen_layout::AnimationFrame>,
@@ -1401,6 +1407,19 @@ pub(crate) struct Lumen {
     ///
     /// `None` until the first click is processed.  Updated by `handle_click_at`.
     pub(crate) focused_node: Option<lumen_dom::NodeId>,
+    /// CSS Overflow L5 §3.3 — focused scroll-control pseudo-element
+    /// (`::scroll-marker`/`::scroll-button()`): `(originating NodeId,
+    /// `PseudoKind` discriminant as u8, associated scroll-container NodeId)`.
+    /// While `Some`, `focused_node` addresses the scroll container —
+    /// `document.activeElement` per §3.3.1 — and `:focus`/`:focus-visible`/
+    /// `:focus-within` resolve through `lumen_layout::PseudoFocus` instead of
+    /// the element mirrors (§3.3.2).
+    pub(crate) focused_pseudo: Option<(lumen_dom::NodeId, u8, lumen_dom::NodeId)>,
+    /// CSS Overflow L5 §3.1.10: `true` while the CURRENT pseudo-element focus
+    /// came from scroll-marker *activation* (click/keyboard invocation) — the
+    /// next Tab press then continues at the scroll target, not at the next
+    /// pseudo stop. Tab-focused markers leave this `false`.
+    pub(crate) pseudo_nav_pending: bool,
     /// `(индекс фрейма, узел ЕГО документа)`, если последний клик пришёлся
     /// ВНУТРЬ содержимого фрейма (BUG-480 срезы 22/23).
     ///

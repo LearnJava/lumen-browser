@@ -52,6 +52,7 @@ impl Lumen {
             prev_styles: std::mem::take(&mut self.prev_styles),
             page_prev_cascade_styles: self.page_prev_cascade_styles.take(),
             page_prev_interactive: std::mem::take(&mut self.page_prev_interactive),
+            page_prev_pseudo_focus: self.page_prev_pseudo_focus.take(),
             anim_frame: self.anim_frame.take(),
             layout_box: self.layout_box.take(),
             page_tracks: std::mem::take(&mut self.page_tracks),
@@ -160,6 +161,7 @@ impl Lumen {
         self.prev_styles = snap.prev_styles;
         self.page_prev_cascade_styles = snap.page_prev_cascade_styles;
         self.page_prev_interactive = snap.page_prev_interactive;
+        self.page_prev_pseudo_focus = snap.page_prev_pseudo_focus;
         self.anim_frame = snap.anim_frame;
         self.layout_box = snap.layout_box;
         self.page_tracks = snap.page_tracks;

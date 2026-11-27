@@ -218,6 +218,7 @@ use inline_build::{
 
 mod scroll_pseudos;
 pub(crate) use scroll_pseudos::button_keywords;
+pub use scroll_pseudos::{scroll_button_box_enabled, scroll_button_dir_enabled};
 use scroll_pseudos::{inject_all_scroll_pseudos, ScrollPseudoCx};
 
 mod build;

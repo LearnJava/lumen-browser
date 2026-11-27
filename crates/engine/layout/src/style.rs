@@ -103,7 +103,7 @@ pub(crate) use share_cache::ShareCache;
 pub use cascade_index::{
     add_cascade_index_stats, add_pseudo_cascade_sites, add_pseudo_cascade_stats,
     clear_rule_idx_cache, clear_shadow_sheets, set_pseudo_cascade_diagnostics, set_shadow_sheets,
-    sheet_has_pseudo_counters, sheet_has_quote_content, sheet_targets_pseudo, take_cascade_index_stats,
+    sheet_has_pseudo_counters, sheet_has_quote_content, sheet_has_scroll_button_state, sheet_targets_pseudo, take_cascade_index_stats,
     take_pseudo_cascade_sites, take_pseudo_cascade_stats, CascadeIndexStats, PseudoCascadeStats,
 };
 // Видны только сиблингам `style::cascade_index` — `style::cascade`/
@@ -356,6 +356,7 @@ pub use env::{
     restore_cq_axes,
     set_animated_heights, set_cq_axes, set_cq_context, set_forced_colors, set_interactive_state,
     set_keyboard_focus, set_active_keyboard,
+    set_pseudo_focus, pseudo_focus, PseudoFocus,
     set_print_media, StyleEnvSnapshot, set_device_pixel_ratio, device_pixel_ratio,
 };
 pub(crate) use env::{animated_height_for, animated_heights_active, note_cq_unit};

@@ -482,6 +482,9 @@ pub(crate) struct InteractiveMirror {
     /// CSS UI L4 §3.3: `:focus-visible`'s second input — without it
     /// `el.matches(':focus-visible')` always saw "mouse focus".
     keyboard: Arc<std::sync::atomic::AtomicBool>,
+    /// CSS Overflow L5 §3.3: focused scroll-control pseudo-element —
+    /// `(origin index, PseudoKind as u8, container index)`; `None` = none.
+    pseudo: Arc<Mutex<Option<(u32, u8, u32)>>>,
 }
 
 impl InteractiveMirror {
@@ -490,8 +493,9 @@ impl InteractiveMirror {
         hovered_nid: Arc<Mutex<Option<u32>>>,
         active_nid: Arc<Mutex<Option<(u32, bool)>>>,
         keyboard_focus: Arc<std::sync::atomic::AtomicBool>,
+        pseudo_focus: Arc<Mutex<Option<(u32, u8, u32)>>>,
     ) -> Self {
-        Self { focused: focused_nid, hovered: hovered_nid, active: active_nid, keyboard: keyboard_focus }
+        Self { focused: focused_nid, hovered: hovered_nid, active: active_nid, keyboard: keyboard_focus, pseudo: pseudo_focus }
     }
 }
 
@@ -530,6 +534,14 @@ fn with_focus_state<R>(mirror: &InteractiveMirror, f: impl FnOnce() -> R) -> R {
     lumen_layout::set_keyboard_focus(
         mirror.keyboard.load(std::sync::atomic::Ordering::Relaxed),
     );
+    // CSS Overflow L5 §3.3: `::scroll-marker:focus` & friends resolve through
+    // the same env the painted relayout gets.
+    let pf = mirror.pseudo.lock().unwrap_or_else(|e| e.into_inner());
+    lumen_layout::set_pseudo_focus(match *pf {
+        Some((o, k, c)) => lumen_layout::PseudoFocus { origin: o, kind: k, container: c },
+        None => lumen_layout::PseudoFocus::NONE,
+    });
+    drop(pf);
     let result = f();
     lumen_layout::clear_interactive_state();
     result

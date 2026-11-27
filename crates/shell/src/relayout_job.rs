@@ -594,6 +594,14 @@ impl Lumen {
         // поздний динамический `<style>` должен попасть в каскад до клонирования.
         self.refresh_dynamic_css();
         let src = self.layout_source.as_ref()?;
+        // CSS Overflow L5 §3.3: pseudo-element `:focus*` styles (`::scroll-
+        // marker:focus` etc.) live outside the element restyle's dirty-root
+        // reach, and the job's interactive triple cannot express them — every
+        // pseudo-focus state (current OR the one `page_prev_*` was captured
+        // under) routes through the synchronous full-cascade path instead.
+        if self.focused_pseudo.is_some() || self.page_prev_pseudo_focus.is_some() {
+            return None;
+        }
         self.engine_job_generation = self.engine_job_generation.wrapping_add(1);
         let generation = self.engine_job_generation;
         // Immutable snapshots captured by the job (ADR-016 invariant 1). The

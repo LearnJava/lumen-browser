@@ -217,6 +217,40 @@ thread_local! {
     /// CSS UI L4 §3.3: `:focus-visible` matches for such focus, and for a
     /// text-like `<input>`/`<textarea>` regardless of how it got focused.
     pub(in crate::style) static KEYBOARD_FOCUS: Cell<bool> = const { Cell::new(false) };
+    /// CSS Overflow L5 §3.3 — identity of a focused scroll-control
+    /// pseudo-element (`::scroll-marker`, `::scroll-button()`): the
+    /// originating element's node index, the `PseudoKind` discriminant as u8
+    /// and the associated scroll container's node index. `origin == u32::MAX`
+    /// means no pseudo-element focus. Read by the pseudo-element matcher
+    /// (`style::pseudo`) and by the element-level `:focus*` guards; set with
+    /// [`set_pseudo_focus`] alongside [`set_interactive_state`].
+    pub(in crate::style) static PSEUDO_FOCUS: Cell<PseudoFocus> = const { Cell::new(PseudoFocus::NONE) };
+}
+
+/// Focused scroll-control pseudo-element identity (CSS Overflow L5 §3.3).
+/// All fields are `NodeId::index()` space, `u32::MAX` = absent — same
+/// convention as [`FOCUS_NID`](env::FOCUS_NID) et al.
+#[derive(Clone, Copy, Default)]
+pub struct PseudoFocus {
+    /// Originating element of the pseudo-element (`::scroll-marker`'s target,
+    /// `::scroll-button()`'s scroll container).
+    pub origin: u32,
+    /// `PseudoKind` discriminant (`::scroll-marker` = 6, `::scroll-button()`
+    /// variants = 8..=11, `::scroll-marker-group` = 7).
+    pub kind: u8,
+    /// Associated scroll container — `document.activeElement` while the
+    /// pseudo-element is focused (§3.3.1) and the `:focus-within` root (§3.3.2).
+    pub container: u32,
+}
+
+impl PseudoFocus {
+    /// No pseudo-element focus.
+    pub const NONE: Self = Self { origin: u32::MAX, kind: 0, container: u32::MAX };
+
+    /// `true` when a scroll-control pseudo-element currently holds focus.
+    pub fn is_some(&self) -> bool {
+        self.origin != u32::MAX
+    }
 }
 
 /// Sets the interactive hover/focus/active state for the next layout pass.
@@ -252,11 +286,35 @@ pub fn set_active_keyboard(keyboard: bool) {
     ACTIVE_KEYBOARD.with(|k| k.set(keyboard));
 }
 
+/// Sets the focused scroll-control pseudo-element (CSS Overflow L5 §3.3).
+///
+/// Call after [`set_interactive_state`] on the same pass; cleared by
+/// [`clear_interactive_state`] together with the rest of the interactive
+/// state. `PseudoFocus::NONE` is the default — callers without pseudo-element
+/// focus never need to call this.
+pub fn set_pseudo_focus(pf: PseudoFocus) {
+    PSEUDO_FOCUS.with(|p| p.set(pf));
+}
+
+/// The pseudo-element focus recorded for the current pass —
+/// [`PseudoFocus::NONE`] outside a layout/style pass that set one.
+pub fn pseudo_focus() -> PseudoFocus {
+    PSEUDO_FOCUS.with(Cell::get)
+}
+
+/// `:focus-visible`'s modality input — [`KEYBOARD_FOCUS`] read accessor for
+/// the pseudo-element matcher (`style::pseudo`), which is `pub(in crate::style)`
+/// state and cannot name the thread-local directly.
+pub fn keyboard_focus() -> bool {
+    KEYBOARD_FOCUS.with(Cell::get)
+}
+
 /// Clears hover/focus/active state after layout.
 pub fn clear_interactive_state() {
     set_interactive_state(None, None, None);
     set_keyboard_focus(false);
     set_active_keyboard(false);
+    set_pseudo_focus(PseudoFocus::NONE);
 }
 
 thread_local! {
@@ -402,6 +460,7 @@ pub struct StyleEnvSnapshot {
     /// UX-FOCUS-RING: `:focus-visible` reads it — a worker without it would cascade a
     /// focused element as if the focus came from the mouse.
     keyboard_focus: bool,
+    pseudo_focus: PseudoFocus,
     forced_colors: bool,
     print_media: bool,
     device_pixel_ratio: f32,
@@ -416,6 +475,7 @@ impl StyleEnvSnapshot {
             focus_nid:     FOCUS_NID.with(Cell::get),
             active_nid:    ACTIVE_NID.with(Cell::get),
             keyboard_focus: KEYBOARD_FOCUS.with(Cell::get),
+            pseudo_focus: PSEUDO_FOCUS.with(Cell::get),
             forced_colors: FORCED_COLORS.with(Cell::get),
             print_media:   PRINT_MEDIA.with(Cell::get),
             device_pixel_ratio: DEVICE_PIXEL_RATIO.with(Cell::get),
@@ -429,6 +489,7 @@ impl StyleEnvSnapshot {
         FOCUS_NID.with(|f| f.set(self.focus_nid));
         ACTIVE_NID.with(|a| a.set(self.active_nid));
         KEYBOARD_FOCUS.with(|k| k.set(self.keyboard_focus));
+        PSEUDO_FOCUS.with(|p| p.set(self.pseudo_focus));
         FORCED_COLORS.with(|f| f.set(self.forced_colors));
         PRINT_MEDIA.with(|p| p.set(self.print_media));
         DEVICE_PIXEL_RATIO.with(|d| d.set(self.device_pixel_ratio));

@@ -20,8 +20,8 @@ use crate::style::{
 };
 use lumen_core::geom::Size;
 use lumen_css_parser::{
-    ComplexSelector, CompoundSelector, Declaration, PseudoElementKind, SimpleSelector, Specificity,
-    Stylesheet,
+    ComplexSelector, CompoundSelector, Declaration, PseudoClass, PseudoElementKind, SimpleSelector,
+    Specificity, Stylesheet,
 };
 use lumen_dom::{Document, DocumentMode, NodeData, NodeId};
 
@@ -197,31 +197,180 @@ fn matches_complex_for_pseudo(
     let NodeData::Element { name, attrs } = &doc.get(node).data else {
         return None;
     };
+    // CSS Overflow L5 §3.3.2: focus pseudo-classes on scroll-control
+    // pseudo-elements (`::scroll-marker`, `::scroll-button()`,
+    // `::scroll-marker-group`) match the pseudo-element focus state recorded
+    // in `env::PSEUDO_FOCUS`, not the originating element's own `:focus*` —
+    // which is always false while a pseudo-element holds focus anyway. They
+    // are lifted out of the subject compound here and checked separately
+    // below, so `matches_simple` never sees them.
+    let pseudo_base = split_pseudo_request(pseudo).0;
+    let is_marker = pseudo_base.eq_ignore_ascii_case("scroll-marker");
+    let is_group = pseudo_base.eq_ignore_ascii_case("scroll-marker-group");
+    let is_button = pseudo_base.eq_ignore_ascii_case("scroll-button");
+    let scroll_control = is_marker || is_group || is_button;
+    // Псевдоклассы, которые у scroll-control псевдоэлементов означают состояние
+    // САМОГО псевдо-бокса, а не originating-элемента: focus-набор для всех трёх
+    // (CSS Overflow L5 §3.3.2) и `:enabled`/`:disabled` — только для кнопок
+    // (§3.2: «`:disabled` can apply to `::scroll-button()`»).
+    let is_lifted_part = |p: &SimpleSelector| {
+        scroll_control
+            && match p {
+                SimpleSelector::PseudoClass(
+                    PseudoClass::Focus
+                    | PseudoClass::FocusVisible
+                    | PseudoClass::FocusWithin
+                    | PseudoClass::Active,
+                ) => true,
+                SimpleSelector::PseudoClass(PseudoClass::Enabled | PseudoClass::Disabled) => is_button,
+                _ => false,
+            }
+    };
     if !last.parts.iter().all(|p| {
-        matches!(p, SimpleSelector::PseudoElement(_)) || matches_simple(p, doc, node, &name.local, attrs)
+        matches!(p, SimpleSelector::PseudoElement(_))
+            || is_lifted_part(p)
+            || matches_simple(p, doc, node, &name.local, attrs)
     }) {
         return None;
     }
-    // Селектор без префикса: subject уже решил матч целиком (таков и был бы
-    // `matches_chain` по модифицированному селектору — один compound).
-    if complex.tail.is_empty() {
-        return Some(complex.specificity());
-    }
-    // Строим модифицированный последний compound без PseudoElement.
+    // Собираем модифицированный последний compound без PseudoElement и без
+    // поднятых псевдоклассов scroll-control псевдоэлементов (см. выше).
     let stripped = CompoundSelector {
         parts: last.parts.iter()
-            .filter(|p| !matches!(p, SimpleSelector::PseudoElement(_)))
+            .filter(|p| !matches!(p, SimpleSelector::PseudoElement(_)) && !is_lifted_part(p))
             .cloned()
             .collect(),
     };
-    // Собираем модифицированный ComplexSelector.
-    let mut tail = complex.tail.clone();
-    tail.last_mut().unwrap().1 = stripped;
-    let modified = ComplexSelector { head: complex.head.clone(), tail };
-    if matches_complex(&modified, doc, node) {
-        Some(complex.specificity())
+    // Собираем модифицированный ComplexSelector. Односоставный селектор
+    // (`::scroll-marker:focus` без предков) имеет пустой `tail` — его
+    // subject-компаунд уже проверен выше инлайн, `modified` не нужен.
+    let element_matched = if complex.tail.is_empty() {
+        true
     } else {
-        None
+        let mut tail = complex.tail.clone();
+        tail.last_mut().unwrap().1 = stripped;
+        matches_complex(&ComplexSelector { head: complex.head.clone(), tail }, doc, node)
+    };
+    if !element_matched {
+        return None;
+    }
+    if scroll_control
+        && !last.parts.iter().all(|p| {
+            !is_lifted_part(p) || scroll_pseudo_part_matches(node, pseudo_base, pseudo, p)
+        })
+    {
+        return None;
+    }
+    Some(complex.specificity())
+}
+
+/// CSS Overflow L5 §3.3.2/§3.2 — does lifted pseudo-class `p` (a
+/// `SimpleSelector` already known to be one of the scroll-control state
+/// classes) hold for the pseudo-element `pseudo_base` of `node`?
+///
+/// Focus classes read the pseudo-element focus recorded in `env::PSEUDO_FOCUS`:
+/// - `::scroll-marker`/`::scroll-button()`: `:focus`/`:active`/`:focus-within`
+///   match when THIS pseudo-element (origin + kind) is the focused one;
+///   `:focus-visible` additionally requires keyboard focus modality.
+/// - `::scroll-marker-group`: never `:focus` itself; `:focus-within` matches
+///   while a marker of its group is focused (the group belongs to the scroll
+///   container `node`).
+///
+/// `:enabled`/`:disabled` (only lifted for `::scroll-button()`) read the
+/// per-direction scrollability installed by `box_tree::scroll_pseudos` for
+/// the pseudo-element's own build (`scroll_state::install_scroll_button_states`).
+fn scroll_pseudo_part_matches(
+    node: NodeId,
+    pseudo_base: &str,
+    pseudo: &str,
+    p: &SimpleSelector,
+) -> bool {
+    let is_group = pseudo_base.eq_ignore_ascii_case("scroll-marker-group");
+    let is_marker = pseudo_base.eq_ignore_ascii_case("scroll-marker");
+    let is_button = pseudo_base.eq_ignore_ascii_case("scroll-button");
+    if !(is_group || is_marker || is_button) {
+        return false;
+    }
+    let pc = match p {
+        SimpleSelector::PseudoClass(pc) => pc,
+        _ => return false,
+    };
+    match pc {
+        PseudoClass::Enabled | PseudoClass::Disabled => {
+            if !is_button {
+                return false;
+            }
+            // Запрос собирается `button_request` как `"<logical>|<physical>"`;
+            // физическое направление — состояние кнопки. Логический аргумент
+            // без writing-mode здесь не разрешить — кнопка считается активной.
+            let arg = split_pseudo_request(pseudo).1.unwrap_or("");
+            let physical = arg.rsplit('|').next().unwrap_or(arg);
+            let want_enabled = matches!(pc, PseudoClass::Enabled);
+            match crate::scroll_state::scroll_button_enabled(node, physical) {
+                Some(enabled) => enabled == want_enabled,
+                None => want_enabled,
+            }
+        }
+        _ => scroll_pseudo_focus_matches(node, pseudo_base, p),
+    }
+}
+
+/// CSS Overflow L5 §3.3.2 — does focus pseudo-class `p` (a `SimpleSelector`
+/// already known to be `PseudoClass::Focus`/`FocusVisible`/`FocusWithin`/
+/// `Active`) hold for the scroll-control pseudo-element `pseudo_base` of
+/// `node`, given the pseudo-element focus recorded in `env::PSEUDO_FOCUS`?
+fn scroll_pseudo_focus_matches(
+    node: NodeId,
+    pseudo_base: &str,
+    p: &SimpleSelector,
+) -> bool {
+    let pf = crate::style::env::pseudo_focus();
+    if !pf.is_some() {
+        return false;
+    }
+    let is_group = pseudo_base.eq_ignore_ascii_case("scroll-marker-group");
+    let is_marker = pseudo_base.eq_ignore_ascii_case("scroll-marker");
+    let is_button = pseudo_base.eq_ignore_ascii_case("scroll-button");
+    if !(is_group || is_marker || is_button) {
+        return false;
+    }
+    // PseudoKind discriminants — same order as `PseudoHit`/`pseudo_kind_from_u8`.
+    let kind_ok = if is_marker {
+        pf.kind == crate::PseudoKind::ScrollMarker as u8
+    } else if is_group {
+        pf.kind == crate::PseudoKind::ScrollMarkerGroup as u8
+    } else {
+        (crate::PseudoKind::ScrollButtonBlockStart as u8
+            ..=crate::PseudoKind::ScrollButtonBlockEnd as u8)
+            .contains(&pf.kind)
+    };
+    if !kind_ok {
+        return false;
+    }
+    let pc = match p {
+        SimpleSelector::PseudoClass(pc) => pc,
+        _ => return false,
+    };
+    match pc {
+        // The group box itself is never the focused control.
+        PseudoClass::Focus | PseudoClass::Active if is_group => false,
+        PseudoClass::Focus | PseudoClass::Active => pf.origin == node.index() as u32,
+        PseudoClass::FocusVisible => {
+            !is_group
+                && pf.origin == node.index() as u32
+                && crate::style::env::keyboard_focus()
+        }
+        PseudoClass::FocusWithin => {
+            if is_group {
+                // The group belongs to the scroll container — `:focus-within`
+                // matches while any of its markers holds focus.
+                pf.container == node.index() as u32
+            } else {
+                // A focused pseudo-element matches `:focus-within` itself.
+                pf.origin == node.index() as u32
+            }
+        }
+        _ => false,
     }
 }
 
@@ -956,21 +1105,6 @@ fn compute_pseudo_element_style_inner(
     let matched: &[PseudoMatch] = if let Some(rec) = &pre {
         rec
     } else {
-        // DIAG-PRE: env-gated census of sequential pseudo matches — which road
-        // missed and for which pseudo name. Remove with the diagnosis.
-        if std::env::var_os("LUMEN_PSEUDO_PRE_DEBUG").is_some() {
-            static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-            let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            if n < 40 || n.is_multiple_of(5000) {
-                eprintln!(
-                    "[pseudo-pre] seq #{n} pseudo={pseudo:?} table={} cache={} ua_decls={} tid={:?}",
-                    super::pre_match::pseudo_lookup(node, pseudo_base, sheet, viewport, dark_mode).is_some(),
-                    match_cache.is_some(),
-                    ua_decls.is_empty(),
-                    std::thread::current().id(),
-                );
-            }
-        }
         collect_pseudo_matches(
             doc, node, pseudo, pseudo_base, sheet, viewport, dark_mode, &part_scopes, &mut matched_vec,
         );
@@ -1001,6 +1135,9 @@ fn compute_pseudo_element_style_inner(
         if is_scroll_group {
             let mut style = pseudo_inherited_style(parent);
             style.display = Display::Block;
+            // Группа — сосед originating-элемента: flex/grid-item, когда flex/grid
+            // и его родитель (CSS Flexbox L1 §4.3 — `z-index` на static-item).
+            style.is_flex_grid_item = parent.is_flex_grid_item;
             return Some(style);
         }
         return None;
@@ -1014,12 +1151,69 @@ fn compute_pseudo_element_style_inner(
         }
         if is_scroll_group {
             style.display = Display::Block;
+            style.is_flex_grid_item = parent.is_flex_grid_item;
         }
         if split_pseudo_request(pseudo).0.eq_ignore_ascii_case("scroll-button") {
+            // `::scroll-button()` — сосед originating-элемента в его родителе:
+            // flex/grid-item при flex/grid-родителе (см. `is_scroll_group`).
+            style.is_flex_grid_item = parent.is_flex_grid_item;
             super::ua::apply_ua_scroll_button(&mut style, dark_mode);
         }
         style
     };
+    // CSS Basic UI L4 §appearance-disabling-properties / HTML LS §15.5:
+    // `::scroll-button()` is a widget in its own right — an author
+    // `background`/`border`/`padding` declaration (or `appearance: none`)
+    // drops the UA box styling exactly like on `<button>`; the origin
+    // element's tag is irrelevant (WPT `scroll-buttons-*` refs compare it
+    // against a real `<button>`, whose UA border disappears the same way).
+    // Runs before the declaration loop below so author values land on the
+    // stripped basis, mirroring `cascade`'s `disabled_by_author` pass.
+    if split_pseudo_request(pseudo).0.eq_ignore_ascii_case("scroll-button") {
+        let mut appearance_none = false;
+        let mut appearance_auto = true;
+        for m in matched {
+            let Some(decl) = resolve_pseudo_decl(sheet, &part_scopes, m) else {
+                continue;
+            };
+            if matches!(decl.property.as_str(), "appearance" | "-webkit-appearance") {
+                appearance_none = decl.value.trim().eq_ignore_ascii_case("none");
+                appearance_auto = decl.value.trim().eq_ignore_ascii_case("auto");
+            }
+        }
+        let disabled_by_author = appearance_auto
+            && matched.iter().any(|m| {
+                resolve_pseudo_decl(sheet, &part_scopes, m)
+                    .is_some_and(|d| super::ua::is_appearance_disabling_property(&d.property))
+            });
+        if appearance_none || disabled_by_author {
+            for w in [
+                &mut style.border_top_width,
+                &mut style.border_right_width,
+                &mut style.border_bottom_width,
+                &mut style.border_left_width,
+            ] {
+                *w = 0.0;
+            }
+            style.border_top_style = crate::style::BorderStyle::None;
+            style.border_right_style = crate::style::BorderStyle::None;
+            style.border_bottom_style = crate::style::BorderStyle::None;
+            style.border_left_style = crate::style::BorderStyle::None;
+            style.padding_top = crate::style::Length::Px(0.0);
+            style.padding_right = crate::style::Length::Px(0.0);
+            style.padding_bottom = crate::style::Length::Px(0.0);
+            style.padding_left = crate::style::Length::Px(0.0);
+            style.background_color = Some(crate::style::CssColor::Rgba(crate::style::Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 0,
+            }));
+            if disabled_by_author {
+                style.appearance = crate::Appearance::None;
+            }
+        }
+    }
     let _prof_apply = lumen_core::profile::scope_detail("ps_apply");
 
     // `matched` arrives sorted — `collect_pseudo_matches` callers sort by the
