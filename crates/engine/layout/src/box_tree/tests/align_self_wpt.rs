@@ -100,10 +100,13 @@ fn dump_box(doc: &Document, b: &LayoutBox, depth: usize) {
 
 /// Mismatches of one vendored file (`path` relative to `tests/wpt/`); empty when it passes.
 pub(super) fn check_file(path: &str) -> Vec<String> {
+    // Фикстуры вендорены в крейт (`tests/fixtures/wpt/`): CI исключает `tests/wpt`
+    // из чекаута — см. conventions.md «Test fixtures live in their crate».
+    // Абсолютный путь — прямой обход отдельным файлом.
     let full = if std::path::Path::new(path).is_absolute() {
         path.to_string()
     } else {
-        format!("{}/../../../tests/wpt/{path}", env!("CARGO_MANIFEST_DIR"))
+        format!("{}/tests/fixtures/wpt/{path}", env!("CARGO_MANIFEST_DIR"))
     };
     let html = std::fs::read_to_string(&full).unwrap_or_else(|e| panic!("{full}: {e}"));
     check_html(path, &html)
