@@ -462,6 +462,42 @@ fn eval_returns_json_value() {
 
 #[test]
 #[cfg(feature = "v8")]
+fn eval_await_promise_settles_on_microtasks() {
+    // MCP-TOTAL-S7f: общий метод трейта — приём «промис → результат», ранее
+    // живший только в BiDi.
+    use crate::AwaitedPromise;
+    let mut s = make_session("<html><body></body></html>");
+    assert_eq!(
+        s.eval_await_promise("Promise.resolve(41 + 1)").expect("await"),
+        AwaitedPromise::Fulfilled(Some("42".into()))
+    );
+    // Исполнен с `undefined` — JSON его не переносит.
+    assert_eq!(
+        s.eval_await_promise("Promise.resolve()").expect("await"),
+        AwaitedPromise::Fulfilled(None)
+    );
+    // Отклонение — Err с текстом причины.
+    let err = s
+        .eval_await_promise("Promise.reject(new Error('boom'))")
+        .expect_err("отклонённый промис — ошибка");
+    assert!(
+        err.to_string().contains("uncaught (in promise): boom"),
+        "unexpected: {err}"
+    );
+    // Синхронное исключение выражения — тоже ошибка с причиной.
+    let err = s
+        .eval_await_promise("(function(){ throw new Error('sync') })()")
+        .expect_err("sync throw — ошибка");
+    assert!(err.to_string().contains("sync"), "unexpected: {err}");
+    // Промис на макротаске не оседает на микротасках — Pending.
+    assert_eq!(
+        s.eval_await_promise("new Promise(function(){})").expect("await"),
+        AwaitedPromise::Pending
+    );
+}
+
+#[test]
+#[cfg(feature = "v8")]
 fn eval_without_navigate_errors() {
     let mut s = InProcessSession::new();
     let err = s.eval("1").expect_err("eval before navigate must fail");

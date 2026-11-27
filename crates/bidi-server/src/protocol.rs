@@ -58,7 +58,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use lumen_core::json::{parse as parse_json, JsonValue};
-use lumen_driver::{BrowserSession, InterceptedRequest, LiveWindowSession, Target, WaitCondition};
+use lumen_driver::{
+    AwaitedPromise, BrowserSession, InterceptedRequest, LiveWindowSession, Target, WaitCondition,
+};
 
 /// Upper bound on how long `bc_navigate` blocks waiting for
 /// `document.readyState == "complete"` before giving up (P2-wpt S1). Generous
@@ -1490,10 +1492,15 @@ fn script_evaluate(id: i64, params: &JsonValue, state: &mut BidiState) -> Dispat
 
     let expression = params.get("expression").and_then(|v| v.as_str());
     let result = match (expression, &mut state.live) {
-        (Some(expr), Some(live)) if await_promise => match eval_await_promise(live, expr) {
-            Ok(rv) => rv,
+        // MCP-TOTAL-S7f: приём «промис → результат» поднят на уровень драйвера
+        // (`BrowserSession::eval_await_promise`), общий с MCP `eval`.
+        (Some(expr), Some(live)) if await_promise => match live.eval_await_promise(expr) {
+            Ok(AwaitedPromise::Fulfilled(Some(json))) => eval_result_to_remote_value(&json),
+            // Исполнен с `undefined` — JSON его не переносит.
+            Ok(AwaitedPromise::Fulfilled(None)) => undefined_remote_value(),
+            Ok(AwaitedPromise::Pending) => eval_result_to_remote_value("{}"),
             Err(e) => {
-                return DispatchResult::single(make_error(Some(id), "javascript error", &e));
+                return DispatchResult::single(make_error(Some(id), "javascript error", &e.to_string()));
             }
         },
         (Some(expr), Some(live)) => match live.eval(expr) {
@@ -1568,69 +1575,6 @@ fn undefined_remote_value() -> JsonValue {
     let mut obj = BTreeMap::new();
     obj.insert("type".into(), JsonValue::String("undefined".into()));
     JsonValue::Object(obj)
-}
-
-/// Await a promise-valued expression for BiDi `script.evaluate` with
-/// `awaitPromise:true` (BiDi §10.2.4).
-///
-/// `AutomationCommand::Eval` is synchronous and snapshots the expression's
-/// value before the microtask queue drains, so a promise-valued expression
-/// evaluates to the unsettled promise object. V8, however, auto-runs a
-/// microtask checkpoint at the end of each eval, so this uses two eval
-/// round-trips:
-///
-/// 1. wrap the expression in `Promise.resolve(...)` and attach a settle
-///    handler that records `{state, value|error}` on a well-known global. The
-///    checkpoint runs the handler before round 1 returns.
-/// 2. read that global back and translate it into a `RemoteValue` (fulfilled)
-///    or an `Err` message (rejected → the caller emits a `javascript error`).
-///
-/// Only microtask-settleable promises resolve this way; a promise still pending
-/// on a macrotask/IO reports `state:"pending"` and falls back to the promise
-/// object (`{type:"string", value:"{}"}`), matching the non-awaited path. This
-/// limitation is acceptable because the awaited-value use cases (`Promise.resolve`,
-/// sync `async` functions) settle purely on microtasks.
-fn eval_await_promise(live: &mut LiveWindowSession, expr: &str) -> Result<JsonValue, String> {
-    // Round 1: evaluate the expression, record its settled outcome on a global.
-    let setup = format!(
-        "(function(){{\
-             globalThis.__lumen_bidi_await = {{ state: \"pending\" }};\
-             try {{\
-                 Promise.resolve(({expr})).then(\
-                     function(v){{ globalThis.__lumen_bidi_await = {{ state: \"fulfilled\", value: v }}; }},\
-                     function(e){{ globalThis.__lumen_bidi_await = {{ state: \"rejected\", error: (e && e.message !== undefined) ? String(e.message) : String(e) }}; }}\
-                 );\
-             }} catch (e) {{\
-                 globalThis.__lumen_bidi_await = {{ state: \"rejected\", error: (e && e.message !== undefined) ? String(e.message) : String(e) }};\
-             }}\
-             return \"pending\";\
-         }})()"
-    );
-    live.eval(&setup).map_err(|e| format!("eval: {e}"))?;
-
-    // Round 2: read the outcome the microtask checkpoint left behind.
-    let read = "(function(){ var r = globalThis.__lumen_bidi_await; \
-         try { delete globalThis.__lumen_bidi_await; } catch (e) {} return r; })()";
-    let raw = live.eval(read).map_err(|e| format!("eval: {e}"))?;
-
-    match parse_json(&raw) {
-        Ok(JsonValue::Object(map)) => match map.get("state").and_then(|v| v.as_str()) {
-            Some("fulfilled") => Ok(match map.get("value") {
-                Some(v) => remote_value_from_json(v),
-                // A missing `value` means the promise fulfilled with `undefined`
-                // (JSON serialization drops undefined-valued keys).
-                None => undefined_remote_value(),
-            }),
-            Some("rejected") => Err(format!(
-                "uncaught (in promise): {}",
-                map.get("error").and_then(|v| v.as_str()).unwrap_or("")
-            )),
-            // Still pending (needs a macrotask/IO) — fall back to the promise
-            // object, same as the non-awaited path.
-            _ => Ok(eval_result_to_remote_value("{}")),
-        },
-        _ => Ok(eval_result_to_remote_value(&raw)),
-    }
 }
 
 /// `script.callFunction` — вызвать функцию в browsing context (BiDi §10.2.5).
