@@ -75,12 +75,12 @@
 {
  "generated": "2026-11-27",
  "counts": {
-  "open": 313,
+  "open": 314,
   "fixed": 1474,
   "inprogress": 0,
   "wontfix": 8
  },
- "total_bugs": 1795,
+ "total_bugs": 1796,
  "phases": [
   {
    "id": "P0",
@@ -12033,6 +12033,13 @@
    "status": "open",
    "title": "После выхода из fullscreen вьюпорт страницы отстаёт на один resize: `innerWidth/innerHeight` остаются 1904×869 (fullscreen минус хром) при вернувшемся окне 1040…",
    "component": "shell (sync `chrome_page_host_rect` ↔ `relayout`: `relayout.rs:1548`, `app/mod.rs:247`, `lumen/viewport_sync.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1861": {
+   "status": "open",
+   "title": "`resource://network` (и DevTools-панель Ctrl+Shift+E) после загрузки страницы пуст: `clear_log()` стоит в установке УЖЕ загруженной страницы и стирает записи за…",
+   "component": "shell (очистка сетевого лога — `page_load.rs:2538` в `apply_loaded_page`; запись — `devtools/network_panel.rs` `NetworkLogSink`)",
    "date": null,
    "debtor": false
   },
@@ -25809,6 +25816,9 @@
   ],
   "shell (навигация)": [
    "BUG-308"
+  ],
+  "shell (очистка сетевого лога — `page_load.rs:2538` в `apply_loaded_page`; запись — `devtools/network_panel.rs` `NetworkLogSink`)": [
+   "BUG-1861"
   ],
   "shell (тест `platform::os_params::windows::watcher_window_receives_settingchange`; прод-watcher не трогается)": [
    "BUG-1854"
