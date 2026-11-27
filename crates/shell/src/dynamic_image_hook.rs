@@ -179,11 +179,11 @@ impl lumen_core::ext::ImageLoadHook for DynamicImgFetchHook {
                         animated: None,
                     });
                 }
-                Some(image_cache::DecodedImage::Animated { first, gif }) => {
+                Some(image_cache::DecodedImage::Animated { first, anim }) => {
                     let _ = proxy.send_event(LoadEvent::ImageDecoded {
                         src: raw_src,
                         image: Box::new((*first).clone()),
-                        animated: Some(Box::new((*gif).clone())),
+                        animated: Some(Box::new((*anim).clone())),
                     });
                 }
             }

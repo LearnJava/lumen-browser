@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-11-26T02:13:23",
+  "timestamp": "2026-11-27T03:53:00",
   "git": {
-    "commit": "3705089434",
-    "branch": "bug-nextera-portal-fix",
-    "subject": "docs: HANDOFF-PERF — shim-фиксы этой сессии и JS-методика проб"
+    "commit": "3ce46f112e",
+    "branch": "bug-1853-fix",
+    "subject": "BUG-1853 срез: проигрывание анимированного WebP и arc-флаги svg_path"
   },
   "crop_offset": [
     8,

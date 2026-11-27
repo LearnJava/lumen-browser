@@ -4,7 +4,7 @@ use gif::{DecodeOptions, Decoder};
 use weezl::BitOrder;
 use weezl::decode::Decoder as LzwDecoder;
 use weezl::LzwStatus;
-use crate::{Image, PixelFormat};
+use crate::{Image, PixelFormat, LoopCount};
 
 /// GIF сигнатура: "GIF87a" или "GIF89a" (6 байтов).
 pub const GIF_SIGNATURE_LEN: usize = 6;
@@ -53,25 +53,17 @@ const fn delay_cs_to_ms(delay_cs: u16) -> u64 {
     cs * 10
 }
 
-/// Количество повторений анимации GIF.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GifLoopCount {
-    /// Анимация воспроизводится ровно N раз (N ≥ 1).
-    Finite(u16),
-    /// Анимация воспроизводится бесконечно (Netscape extension loop_count = 0).
-    Infinite,
-}
 
 /// Возвращает индекс кадра для `elapsed_ms` по массиву задержек `delays_cs`.
 ///
 /// Чистая функция над метаданными таймингов — выделена из [`AnimatedGif::frame_index_at`]
 /// для юнит-тестирования без реальных GIF-байтов.
 ///
-/// - `GifLoopCount::Infinite` — время берётся по модулю суммарной длительности.
-/// - `GifLoopCount::Finite(n)` — после `n` повторений останавливается на последнем кадре.
+/// - `LoopCount::Infinite` — время берётся по модулю суммарной длительности.
+/// - `LoopCount::Finite(n)` — после `n` повторений останавливается на последнем кадре.
 /// - Пустой `delays_cs` → всегда 0 (безопасный fallback).
 #[must_use]
-fn frame_index_for(delays_cs: &[u16], loop_count: GifLoopCount, elapsed_ms: u64) -> usize {
+fn frame_index_for(delays_cs: &[u16], loop_count: LoopCount, elapsed_ms: u64) -> usize {
     if delays_cs.is_empty() {
         return 0;
     }
@@ -81,8 +73,8 @@ fn frame_index_for(delays_cs: &[u16], loop_count: GifLoopCount, elapsed_ms: u64)
     }
 
     let effective_ms = match loop_count {
-        GifLoopCount::Infinite => elapsed_ms % total_ms,
-        GifLoopCount::Finite(n) => {
+        LoopCount::Infinite => elapsed_ms % total_ms,
+        LoopCount::Finite(n) => {
             let max_ms = total_ms.saturating_mul(u64::from(n));
             if elapsed_ms >= max_ms {
                 // Animation ended — hold last frame.
@@ -412,7 +404,7 @@ pub struct AnimatedGif {
     /// Логическая высота экрана GIF, пикселей.
     pub height: u32,
     /// Количество повторений анимации.
-    pub loop_count: GifLoopCount,
+    pub loop_count: LoopCount,
     /// Задержка каждого кадра в сотых долях секунды, в порядке отображения. Всегда непустой
     /// (гарантирует [`decode_gif_animated`]). Декодируется один раз при загрузке.
     delays_cs: Vec<u16>,
@@ -484,8 +476,8 @@ impl AnimatedGif {
 
     /// Возвращает индекс кадра для `elapsed_ms` миллисекунд от начала анимации.
     ///
-    /// - `GifLoopCount::Infinite` — время берётся по модулю суммарной длительности.
-    /// - `GifLoopCount::Finite(n)` — после `n` повторений останавливается на последнем кадре.
+    /// - `LoopCount::Infinite` — время берётся по модулю суммарной длительности.
+    /// - `LoopCount::Finite(n)` — после `n` повторений останавливается на последнем кадре.
     #[must_use]
     pub fn frame_index_at(&self, elapsed_ms: u64) -> usize {
         frame_index_for(&self.delays_cs, self.loop_count, elapsed_ms)
@@ -657,8 +649,8 @@ pub fn decode_gif_animated(bytes: &[u8]) -> Result<AnimatedGif, GifError> {
     }
 
     let loop_count = match reader.repeat() {
-        gif::Repeat::Finite(n) => GifLoopCount::Finite(n),
-        gif::Repeat::Infinite => GifLoopCount::Infinite,
+        gif::Repeat::Finite(n) => LoopCount::Finite(n),
+        gif::Repeat::Infinite => LoopCount::Infinite,
     };
 
     // Metadata pass: walk the container to record every frame's delay. `skip_frame_decoding`
@@ -768,71 +760,71 @@ mod tests {
 
     #[test]
     fn frame_index_at_start() {
-        assert_eq!(frame_index_for(&THREE_INFINITE, GifLoopCount::Infinite, 0), 0);
+        assert_eq!(frame_index_for(&THREE_INFINITE, LoopCount::Infinite, 0), 0);
     }
 
     #[test]
     fn frame_index_at_middle_of_first() {
-        assert_eq!(frame_index_for(&THREE_INFINITE, GifLoopCount::Infinite, 50), 0);
+        assert_eq!(frame_index_for(&THREE_INFINITE, LoopCount::Infinite, 50), 0);
     }
 
     #[test]
     fn frame_index_at_boundary_second() {
         // frame0 = 100 ms; frame1 starts at 100 ms
-        assert_eq!(frame_index_for(&THREE_INFINITE, GifLoopCount::Infinite, 100), 1);
+        assert_eq!(frame_index_for(&THREE_INFINITE, LoopCount::Infinite, 100), 1);
     }
 
     #[test]
     fn frame_index_at_boundary_third() {
         // frame0=100 + frame1=200 = 300 ms → frame2
-        assert_eq!(frame_index_for(&THREE_INFINITE, GifLoopCount::Infinite, 300), 2);
+        assert_eq!(frame_index_for(&THREE_INFINITE, LoopCount::Infinite, 300), 2);
     }
 
     #[test]
     fn frame_index_loops_infinite() {
         // total = 600 ms; at 600 ms wraps back to frame 0
-        assert_eq!(frame_index_for(&THREE_INFINITE, GifLoopCount::Infinite, 600), 0);
-        assert_eq!(frame_index_for(&THREE_INFINITE, GifLoopCount::Infinite, 650), 0);
-        assert_eq!(frame_index_for(&THREE_INFINITE, GifLoopCount::Infinite, 700), 1);
+        assert_eq!(frame_index_for(&THREE_INFINITE, LoopCount::Infinite, 600), 0);
+        assert_eq!(frame_index_for(&THREE_INFINITE, LoopCount::Infinite, 650), 0);
+        assert_eq!(frame_index_for(&THREE_INFINITE, LoopCount::Infinite, 700), 1);
     }
 
     #[test]
     fn frame_index_finite_one_loop_clamps() {
         // total = 300 ms, 1 loop → stops at last frame after 300 ms
         let d = [10u16, 20];
-        assert_eq!(frame_index_for(&d, GifLoopCount::Finite(1), 0), 0);
-        assert_eq!(frame_index_for(&d, GifLoopCount::Finite(1), 100), 1);
-        assert_eq!(frame_index_for(&d, GifLoopCount::Finite(1), 1_000_000), 1);
+        assert_eq!(frame_index_for(&d, LoopCount::Finite(1), 0), 0);
+        assert_eq!(frame_index_for(&d, LoopCount::Finite(1), 100), 1);
+        assert_eq!(frame_index_for(&d, LoopCount::Finite(1), 1_000_000), 1);
     }
 
     #[test]
     fn frame_index_finite_two_loops() {
         // each frame 100 ms; 2 loops = 400 ms total
         let d = [10u16, 10];
-        assert_eq!(frame_index_for(&d, GifLoopCount::Finite(2), 0), 0);
-        assert_eq!(frame_index_for(&d, GifLoopCount::Finite(2), 100), 1);
-        assert_eq!(frame_index_for(&d, GifLoopCount::Finite(2), 200), 0); // loop 2 starts
-        assert_eq!(frame_index_for(&d, GifLoopCount::Finite(2), 300), 1);
-        assert_eq!(frame_index_for(&d, GifLoopCount::Finite(2), 500), 1); // clamped past end
+        assert_eq!(frame_index_for(&d, LoopCount::Finite(2), 0), 0);
+        assert_eq!(frame_index_for(&d, LoopCount::Finite(2), 100), 1);
+        assert_eq!(frame_index_for(&d, LoopCount::Finite(2), 200), 0); // loop 2 starts
+        assert_eq!(frame_index_for(&d, LoopCount::Finite(2), 300), 1);
+        assert_eq!(frame_index_for(&d, LoopCount::Finite(2), 500), 1); // clamped past end
     }
 
     #[test]
     fn frame_index_empty_returns_zero() {
-        assert_eq!(frame_index_for(&[], GifLoopCount::Infinite, 0), 0);
-        assert_eq!(frame_index_for(&[], GifLoopCount::Infinite, 99999), 0);
+        assert_eq!(frame_index_for(&[], LoopCount::Infinite, 0), 0);
+        assert_eq!(frame_index_for(&[], LoopCount::Infinite, 99999), 0);
     }
 
-    // ── GifLoopCount ─────────────────────────────────────────────────────────
+    // ── LoopCount ─────────────────────────────────────────────────────────
 
     #[test]
     fn loop_count_finite_eq() {
-        assert_eq!(GifLoopCount::Finite(3), GifLoopCount::Finite(3));
-        assert_ne!(GifLoopCount::Finite(3), GifLoopCount::Finite(4));
+        assert_eq!(LoopCount::Finite(3), LoopCount::Finite(3));
+        assert_ne!(LoopCount::Finite(3), LoopCount::Finite(4));
     }
 
     #[test]
     fn loop_count_infinite_ne_finite() {
-        assert_ne!(GifLoopCount::Infinite, GifLoopCount::Finite(0));
+        assert_ne!(LoopCount::Infinite, LoopCount::Finite(0));
     }
 
     // ── lazy decode round-trip on a real synthetic GIF ───────────────────────
@@ -866,7 +858,7 @@ mod tests {
         assert_eq!(gif.frame_count(), 2);
         assert_eq!(gif.width, 2);
         assert_eq!(gif.height, 1);
-        assert_eq!(gif.loop_count, GifLoopCount::Infinite);
+        assert_eq!(gif.loop_count, LoopCount::Infinite);
         assert_eq!(gif.total_cycle_ms(), 300); // 100 + 200
         assert_eq!(gif.frame_delay_ms(0), 100);
         assert_eq!(gif.frame_delay_ms(1), 200);

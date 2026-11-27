@@ -24,7 +24,7 @@ use crate::frames::{frame_image_key, FrameHandle};
 #[derive(Default)]
 pub(crate) struct FrameLazyLoaded {
     pub(crate) images: Vec<(String, Arc<lumen_image::Image>)>,
-    pub(crate) animated_gifs: Vec<(String, lumen_image::AnimatedGif)>,
+    pub(crate) animated_gifs: Vec<(String, lumen_image::AnimatedImage)>,
 }
 
 /// Drain `frame.pending_lazy` (harvested by `frames::harvest_frame_lazy_requests`
@@ -86,10 +86,10 @@ pub(crate) fn fetch_frame_lazy_images(
                 continue;
             }
             Some(crate::image_cache::DecodedImage::Static(i)) => i,
-            Some(crate::image_cache::DecodedImage::Animated { first, gif }) => {
-                let gif = (*gif).clone();
-                frame.animated_gifs.push((key.clone(), gif.clone()));
-                loaded.animated_gifs.push((key.clone(), gif));
+            Some(crate::image_cache::DecodedImage::Animated { first, anim }) => {
+                let anim = (*anim).clone();
+                frame.animated_gifs.push((key.clone(), anim.clone()));
+                loaded.animated_gifs.push((key.clone(), anim));
                 first
             }
         };

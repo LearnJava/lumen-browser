@@ -504,7 +504,7 @@ fn post_item_place(frame: &mut Frame, li: usize, pos: &ItemPos, viewport: Size) 
     // line is complete — `finish_line` does it (`align_column_line`).
     if frame.init.is_column && !frame.init.is_wrap && !frame.init.cross_indefinite {
         let cross_shift =
-            column_item_cross_shift(&frame.b.children[pos.i], frame.init.content_width, &frame.init.s, frame.init.cross_rev, frame.init.wrap_reverse, viewport);
+            column_item_cross_shift(&frame.b.children[pos.i], frame.init.content_width, frame.init.content_width, &frame.init.s, frame.init.cross_rev, frame.init.wrap_reverse, viewport);
         if cross_shift != 0.0 {
             shift_tree(&mut frame.b.children[pos.i], cross_shift, 0.0);
         }
@@ -651,6 +651,7 @@ fn cross_item_baseline(
 fn column_item_cross_shift(
     item: &LayoutBox,
     cross_size: f32,
+    laid_base: f32,
     container: &ComputedStyle,
     cross_rev: bool,
     wrap_reverse: bool,
@@ -668,7 +669,7 @@ fn column_item_cross_shift(
     let cross_align = frame_align(is, container, wrap_reverse, true, cross_rev);
     let cross_align = safe_overflow_fallback(is, container, cross_align, avail_cross < item.rect.width);
     let free_cross = (avail_cross - item.rect.width).max(0.0);
-    if auto_cross_l && auto_cross_r {
+    let desired = if auto_cross_l && auto_cross_r {
         free_cross / 2.0
     } else if auto_cross_l {
         free_cross
@@ -683,7 +684,26 @@ fn column_item_cross_shift(
             AlignValue::End | AlignValue::LastBaseline => signed_free,
             _ => 0.0,
         }
-    }
+    };
+    // Элемент уже положен блочным §10.3.3 против `laid_base`: при определённой
+    // ширине авто-маргины распределили остаток ровно как §8.1, так что эту
+    // часть сдвига надо вычесть, а не добавить сверху (BUG-1853: карточка
+    // портала nextera уезжала на 90px вправо от центра). При auto-ширине
+    // §10.3.3 оставляет маргины по нулю — вычитать нечего.
+    let block_applied = if is.width.as_ref().and_then(|l| l.resolve(iem, Some(laid_base), viewport)).is_some() {
+        let laid_avail = (laid_base - m_l - m_r).max(0.0);
+        let laid_free = (laid_avail - item.rect.width).max(0.0);
+        if auto_cross_l && auto_cross_r {
+            laid_free / 2.0
+        } else if auto_cross_l {
+            laid_free
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
+    desired - block_applied
 }
 
 /// Width of a wrapped column's line `li` — the widest margin box among its items
@@ -818,7 +838,7 @@ fn finish_line(
         for jx in 0..n_items {
             let k = frame.init.line_inits[li].line_keys[jx];
             let i = frame.init.item_idxs[k];
-            let shift = column_item_cross_shift(&frame.b.children[i], line_cross, &frame.init.s, frame.init.cross_rev, frame.init.wrap_reverse, viewport);
+            let shift = column_item_cross_shift(&frame.b.children[i], line_cross, frame.init.content_width, &frame.init.s, frame.init.cross_rev, frame.init.wrap_reverse, viewport);
             if shift != 0.0 {
                 shift_tree(&mut frame.b.children[i], shift, 0.0);
             }
@@ -1262,8 +1282,8 @@ fn finish_frame(
                         let k = frame.init.line_inits[li].line_keys[jx];
                         let i = frame.init.item_idxs[k];
                         let dx = offset
-                            + column_item_cross_shift(&frame.b.children[i], new_cross, &frame.init.s, frame.init.cross_rev, frame.init.wrap_reverse, viewport)
-                            - column_item_cross_shift(&frame.b.children[i], old_cross, &frame.init.s, frame.init.cross_rev, frame.init.wrap_reverse, viewport);
+                            + column_item_cross_shift(&frame.b.children[i], new_cross, frame.init.content_width, &frame.init.s, frame.init.cross_rev, frame.init.wrap_reverse, viewport)
+                            - column_item_cross_shift(&frame.b.children[i], old_cross, frame.init.content_width, &frame.init.s, frame.init.cross_rev, frame.init.wrap_reverse, viewport);
                         if dx != 0.0 {
                             shift_tree(&mut frame.b.children[i], dx, 0.0);
                         }

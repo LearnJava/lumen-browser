@@ -89,7 +89,7 @@ impl Lumen {
                 let gif_bytes: usize = self
                     .animated_gifs
                     .values()
-                    .map(lumen_image::AnimatedGif::resident_bytes)
+                    .map(lumen_image::AnimatedImage::resident_bytes)
                     .sum();
                 let (img_n, img_b) = image_cache::IMAGE_CACHE.debug_stats();
                 let (pf_n, pf_b) = prefetch::PREFETCH_CACHE.debug_stats();

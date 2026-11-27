@@ -421,3 +421,54 @@ fn place_content_takes_left_and_right_for_the_inline_axis() {
     let c = "width:100px;height:50px;place-content:start right";
     assert_eq!(lone_item(c, "width:20px;height:10px").x, 80.0);
 }
+
+// ── BUG-1853: определённая поперечная ширина элемента колоночного контейнера ──
+//
+// `column_item_avail_cross` раньше безусловно ставил элемент с авто-маргинами
+// или не-stretch выравниванием в fit-content, даже когда `width` определена
+// (живой случай — портал nextera: `width:100%` + `margin:auto` сжимал обёртку
+// в max-content приветствия, 487px вместо 820). По CSS Flexbox §8.1/§9.4
+// авто-маргины и align-self лишь распределяют остаток, а не меняют размер.
+
+#[test]
+fn column_item_percent_width_with_auto_margins_keeps_the_width() {
+    // width:100% контейнера 400 зажимается max-width:200; пара auto-маргинов
+    // делит остаток пополам (x=100), но не сжимает сам элемент.
+    let html = r#"<div id="k"><div id="a"></div></div>"#;
+    let css = "#k{display:flex;flex-direction:column;width:400px}#a{width:100%;max-width:200px;margin:auto}";
+    let r = rects(html, css, &["a"]);
+    assert_eq!(r[0].width, 200.0);
+    assert_eq!(r[0].x, 100.0);
+}
+
+#[test]
+fn column_item_percent_width_resolves_against_the_container() {
+    // Проценты поперечной оси разрешаются от контейнера, а не от fit-content
+    // самого элемента (симптом «width:50% = половина собственного max-content»).
+    let html = r#"<div id="k"><div id="a"></div></div>"#;
+    let css = "#k{display:flex;flex-direction:column;width:400px}#a{width:50%}";
+    let r = rects(html, css, &["a"]);
+    assert_eq!(r[0].width, 200.0);
+    assert_eq!(r[0].x, 0.0);
+}
+
+#[test]
+fn column_item_definite_width_with_align_center_keeps_the_width() {
+    let html = r#"<div id="k"><div id="a"></div></div>"#;
+    let css = "#k{display:flex;flex-direction:column;align-items:center;width:400px}#a{width:100px;height:20px}";
+    let r = rects(html, css, &["a"]);
+    assert_eq!(r[0].width, 100.0);
+    assert_eq!(r[0].x, 150.0);
+}
+
+#[test]
+fn column_auto_width_item_with_auto_margins_stays_fit_content() {
+    // Регресс-ограничитель прежнего поведения: без определённой ширины
+    // авто-маргины по-прежнему означают fit-content (пустой div — 0), а не
+    // растягивание на контейнер.
+    let html = r#"<div id="k"><div id="a"></div></div>"#;
+    let css = "#k{display:flex;flex-direction:column;width:400px}#a{margin:auto}";
+    let r = rects(html, css, &["a"]);
+    assert_eq!(r[0].width, 0.0);
+    assert_eq!(r[0].x, 200.0);
+}
