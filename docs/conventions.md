@@ -42,6 +42,14 @@ Write tests before code for parsers (`html-parser`, `css-parser`, `font`) and al
 
 ---
 
+## Test fixtures live in their crate, not in `tests/wpt`
+
+**A fixture referenced from Rust source — `include_str!`, `include_bytes!`, any compile-time include — must be committed inside its own crate** (`tests/data/`, `tests/fixtures/`, mirroring the crate's existing layout), never under `tests/wpt/`. Both CI checkouts exclude `tests/wpt` entirely (`!/tests/wpt` in `ci.yml` and `perf-gate.yml`; it is 105 702 of 108 534 tracked files), so the include compiles on a full local checkout and dies on CI with `error: couldn't read ...`. Since `cargo clippy --workspace` stops at the first offending crate, the set of red crates changes between runs depending on compile order — a red that looks like "my push broke CI" when the include predates it. Hit for real on 2026-11-27 across four crates (`media-native` webm, `shell` mp3, `layout` icc, `paint` ttf, then `network` certs via `include_str!`, which a `include_bytes`-only grep misses — grep for the `tests/wpt` path, not for one macro).
+
+`tests/wpt` stays the *source* of truth for fixture content: copy the (small) file into the crate, credit the WPT path in a comment next to the include. Runtime `fs` reads of `tests/wpt` paths in tests are a separate matter — they do not break compilation, but a new one must skip-with-a-message when the file is absent, not fail.
+
+---
+
 ## Error handling
 
 - User-facing API: `Result<T, E>` with a meaningful `Error` enum.
