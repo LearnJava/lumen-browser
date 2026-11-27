@@ -224,6 +224,26 @@ fn wheelevent_delta_constants() {
 }
 
 #[test]
+fn dispatch_wheel_event_delivers_trusted_wheel_event() {
+    // MCP-TOTAL-S7d: the automation `wheel` dispatch must deliver a trusted,
+    // cancelable, bubbling WheelEvent with the given pixel deltas to the
+    // target node (the same contract as the mouse dispatch path).
+    let doc = make_doc();
+    let rt = v8_runtime_with_dom(doc);
+    let r = rt.eval(
+        "var el = document.createElement('div'); document.body.appendChild(el); \
+                  var got = null; \
+                  el.addEventListener('wheel', function(e) { got = e; }); \
+                  _lumen_dispatch_wheel_event(el.__nid__, 5, 6, 0, 120, 0); \
+                  got !== null && got instanceof WheelEvent && got.isTrusted && \
+                  got.bubbles && got.cancelable && \
+                  got.deltaX === 0 && got.deltaY === 120 && got.deltaMode === 0 && \
+                  got.clientX === 5 && got.clientY === 6"
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
 fn pointerevent_instanceof_chain_and_fields() {
     let rt = v8_runtime_with_dom(make_doc());
     let r = rt.eval(

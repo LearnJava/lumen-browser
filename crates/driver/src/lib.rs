@@ -38,9 +38,9 @@ pub mod winit_session;
 pub mod gpu_session;
 
 pub use types::{
-    A11yBounds, A11yNode, A11yState, AxQuery, AutomationCommand, AutomationReply, BoxModel, ComputedProperties, ConsoleEntry, ConsoleLevel,
+    A11yBounds, A11yNode, A11yState, AxQuery, AutomationCommand, AutomationReply, AutomationDialog, AutomationDownload, BoxModel, ComputedProperties, ConsoleEntry, ConsoleLevel,
     AutomationCookie, ExplainElement, ExplainPage, ExplainPagePhaseTimings, FingerprintProfile, InputCommand, InterceptedRequest,
-    InvariantViolationCounts, NetworkEntry, NodeRef, ScrollDelta, TabInfo, Target, WaitCondition,
+    InvariantViolationCounts, NavigationSnapshot, NetworkEntry, NodeRef, ScrollDelta, TabInfo, Target, WaitCondition,
 };
 pub use automation::{AutomationHandle, AutomationRequest};
 pub use live_session::LiveWindowSession;
@@ -57,6 +57,17 @@ pub use determinism::ClockMode;
 pub use lumen_layout::ComputedStyleSnapshot;
 
 use lumen_core::error::Result;
+
+/// Результат [`BrowserSession::eval_await_promise`] (MCP-TOTAL-S7f): итог
+/// ожидания промисного выражения.
+#[derive(Debug, PartialEq)]
+pub enum AwaitedPromise {
+    /// Промис исполнен: `Some` — значение как JSON-строка, `None` — исполнен
+    /// с `undefined` (JSON его не переносит).
+    Fulfilled(Option<String>),
+    /// Промис не осел на микротасках (макротаск/IO) — остался pending.
+    Pending,
+}
 
 /// Программный интерфейс к браузерному сеансу.
 ///
@@ -209,6 +220,31 @@ pub trait BrowserSession {
         self.navigate(url)
     }
 
+    /// Перезагрузить активную вкладку (MCP-TOTAL-S7e, BiDi
+    /// `browsingContext.reload`): текущий источник грузится заново;
+    /// `ignore_cache` — запрос обхода HTTP-кэша (движок его пока не
+    /// различает). Ответ — [`NavigationSnapshot`]: адрес и флаги истории.
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — команду исполняет только живое окно.
+    fn reload(&self, ignore_cache: bool) -> Result<NavigationSnapshot> {
+        let _ = ignore_cache;
+        Err(lumen_core::error::Error::Other("reload: только для живого окна (--mcp-live-port)".into()))
+    }
+
+    /// Шаг по истории сессии (MCP-TOTAL-S7e, BiDi
+    /// `browsingContext.traverseHistory`): минус — назад, плюс — вперёд,
+    /// `0` — перезагрузка текущей записи (HTML LS §7.8.3). Ответ —
+    /// [`NavigationSnapshot`].
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — команду исполняет только живое окно; у живого
+    /// окна — выход за границы истории.
+    fn traverse_history(&self, delta: i32) -> Result<NavigationSnapshot> {
+        let _ = delta;
+        Err(lumen_core::error::Error::Other("traverse_history: только для живого окна (--mcp-live-port)".into()))
+    }
+
     /// Открытые вкладки в порядке таб-стрипа (COMPAT-CORPUS-3-TABS).
     ///
     /// Сессии без таб-стрипа вкладок не различают — по умолчанию `Err`.
@@ -266,6 +302,61 @@ pub trait BrowserSession {
     fn eval_with_timeout(&mut self, js: &str, timeout_ms: u64) -> Result<String> {
         let _ = timeout_ms;
         self.eval(js)
+    }
+
+    /// Ождать промисное выражение (MCP-TOTAL-S7f): выражение, значением
+    /// которого является промис, → его осевшее значение. Отклонение — `Err`
+    /// с текстом причины («uncaught (in promise): …»).
+    ///
+    /// `Self::eval` синхронен и снимает значение выражения до опустошения
+    /// очереди микротасков, поэтому промисное выражение без ожидания даёт
+    /// неосевший промис-объект. V8 при этом выполняет микротаск-чекпоинт в
+    /// конце каждого eval, так что хватает двух заходов:
+    ///
+    /// 1. обернуть выражение в `Promise.resolve(...)` и навесить обработчик
+    ///    оседания, записывающий `{state, value|error}` в well-known глобал;
+    ///    чекпоинт исполняет обработчик до возврата из первого захода.
+    /// 2. прочитать глобал обратно.
+    ///
+    /// Оседают только промисы на микротасках; промис, ждущий макротаска/IO,
+    /// возвращает [`AwaitedPromise::Pending`] — вызывающий отступает к
+    /// промис-объекту, как без ожидания.
+    fn eval_await_promise(&mut self, expr: &str) -> Result<AwaitedPromise> {
+        // Заход 1: исполнить выражение, записать исход оседания в глобал.
+        let setup = format!(
+            "(function(){{\
+                 globalThis.__lumen_await = {{ state: \"pending\" }};\
+                 try {{\
+                     Promise.resolve(({expr})).then(\
+                         function(v){{ globalThis.__lumen_await = (v === undefined) ? {{ state: \"fulfilled\" }} : {{ state: \"fulfilled\", value: v }}; }},\
+                         function(e){{ globalThis.__lumen_await = {{ state: \"rejected\", error: (e && e.message !== undefined) ? String(e.message) : String(e) }}; }}\
+                     );\
+                 }} catch (e) {{\
+                     globalThis.__lumen_await = {{ state: \"rejected\", error: (e && e.message !== undefined) ? String(e.message) : String(e) }};\
+                 }}\
+                 return \"pending\";\
+             }})()"
+        );
+        self.eval(&setup).map_err(|e| lumen_core::error::Error::Other(format!("eval: {e}")))?;
+
+        // Заход 2: прочитать исход, оставленный микротаск-чекпоинтом.
+        let read = "(function(){ var r = globalThis.__lumen_await; \
+             try { delete globalThis.__lumen_await; } catch (e) {} return r; })()";
+        let raw = self.eval(read).map_err(|e| lumen_core::error::Error::Other(format!("eval: {e}")))?;
+
+        let outcome: serde_json::Value = serde_json::from_str(&raw)
+            .map_err(|e| lumen_core::error::Error::Other(format!("eval: {e}")))?;
+        match outcome.get("state").and_then(|v| v.as_str()) {
+            Some("fulfilled") => Ok(AwaitedPromise::Fulfilled(
+                outcome.get("value").map(|v| v.to_string()),
+            )),
+            Some("rejected") => Err(lumen_core::error::Error::Other(format!(
+                "uncaught (in promise): {}",
+                outcome.get("error").and_then(|v| v.as_str()).unwrap_or("")
+            ))),
+            // Ещё pending (ждёт макротаска/IO).
+            _ => Ok(AwaitedPromise::Pending),
+        }
     }
 
     /// Найти DOM-узлы по CSS-селектору. Возвращает пустой вектор, если
@@ -372,6 +463,30 @@ pub trait BrowserSession {
         Err(lumen_core::error::Error::Other("type_focused: только для живого окна (--mcp-live-port)".into()))
     }
 
+    /// Отпустить всё зажатое автоматизацией (MCP-TOTAL-S7d, BiDi
+    /// `input.releaseActions`): кнопку `pointer_down` (страница получает
+    /// `pointerup`/`mouseup`, `:active` снят) и все удерживаемые модификаторы
+    /// `key_down` (каждый получает свой `keyup`). Идемпотентно.
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — команду исполняет только живое окно.
+    fn release_actions(&self) -> Result<()> {
+        Err(lumen_core::error::Error::Other("release_actions: только для живого окна (--mcp-live-port)".into()))
+    }
+
+    /// Колесо мыши в `(x, y)` (CSS px вьюпорта, MCP-TOTAL-S7d): страница
+    /// получает доверенный `wheel` с `delta_x`/`delta_y` (px, плюс —
+    /// вправо/вниз), затем прокрутка идёт тем же маршрутом, что у настоящего
+    /// `MouseWheel`; `modifiers` — маска из `press_key` (ctrl 1, shift 2,
+    /// alt 4, meta 8).
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — команду исполняет только живое окно.
+    fn wheel(&self, x: f32, y: f32, delta_x: f32, delta_y: f32, modifiers: u8) -> Result<()> {
+        let _ = (x, y, delta_x, delta_y, modifiers);
+        Err(lumen_core::error::Error::Other("wheel: только для живого окна (--mcp-live-port)".into()))
+    }
+
     /// Неистёкшие cookies активного jar живого окна, `HttpOnly` включительно
     /// (`storage.getCookies`, DEVX-20).
     ///
@@ -418,6 +533,71 @@ pub trait BrowserSession {
     fn remove_preload_script(&self, id: &str) -> Result<()> {
         let _ = id;
         Err(lumen_core::error::Error::Other("remove_preload_script: только для живого окна (--mcp-live-port)".into()))
+    }
+
+    /// Открытый JS-диалог живого окна (`alert`/`confirm`/`prompt`), если есть
+    /// (MCP-TOTAL-S7a, BiDi `browsingContext.userPromptOpened`). Диалог
+    /// блокирует JS-поток, поэтому ответ читается из состояния UI, не через
+    /// него; `None` — диалога нет.
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — диалоги живого окна доступны только живому окну.
+    fn user_prompt(&self) -> Result<Option<AutomationDialog>> {
+        Err(lumen_core::error::Error::Other("user_prompt: только для живого окна (--mcp-live-port)".into()))
+    }
+
+    /// Ответить на открытый JS-диалог живого окна (MCP-TOTAL-S7a, BiDi
+    /// `browsingContext.handleUserPrompt`): `accept` — OK/отмена,
+    /// `user_text` — замена введённого текста `prompt`.
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — команду исполняет только живое окно.
+    fn handle_user_prompt(&self, accept: bool, user_text: Option<&str>) -> Result<()> {
+        let _ = (accept, user_text);
+        Err(lumen_core::error::Error::Other("handle_user_prompt: только для живого окна (--mcp-live-port)".into()))
+    }
+
+    /// Заполнить `<input type="file">` по `target` файлами `paths` без
+    /// OS-диалога (MCP-TOTAL-S7b, BiDi `input.setFiles`): каждый путь должен
+    /// существовать — он регистрируется непрозрачным грантом (JS путей не
+    /// видит, BUG-371), доставка и события `input`/`change` — тем же путём,
+    /// что после настоящего выбора в диалоге.
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — команду исполняет только живое окно.
+    fn set_files(&self, target: &Target, paths: &[String]) -> Result<()> {
+        let _ = (target, paths);
+        Err(lumen_core::error::Error::Other("set_files: только для живого окна (--mcp-live-port)".into()))
+    }
+
+    /// Загрузки живого окна (MCP-TOTAL-S7c, BiDi `browser.getDownloads`):
+    /// каждая запись менеджера загрузок — id, URL, имя файла, состояние,
+    /// счётчики байт и путь на диске.
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — менеджер загрузок есть только у живого окна.
+    fn list_downloads(&self) -> Result<Vec<AutomationDownload>> {
+        Err(lumen_core::error::Error::Other("list_downloads: только для живого окна (--mcp-live-port)".into()))
+    }
+
+    /// Начать загрузку `url` (MCP-TOTAL-S7c): файл уходит в папку загрузок
+    /// ОС тем же путём, что и загрузка по клику страницы; возвращает id
+    /// записи для [`list_downloads`](BrowserSession::list_downloads) /
+    /// [`cancel_download`](BrowserSession::cancel_download).
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — команду исполняет только живое окно.
+    fn start_download(&self, _url: &str) -> Result<u32> {
+        Err(lumen_core::error::Error::Other("start_download: только для живого окна (--mcp-live-port)".into()))
+    }
+
+    /// Отменить загрузку `id` (MCP-TOTAL-S7c); запись оседает в состоянии
+    /// `cancelled`.
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — команду исполняет только живое окно.
+    fn cancel_download(&self, _id: u32) -> Result<()> {
+        Err(lumen_core::error::Error::Other("cancel_download: только для живого окна (--mcp-live-port)".into()))
     }
 
     // ── Isolation & Fingerprinting (Phase 1: 8E/8F) ─────────────────────────

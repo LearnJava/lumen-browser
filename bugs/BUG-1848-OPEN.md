@@ -27,9 +27,37 @@
 cargo test -p lumen-js --features v8-backend --lib "document_pip::tests::document_pip_picture_in_picture_event_class_exists" -- --exact --test-threads=1
 ```
 
+Дополнение 2026-11-26 (гейт MCP-TOTAL-S7a, js-код по-прежнему идентичен `main`):
+в полном прогоне `scoped-test.sh` те же девять плюс ещё пять из той же семьи
+(установка/состав глобала):
+
+- `dom::tests::v8_bug568_document_write::written_external_script_load_and_error_events`
+  и `…_blocks_later_written_scripts`;
+- `frame_bridge::tests::frame_registration_supersedes_the_initial_frame_runtime`;
+- `internal_globals::tests::only_known_internal_names_remain_on_the_global`;
+- `shared_worker::tests_v8::v8_shared_worker_top_level_failure_reaches_the_first_client`.
+
+Единичный прогон (`--exact --test-threads=1`) для этих пяти не снят; полный
+прогон в тот раз оборвался внутри `lumen-js` (cargo считает краш тест-бинаря
+не «фейлом» и останавливает остаток), хвост замыкания прогнан отдельно. Если
+корень у пятерки не общий с `document_pip` — развести по багам.
+
 Отдельно от этого: падения `navigator_clipboard_read_asks_and_returns_items` и
 `perf9_code_cache_hit_preserves_semantics` в полном прогоне проходят по одному —
 это известный [BUG-1677](BUG-1677-OPEN.md), в этот баг не входит.
+
+Дополнение 2026-11-26 (гейт MCP-TOTAL-S7b, js-код по-прежнему идентичен `main`):
+полный прогон `scoped-test.sh` дал те же кластеры с чуть сместившимся составом —
+к перечисленному добавились `web_audio::tests_v8::bug1089_sink_id_and_playback_stats`,
+`worker::tests_v8::v8_worker_end_to_end_top_level_throw_runs_scope_handlers_once`,
+`frame_bridge::tests::initial_frame_eval_creates_a_runtime_whose_state_persists`
+и три интеграционных из той же семьи (`speech_api::speech_recognition_is_not_exposed`,
+`webrtc_not_declared` — оба). Каждый печатает тот же v8-шум
+`install_document_pip_api_v8 failed` — корень, судя по всему, не сменился; состав
+падающих тестов в полном прогоне плавает от запуска к запуску. Попутно: перф-ворота
+`lumen-layout` `block_flow_trampoline::deep_chain_with_margins_collapses_through_the_trampoline`
+(x17.6 против порога ~x16) в том же параллельном прогоне упали, но соло проходят —
+нагрузочный флейк замера, не регрессия; в баги не отнесено.
 
 ## Причина
 

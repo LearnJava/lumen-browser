@@ -26,9 +26,9 @@ use std::time::Duration;
 use lumen_core::error::{Error, Result};
 
 use crate::{
-    A11yNode, AutomationCommand, AutomationCookie, AutomationHandle, AutomationReply, AxQuery, BoxModel,
+    A11yNode, AutomationCommand, AutomationCookie, AutomationDialog, AutomationDownload, AutomationHandle, AutomationReply, AxQuery, BoxModel,
     BrowserSession, ComputedProperties, ComputedStyleSnapshot, ConsoleEntry, ExplainElement,
-    ExplainPage, FingerprintProfile, InterceptedRequest, NetworkEntry, NodeRef, ScrollDelta, TabInfo,
+    ExplainPage, FingerprintProfile, InterceptedRequest, NavigationSnapshot, NetworkEntry, NodeRef, ScrollDelta, TabInfo,
     Target, WaitCondition,
 };
 
@@ -113,73 +113,83 @@ impl BrowserSession for LiveWindowSession {
         }
     }
 
-    /// Not yet wired to the live window: `AutomationCommand` has no scoped
-    /// layout-snapshot variant yet (SDC-2 MVP scope, DEVX-14 wired the
-    /// whole-page `layout_snapshot` but not this) — always empty.
-    fn layout_snapshot_scoped(&self, _selector: &str) -> Result<Vec<BoxModel>> {
-        Ok(Vec::new())
+    /// MCP-TOTAL-S2c: the subtree box-model snapshot round-trips through
+    /// [`AutomationCommand::LayoutSnapshotScoped`]; a selector matching
+    /// nothing is an empty snapshot — the same shape the headless sessions
+    /// answer.
+    fn layout_snapshot_scoped(&self, selector: &str) -> Result<Vec<BoxModel>> {
+        match self.execute(AutomationCommand::LayoutSnapshotScoped { selector: selector.to_owned() })? {
+            AutomationReply::LayoutSnapshot(boxes) => Ok(boxes),
+            other => Err(unexpected_reply("LayoutSnapshot", &other)),
+        }
     }
 
     /// Not yet wired to the live window (SDC-2 MVP scope) — always `Err`
-    /// (unlike the other scoped reads, an empty screenshot/dump isn't a
-    /// meaningfully distinct "not found" answer, so this mirrors
-    /// `screenshot_scoped`'s own not-found error rather than silently
-    /// returning nothing).
+    /// (an empty screenshot/dump isn't a meaningfully distinct "not found"
+    /// answer); since MCP-TOTAL-S2a every silent x-surface stub here mirrors
+    /// this shape instead of silently returning nothing.
     fn screenshot_scoped(&self, _selector: &str) -> Result<Vec<u8>> {
         Err(Error::Other("screenshot_scoped: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
     }
 
-    /// Not yet wired to the live window (SDC-2 MVP scope) — always `Err`,
-    /// see `screenshot_scoped`. Unlike `display_list_scoped`, the whole-page
-    /// [`display_list`](BrowserSession::display_list) has the same gap —
-    /// `AutomationCommand` carries no display-list variant at all yet
-    /// (DEVX-14 wired `layout_snapshot`/`network_log` only).
-    fn display_list_scoped(&self, _selector: &str) -> Result<String> {
-        Err(Error::Other("display_list_scoped: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
+    /// MCP-TOTAL-S2b: the subtree dump round-trips through
+    /// [`AutomationCommand::DisplayListScoped`]; a selector matching nothing
+    /// is the arm's `Error` — the same shape the headless sessions answer.
+    fn display_list_scoped(&self, selector: &str) -> Result<String> {
+        match self.execute(AutomationCommand::DisplayListScoped { selector: selector.to_owned() })? {
+            AutomationReply::DisplayList(text) => Ok(text),
+            other => Err(unexpected_reply("DisplayList", &other)),
+        }
     }
 
-    /// Not yet wired to the live window (SDC-2 MVP scope): `AutomationCommand`
-    /// carries no display-list variant yet — always `Err`. Unlike
-    /// `layout_snapshot`/`network_log`, DEVX-14 left this one a documented
-    /// gap rather than wiring it (the brief scoped live-window work to
-    /// `resource://layout`/`resource://network` only).
+    /// MCP-TOTAL-S2b: the whole-page dump round-trips through
+    /// [`AutomationCommand::DisplayList`] — the arm serializes the same
+    /// display list the window paints (frame content included, BUG-480).
     fn display_list(&self) -> Result<String> {
-        Err(Error::Other("display_list: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
+        match self.execute(AutomationCommand::DisplayList)? {
+            AutomationReply::DisplayList(text) => Ok(text),
+            other => Err(unexpected_reply("DisplayList", &other)),
+        }
     }
 
-    /// Not yet wired to the live window (SDC-2 MVP scope) — always `None`.
+    /// Not yet wired to the live window (SDC-2 MVP scope) — always `Err`
+    /// (MCP-TOTAL-S2a), see `screenshot_scoped`.
     fn computed_style(&self, _selector: &str) -> Result<Option<ComputedProperties>> {
-        Ok(None)
+        Err(Error::Other("computed_style: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
     }
 
-    /// Not yet wired to the live window (SDC-2 MVP scope) — always `None`.
+    /// Not yet wired to the live window (SDC-2 MVP scope) — always `Err`
+    /// (MCP-TOTAL-S2a), see `screenshot_scoped`.
     fn computed_style_snapshot(&self, _selector: &str) -> Result<Option<ComputedStyleSnapshot>> {
-        Ok(None)
+        Err(Error::Other("computed_style_snapshot: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
     }
 
-    /// Not yet wired to the live window (SDC-2 MVP scope) — always `None`.
+    /// Not yet wired to the live window (SDC-2 MVP scope) — always `Err`
+    /// (MCP-TOTAL-S2a), see `screenshot_scoped`.
     fn layout_box_by_selector(&self, _selector: &str) -> Result<Option<BoxModel>> {
-        Ok(None)
+        Err(Error::Other("layout_box_by_selector: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
     }
 
-    /// Not yet wired to the live window (SDC-2 MVP scope) — always empty.
+    /// Not yet wired to the live window (SDC-2 MVP scope) — always `Err`
+    /// (MCP-TOTAL-S2a), see `screenshot_scoped`.
     fn all_layout_boxes_by_selector(&self, _selector: &str) -> Result<Vec<BoxModel>> {
-        Ok(Vec::new())
+        Err(Error::Other("all_layout_boxes_by_selector: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
     }
 
     /// Not yet wired to the live window (SDC-2 MVP scope, same gap as
-    /// `layout_box_by_selector`) — always the all-default `ExplainElement`
-    /// (`in_dom: false`), not an error: `explain_element` needs per-selector
+    /// `layout_box_by_selector`) — always `Err` (MCP-TOTAL-S2a), see
+    /// `screenshot_scoped`: `explain_element` needs per-selector
     /// layout/provenance data, which `AutomationCommand` still doesn't carry
     /// even after DEVX-14 wired the whole-page `layout_snapshot`.
     fn explain_element(&self, _selector: &str) -> Result<ExplainElement> {
-        Ok(ExplainElement::default())
+        Err(Error::Other("explain_element: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
     }
 
     /// Not yet wired to the live window (SDC-2 MVP scope, same gap as
-    /// `explain_element`) — always the all-default `ExplainPage`.
+    /// `explain_element`) — always `Err` (MCP-TOTAL-S2a), see
+    /// `screenshot_scoped`.
     fn explain_page(&self) -> Result<ExplainPage> {
-        Ok(ExplainPage::default())
+        Err(Error::Other("explain_page: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
     }
 
     /// Network request log since the last `navigate()` (DEVX-14) —
@@ -238,6 +248,24 @@ impl BrowserSession for LiveWindowSession {
             *cur = url.to_owned();
         }
         Ok(())
+    }
+
+    /// MCP-TOTAL-S7e: reload the current source; the arm answers with the
+    /// address and the history flags of the tab.
+    fn reload(&self, ignore_cache: bool) -> Result<NavigationSnapshot> {
+        match self.execute(AutomationCommand::Reload { ignore_cache })? {
+            AutomationReply::Navigation(snap) => Ok(snap),
+            other => Err(unexpected_reply("Navigation", &other)),
+        }
+    }
+
+    /// MCP-TOTAL-S7e: a step through the session history; a delta outside
+    /// the history bounds is the arm's `Error`.
+    fn traverse_history(&self, delta: i32) -> Result<NavigationSnapshot> {
+        match self.execute(AutomationCommand::TraverseHistory { delta })? {
+            AutomationReply::Navigation(snap) => Ok(snap),
+            other => Err(unexpected_reply("Navigation", &other)),
+        }
     }
 
     fn list_tabs(&self) -> Result<Vec<TabInfo>> {
@@ -311,10 +339,17 @@ impl BrowserSession for LiveWindowSession {
         }
     }
 
-    /// Not yet wired to the live window (SDC-2 MVP scope): `AutomationCommand`
-    /// has no scoped-query variant yet — always empty.
-    fn query_scoped(&self, _root_selector: &str, _selector: &str) -> Result<Vec<NodeRef>> {
-        Ok(Vec::new())
+    /// MCP-TOTAL-S2c: the subtree-scoped DOM query round-trips through
+    /// [`AutomationCommand::QueryScoped`] — Element.querySelectorAll scoping,
+    /// the arm resolves `root_selector` and matches `selector` inside it.
+    fn query_scoped(&self, root_selector: &str, selector: &str) -> Result<Vec<NodeRef>> {
+        match self.execute(AutomationCommand::QueryScoped {
+            root_selector: root_selector.to_owned(),
+            selector: selector.to_owned(),
+        })? {
+            AutomationReply::Query(nodes) => Ok(nodes),
+            other => Err(unexpected_reply("Query", &other)),
+        }
     }
 
     /// Not yet wired to the live window (SDC-2 MVP scope, same gap as
@@ -356,6 +391,19 @@ impl BrowserSession for LiveWindowSession {
         Ok(())
     }
 
+    /// MCP-TOTAL-S7d: release everything automation holds pressed.
+    fn release_actions(&self) -> Result<()> {
+        self.execute(AutomationCommand::ReleaseActions)?;
+        Ok(())
+    }
+
+    /// MCP-TOTAL-S7d: a wheel notch at the point; the shell runs the same
+    /// `MouseWheel` handler a real wheel event takes.
+    fn wheel(&self, x: f32, y: f32, delta_x: f32, delta_y: f32, modifiers: u8) -> Result<()> {
+        self.execute(AutomationCommand::Wheel { x, y, delta_x, delta_y, modifiers })?;
+        Ok(())
+    }
+
     fn get_cookies(&self) -> Result<Vec<AutomationCookie>> {
         match self.execute(AutomationCommand::GetCookies)? {
             AutomationReply::Cookies(cookies) => Ok(cookies),
@@ -387,6 +435,58 @@ impl BrowserSession for LiveWindowSession {
 
     fn remove_preload_script(&self, id: &str) -> Result<()> {
         self.execute(AutomationCommand::RemovePreloadScript(id.to_owned()))?;
+        Ok(())
+    }
+
+    /// MCP-TOTAL-S7a: the open JS dialog, read from the shell's UI state (the
+    /// dialog blocks the JS thread, so this never round-trips through it).
+    fn user_prompt(&self) -> Result<Option<AutomationDialog>> {
+        match self.execute(AutomationCommand::UserPrompt)? {
+            AutomationReply::UserPrompt(dialog) => Ok(dialog),
+            other => Err(unexpected_reply("UserPrompt", &other)),
+        }
+    }
+
+    /// MCP-TOTAL-S7a: answer the open JS dialog; errors when none is open.
+    fn handle_user_prompt(&self, accept: bool, user_text: Option<&str>) -> Result<()> {
+        self.execute(AutomationCommand::HandleUserPrompt {
+            accept,
+            user_text: user_text.map(str::to_owned),
+        })?;
+        Ok(())
+    }
+
+    /// MCP-TOTAL-S7b: fill a file input without the OS dialog; the shell arm
+    /// validates the paths and answers `Error` with the reason.
+    fn set_files(&self, target: &Target, paths: &[String]) -> Result<()> {
+        self.execute(AutomationCommand::SetFiles {
+            target: target.clone(),
+            paths: paths.to_vec(),
+        })?;
+        Ok(())
+    }
+
+    /// MCP-TOTAL-S7c: the live window's download manager entries; the arm
+    /// polls terminal events first, so a just-finished download is not
+    /// reported a frame behind.
+    fn list_downloads(&self) -> Result<Vec<AutomationDownload>> {
+        match self.execute(AutomationCommand::GetDownloads)? {
+            AutomationReply::Downloads(entries) => Ok(entries),
+            other => Err(unexpected_reply("Downloads", &other)),
+        }
+    }
+
+    /// MCP-TOTAL-S7c: start a download; the arm answers with the new id.
+    fn start_download(&self, url: &str) -> Result<u32> {
+        match self.execute(AutomationCommand::StartDownload { url: url.to_owned() })? {
+            AutomationReply::DownloadId(id) => Ok(id),
+            other => Err(unexpected_reply("DownloadId", &other)),
+        }
+    }
+
+    /// MCP-TOTAL-S7c: cancel a download by id; an unknown id is an error.
+    fn cancel_download(&self, id: u32) -> Result<()> {
+        self.execute(AutomationCommand::CancelDownload { id })?;
         Ok(())
     }
 

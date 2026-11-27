@@ -40,8 +40,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 // ── IDs and status ────────────────────────────────────────────────────────────
 
 /// Opaque identifier for a single download entry.
+///
+/// The tuple field is `pub(crate)` so the automation arm (MCP-TOTAL-S7c) can
+/// rebuild an id from its wire form (`DownloadId(raw)` round-trip).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct DownloadId(u32);
+pub struct DownloadId(pub(crate) u32);
 
 impl DownloadId {
     /// Raw numeric id — round-tripped through `ChromeDownloadModel::id` /
@@ -492,6 +495,27 @@ impl DownloadManager {
 
 // ── Background thread ─────────────────────────────────────────────────────────
 
+/// Full body of the download's source: a `file://` URL reads straight from
+/// disk (a download of a local file never touches the network — the HTTP
+/// client itself rejects non-http schemes), everything else goes through
+/// [`lumen_network::HttpClient`] with the shell's own config applied.
+fn fetch_download_body(url: &lumen_core::url::Url) -> Result<Vec<u8>, String> {
+    if url.scheme() == "file" {
+        let path = url
+            .to_file_path()
+            .ok_or_else(|| format!("not a local file path: {}", url.as_str()))?;
+        return std::fs::read(path).map_err(|e| e.to_string());
+    }
+    use lumen_core::ext::NetworkTransport as _;
+    use lumen_network::HttpClient;
+
+    let client = crate::config::global().apply_http(
+        HttpClient::new()
+            .with_content_decoders(lumen_network::default_content_decoders()),
+    );
+    client.fetch(url).map_err(|e| e.to_string())
+}
+
 fn run_download(
     id: DownloadId,
     url: String,
@@ -515,20 +539,12 @@ fn run_download(
         }
     };
 
-    use lumen_core::ext::NetworkTransport as _;
-    use lumen_network::HttpClient;
-
-    let client = crate::config::global().apply_http(
-        HttpClient::new()
-            .with_content_decoders(lumen_network::default_content_decoders()),
-    );
-
-    let body = match client.fetch(&parsed) {
+    let body = match fetch_download_body(&parsed) {
         Ok(b) => b,
         Err(e) => {
             let _ = tx.send(DownloadEvent::Failed {
                 id,
-                reason: e.to_string(),
+                reason: e,
             });
             return;
         }
@@ -788,6 +804,19 @@ pub(crate) fn extension_label(filename: &str) -> String {
         None => filename.to_string(),
     };
     label.to_uppercase().chars().take(4).collect()
+}
+
+/// Wire-form name of a download's lifecycle state (MCP-TOTAL-S7c): the
+/// canonical `list_downloads` strings; the BiDi sync maps them onto its own
+/// `inProgress`/`completed`/`aborted` vocabulary.
+pub(crate) fn status_name(status: &DownloadStatus) -> String {
+    match status {
+        DownloadStatus::Pending => "pending".to_owned(),
+        DownloadStatus::InProgress => "in_progress".to_owned(),
+        DownloadStatus::Done { .. } => "completed".to_owned(),
+        DownloadStatus::Failed(_) => "failed".to_owned(),
+        DownloadStatus::Cancelled => "cancelled".to_owned(),
+    }
 }
 
 /// `pub(crate)`: also used by `Lumen::chrome_model_snapshot`
@@ -1144,5 +1173,20 @@ mod tests {
         assert_eq!(extension_label("report.pdf"), "PDF");
         assert_eq!(extension_label("archive.tar.gz"), "GZ");
         assert_eq!(extension_label("no_extension"), "NO_E");
+    }
+
+    // ── Automation surface (MCP-TOTAL-S7c) ────────────────────────────────
+
+    #[test]
+    fn status_name_maps_every_state() {
+        assert_eq!(status_name(&DownloadStatus::Pending), "pending");
+        assert_eq!(status_name(&DownloadStatus::InProgress), "in_progress");
+        assert_eq!(status_name(&DownloadStatus::Done { bytes: 1 }), "completed");
+        assert_eq!(status_name(&DownloadStatus::Failed("x".into())), "failed");
+        assert_eq!(status_name(&DownloadStatus::Cancelled), "cancelled");
+        // The id round-trips through the wire form the automation arm uses.
+        let id = DownloadId(7);
+        assert_eq!(id.raw(), 7);
+        assert_eq!(DownloadId(id.raw()), id);
     }
 }

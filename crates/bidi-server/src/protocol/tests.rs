@@ -53,6 +53,8 @@ fn fake_live_session() -> LiveWindowSession {
                     AutomationReply::Ack
                 }
                 AutomationCommand::Wait(_, _) => AutomationReply::Ack,
+                // MCP-TOTAL-S7a: the per-dispatch dialog poll — no dialog open.
+                AutomationCommand::UserPrompt => AutomationReply::UserPrompt(None),
                 _ => AutomationReply::Error("unsupported in fake_live_session".into()),
             };
             let _ = reply_tx.send(reply);
@@ -111,7 +113,8 @@ fn fake_live_session_load_settled_error() -> LiveWindowSession {
 /// A fake "live window" that emulates V8's `awaitPromise` two-round-trip
 /// dance for BUG-319: the round-1 setup eval (`Promise.resolve(...).then`)
 /// is answered `"pending"`, and the round-2 read of
-/// `globalThis.__lumen_bidi_await` returns `settled` — the canned JSON a
+/// `globalThis.__lumen_await` (the shared driver global, MCP-TOTAL-S7f)
+/// returns `settled` — the canned JSON a
 /// real page's settle handler would have left after the microtask
 /// checkpoint (`{state:"fulfilled",value:..}` / `{state:"rejected",..}` /
 /// `{state:"pending"}`).
@@ -604,13 +607,55 @@ fn input_perform_actions_with_live_window_clicks() {
 
 /// Fake live window that records every `AutomationCommand` it receives.
 fn recording_live_session() -> (LiveWindowSession, std::sync::mpsc::Receiver<String>) {
-    use lumen_driver::{AutomationHandle, AutomationReply};
+    use lumen_driver::{AutomationCommand, AutomationHandle, AutomationReply};
     let (tx, rx) = std::sync::mpsc::channel::<lumen_driver::AutomationRequest>();
     let (log_tx, log_rx) = std::sync::mpsc::channel::<String>();
     std::thread::spawn(move || {
         for (cmd, reply_tx) in rx {
-            let _ = log_tx.send(format!("{cmd:?}"));
-            let _ = reply_tx.send(AutomationReply::Ack);
+            // MCP-TOTAL-S7a/S7c: the per-dispatch dialog/download polls are
+            // not client actions — answer silently and keep them out of the
+            // action log the assertions read.
+            let reply = match cmd {
+                AutomationCommand::UserPrompt => AutomationReply::UserPrompt(None),
+                AutomationCommand::GetDownloads => AutomationReply::Downloads(Vec::new()),
+                cmd => {
+                    let _ = log_tx.send(format!("{cmd:?}"));
+                    AutomationReply::Ack
+                }
+            };
+            let _ = reply_tx.send(reply);
+        }
+    });
+    (LiveWindowSession::new(AutomationHandle::new(tx)), log_rx)
+}
+
+/// MCP-TOTAL-S7a: a fake live window whose `confirm("go?")` dialog opens only
+/// on the fourth poll — after `new_session_ctx`'s two dispatches and the
+/// subscribe — so the dialog is genuinely open *during* the tested command,
+/// not before it. `HandleUserPrompt` answers Ack and is logged.
+fn fake_live_session_with_dialog() -> (LiveWindowSession, std::sync::mpsc::Receiver<String>) {
+    use lumen_driver::{AutomationCommand, AutomationDialog, AutomationHandle, AutomationReply};
+    let (tx, rx) = std::sync::mpsc::channel::<lumen_driver::AutomationRequest>();
+    let (log_tx, log_rx) = std::sync::mpsc::channel::<String>();
+    let polls = std::sync::atomic::AtomicUsize::new(0);
+    std::thread::spawn(move || {
+        for (cmd, reply_tx) in rx {
+            let reply = match cmd {
+                AutomationCommand::UserPrompt => {
+                    let n = polls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    AutomationReply::UserPrompt((n >= 3).then(|| AutomationDialog {
+                        kind: "confirm".to_owned(),
+                        message: "go?".to_owned(),
+                        default_value: String::new(),
+                    }))
+                }
+                AutomationCommand::HandleUserPrompt { .. } => {
+                    let _ = log_tx.send(format!("{cmd:?}"));
+                    AutomationReply::Ack
+                }
+                _ => AutomationReply::Ack,
+            };
+            let _ = reply_tx.send(reply);
         }
     });
     (LiveWindowSession::new(AutomationHandle::new(tx)), log_rx)
@@ -655,6 +700,98 @@ fn input_perform_actions_text_without_pointer_does_not_click() {
     dispatch(&cmd, &mut state);
     let seen: Vec<String> = log.try_iter().collect();
     assert_eq!(seen, vec![r#"TypeFocused("ab")"#.to_owned()]);
+}
+
+/// MCP-TOTAL-S7d: a wheel source's `scroll` action is a wheel notch (the
+/// command carries the deltas), and `input.releaseActions` releases what a
+/// previous `pointerDown` holds.
+#[test]
+fn input_wheel_scroll_and_release_actions_replay_to_live_window() {
+    let (live, log) = recording_live_session();
+    let mut state = BidiState::with_live_session(live, None);
+    let cid = new_session_ctx(&mut state);
+    let cmd = format!(
+        r#"{{"id":1,"method":"input.performActions","params":{{"context":"{cid}","actions":[
+                {{"type":"wheel","id":"w","actions":[{{"type":"scroll","x":10,"y":20,"deltaX":0,"deltaY":120}}]}},
+                {{"type":"pointer","id":"m","actions":[
+                    {{"type":"pointerMove","x":10,"y":20}},
+                    {{"type":"pointerDown","button":0}}
+                ]}}
+            ]}}}}"#
+    );
+    let r = dispatch(&cmd, &mut state);
+    assert!(r.frames[0].contains("success"), "got: {}", r.frames[0]);
+    let r = dispatch(
+        &format!(r#"{{"id":2,"method":"input.releaseActions","params":{{"context":"{cid}"}}}}"#),
+        &mut state,
+    );
+    assert!(r.frames[0].contains("success"), "got: {}", r.frames[0]);
+    let seen: Vec<String> = log.try_iter().collect();
+    assert!(
+        seen.iter().any(|c| c.contains("Wheel") && c.contains("delta_y: 120.0")),
+        "{seen:?}"
+    );
+    assert!(seen.iter().any(|c| c.contains("PointerDown")), "{seen:?}");
+    assert!(seen.iter().any(|c| c.contains("ReleaseActions")), "{seen:?}");
+}
+
+/// MCP-TOTAL-S7e: `browsingContext.reload` answers in the NavigateResult
+/// shape with the live-reported address, `browsingContext.traverseHistory`
+/// answers EmptyResult — and a delta outside the session history is
+/// `no such history entry`, not a silent success.
+#[test]
+fn browsing_context_reload_and_traverse_history_replay_to_live_window() {
+    use lumen_driver::{AutomationCommand, AutomationHandle, AutomationReply, NavigationSnapshot};
+    let (tx, rx) = std::sync::mpsc::channel::<lumen_driver::AutomationRequest>();
+    std::thread::spawn(move || {
+        for (cmd, reply_tx) in rx {
+            let reply = match cmd {
+                AutomationCommand::TraverseHistory { delta } if delta.abs() > 1 => {
+                    AutomationReply::Error("traverse_history: нет записи истории".to_owned())
+                }
+                AutomationCommand::Reload { .. } | AutomationCommand::TraverseHistory { .. } => {
+                    AutomationReply::Navigation(NavigationSnapshot {
+                        url: "http://back.test/".to_owned(),
+                        can_go_back: true,
+                        can_go_forward: false,
+                    })
+                }
+                _ => AutomationReply::Ack,
+            };
+            let _ = reply_tx.send(reply);
+        }
+    });
+    let mut state = BidiState::with_live_session(LiveWindowSession::new(AutomationHandle::new(tx)), None);
+    let cid = new_session_ctx(&mut state);
+
+    let r = dispatch(
+        &format!(r#"{{"id":1,"method":"browsingContext.reload","params":{{"context":"{cid}","ignoreCache":true}}}}"#),
+        &mut state,
+    );
+    let v = parse(&r.frames[0]);
+    assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("success"));
+    let result = v.get("result").expect("reload must answer a result");
+    assert_eq!(result.get("url").and_then(|u| u.as_str()), Some("http://back.test/"));
+    assert!(result.get("navigation").is_some(), "reload must answer the NavigateResult shape");
+
+    let r = dispatch(
+        &format!(r#"{{"id":2,"method":"browsingContext.traverseHistory","params":{{"context":"{cid}","delta":-1}}}}"#),
+        &mut state,
+    );
+    let v = parse(&r.frames[0]);
+    assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("success"));
+    assert!(
+        v.get("result").and_then(|r| r.as_object()).is_some_and(|o| o.is_empty()),
+        "traverseHistory must answer EmptyResult"
+    );
+
+    let r = dispatch(
+        &format!(r#"{{"id":3,"method":"browsingContext.traverseHistory","params":{{"context":"{cid}","delta":5}}}}"#),
+        &mut state,
+    );
+    let v = parse(&r.frames[0]);
+    assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("error"));
+    assert_eq!(v.get("error").and_then(|x| x.as_str()), Some("no such history entry"));
 }
 
 #[test]

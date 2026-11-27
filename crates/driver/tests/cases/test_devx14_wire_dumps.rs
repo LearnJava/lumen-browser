@@ -45,10 +45,10 @@ fn winit_session_display_list_contains_page_commands() {
     assert!(dump.contains("FillRect"), "expected a fill command in the dump:\n{dump}");
 }
 
-/// A fake "live window" answering `LayoutSnapshot`/`NetworkLog` from a
-/// background thread, the same pattern `lumen-bidi-server`'s
-/// `fake_live_session` uses for BiDi-relevant commands — here for the two
-/// DEVX-14 wired MCP-relevant ones.
+/// A fake "live window" answering `LayoutSnapshot`/`NetworkLog`/`DisplayList`/
+/// `DisplayListScoped` from a background thread, the same pattern
+/// `lumen-bidi-server`'s `fake_live_session` uses for BiDi-relevant commands —
+/// here for the DEVX-14/S2b wired MCP-relevant ones.
 fn fake_live_session(boxes: Vec<BoxModel>, entries: Vec<NetworkEntry>) -> LiveWindowSession {
     let (tx, rx) = std::sync::mpsc::channel::<lumen_driver::AutomationRequest>();
     std::thread::spawn(move || {
@@ -56,6 +56,28 @@ fn fake_live_session(boxes: Vec<BoxModel>, entries: Vec<NetworkEntry>) -> LiveWi
             let reply = match cmd {
                 AutomationCommand::LayoutSnapshot => AutomationReply::LayoutSnapshot(boxes.clone()),
                 AutomationCommand::NetworkLog => AutomationReply::NetworkLog(entries.clone()),
+                AutomationCommand::DisplayList => AutomationReply::DisplayList("whole-page dump".into()),
+                AutomationCommand::DisplayListScoped { selector } => {
+                    AutomationReply::DisplayList(format!("scoped [{selector}] dump"))
+                }
+                // MCP-TOTAL-S2c: echo the selectors back so the round-trip test
+                // can see they reached the arm.
+                AutomationCommand::LayoutSnapshotScoped { selector } => {
+                    AutomationReply::LayoutSnapshot(vec![BoxModel {
+                        node_id: 7,
+                        tag_name: format!("scoped [{selector}]"),
+                        border_box: lumen_core::geom::Rect::ZERO,
+                        margin_box: lumen_core::geom::Rect::ZERO,
+                    }])
+                }
+                AutomationCommand::QueryScoped { root_selector, selector } => {
+                    AutomationReply::Query(vec![lumen_driver::NodeRef {
+                        node_id: 9,
+                        tag_name: format!("a within [{root_selector}]"),
+                        text_content: format!("matched [{selector}]"),
+                        bounding_rect: lumen_core::geom::Rect::ZERO,
+                    }])
+                }
                 _ => AutomationReply::Error("unsupported in fake_live_session".into()),
             };
             let _ = reply_tx.send(reply);
@@ -91,4 +113,56 @@ fn live_window_network_log_round_trips_through_automation_channel() {
     assert_eq!(got.len(), 1);
     assert_eq!(got[0].url, "https://example.com/");
     assert_eq!(got[0].status, 200);
+}
+
+/// MCP-TOTAL-S2b: both display-list reads round-trip through the automation
+/// channel — the whole-page dump verbatim, the scoped one carrying the
+/// selector through to the arm.
+#[test]
+fn live_window_display_list_round_trips_through_automation_channel() {
+    let session = fake_live_session(Vec::new(), Vec::new());
+    assert_eq!(session.display_list().expect("display_list failed"), "whole-page dump");
+    assert_eq!(
+        session.display_list_scoped("#b").expect("display_list_scoped failed"),
+        "scoped [#b] dump"
+    );
+}
+
+/// MCP-TOTAL-S2c: the scoped layout snapshot and the subtree-scoped query
+/// round-trip through the automation channel, carrying the selectors through
+/// to the arm.
+#[test]
+fn live_window_scoped_layout_and_query_round_trip_through_automation_channel() {
+    let session = fake_live_session(Vec::new(), Vec::new());
+    let boxes = session.layout_snapshot_scoped("#box").expect("layout_snapshot_scoped failed");
+    assert_eq!(boxes.len(), 1);
+    assert_eq!(boxes[0].tag_name, "scoped [#box]");
+    let nodes = session.query_scoped("#box", "a").expect("query_scoped failed");
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].tag_name, "a within [#box]");
+    assert_eq!(nodes[0].text_content, "matched [a]");
+}
+
+/// MCP-TOTAL-S2a: the six remaining silent x-surface stubs (`Ok(пусто)`/
+/// `Ok(None)`) answer an honest `Err` instead. The receiver half is dropped,
+/// so a stub that still tried an automation round-trip would fail on `send` —
+/// the only `Err` these methods can return is their own. (S2c un-stubbed
+/// `layout_snapshot_scoped`/`query_scoped`, S2b `display_list*`.)
+#[test]
+fn live_window_x_surface_stubs_are_honest_errors() {
+    let (tx, rx) = std::sync::mpsc::channel::<lumen_driver::AutomationRequest>();
+    drop(rx);
+    let session = LiveWindowSession::new(AutomationHandle::new(tx));
+
+    let check = |r: lumen_core::error::Result<()>| {
+        let msg = r.expect_err("stub must answer Err").to_string();
+        assert!(msg.contains("не реализовано для LiveWindowSession"), "wrong stub error: {msg}");
+    };
+    check(session.screenshot_scoped("#a").map(drop));
+    check(session.computed_style("#a").map(drop));
+    check(session.computed_style_snapshot("#a").map(drop));
+    check(session.layout_box_by_selector("#a").map(drop));
+    check(session.all_layout_boxes_by_selector("#a").map(drop));
+    check(session.explain_element("#a").map(drop));
+    check(session.explain_page().map(drop));
 }

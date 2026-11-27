@@ -462,6 +462,42 @@ fn eval_returns_json_value() {
 
 #[test]
 #[cfg(feature = "v8")]
+fn eval_await_promise_settles_on_microtasks() {
+    // MCP-TOTAL-S7f: общий метод трейта — приём «промис → результат», ранее
+    // живший только в BiDi.
+    use crate::AwaitedPromise;
+    let mut s = make_session("<html><body></body></html>");
+    assert_eq!(
+        s.eval_await_promise("Promise.resolve(41 + 1)").expect("await"),
+        AwaitedPromise::Fulfilled(Some("42".into()))
+    );
+    // Исполнен с `undefined` — JSON его не переносит.
+    assert_eq!(
+        s.eval_await_promise("Promise.resolve()").expect("await"),
+        AwaitedPromise::Fulfilled(None)
+    );
+    // Отклонение — Err с текстом причины.
+    let err = s
+        .eval_await_promise("Promise.reject(new Error('boom'))")
+        .expect_err("отклонённый промис — ошибка");
+    assert!(
+        err.to_string().contains("uncaught (in promise): boom"),
+        "unexpected: {err}"
+    );
+    // Синхронное исключение выражения — тоже ошибка с причиной.
+    let err = s
+        .eval_await_promise("(function(){ throw new Error('sync') })()")
+        .expect_err("sync throw — ошибка");
+    assert!(err.to_string().contains("sync"), "unexpected: {err}");
+    // Промис на макротаске не оседает на микротасках — Pending.
+    assert_eq!(
+        s.eval_await_promise("new Promise(function(){})").expect("await"),
+        AwaitedPromise::Pending
+    );
+}
+
+#[test]
+#[cfg(feature = "v8")]
 fn eval_without_navigate_errors() {
     let mut s = InProcessSession::new();
     let err = s.eval("1").expect_err("eval before navigate must fail");
@@ -673,6 +709,9 @@ fn live_window_only_trait_defaults_are_honest_errors() {
         ("pointer_up", s.pointer_up().is_err()),
         ("press_key", s.press_key("Escape", "Escape", true).is_err()),
         ("type_focused", s.type_focused("x").is_err()),
+        // MCP-TOTAL-S7d: release_actions и колесо — тоже только живого окна.
+        ("release_actions", s.release_actions().is_err()),
+        ("wheel", s.wheel(1.0, 2.0, 0.0, 120.0, 0).is_err()),
         ("get_cookies", s.get_cookies().is_err()),
         ("set_cookie", s.set_cookie(cookie).is_err()),
         ("delete_cookie", s.delete_cookie("example.test", "/", "n").is_err()),
@@ -686,6 +725,12 @@ fn live_window_only_trait_defaults_are_honest_errors() {
         ("remove_intercept", s.remove_intercept("id").is_err()),
         ("resolve_intercepted_request", s.resolve_intercepted_request("r", true).is_err()),
         ("poll_intercepted_requests", s.poll_intercepted_requests().is_err()),
+        ("user_prompt", s.user_prompt().is_err()),
+        ("handle_user_prompt", s.handle_user_prompt(true, None).is_err()),
+        // MCP-TOTAL-S7c: загрузки — тоже только живого окна.
+        ("list_downloads", s.list_downloads().is_err()),
+        ("start_download", s.start_download("file:///tmp/x.bin").is_err()),
+        ("cancel_download", s.cancel_download(1).is_err()),
     ]
     .into_iter()
     .collect();

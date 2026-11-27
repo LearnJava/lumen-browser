@@ -451,6 +451,34 @@ fn open_prompt_count(state: &BidiState) -> usize {
     state.open_prompt_count()
 }
 
+/// MCP-TOTAL-S7a: диалог живого окна доезжает до `handleUserPrompt` в тот же
+/// вызов, каким открыт (синхронизация стоит *до* разбора метода), ответ
+/// уходит в окно, «no such alert» больше не приходит.
+#[test]
+fn live_window_dialog_is_recorded_and_answered() {
+    let (live, log) = fake_live_session_with_dialog();
+    let mut state = BidiState::with_live_session(live, None);
+    let cid = new_session_ctx(&mut state);
+    // Подписка — второй dispatch, диалог открывается только на третьем.
+    dispatch(
+        r#"{"id":3,"method":"session.subscribe","params":{"events":["browsingContext.userPromptOpened"]}}"#,
+        &mut state,
+    );
+
+    let cmd = format!(
+        r#"{{"id":4,"method":"browsingContext.handleUserPrompt","params":{{"context":"{cid}","accept":true}}}}"#
+    );
+    let r = dispatch(&cmd, &mut state);
+    let all = r.frames.join(" ");
+    assert!(!all.contains("no such alert"), "got: {all}");
+    assert!(all.contains("userPromptOpened"), "got: {all}");
+    assert!(all.contains("\"type\":\"success\""), "got: {all}");
+    let seen: Vec<String> = log.try_iter().collect();
+    assert!(seen.iter().any(|c| c.contains("HandleUserPrompt")), "{seen:?}");
+    // Диалог отвечен — запись из состояния ушла.
+    assert_eq!(open_prompt_count(&state), 0);
+}
+
 // ── preload per-context ──
 
 #[test]
@@ -928,6 +956,72 @@ fn get_downloads_reflects_completed_state() {
     let v = parse(&r.frames[0]);
     let dl = &v.get("result").unwrap().get("downloads").unwrap().as_array().unwrap()[0];
     assert_eq!(dl.get("state").and_then(|x| x.as_str()), Some("completed"));
+}
+
+/// MCP-TOTAL-S7c: the live window's download manager feeds
+/// `browser.getDownloads` and the `browser.download*` events through the
+/// per-dispatch sync — a download started after `session.new` shows up on
+/// the next command, progress/state changes emit exactly one event each,
+/// and an unchanged manager emits nothing.
+#[test]
+fn sync_downloads_feeds_get_downloads_and_events() {
+    use std::sync::{Arc, Mutex};
+    use lumen_driver::{AutomationCommand, AutomationDownload, AutomationHandle, AutomationReply};
+
+    let entries = Arc::new(Mutex::new(Vec::<AutomationDownload>::new()));
+    let (tx, rx) = std::sync::mpsc::channel::<lumen_driver::AutomationRequest>();
+    let src = Arc::clone(&entries);
+    std::thread::spawn(move || {
+        for (cmd, reply_tx) in rx {
+            let reply = match cmd {
+                AutomationCommand::GetDownloads => AutomationReply::Downloads(src.lock().unwrap().clone()),
+                _ => AutomationReply::Ack,
+            };
+            let _ = reply_tx.send(reply);
+        }
+    });
+    let mut state = BidiState::with_live_session(LiveWindowSession::new(AutomationHandle::new(tx)), None);
+    dispatch(r#"{"id":1,"method":"session.new","params":{}}"#, &mut state);
+    dispatch(r#"{"id":2,"method":"session.subscribe","params":{"events":["browser"]}}"#, &mut state);
+
+    // The download starts after the session: the next dispatch sees it as
+    // new — `browser.downloadWillBegin` rides along, `getDownloads` lists it.
+    *entries.lock().unwrap() = vec![AutomationDownload {
+        id: 1,
+        url: "https://ex.com/file.zip".into(),
+        file_name: "file.zip".into(),
+        state: "in_progress".into(),
+        received_bytes: 100,
+        total_bytes: 200,
+        path: "C:/Downloads/file.zip".into(),
+    }];
+    let r = dispatch(r#"{"id":3,"method":"browser.getDownloads","params":{}}"#, &mut state);
+    assert_eq!(r.frames.len(), 2, "WillBegin + response, got: {:?}", r.frames);
+    assert!(r.frames[0].contains("browser.downloadWillBegin"), "{}", r.frames[0]);
+    let resp = parse(&r.frames[1]);
+    let downloads = resp.get("result").unwrap().get("downloads").unwrap().as_array().unwrap();
+    assert_eq!(downloads.len(), 1);
+    assert_eq!(downloads[0].get("downloadId").and_then(|x| x.as_str()), Some("1"));
+    assert_eq!(downloads[0].get("state").and_then(|x| x.as_str()), Some("inProgress"));
+    assert_eq!(downloads[0].get("receivedBytes").and_then(|x| x.as_number()), Some(100.0));
+
+    // Nothing changed — no events, just the response.
+    let r = dispatch(r#"{"id":4,"method":"browser.getDownloads","params":{}}"#, &mut state);
+    assert_eq!(r.frames.len(), 1, "unchanged sync emits no events: {:?}", r.frames);
+
+    // Completion reaches the next dispatch as `downloadItemCompleted`, and
+    // the state the client reads is `completed`.
+    let mut e = entries.lock().unwrap().first_mut().unwrap().clone();
+    e.state = "completed".into();
+    e.received_bytes = 200;
+    entries.lock().unwrap()[0] = e;
+    let r = dispatch(r#"{"id":5,"method":"browser.getDownloads","params":{}}"#, &mut state);
+    assert_eq!(r.frames.len(), 2, "ItemCompleted + response, got: {:?}", r.frames);
+    assert!(r.frames[0].contains("browser.downloadItemCompleted"), "{}", r.frames[0]);
+    let resp = parse(&r.frames[1]);
+    let downloads = resp.get("result").unwrap().get("downloads").unwrap().as_array().unwrap();
+    assert_eq!(downloads[0].get("state").and_then(|x| x.as_str()), Some("completed"));
+    assert_eq!(downloads[0].get("receivedBytes").and_then(|x| x.as_number()), Some(200.0));
 }
 
 // ── cookie-change events from storage commands ──

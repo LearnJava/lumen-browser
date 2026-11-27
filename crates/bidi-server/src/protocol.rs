@@ -54,11 +54,13 @@
 //! Without a live window this layer stays a pure protocol state machine: one
 //! connection = one [`BidiState`].
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use lumen_core::json::{parse as parse_json, JsonValue};
-use lumen_driver::{BrowserSession, InterceptedRequest, LiveWindowSession, Target, WaitCondition};
+use lumen_driver::{
+    AwaitedPromise, BrowserSession, InterceptedRequest, LiveWindowSession, Target, WaitCondition,
+};
 
 /// Upper bound on how long `bc_navigate` blocks waiting for
 /// `document.readyState == "complete"` before giving up (P2-wpt S1). Generous
@@ -541,7 +543,6 @@ impl BidiState {
     ///
     /// `prompt_type`: `"alert"`, `"confirm"`, `"prompt"`, or `"beforeUnload"`.
     /// Returns `(prompt_id, event_frames)`.
-    #[allow(dead_code)]
     pub fn fire_user_prompt(
         &mut self,
         context_id: &str,
@@ -585,13 +586,132 @@ impl BidiState {
         self.user_prompts.len()
     }
 
+    /// MCP-TOTAL-S7a: sync the live window's open JS dialog into
+    /// `user_prompts` ahead of a method dispatch, so
+    /// `browsingContext.handleUserPrompt` sees a dialog opened after the last
+    /// command within the same round-trip (this transport has no event-push
+    /// path — the intercept drain below `dispatch` rides on responses the
+    /// same way).
+    ///
+    /// Returns `browsingContext.userPromptOpened` frames for the dialog
+    /// recorded by this call. A record whose dialog is gone (answered from
+    /// the real keyboard/UI) is dropped without a `userPromptClosed` event —
+    /// the shell does not report how a keyboard answer was decided, and a
+    /// fabricated `accepted` would lie to the subscriber.
+    fn sync_user_prompts(&mut self) -> Vec<String> {
+        // Without a live window there is no source of truth to sync against:
+        // records created by a direct `fire_user_prompt` (unit tests) stay.
+        let Some(live) = &mut self.live else {
+            return Vec::new();
+        };
+        let dialog = live.user_prompt().ok().flatten();
+        let Some(dialog) = dialog else {
+            self.user_prompts.clear();
+            return Vec::new();
+        };
+        // One window per process and one dialog at a time: the recorded
+        // prompt *is* this dialog (opened earlier, still open) — nothing new.
+        if self
+            .user_prompts
+            .iter()
+            .any(|p| p.type_ == dialog.kind && p.message == dialog.message)
+        {
+            return Vec::new();
+        }
+        let Some(ctx) = self.contexts.first() else {
+            return Vec::new();
+        };
+        let ctx_id = ctx.id.clone();
+        let (_, frames) =
+            self.fire_user_prompt(&ctx_id, &dialog.kind, &dialog.message, &dialog.default_value);
+        frames
+    }
+
+    /// MCP-TOTAL-S7c: sync the live window's download manager into
+    /// `download_items` ahead of a method dispatch, so `browser.getDownloads`
+    /// and the `browser.download*` events answer from the manager's real
+    /// state (this transport has no event-push path — the same pattern as
+    /// `sync_user_prompts` and the intercept drain below `dispatch`).
+    ///
+    /// Returns the subscribed `browser.downloadWillBegin` /
+    /// `browser.downloadItemUpdated` / `browser.downloadItemCompleted` /
+    /// `browser.downloadItemAborted` frames for what changed during this
+    /// sync. Records whose live entry disappeared (`clear_finished` in the
+    /// manager) are dropped without a fabricated closing event.
+    fn sync_downloads(&mut self) -> Vec<String> {
+        // Without a live window there is no source of truth to sync against:
+        // records created by a direct `begin_download` (unit tests) stay.
+        let Some(live) = &mut self.live else {
+            return Vec::new();
+        };
+        let Ok(entries) = live.list_downloads() else {
+            return Vec::new();
+        };
+        let live_ids: HashSet<u32> = entries.iter().map(|e| e.id).collect();
+        self.download_items
+            .retain(|_, item| item.id.parse::<u32>().map_or(true, |n| live_ids.contains(&n)));
+
+        let mut frames = Vec::new();
+        for e in entries {
+            let item_id = e.id.to_string();
+            let state = match e.state.as_str() {
+                "completed" => DownloadState::Completed,
+                "failed" | "cancelled" => DownloadState::Aborted,
+                _ => DownloadState::InProgress,
+            };
+            let (url, file_name) = match self.download_items.get_mut(&item_id) {
+                Some(item) => {
+                    if item.received_bytes == e.received_bytes
+                        && item.total_bytes == e.total_bytes
+                        && item.state == state
+                    {
+                        continue;
+                    }
+                    item.received_bytes = e.received_bytes;
+                    item.total_bytes = e.total_bytes;
+                    item.state = state;
+                    (item.url.clone(), item.file_name.clone())
+                }
+                None => {
+                    // New download: record it and announce the start (and its
+                    // already-settled state, when the manager raced us — a
+                    // small local file can finish between two dispatches).
+                    if self.is_subscribed("browser.downloadWillBegin") {
+                        frames.push(make_event(
+                            "browser.downloadWillBegin",
+                            download_event_params(&item_id, &e.url, &e.file_name, e.received_bytes, e.total_bytes, "inProgress"),
+                        ));
+                    }
+                    self.download_items.insert(item_id.clone(), DownloadItem {
+                        id: item_id.clone(),
+                        url: e.url.clone(),
+                        file_name: e.file_name.clone(),
+                        total_bytes: e.total_bytes,
+                        received_bytes: e.received_bytes,
+                        state,
+                    });
+                    if state == DownloadState::InProgress {
+                        continue;
+                    }
+                    (e.url.clone(), e.file_name.clone())
+                }
+            };
+            let (event, state_name) = download_change_event(state);
+            if self.is_subscribed(event) {
+                frames.push(make_event(
+                    event,
+                    download_event_params(&item_id, &url, &file_name, e.received_bytes, e.total_bytes, state_name),
+                ));
+            }
+        }
+        frames
+    }
+
     /// Number of cookies in the session (for testing).
     #[allow(dead_code)]
     pub fn cookie_count(&self) -> usize {
         self.cookies.len()
-    }
-
-    /// Number of active download items.
+    }    /// Number of active download items.
     #[allow(dead_code)]
     pub fn download_count(&self) -> usize {
         self.download_items.len()
@@ -667,6 +787,15 @@ pub fn dispatch(message: &str, state: &mut BidiState) -> DispatchResult {
         return DispatchResult::single(make_error(Some(id), "invalid argument", "missing method"));
     };
 
+    // MCP-TOTAL-S7a: record a live-window dialog opened since the last
+    // command *before* the method runs, so `browsingContext.handleUserPrompt`
+    // as the very next command after the dialog opened still finds it.
+    let prompt_frames = state.sync_user_prompts();
+    // MCP-TOTAL-S7c: the same for the live window's download manager —
+    // `browser.getDownloads` as the very next command after a download
+    // started still sees it, and `browser.download*` events ride along.
+    let download_frames = state.sync_downloads();
+
     let mut result = match method {
         "session.status" => DispatchResult::single(make_success(id, session_status_result(state))),
         "session.new" => session_new(id, &params, state),
@@ -678,6 +807,8 @@ pub fn dispatch(message: &str, state: &mut BidiState) -> DispatchResult {
         "browsingContext.create" => bc_create(id, &params, state),
         "browsingContext.close" => bc_close(id, &params, state),
         "browsingContext.navigate" => bc_navigate(id, &params, state),
+        "browsingContext.reload" => bc_reload(id, &params, state),
+        "browsingContext.traverseHistory" => bc_traverse_history(id, &params, state),
         "browsingContext.activate" => bc_activate(id, &params, state),
         "browsingContext.getTree" => {
             DispatchResult::single(make_success(id, browsing_context_tree(state)))
@@ -753,6 +884,12 @@ pub fn dispatch(message: &str, state: &mut BidiState) -> DispatchResult {
             let frame = make_event(event, before_request_sent_params(state, req));
             result.frames.insert(0, frame);
         }
+    }
+    for frame in prompt_frames {
+        result.frames.insert(0, frame);
+    }
+    for frame in download_frames {
+        result.frames.insert(0, frame);
     }
     result
 }
@@ -1035,6 +1172,118 @@ fn unix_timestamp_ms() -> f64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64() * 1000.0).unwrap_or(0.0)
 }
 
+/// MCP-TOTAL-S7e: the common tail of the live-window navigation commands
+/// (`browsingContext.reload`, `browsingContext.traverseHistory`) — update the
+/// context's URL, answer `{navigation, url}` (the shape of
+/// `browsingContext.NavigateResult`, which `ReloadResult` reuses) and emit
+/// `browsingContext.load` to subscribers, exactly as `bc_navigate` does.
+fn bc_navigated_result(id: i64, cid: &str, state: &mut BidiState, url: String) -> DispatchResult {
+    let navigation_id = state.next_id(0x4a71);
+    if let Some(ctx) = state.contexts.iter_mut().find(|c| c.id == cid) {
+        ctx.url = url.clone();
+    }
+    let mut result = BTreeMap::new();
+    result.insert("navigation".into(), JsonValue::String(navigation_id.clone()));
+    result.insert("url".into(), JsonValue::String(url.clone()));
+    let mut frames = vec![make_success(id, JsonValue::Object(result))];
+    if state.is_subscribed("browsingContext.load") {
+        let mut ev = BTreeMap::new();
+        ev.insert("context".into(), JsonValue::String(cid.to_owned()));
+        ev.insert("navigation".into(), JsonValue::String(navigation_id));
+        ev.insert("url".into(), JsonValue::String(url));
+        ev.insert("timestamp".into(), JsonValue::Number(unix_timestamp_ms()));
+        frames.push(make_event("browsingContext.load", JsonValue::Object(ev)));
+    }
+    DispatchResult { frames, close: false }
+}
+
+/// `browsingContext.reload` (BiDi §7.3.3.10, MCP-TOTAL-S7e) — перезагрузка
+/// контекста. Валидирует `context`; исполнение — только в живом окне
+/// (`ReloadResult` = `NavigateResult`, ожидание загрузки — как в navigate).
+fn bc_reload(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
+    let Some(cid) = params.get("context").and_then(|v| v.as_str()).map(str::to_owned) else {
+        return DispatchResult::single(make_error(Some(id), "invalid argument", "missing context"));
+    };
+    let ignore_cache = params.get("ignoreCache").and_then(|v| v.as_bool()).unwrap_or(false);
+    if state.find(&cid).is_none() {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "no such frame",
+            &format!("no such context: {cid}"),
+        ));
+    }
+    let Some(live) = &mut state.live else {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "unknown error",
+            "reload requires a live window (--bidi-port with an open window)",
+        ));
+    };
+    let url = match live.reload(ignore_cache) {
+        Ok(snap) => snap.url,
+        Err(e) => {
+            return DispatchResult::single(make_error(Some(id), "unknown error", &format!("reload: {e}")))
+        }
+    };
+    if let Err(e) = live.wait(WaitCondition::DocumentReady, NAVIGATE_LOAD_TIMEOUT_MS) {
+        return DispatchResult::single(make_error(Some(id), "unknown error", &format!("reload: {e}")));
+    }
+    bc_navigated_result(id, &cid, state, url)
+}
+
+/// `browsingContext.traverseHistory` (BiDi §7.3.3.15, MCP-TOTAL-S7e) — шаг по
+/// истории сессии: минус — назад, плюс — вперёд, `0` — перезагрузка текущей
+/// записи (HTML LS §7.8.3). Результат — `EmptyResult`; выход за границы
+/// истории живого окна — `no such history entry`.
+fn bc_traverse_history(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
+    let Some(cid) = params.get("context").and_then(|v| v.as_str()).map(str::to_owned) else {
+        return DispatchResult::single(make_error(Some(id), "invalid argument", "missing context"));
+    };
+    let Some(delta) = params.get("delta").and_then(|v| v.as_number()).map(|n| n as i64) else {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "invalid argument",
+            "missing or non-integer delta",
+        ));
+    };
+    let Ok(delta) = i32::try_from(delta) else {
+        return DispatchResult::single(make_error(Some(id), "invalid argument", "delta out of range"));
+    };
+    if state.find(&cid).is_none() {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "no such frame",
+            &format!("no such context: {cid}"),
+        ));
+    }
+    let Some(live) = &mut state.live else {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "unknown error",
+            "traverseHistory requires a live window (--bidi-port with an open window)",
+        ));
+    };
+    let url = match live.traverse_history(delta) {
+        Ok(snap) => snap.url,
+        Err(e) => {
+            return DispatchResult::single(make_error(
+                Some(id),
+                "no such history entry",
+                &format!("traverseHistory: {e}"),
+            ))
+        }
+    };
+    if let Err(e) = live.wait(WaitCondition::DocumentReady, NAVIGATE_LOAD_TIMEOUT_MS) {
+        return DispatchResult::single(make_error(Some(id), "unknown error", &format!("traverseHistory: {e}")));
+    }
+    if delta == 0 {
+        // Reload of the current entry: same result shape as `reload`.
+        bc_navigated_result(id, &cid, state, url)
+    } else {
+        DispatchResult::single(make_success(id, empty_obj()))
+    }
+}
+
 /// `browsingContext.activate` — пометить контекст активным (ACK).
 ///
 /// Валидирует существование контекста; реальной активации окна на этом слое
@@ -1243,10 +1492,15 @@ fn script_evaluate(id: i64, params: &JsonValue, state: &mut BidiState) -> Dispat
 
     let expression = params.get("expression").and_then(|v| v.as_str());
     let result = match (expression, &mut state.live) {
-        (Some(expr), Some(live)) if await_promise => match eval_await_promise(live, expr) {
-            Ok(rv) => rv,
+        // MCP-TOTAL-S7f: приём «промис → результат» поднят на уровень драйвера
+        // (`BrowserSession::eval_await_promise`), общий с MCP `eval`.
+        (Some(expr), Some(live)) if await_promise => match live.eval_await_promise(expr) {
+            Ok(AwaitedPromise::Fulfilled(Some(json))) => eval_result_to_remote_value(&json),
+            // Исполнен с `undefined` — JSON его не переносит.
+            Ok(AwaitedPromise::Fulfilled(None)) => undefined_remote_value(),
+            Ok(AwaitedPromise::Pending) => eval_result_to_remote_value("{}"),
             Err(e) => {
-                return DispatchResult::single(make_error(Some(id), "javascript error", &e));
+                return DispatchResult::single(make_error(Some(id), "javascript error", &e.to_string()));
             }
         },
         (Some(expr), Some(live)) => match live.eval(expr) {
@@ -1321,69 +1575,6 @@ fn undefined_remote_value() -> JsonValue {
     let mut obj = BTreeMap::new();
     obj.insert("type".into(), JsonValue::String("undefined".into()));
     JsonValue::Object(obj)
-}
-
-/// Await a promise-valued expression for BiDi `script.evaluate` with
-/// `awaitPromise:true` (BiDi §10.2.4).
-///
-/// `AutomationCommand::Eval` is synchronous and snapshots the expression's
-/// value before the microtask queue drains, so a promise-valued expression
-/// evaluates to the unsettled promise object. V8, however, auto-runs a
-/// microtask checkpoint at the end of each eval, so this uses two eval
-/// round-trips:
-///
-/// 1. wrap the expression in `Promise.resolve(...)` and attach a settle
-///    handler that records `{state, value|error}` on a well-known global. The
-///    checkpoint runs the handler before round 1 returns.
-/// 2. read that global back and translate it into a `RemoteValue` (fulfilled)
-///    or an `Err` message (rejected → the caller emits a `javascript error`).
-///
-/// Only microtask-settleable promises resolve this way; a promise still pending
-/// on a macrotask/IO reports `state:"pending"` and falls back to the promise
-/// object (`{type:"string", value:"{}"}`), matching the non-awaited path. This
-/// limitation is acceptable because the awaited-value use cases (`Promise.resolve`,
-/// sync `async` functions) settle purely on microtasks.
-fn eval_await_promise(live: &mut LiveWindowSession, expr: &str) -> Result<JsonValue, String> {
-    // Round 1: evaluate the expression, record its settled outcome on a global.
-    let setup = format!(
-        "(function(){{\
-             globalThis.__lumen_bidi_await = {{ state: \"pending\" }};\
-             try {{\
-                 Promise.resolve(({expr})).then(\
-                     function(v){{ globalThis.__lumen_bidi_await = {{ state: \"fulfilled\", value: v }}; }},\
-                     function(e){{ globalThis.__lumen_bidi_await = {{ state: \"rejected\", error: (e && e.message !== undefined) ? String(e.message) : String(e) }}; }}\
-                 );\
-             }} catch (e) {{\
-                 globalThis.__lumen_bidi_await = {{ state: \"rejected\", error: (e && e.message !== undefined) ? String(e.message) : String(e) }};\
-             }}\
-             return \"pending\";\
-         }})()"
-    );
-    live.eval(&setup).map_err(|e| format!("eval: {e}"))?;
-
-    // Round 2: read the outcome the microtask checkpoint left behind.
-    let read = "(function(){ var r = globalThis.__lumen_bidi_await; \
-         try { delete globalThis.__lumen_bidi_await; } catch (e) {} return r; })()";
-    let raw = live.eval(read).map_err(|e| format!("eval: {e}"))?;
-
-    match parse_json(&raw) {
-        Ok(JsonValue::Object(map)) => match map.get("state").and_then(|v| v.as_str()) {
-            Some("fulfilled") => Ok(match map.get("value") {
-                Some(v) => remote_value_from_json(v),
-                // A missing `value` means the promise fulfilled with `undefined`
-                // (JSON serialization drops undefined-valued keys).
-                None => undefined_remote_value(),
-            }),
-            Some("rejected") => Err(format!(
-                "uncaught (in promise): {}",
-                map.get("error").and_then(|v| v.as_str()).unwrap_or("")
-            )),
-            // Still pending (needs a macrotask/IO) — fall back to the promise
-            // object, same as the non-awaited path.
-            _ => Ok(eval_result_to_remote_value("{}")),
-        },
-        _ => Ok(eval_result_to_remote_value(&raw)),
-    }
 }
 
 /// `script.callFunction` — вызвать функцию в browsing context (BiDi §10.2.5).
@@ -2066,6 +2257,22 @@ fn bc_handle_user_prompt(
         .unwrap_or("")
         .to_owned();
 
+    // MCP-TOTAL-S7a: the answer reaches the live window — without this the
+    // protocol state moves but the page's JS thread stays blocked on the
+    // dialog. Only a `prompt` carries replacement text.
+    if let Some(live) = &mut state.live
+        && let Err(e) = live.handle_user_prompt(
+            accepted,
+            if prompt.type_ == "prompt" { Some(user_text.as_str()) } else { None },
+        )
+    {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "unknown error",
+            &format!("handle user prompt: {e}"),
+        ));
+    }
+
     let mut frames = vec![make_success(id, empty_obj())];
     if state.is_subscribed("browsingContext.userPromptClosed") {
         let mut ev = BTreeMap::new();
@@ -2384,6 +2591,16 @@ fn cookie_event_params(cookie: &BidiCookie) -> JsonValue {
     JsonValue::Object(params)
 }
 
+/// Event name and BiDi state string for a download's new state — the update
+/// event while it runs, the terminal ones when it settles (MCP-TOTAL-S7c).
+fn download_change_event(state: DownloadState) -> (&'static str, &'static str) {
+    match state {
+        DownloadState::Completed => ("browser.downloadItemCompleted", "completed"),
+        DownloadState::Aborted => ("browser.downloadItemAborted", "aborted"),
+        DownloadState::InProgress => ("browser.downloadItemUpdated", "inProgress"),
+    }
+}
+
 /// Build `browser.download*` event params.
 fn download_event_params(
     item_id: &str,
@@ -2499,7 +2716,7 @@ fn char_dom_code(ch: char) -> String {
     }
 }
 
-/// Replay the pointer and key-input subset of a BiDi `input.performActions`
+/// Replay the pointer, key and wheel subsets of a BiDi `input.performActions`
 /// action chain against a live window (SDC-2 MVP).
 ///
 /// Supported: a `"pointer"` source's `pointerMove {x,y}` moves the cursor
@@ -2508,9 +2725,13 @@ fn char_dom_code(ch: char) -> String {
 /// codes (`\u{E00C}` Escape, `\u{E004}` Tab, ...) become `keydown`/`keyup` with
 /// the proper `key`/`code`, ordinary characters are typed: at the last pointer
 /// position when a pointer action preceded them (click-then-type), otherwise
-/// into the already focused element, without a click. NOT modeled: pauses,
-/// multi-touch/wheel sources, drag gestures, or `pointerUp`-gated release
-/// semantics - full W3C Actions fidelity is future work.
+/// into the already focused element, without a click; a `"wheel"` source's
+/// `scroll {x, y, deltaX, deltaY}` (MCP-TOTAL-S7d) is a wheel notch at the
+/// point — trusted `wheel` event, then the real scroll routing, with the
+/// modifiers a preceding key source still holds (Ctrl+wheel zooms).
+/// NOT modeled: pauses, multi-touch sources, drag gestures, or
+/// `pointerUp`-gated release semantics - full W3C Actions fidelity is future
+/// work.
 fn replay_input_actions(live: &mut LiveWindowSession, sources: &[JsonValue]) {
     let mut last_point: Option<Target> = None;
     // Modifier mask mirrored locally (bits match `AutomationCommand::Key`'s
@@ -2607,6 +2828,21 @@ fn replay_input_actions(live: &mut LiveWindowSession, sources: &[JsonValue]) {
                 }
                 flush_typed_text(live, last_point.as_ref(), &mut text);
             }
+            // MCP-TOTAL-S7d: wheel scroll actions — a notch at (x, y); the
+            // modifiers a preceding key source holds ride along (Ctrl+wheel
+            // zooms, Shift+wheel scrolls horizontally).
+            "wheel" => {
+                for action in actions {
+                    if action.get("type").and_then(|v| v.as_str()) != Some("scroll") {
+                        continue;
+                    }
+                    let x = action.get("x").and_then(|v| v.as_number()).unwrap_or(0.0) as f32;
+                    let y = action.get("y").and_then(|v| v.as_number()).unwrap_or(0.0) as f32;
+                    let delta_x = action.get("deltaX").and_then(|v| v.as_number()).unwrap_or(0.0) as f32;
+                    let delta_y = action.get("deltaY").and_then(|v| v.as_number()).unwrap_or(0.0) as f32;
+                    let _ = live.wheel(x, y, delta_x, delta_y, held_mods);
+                }
+            }
             _ => {}
         }
     }
@@ -2628,8 +2864,12 @@ fn flush_typed_text(live: &mut LiveWindowSession, point: Option<&Target>, text: 
 
 /// `input.releaseActions` — release all active input sources (BiDi §15.7.4).
 ///
-/// Phase 1 stub: validates context, returns ACK.
-fn input_release_actions(id: i64, params: &JsonValue, state: &BidiState) -> DispatchResult {
+/// MCP-TOTAL-S7d: with a live window the release is real — `pointerup`/
+/// `mouseup` for a button held by a previous `pointerDown`, `keyup`s for
+/// modifiers held by key actions. Without a live window the
+/// validate-then-ACK stub stays: in-memory state holds no input state to
+/// release.
+fn input_release_actions(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
     if let Some(ctx_id) = params.get("context").and_then(|v| v.as_str())
         && state.find(ctx_id).is_none()
     {
@@ -2637,6 +2877,15 @@ fn input_release_actions(id: i64, params: &JsonValue, state: &BidiState) -> Disp
             Some(id),
             "no such frame",
             &format!("unknown browsing context: {ctx_id}"),
+        ));
+    }
+    if let Some(live) = &state.live
+        && let Err(e) = live.release_actions()
+    {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "unknown error",
+            &format!("releaseActions: {e}"),
         ));
     }
     DispatchResult::single(make_success(id, empty_obj()))
@@ -2644,8 +2893,14 @@ fn input_release_actions(id: i64, params: &JsonValue, state: &BidiState) -> Disp
 
 /// `input.setFiles` — set files on a file-input element (BiDi §15.7.2).
 ///
-/// Phase 1 stub: validates context, returns ACK.
-fn input_set_files(id: i64, params: &JsonValue, state: &BidiState) -> DispatchResult {
+/// MCP-TOTAL-S7b: with a live window the element is addressed by
+/// `element.sharedId` (decimal node id) or `element.locator`
+/// (`{type: "css", value}` — the protocol has no element store to mint
+/// `sharedId`s, so a non-decimal one is `no such element`), `files` are
+/// absolute filesystem paths validated and delivered by the shell arm the
+/// same way a real OS pick delivers them. Without a live window the
+/// validate-then-ACK stub stays: in-memory state has no page to fill.
+fn input_set_files(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
     if let Some(ctx_id) = params.get("context").and_then(|v| v.as_str())
         && state.find(ctx_id).is_none()
     {
@@ -2655,7 +2910,47 @@ fn input_set_files(id: i64, params: &JsonValue, state: &BidiState) -> DispatchRe
             &format!("unknown browsing context: {ctx_id}"),
         ));
     }
-    DispatchResult::single(make_success(id, empty_obj()))
+    let Some(live) = &mut state.live else {
+        return DispatchResult::single(make_success(id, empty_obj()));
+    };
+    let bad = |msg: String| DispatchResult::single(make_error(Some(id), "invalid argument", &msg));
+    let element = params.get("element").unwrap_or(&JsonValue::Null);
+    let target = if let Some(shared) = element.get("sharedId").and_then(|v| v.as_str()) {
+        match shared.parse::<u32>() {
+            Ok(node_id) => Target::NodeId(node_id),
+            Err(_) => {
+                return DispatchResult::single(make_error(
+                    Some(id),
+                    "no such element",
+                    &format!(
+                        "setFiles: unknown sharedId {shared:?} — the protocol does not mint element ids; pass a decimal node id or element.locator {{type: \"css\", value}}"
+                    ),
+                ));
+            }
+        }
+    } else if let Some(value) =
+        element.get("locator").and_then(|l| l.get("value")).and_then(|v| v.as_str())
+    {
+        Target::Selector(value.to_owned())
+    } else {
+        return bad("setFiles: element.sharedId or element.locator is required".to_owned());
+    };
+    let Some(files) = params.get("files").and_then(|v| v.as_array()) else {
+        return bad("setFiles: files must be an array of paths".to_owned());
+    };
+    let paths: Vec<String> =
+        files.iter().map(|f| f.as_str().unwrap_or_default().to_owned()).collect();
+    if paths.iter().any(String::is_empty) {
+        return bad("setFiles: files must be an array of strings".to_owned());
+    }
+    match live.set_files(&target, &paths) {
+        Ok(()) => DispatchResult::single(make_success(id, empty_obj())),
+        Err(e) => DispatchResult::single(make_error(
+            Some(id),
+            "unknown error",
+            &format!("setFiles: {e}"),
+        )),
+    }
 }
 
 #[cfg(test)]

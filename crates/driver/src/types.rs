@@ -533,6 +533,24 @@ pub enum AutomationCommand {
     Navigate(String),
     /// Open a new tab (it becomes active) and navigate it to a URL.
     NewTab(String),
+    /// Reload the active tab (MCP-TOTAL-S7e, BiDi `browsingContext.reload`):
+    /// the current source is fetched and rendered again. Reply:
+    /// [`AutomationReply::Navigation`].
+    Reload {
+        /// Requested cache bypass (BiDi `ignoreCache`). The current reload
+        /// pipeline has no cache-bypass mode — the flag is accepted but not
+        /// honored (shortcut: upgrade when the engine grows a hard-reload path).
+        ignore_cache: bool,
+    },
+    /// Traverse the session history by `delta` entries (MCP-TOTAL-S7e, BiDi
+    /// `browsingContext.traverseHistory`): negative — back, positive —
+    /// forward, `0` — reload of the current entry (HTML LS §7.8.3). A delta
+    /// pointing outside the history is an `Error` reply. Reply:
+    /// [`AutomationReply::Navigation`].
+    TraverseHistory {
+        /// Signed history step count.
+        delta: i32,
+    },
     /// List the tabs of the live window (COMPAT-CORPUS-3-TABS). Reply:
     /// [`AutomationReply::Tabs`].
     ListTabs,
@@ -592,6 +610,31 @@ pub enum AutomationCommand {
     /// Type characters into the currently focused element without clicking
     /// first (BUG-1194; `Type` always clicks its target).
     TypeFocused(String),
+    /// Release everything automation holds pressed (MCP-TOTAL-S7d, BiDi
+    /// `input.releaseActions`): the left button of [`Self::PointerDown`]
+    /// (the page gets `pointerup`/`mouseup`, `:active` clears) and every
+    /// modifier held by [`Self::Key`] (each gets its `keyup`). Idempotent.
+    /// Reply: `Ack`.
+    ReleaseActions,
+    /// A wheel notch at viewport CSS-pixel `(x, y)` (MCP-TOTAL-S7d): the page
+    /// gets a trusted `wheel` event with `delta_x`/`delta_y` (px, positive =
+    /// right/down), then the scroll follows the same routing as a real
+    /// `MouseWheel` — frame, overflow container, smooth page scroll;
+    /// Ctrl+wheel zooms, Shift+wheel scrolls horizontally. `modifiers` is the
+    /// `Key` bit-mask (bit0=ctrl, bit1=shift, bit2=alt, bit3=meta). Reply:
+    /// `Ack`.
+    Wheel {
+        /// Viewport X, CSS px.
+        x: f32,
+        /// Viewport Y, CSS px.
+        y: f32,
+        /// Wheel delta X, px (positive = right).
+        delta_x: f32,
+        /// Wheel delta Y, px (positive = down).
+        delta_y: f32,
+        /// Held modifiers: ctrl 1, shift 2, alt 4, meta 8.
+        modifiers: u8,
+    },
     /// Evaluate JavaScript in the active tab.
     ///
     /// The second field is how long (ms) the live window waits for its engine
@@ -614,6 +657,35 @@ pub enum AutomationCommand {
     /// Network request log since the last `Navigate` (DEVX-14, wires
     /// `resource://network` to the live window).
     NetworkLog,
+    /// Text dump of the whole page's display list (MCP-TOTAL-S2b, wires
+    /// `resource://x-display-list` to the live window). Reply:
+    /// [`AutomationReply::DisplayList`].
+    DisplayList,
+    /// Display-list commands attributed to `selector`'s subtree only
+    /// (MCP-TOTAL-S2b, wires `x-scope-display-list` to the live window).
+    /// A selector matching nothing is an [`AutomationReply::Error`].
+    DisplayListScoped {
+        /// CSS selector of the subtree root.
+        selector: String,
+    },
+    /// Box-model snapshot of `selector`'s subtree only (MCP-TOTAL-S2c, wires
+    /// `x-scope-layout` to the live window). A selector matching nothing is an
+    /// empty snapshot — the same shape the headless sessions answer.
+    /// Reply: [`AutomationReply::LayoutSnapshot`].
+    LayoutSnapshotScoped {
+        /// CSS selector of the subtree root.
+        selector: String,
+    },
+    /// DOM query restricted to `root_selector`'s subtree (MCP-TOTAL-S2c, wires
+    /// `x-scope-query` to the live window) — Element.querySelectorAll scoping.
+    /// Empty when either selector matches nothing.
+    /// Reply: [`AutomationReply::Query`].
+    QueryScoped {
+        /// CSS selector for the subtree root.
+        root_selector: String,
+        /// CSS selector to match within the subtree.
+        selector: String,
+    },
     /// Enable/disable offline-network simulation (BUG-295, WebDriver BiDi
     /// `network.setOfflineStatus`) on the live window.
     SetOffline(bool),
@@ -697,6 +769,101 @@ pub enum AutomationCommand {
     },
     /// Drop a preload script by id (`script.removePreloadScript`). Reply: `Ack`.
     RemovePreloadScript(String),
+    /// Read the open JS dialog of the live window (`alert`/`confirm`/`prompt`),
+    /// if any (MCP-TOTAL-S7a, BiDi `browsingContext.userPromptOpened`). The
+    /// dialog blocks the JS thread, so this never round-trips through it —
+    /// the shell answers from its own UI state. Shell-internal dialogs
+    /// (close-warning) are not page dialogs and are not reported. Reply:
+    /// [`AutomationReply::UserPrompt`].
+    UserPrompt,
+    /// Answer the open JS dialog of the live window (MCP-TOTAL-S7a, BiDi
+    /// `browsingContext.handleUserPrompt`): `accept` = OK / cancel, `user_text`
+    /// replaces the typed `prompt` value. Errors when no dialog is open.
+    /// Reply: `Ack`.
+    HandleUserPrompt {
+        /// `true` = OK («Уйти» for `beforeunload`), `false` = cancel.
+        accept: bool,
+        /// Replacement text for an open `prompt` dialog.
+        user_text: Option<String>,
+    },
+    /// Fill a `<input type="file">` resolved from `target` with `paths`
+    /// without the OS dialog (MCP-TOTAL-S7b, BiDi `input.setFiles`): every
+    /// path must exist — each is registered as an opaque grant token (the
+    /// page never sees paths, BUG-371) and the delivery with its
+    /// `input`/`change` events goes the same way as after a real pick.
+    /// Reply: `Ack`.
+    SetFiles {
+        /// The file input to fill (`Target::Point` has no element — error).
+        target: Target,
+        /// Absolute filesystem paths of the files to deliver.
+        paths: Vec<String>,
+    },
+    /// Every entry of the live window's download manager (MCP-TOTAL-S7c,
+    /// BiDi `browser.getDownloads`). Reply:
+    /// [`AutomationReply::Downloads`].
+    GetDownloads,
+    /// Start downloading `url` into the OS Downloads directory — the same
+    /// path a user-initiated download takes (MCP-TOTAL-S7c). The entry is
+    /// visible to [`AutomationCommand::GetDownloads`] immediately.
+    /// Reply: [`AutomationReply::DownloadId`].
+    StartDownload {
+        /// URL to fetch.
+        url: String,
+    },
+    /// Request cancellation of download `id` (MCP-TOTAL-S7c). Errors when no
+    /// entry has that id. Reply: `Ack`.
+    CancelDownload {
+        /// Download id from `list_downloads` / `start_download`.
+        id: u32,
+    },
+}
+
+/// One entry of the live window's download manager, as
+/// [`AutomationCommand::GetDownloads`] reports it (MCP-TOTAL-S7c, BiDi
+/// `browser.getDownloads`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutomationDownload {
+    /// Opaque download id, stable within the session — the argument of
+    /// [`AutomationCommand::CancelDownload`].
+    pub id: u32,
+    /// Source URL of the download.
+    pub url: String,
+    /// Destination file name (derived from the URL or the suggested name).
+    pub file_name: String,
+    /// Lifecycle state: `pending`, `in_progress`, `completed`, `failed` or
+    /// `cancelled`.
+    pub state: String,
+    /// Bytes written to disk so far.
+    pub received_bytes: u64,
+    /// Expected total size in bytes; `0` while unknown.
+    pub total_bytes: u64,
+    /// Absolute path on disk the file is (or will be) written to.
+    pub path: String,
+}
+
+/// Where a navigation command (`Reload`, `TraverseHistory`) left the active
+/// tab (MCP-TOTAL-S7e): the current address and the can-go-back/forward
+/// flags of its session history.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NavigationSnapshot {
+    /// Address of the current page (display URL), `""` when nothing is loaded.
+    pub url: String,
+    /// `true` when a session-history entry exists behind the current one.
+    pub can_go_back: bool,
+    /// `true` when a session-history entry exists ahead of the current one.
+    pub can_go_forward: bool,
+}
+
+/// The open JS dialog of the live window, as [`AutomationCommand::UserPrompt`]
+/// reports it (MCP-TOTAL-S7a).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutomationDialog {
+    /// Dialog kind: `alert`, `confirm`, `prompt` or `beforeUnload`.
+    pub kind: String,
+    /// Message text the page passed to the dialog call.
+    pub message: String,
+    /// Initial value of the `prompt` input field.
+    pub default_value: String,
 }
 
 /// A cookie as exchanged with the live window (WebDriver BiDi `storage.Cookie`,
@@ -742,6 +909,9 @@ pub enum AutomationReply {
     LayoutSnapshot(Vec<BoxModel>),
     /// `NetworkLog` result: network request log (DEVX-14).
     NetworkLog(Vec<NetworkEntry>),
+    /// `DisplayList`/`DisplayListScoped` result: the display-list text dump
+    /// (MCP-TOTAL-S2b).
+    DisplayList(String),
     /// `ResolveIntercept` result: whether `request_id` matched a pending pause.
     InterceptResolved(bool),
     /// `PollIntercepts` result: requests newly paused since the last poll.
@@ -750,4 +920,16 @@ pub enum AutomationReply {
     Tabs(Vec<TabInfo>),
     /// `GetCookies` result: the live jar's non-expired cookies (DEVX-20).
     Cookies(Vec<AutomationCookie>),
+    /// `UserPrompt` result: the live window's open JS dialog, `None` when no
+    /// dialog is open (MCP-TOTAL-S7a).
+    UserPrompt(Option<AutomationDialog>),
+    /// `GetDownloads` result: every entry of the live window's download
+    /// manager, oldest first (MCP-TOTAL-S7c).
+    Downloads(Vec<AutomationDownload>),
+    /// `StartDownload` result: the id of the new download entry
+    /// (MCP-TOTAL-S7c).
+    DownloadId(u32),
+    /// `Reload`/`TraverseHistory` result: the address and history flags of
+    /// the active tab after the navigation (MCP-TOTAL-S7e).
+    Navigation(NavigationSnapshot),
 }

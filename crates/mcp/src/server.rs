@@ -2,7 +2,7 @@
 
 use serde_json::{json, Value};
 
-use lumen_driver::BrowserSession;
+use lumen_driver::{AwaitedPromise, BrowserSession};
 use lumen_core::error::Result;
 
 use crate::protocol::{McpMessage, McpRequest, McpResource, McpResponse, McpTool};
@@ -35,7 +35,7 @@ pub struct McpServer<S: BrowserSession, T: Transport> {
 }
 
 /// Инструкция для ИИ-агента, отдаётся в `initialize` (MCP §Lifecycle, `instructions`).
-const SERVER_INSTRUCTIONS: &str = "Lumen is a browser you drive and inspect. Workflow: (1) `navigate` (current tab) or `new_tab` with a URL; (2) `wait` with condition document_ready, or network_idle for script-heavy pages — navigation returns before the page has finished loading; (3) read the page with `query` (CSS selector -> nodes with node_id, text, rect) or `eval` (JavaScript; the result is a string, so use JSON.stringify for structured data); (4) interact with `click` / `type` / `scroll`, then `wait` again. Raw input primitives — `pointer_move`, `pointer_down`, `pointer_up`, `key_down`, `key_up`, `type_focused` — drive the live window directly and work only there (`--mcp-live-port`); a headless session answers an error. Emulation tools flip what the page sees without touching its DOM — `set_offline`, `set_user_agent`, `set_timezone`, `set_permission` are process-global overrides (network, UA header + `navigator.userAgent`, `Intl`/`Date` timezone, permission states) and `computed_a11y` reads an element's computed accessibility role and name; they work only in the live window except `set_user_agent`, which a headless session also accepts. Network interception, cookies and preload scripts are live window only (`--mcp-live-port`; a headless session answers an error): `add_intercept {phases, url_patterns, id?}` pauses matching requests at `beforeRequestSent`/`responseStarted` until `resolve_intercept {request_id, continue}` decides them, `poll_intercepts` lists the requests paused since the last call, and `add_preload_script {function_declaration, id?}` runs a function in every document created from now on before its own scripts; `list_cookies` / `set_cookie` / `delete_cookie` read and write the active profile's real cookie jar — what `document.cookie` and requests see. A popup (`window.open`, `target=_blank`) opens as a new tab but does not take over the tools: `list_tabs`, then `switch_tab` to it, and `close_tab` / `switch_tab` back when done. `target` of click/type/scroll is a CSS selector string, {selector}, {node_id} or {point: {x, y}}. `screenshot` and the accessibility, layout, console and network resources help to verify what is shown. `eval` may time out on a busy page: raise `timeout_ms`. Tools prefixed `x-` are experimental (ADR-024): causal explanation of styles and layout (`x-computed-style`, `x-explain-element`, `x-explain-page`, `x-scope-layout`), their output format may change. Errors come back as JSON-RPC errors with a message; a failed tool does not close the session.";
+const SERVER_INSTRUCTIONS: &str = "Lumen is a browser you drive and inspect. Workflow: (1) `navigate` (current tab) or `new_tab` with a URL; (2) `wait` with condition document_ready, or network_idle for script-heavy pages — navigation returns before the page has finished loading; (3) read the page with `query` (CSS selector -> nodes with node_id, text, rect) or `eval` (JavaScript; the result is a string, so use JSON.stringify for structured data); (4) interact with `click` / `type` / `scroll`, then `wait` again. Raw input primitives — `pointer_move`, `pointer_down`, `pointer_up`, `key_down`, `key_up`, `type_focused`, `release_actions` (releases everything the input tools hold pressed), `wheel` (a wheel notch at a point: trusted wheel event, then the real scroll routing) — drive the live window directly and work only there (`--mcp-live-port`); a headless session answers an error. `set_files {target, paths}` fills an `<input type=file>` with real files so the page sees a FileList with readable content plus input/change events while the paths stay on the automation side — live window only too. JS dialogs (`alert`/`confirm`/`prompt`) block the page's JS thread until answered: `user_prompt` reads the open dialog, `handle_user_prompt {accept, user_text?}` answers it — both live window only, and `eval` answers busy while a dialog is open. Emulation tools flip what the page sees without touching its DOM — `set_offline`, `set_user_agent`, `set_timezone`, `set_permission` are process-global overrides (network, UA header + `navigator.userAgent`, `Intl`/`Date` timezone, permission states) and `computed_a11y` reads an element's computed accessibility role and name; they work only in the live window except `set_user_agent`, which a headless session also accepts. Network interception, cookies and preload scripts are live window only (`--mcp-live-port`; a headless session answers an error): `add_intercept {phases, url_patterns, id?}` pauses matching requests at `beforeRequestSent`/`responseStarted` until `resolve_intercept {request_id, continue}` decides them, `poll_intercepts` lists the requests paused since the last call, and `add_preload_script {function_declaration, id?}` runs a function in every document created from now on before its own scripts; `list_cookies` / `set_cookie` / `delete_cookie` read and write the active profile's real cookie jar — what `document.cookie` and requests see. Downloads (live window only): `start_download {url}` fetches a URL into the OS Downloads directory and returns its id, `list_downloads` reports every entry (`state` is pending / in_progress / completed / failed / cancelled; a completed entry's `path` holds where the file was written), `cancel_download {id}` aborts one. A popup (`window.open`, `target=_blank`) opens as a new tab but does not take over the tools: `list_tabs`, then `switch_tab` to it, and `close_tab` / `switch_tab` back when done. `target` of click/type/scroll is a CSS selector string, {selector}, {node_id} or {point: {x, y}}. `screenshot` and the accessibility, layout, console and network resources help to verify what is shown. `eval` may time out on a busy page: raise `timeout_ms`. Tools prefixed `x-` are experimental (ADR-024): causal explanation of styles and layout (`x-computed-style`, `x-explain-element`, `x-explain-page`, `x-scope-layout`), their output format may change. Errors come back as JSON-RPC errors with a message; a failed tool does not close the session.";
 
 impl<S: BrowserSession, T: Transport> McpServer<S, T> {
     /// Создать новый MCP сервер без обязательной аутентификации (stdio-режим
@@ -235,6 +235,32 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                 experimental: false,
             },
             McpTool {
+                name: "reload".to_string(),
+                description: "Reload the active tab: the current page is fetched and rendered again. Returns {url, can_go_back, can_go_forward}. Navigation starts, not finishes: follow with `wait` (document_ready or network_idle) before reading the DOM. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "ignore_cache": {
+                            "type": "boolean",
+                            "description": "Request a cache-bypassing reload; the engine does not distinguish it from a normal reload yet"
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "go_back".to_string(),
+                description: "One step back in the active tab's session history. Returns {url, can_go_back, can_go_forward}; an error at the first history entry. Follow with `wait` before reading the DOM. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({ "type": "object", "properties": {} }),
+                experimental: false,
+            },
+            McpTool {
+                name: "go_forward".to_string(),
+                description: "One step forward in the active tab's session history. Returns {url, can_go_back, can_go_forward}; an error at the newest entry. Follow with `wait` before reading the DOM. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({ "type": "object", "properties": {} }),
+                experimental: false,
+            },
+            McpTool {
                 name: "list_tabs".to_string(),
                 description: "List the open tabs of the live window in strip order. Returns {tabs: [{id, url, title, active}]}. `id` is stable for the session and is what `switch_tab` / `close_tab` take. A popup opened by `window.open()` or a `target=_blank` link shows up here as a new tab; the opener stays the target of the tools until you `switch_tab`.".to_string(),
                 input_schema: json!({ "type": "object", "properties": {} }),
@@ -430,6 +456,122 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                 experimental: false,
             },
             McpTool {
+                name: "release_actions".to_string(),
+                description: "Release everything the input tools hold pressed: the `pointer_down` button (the page gets pointerup/mouseup and `:active` clears) and every modifier held by `key_down` (each gets its keyup). Safe to call when nothing is held. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({ "type": "object", "properties": {} }),
+                experimental: false,
+            },
+            McpTool {
+                name: "wheel".to_string(),
+                description: "A mouse-wheel notch at a point of the content area (CSS px of the content viewport): the page receives a trusted wheel event with these pixel deltas (positive y = down), then the scroll follows the same routing as a real wheel — frame, overflow container, smooth page scroll. The routing's modifier branches (Ctrl+wheel zooms, Shift+wheel scrolls horizontally) need held modifiers, which this tool does not take — a BiDi `wheel` source after a key source reaches them. A page's preventDefault() in the wheel handler does not cancel the scroll. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["x", "y"],
+                    "properties": {
+                        "x": {
+                            "type": "number",
+                            "description": "Viewport X, CSS px of the content area"
+                        },
+                        "y": {
+                            "type": "number",
+                            "description": "Viewport Y, CSS px of the content area"
+                        },
+                        "delta_x": {
+                            "type": "number",
+                            "description": "Wheel delta X, px (positive = right); 0 by default"
+                        },
+                        "delta_y": {
+                            "type": "number",
+                            "description": "Wheel delta Y, px (positive = down); 0 by default"
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "set_files".to_string(),
+                description: "Set files on an <input type=file> element (`target` has the same forms as for `click`) without the OS file dialog: every path must exist on the machine running the browser. The page gets a real FileList with readable content plus input/change events, and the `value` attribute becomes the first file's name; the paths themselves never reach the page. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["target", "paths"],
+                    "properties": {
+                        "target": {
+                            "type": ["string", "object"],
+                            "description": "Target element: a CSS-selector string,                                             {selector}, {node_id} or {point: {x, y}}"
+                        },
+                        "paths": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Absolute filesystem paths of the files to set"
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "user_prompt".to_string(),
+                description: "Read the JS dialog currently open in the live window (alert / confirm / prompt): {open, type, message} plus default_value for a prompt. While the dialog is open the page's JS thread is blocked — eval answers busy until you handle it. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "handle_user_prompt".to_string(),
+                description: "Answer the JS dialog currently open in the live window: accept = OK / cancel, user_text replaces the text typed into a prompt. Errors when no dialog is open. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "accept": {
+                            "type": "boolean",
+                            "description": "true = OK, false = cancel (default true)"
+                        },
+                        "user_text": {
+                            "type": "string",
+                            "description": "Replacement text for an open prompt dialog"
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "list_downloads".to_string(),
+                description: "List the downloads of the live window's download manager: {downloads: [{id, url, file_name, state, received_bytes, total_bytes, path}]}, state is pending / in_progress / completed / failed / cancelled. Terminal events are picked up on the call itself, so a download that just finished is reported completed right away. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({ "type": "object", "properties": {} }),
+                experimental: false,
+            },
+            McpTool {
+                name: "start_download".to_string(),
+                description: "Start downloading `url` into the OS Downloads directory — the same path a user-initiated download takes. Returns {success, id}; poll `list_downloads` until `state` is completed (the entry's `path` then holds where the file was written). Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["url"],
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "URL to download"
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "cancel_download".to_string(),
+                description: "Cancel the download with this `id` (from `start_download` or `list_downloads`): the entry settles into state `cancelled`. Errors when no download has that id. Live window only; a headless session answers an error.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["id"],
+                    "properties": {
+                        "id": {
+                            "type": "integer",
+                            "description": "Download id"
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
                 name: "wait".to_string(),
                 description: "Block until a condition holds: document_ready (document parsed and load finished), network_idle (no requests in flight), js_idle (no pending JS tasks), visible / stable (need `selector`: element has a box / its box stopped moving). Returns {success, condition}; errors on timeout (`timeout_ms`, default 30000). Typical order: navigate, then wait document_ready or network_idle, then query / eval.".to_string(),
                 input_schema: json!({
@@ -455,7 +597,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
             },
             McpTool {
                 name: "eval".to_string(),
-                description: "Run JavaScript in the page and return {success, result}, where `result` is a string. Evaluate an expression and serialize structured data yourself, e.g. `JSON.stringify(...)`, then parse it. Errors carry the JS exception text. In the live window a busy engine thread makes the call fail after `timeout_ms` (default 5000).".to_string(),
+                description: "Run JavaScript in the page and return {success, result}, where `result` is a string. Evaluate an expression and serialize structured data yourself, e.g. `JSON.stringify(...)`, then parse it. With `await_promise: true` a promise-valued expression resolves to its settled value instead of the promise object (`{}`); a rejected promise answers an error carrying the reason. Errors carry the JS exception text. In the live window a busy engine thread makes the call fail after `timeout_ms` (default 5000; not applied with `await_promise`).".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "required": ["code"],
@@ -463,6 +605,10 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                         "code": {
                             "type": "string",
                             "description": "JavaScript code to execute"
+                        },
+                        "await_promise": {
+                            "type": "boolean",
+                            "description": "Await a promise-valued expression and return its settled value. Promises that settle on microtasks (Promise.resolve, sync async functions) resolve; one still pending on a timer/IO falls back to the promise object `{}`"
                         },
                         "timeout_ms": {
                             "type": "integer",
@@ -1010,6 +1156,23 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                     Err(e) => return McpResponse::err(id.clone(), -32603, format!("NewTab error: {e}")),
                 }
             }
+            // MCP-TOTAL-S7e: navigation through the tab's own session history;
+            // the arm answers the address and the can-go-back/forward flags.
+            "reload" => {
+                let ignore_cache = args.get("ignore_cache").and_then(|v| v.as_bool()).unwrap_or(false);
+                match self.session.reload(ignore_cache) {
+                    Ok(s) => json!({ "url": s.url, "can_go_back": s.can_go_back, "can_go_forward": s.can_go_forward }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("Reload error: {e}")),
+                }
+            }
+            "go_back" => match self.session.traverse_history(-1) {
+                Ok(s) => json!({ "url": s.url, "can_go_back": s.can_go_back, "can_go_forward": s.can_go_forward }),
+                Err(e) => return McpResponse::err(id.clone(), -32603, format!("GoBack error: {e}")),
+            },
+            "go_forward" => match self.session.traverse_history(1) {
+                Ok(s) => json!({ "url": s.url, "can_go_back": s.can_go_back, "can_go_forward": s.can_go_forward }),
+                Err(e) => return McpResponse::err(id.clone(), -32603, format!("GoForward error: {e}")),
+            },
             "list_tabs" => match self.session.list_tabs() {
                 Ok(tabs) => json!({
                     "tabs": tabs.iter().map(|t| json!({
@@ -1117,11 +1280,25 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                     Some(c) => c,
                     None => return McpResponse::err(id.clone(), -32602, "Missing code argument"),
                 };
-                // BUG-1145: без `timeout_ms` — прежний путь с таймаутом живого
-                // окна по умолчанию.
-                let result = match args.get("timeout_ms").and_then(|v| v.as_u64()) {
-                    Some(ms) => self.session.eval_with_timeout(code, ms),
-                    None => self.session.eval(code),
+                // MCP-TOTAL-S7f: `await_promise` ждёт промисное выражение через
+                // общий `BrowserSession::eval_await_promise` (тот же приём, что
+                // у BiDi `awaitPromise`); без флага — прежний путь.
+                let result = if args.get("await_promise").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    self.session.eval_await_promise(code).map(|awaited| match awaited {
+                        AwaitedPromise::Fulfilled(Some(json)) => json,
+                        // Исполнен с `undefined` / ещё pending — тот же текст,
+                        // что у eval без флага (`to_json_string` undefined —
+                        // `null`, промис-объект — `{}`).
+                        AwaitedPromise::Fulfilled(None) => "null".to_string(),
+                        AwaitedPromise::Pending => "{}".to_string(),
+                    })
+                } else {
+                    // BUG-1145: без `timeout_ms` — прежний путь с таймаутом живого
+                    // окна по умолчанию.
+                    match args.get("timeout_ms").and_then(|v| v.as_u64()) {
+                        Some(ms) => self.session.eval_with_timeout(code, ms),
+                        None => self.session.eval(code),
+                    }
                 };
                 match result {
                     Ok(result) => json!({ "success": true, "result": result }),
@@ -1166,6 +1343,27 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                 Ok(()) => json!({ "success": true }),
                 Err(e) => return McpResponse::err(id.clone(), -32603, format!("PointerUp error: {e}")),
             },
+            // MCP-TOTAL-S7d: release everything the input tools hold pressed.
+            "release_actions" => match self.session.release_actions() {
+                Ok(()) => json!({ "success": true }),
+                Err(e) => return McpResponse::err(id.clone(), -32603, format!("ReleaseActions error: {e}")),
+            },
+            // MCP-TOTAL-S7d: a wheel notch at the point; modifiers are not
+            // exposed here (the real handler reads none by default).
+            "wheel" => {
+                let Some(x) = args.get("x").and_then(|v| v.as_f64()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing x argument");
+                };
+                let Some(y) = args.get("y").and_then(|v| v.as_f64()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing y argument");
+                };
+                let dx = args.get("delta_x").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let dy = args.get("delta_y").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                match self.session.wheel(x as f32, y as f32, dx as f32, dy as f32, 0) {
+                    Ok(()) => json!({ "success": true, "delta_x": dx, "delta_y": dy }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("Wheel error: {e}")),
+                }
+            }
             "key_down" | "key_up" => {
                 let Some(key) = args.get("key").and_then(|v| v.as_str()) else {
                     return McpResponse::err(id.clone(), -32602, "Missing key argument");
@@ -1187,6 +1385,82 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                 match self.session.type_focused(text) {
                     Ok(()) => json!({ "success": true, "text": text }),
                     Err(e) => return McpResponse::err(id.clone(), -32603, format!("TypeFocused error: {e}")),
+                }
+            }
+            "set_files" => {
+                let target_obj = match args.get("target") {
+                    Some(t) => t,
+                    None => return McpResponse::err(id.clone(), -32602, "Missing target argument"),
+                };
+                let Some(target) = parse_target(target_obj) else {
+                    return McpResponse::err(id.clone(), -32602, TARGET_ERROR);
+                };
+                let paths: Vec<String> = args
+                    .get("paths")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.iter().filter_map(|p| p.as_str().map(str::to_owned)).collect())
+                    .unwrap_or_default();
+                if paths.is_empty() {
+                    return McpResponse::err(id.clone(), -32602, "paths must be a non-empty array of strings");
+                }
+                match self.session.set_files(&target, &paths) {
+                    Ok(()) => json!({ "success": true, "count": paths.len() }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("SetFiles error: {e}")),
+                }
+            }
+            "user_prompt" => {
+                // MCP-TOTAL-S7a: the open dialog blocks the JS thread, so this
+                // read never waits for it.
+                match self.session.user_prompt() {
+                    Ok(Some(d)) => {
+                        let mut v = json!({ "open": true, "type": d.kind, "message": d.message });
+                        if d.kind == "prompt" {
+                            v["default_value"] = json!(d.default_value);
+                        }
+                        v
+                    }
+                    Ok(None) => json!({ "open": false }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("UserPrompt error: {e}")),
+                }
+            }
+            "handle_user_prompt" => {
+                // MCP-TOTAL-S7a: BiDi semantics — accept defaults to true,
+                // user_text only reaches a prompt dialog.
+                let accept = args.get("accept").and_then(|v| v.as_bool()).unwrap_or(true);
+                let user_text = match args.get("user_text") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(s)) => Some(s.as_str()),
+                    Some(_) => {
+                        return McpResponse::err(id.clone(), -32602, "user_text must be a string")
+                    }
+                };
+                match self.session.handle_user_prompt(accept, user_text) {
+                    Ok(()) => json!({ "success": true, "accept": accept }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("HandleUserPrompt error: {e}")),
+                }
+            }
+            "list_downloads" => {
+                match self.session.list_downloads() {
+                    Ok(downloads) => json!({ "downloads": downloads }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("ListDownloads error: {e}")),
+                }
+            }
+            "start_download" => {
+                let Some(url) = args.get("url").and_then(|v| v.as_str()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing url argument");
+                };
+                match self.session.start_download(url) {
+                    Ok(download_id) => json!({ "success": true, "id": download_id }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("StartDownload error: {e}")),
+                }
+            }
+            "cancel_download" => {
+                let Some(download_id) = args.get("id").and_then(|v| v.as_u64()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing id argument");
+                };
+                match self.session.cancel_download(download_id as u32) {
+                    Ok(()) => json!({ "success": true, "id": download_id }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("CancelDownload error: {e}")),
                 }
             }
             "set_offline" => {
@@ -1729,8 +2003,14 @@ mod tests {
             Ok(())
         }
 
-        fn eval(&mut self, _js: &str) -> lumen_core::error::Result<String> {
-            Ok("null".to_string())
+        fn eval(&mut self, js: &str) -> lumen_core::error::Result<String> {
+            // MCP-TOTAL-S7f: второй заход `eval_await_promise` читает глобал с
+            // осевшим исходом — отвечаем исполнением с значением 42.
+            if js.contains("__lumen_await") {
+                Ok("{\"state\":\"fulfilled\",\"value\":42}".to_string())
+            } else {
+                Ok("null".to_string())
+            }
         }
 
         fn eval_with_timeout(&mut self, _js: &str, timeout_ms: u64) -> lumen_core::error::Result<String> {
@@ -1882,28 +2162,39 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_forty_tools() {
+    fn tools_list_returns_fifty_one_tools() {
         let mut server = McpServer::new(MockSession, VecTransport::new());
         let req = make_request("tools/list", serde_json::json!({}));
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_none());
         let tools = resp.result.unwrap()["tools"].as_array().cloned().unwrap_or_default();
-        assert_eq!(tools.len(), 40);
+        assert_eq!(tools.len(), 51);
         let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap_or("")).collect();
         assert!(names.contains(&"navigate"));
         assert!(names.contains(&"new_tab"));
+        assert!(names.contains(&"reload"));
+        assert!(names.contains(&"go_back"));
+        assert!(names.contains(&"go_forward"));
         assert!(names.contains(&"list_tabs"));
         assert!(names.contains(&"switch_tab"));
         assert!(names.contains(&"close_tab"));
         assert!(names.contains(&"click"));
         assert!(names.contains(&"type"));
         assert!(names.contains(&"scroll"));
+        assert!(names.contains(&"set_files"));
         assert!(names.contains(&"pointer_move"));
         assert!(names.contains(&"pointer_down"));
         assert!(names.contains(&"pointer_up"));
         assert!(names.contains(&"key_down"));
         assert!(names.contains(&"key_up"));
         assert!(names.contains(&"type_focused"));
+        assert!(names.contains(&"release_actions"));
+        assert!(names.contains(&"wheel"));
+        assert!(names.contains(&"user_prompt"));
+        assert!(names.contains(&"handle_user_prompt"));
+        assert!(names.contains(&"list_downloads"));
+        assert!(names.contains(&"start_download"));
+        assert!(names.contains(&"cancel_download"));
         assert!(names.contains(&"set_offline"));
         assert!(names.contains(&"set_user_agent"));
         assert!(names.contains(&"set_timezone"));
@@ -1955,9 +2246,10 @@ mod tests {
         }
     }
 
-    /// Все шесть инструментов ввода — только для живого окна: сессия без
-    /// живого окна отвечает `isError: true` с честным текстом дефолта трейта
-    /// (MCP-TOTAL-S1b), а не молчаливым успехом.
+    /// Инструменты ввода, файлового input, JS-диалогов и загрузок — только
+    /// для живого окна: сессия без живого окна отвечает `isError: true` с
+    /// честным текстом дефолта трейта (MCP-TOTAL-S1b, S7a, S7b, S7c, S7d), а
+    /// не молчаливым успехом.
     #[test]
     fn input_tools_error_without_a_live_window() {
         let calls = [
@@ -1967,6 +2259,22 @@ mod tests {
             ("key_down", serde_json::json!({ "key": "Escape" })),
             ("key_up", serde_json::json!({ "key": "Escape" })),
             ("type_focused", serde_json::json!({ "text": "hi" })),
+            // MCP-TOTAL-S7e: навигация по истории — тоже только живого окна.
+            ("reload", serde_json::json!({})),
+            ("go_back", serde_json::json!({})),
+            ("go_forward", serde_json::json!({})),
+            // MCP-TOTAL-S7d: release_actions и колесо — тоже только живого окна.
+            ("release_actions", serde_json::json!({})),
+            ("wheel", serde_json::json!({ "x": 10.0, "y": 20.0, "delta_y": 120.0 })),
+            // MCP-TOTAL-S7b: файловый input — тоже только живого окна.
+            ("set_files", serde_json::json!({ "target": "#f", "paths": ["C:/tmp/a.txt"] })),
+            // MCP-TOTAL-S7a: JS-диалоги — тоже только живого окна.
+            ("user_prompt", serde_json::json!({})),
+            ("handle_user_prompt", serde_json::json!({ "accept": true })),
+            // MCP-TOTAL-S7c: загрузки — тоже только живого окна.
+            ("list_downloads", serde_json::json!({})),
+            ("start_download", serde_json::json!({ "url": "file:///tmp/a.bin" })),
+            ("cancel_download", serde_json::json!({ "id": 1 })),
         ];
         for (name, args) in calls {
             let mut server = McpServer::new(MockSession, VecTransport::new());
@@ -2484,6 +2792,40 @@ mod tests {
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_none());
         assert_eq!(resp.result.unwrap()["result"], "\"waited 30000\"");
+    }
+
+    #[test]
+    fn tool_eval_await_promise_returns_settled_value() {
+        // MCP-TOTAL-S7f: `await_promise` идёт через `eval_await_promise`, а не
+        // через обычный eval — MockSession отвечает на чтение исхода 42.
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({
+                "name": "eval",
+                "arguments": { "code": "Promise.resolve(41 + 1)", "await_promise": true }
+            }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
+        // Контракт eval: `result` — строка (сериализация значения), «42».
+        assert_eq!(resp.result.unwrap()["result"], "42");
+    }
+
+    #[test]
+    fn tool_eval_without_await_promise_unchanged() {
+        // Без флага — прежний путь: обычный eval, никакого ожидания промиса.
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({
+                "name": "eval",
+                "arguments": { "code": "Promise.resolve(42)" }
+            }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
+        assert_eq!(resp.result.unwrap()["result"], "null");
     }
 
     #[test]
