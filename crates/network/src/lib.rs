@@ -8827,6 +8827,7 @@ ok".to_vec());
     /// one-off mode disables the filter for THIS tab only — the neighbour tab
     /// stays protected — until cleared. One test fn because the registry is
     /// process-global and parallel tests would race.
+// Needle — по query-маркеру, не по 127.0.0.1: глобальный фильтр живёт        // весь тест, а параллельные тесты фетчат голый http://127.0.0.1 —        // race давал им blocked: easylist (class BUG-1857).
     #[test]
     fn shields_decide_per_site_and_per_tab() {
         // Registry: `www.` ignored on both sides, trailing dot ignored.
@@ -8847,9 +8848,12 @@ ok".to_vec());
         let (port, server) = mock_http_server(2, |_| {
             b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_vec()
         });
-        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        // Needle — по query-маркеру, не по 127.0.0.1: глобальный фильтр живёт весь
+        // тест, а параллельные тесты в этот процесс фетчат голый
+        // http://127.0.0.1 — race давал им `blocked: easylist` (class BUG-1857).
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/?shields-race-marker")).unwrap();
         install_global_adblock_filter(Arc::new(BlockBySubstring {
-            needle: "127.0.0.1".to_owned(),
+            needle: "shields-race-marker".to_owned(),
             reason: "easylist".to_owned(),
         }));
         install_shield_decisions(true, &[]);
