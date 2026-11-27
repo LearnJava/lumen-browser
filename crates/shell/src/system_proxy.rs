@@ -105,6 +105,7 @@ pub fn redact_for_log(url: &str) -> String {
 /// `socks=` берётся в `socks5_proxy` только когда http(s)-записи нет —
 /// WinINET шлёт через socks и http-трафик, но смешивать два системных
 /// прокси в одном профиле мы не будем.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))] // вызывающий код — cfg(windows)
 pub(crate) fn parse_proxy_endpoints(server: &str) -> Option<SystemProxy> {
     let server = server.trim();
     if server.is_empty() {
@@ -151,6 +152,7 @@ pub(crate) fn parse_proxy_endpoints(server: &str) -> Option<SystemProxy> {
 
 /// `host:port`/`scheme://…` → `http(s)://…`; прочие схемы отбрасываем, чтобы
 /// не получить молча «без прокси».
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn to_http_proxy_url(address: &str) -> Option<String> {
     let has_scheme = address.contains("://");
     let url = if has_scheme {
@@ -167,6 +169,7 @@ fn to_http_proxy_url(address: &str) -> Option<String> {
 }
 
 /// `host:port`/`scheme://…` → `socks5://…`; `socks4`/`ftp` и прочее — мимо.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn to_socks5_url(address: &str) -> Option<String> {
     let has_scheme = address.contains("://");
     let url = if has_scheme {
@@ -183,6 +186,7 @@ fn to_socks5_url(address: &str) -> Option<String> {
 
 /// `ProxyOverride` (`localhost;127.*;*.example.ru;<local>`) → шаблоны для
 /// [`lumen_network::install_no_proxy_patterns`].
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn parse_proxy_override(overrides: &str) -> Vec<String> {
     let mut out = Vec::new();
     for entry in overrides.split(';') {

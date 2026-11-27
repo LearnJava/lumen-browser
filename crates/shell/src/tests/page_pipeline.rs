@@ -1739,12 +1739,15 @@ fn bug1156_document_referrer_is_seeded_from_navigation_referer() {
 // ── LOAD-1: живое окно отдаёт страницу, не дожидаясь картинок ───────────
 
 /// 1×1 PNG: достаточно, чтобы `decode_image` дал реальную картинку без сети.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 const LOAD1_PNG: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
 /// `IMAGE_CACHE` — процессный синглтон, а тесты идут параллельно: живой тест берёт адрес,
 /// которого не касается ни один другой, иначе чужой декод оказался бы «уже в кэше».
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 const LOAD1_LIVE_ONLY: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn load1_page(src: &str) -> String {
     format!("<html><body><img src=\"{src}\"><div style=\"background-image:url({src}?bg)\">x</div></body></html>")
 }
@@ -1950,6 +1953,7 @@ fn load3a_server(delay_ms: u64, body: &'static str) -> (u16, Arc<std::sync::atom
     (port, hits)
 }
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn load3a_page(port: u16) -> String {
     format!(
         "<html><head><title>t</title></head><body><p>x</p>\

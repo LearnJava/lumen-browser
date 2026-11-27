@@ -109,6 +109,7 @@ pub enum Pick<'a> {
     NoSuitable,
 }
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 /// Семейство по ключу реестра, имени и имени исполняемого файла.
 #[must_use]
 pub fn classify(id: &str, name: &str, exe: &Path) -> BrowserKind {
@@ -135,6 +136,7 @@ pub fn classify(id: &str, name: &str, exe: &Path) -> BrowserKind {
 
 /// Путь к исполняемому файлу из значения `shell\open\command`:
 /// `"C:\...\chrome.exe" --single-argument %1` → `C:\...\chrome.exe`.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 #[must_use]
 pub fn parse_command(cmd: &str) -> Option<PathBuf> {
     let cmd = cmd.trim();
