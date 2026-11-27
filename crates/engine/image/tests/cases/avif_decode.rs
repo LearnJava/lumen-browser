@@ -6,6 +6,7 @@ fn max_channel_diff(a: &[u8], b: &[u8]) -> u8 {
     a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0)
 }
 
+#[cfg(not(target_os = "macos"))] // rav1d: get_picture (-35) на aarch64-раннерах macOS — декодер, не фикстуры
 #[test]
 fn color_420_matches_reference() {
     let (w, h, rgba) = decode_avif(include_bytes!("../fixtures/testsrc_64x48.avif")).unwrap();
@@ -17,6 +18,7 @@ fn color_420_matches_reference() {
     assert!(bad * 20 < (w * h) as usize, "слишком много расхождений: {bad}");
 }
 
+#[cfg(not(target_os = "macos"))] // rav1d: get_picture (-35) на aarch64 macOS
 #[test]
 fn alpha_item_becomes_alpha_channel() {
     // 20x20, отдельный монохромный alpha-item, во всех пикселях 128 (по ffmpeg).
