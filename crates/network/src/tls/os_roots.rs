@@ -313,8 +313,9 @@ mod tests {
     use super::*;
 
     /// WPT's self-signed test cert (CN=127.0.0.1, its own issuer) — the same
-    /// fixture `tests/cases/bug785_extra_ca.rs` inlines.
-    const TEST_CERT_PEM: &str = include_str!("../../../../tests/wpt/certs/ca-cert.pem");
+    /// fixture `tests/cases/bug785_extra_ca.rs` inlines. Вендорена в крейт:
+    /// CI исключает `tests/wpt` из чекаута.
+    const TEST_CERT_PEM: &str = include_str!("../../tests/fixtures/ca-cert.pem");
 
     fn test_cert() -> CertificateDer<'static> {
         rustls_pemfile::certs(&mut TEST_CERT_PEM.as_bytes())

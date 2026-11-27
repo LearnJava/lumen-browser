@@ -19,8 +19,9 @@ const IO_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// WPT's self-signed host cert/key (CN=127.0.0.1, SAN 127.0.0.1) — the stand-in
 /// for an antivirus HTTPS-inspection root that is also the serving certificate.
-const CERT_PEM: &str = include_str!("../../../../tests/wpt/certs/host-cert.pem");
-const KEY_PEM: &str = include_str!("../../../../tests/wpt/certs/host-key.pem");
+/// Вендорены в крейт: CI исключает `tests/wpt` из чекаута.
+const CERT_PEM: &str = include_str!("../fixtures/host-cert.pem");
+const KEY_PEM: &str = include_str!("../fixtures/host-key.pem");
 
 type BoxError = Box<dyn std::error::Error>;
 
