@@ -585,3 +585,4 @@ mod align_content_block;
 mod abs_static_align;
 mod bug1669_webkit_center;
 mod bug1470_abs_inline;
+mod replaced_auto_margins;

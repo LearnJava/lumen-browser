@@ -472,3 +472,69 @@ fn column_auto_width_item_with_auto_margins_stays_fit_content() {
     assert_eq!(r[0].width, 0.0);
     assert_eq!(r[0].x, 200.0);
 }
+
+// ── BUG-1858: авто-поперечные маргины айтема, чей BoxKind не решает их сам ──
+//
+// `column_item_cross_shift` вычитал из сдвига §8.1 «уже распределённое §10.3.3»
+// для любого айтема с определённой шириной, но вложенный flex/grid-контейнер,
+// замещаемый бокс и form control свой расклад кладут на origin поперечной оси с
+// нулевыми маргинами — вычитание гасило весь сдвиг (живой случай: портал
+// nextera, `.messages-area` — flex-айтем 820px с margin:auto стоял у левого
+// края контейнера 1920). Для блока/flow-root/таблицы вычитание законно: их
+// собственный расклад уже отцентрировал бокс, и повторный сдвиг дал бы 2×.
+
+#[test]
+fn column_flex_container_item_with_definite_width_and_auto_margins_centers() {
+    // Живая форма BUG-1858: айтем сам flex-контейнер.
+    let html = r#"<div id="k"><div id="a"><div id="in"></div></div></div>"#;
+    let css = "#k{display:flex;flex-direction:column;width:400px}\
+               #a{display:flex;flex-direction:column;width:200px;margin:auto;height:30px}\
+               #in{width:100px;height:10px}";
+    let r = rects(html, css, &["a"]);
+    assert_eq!(r[0].width, 200.0);
+    assert_eq!(r[0].x, 100.0);
+}
+
+#[test]
+fn column_grid_container_item_with_definite_width_and_auto_margins_centers() {
+    let html = r#"<div id="k"><div id="a"><div id="in"></div></div></div>"#;
+    let css = "#k{display:flex;flex-direction:column;width:400px}\
+               #a{display:grid;width:200px;margin:auto;height:30px}\
+               #in{width:100px;height:10px}";
+    let r = rects(html, css, &["a"]);
+    assert_eq!(r[0].width, 200.0);
+    assert_eq!(r[0].x, 100.0);
+}
+
+#[test]
+fn column_table_item_with_definite_width_and_auto_margins_centers_once() {
+    // Табличная обёртка центрирует себя сама (§17.4) — вычитание должно
+    // остаться, иначе сдвиг удвоился бы (200+100=300).
+    let html = r#"<div id="k"><div id="a"><span>hi</span></div></div>"#;
+    let css = "#k{display:flex;flex-direction:column;width:400px}\
+               #a{display:table;width:200px;margin:auto}";
+    let r = rects(html, css, &["a"]);
+    assert_eq!(r[0].width, 200.0);
+    assert_eq!(r[0].x, 100.0);
+}
+
+#[test]
+fn column_flow_root_item_with_definite_width_and_auto_margins_centers_once() {
+    let html = r#"<div id="k"><div id="a"><span>hi</span></div></div>"#;
+    let css = "#k{display:flex;flex-direction:column;width:400px}\
+               #a{display:flow-root;width:200px;margin:auto;height:30px}";
+    let r = rects(html, css, &["a"]);
+    assert_eq!(r[0].width, 200.0);
+    assert_eq!(r[0].x, 100.0);
+}
+
+#[test]
+fn column_flex_container_item_single_auto_margin_moves_to_the_end() {
+    // Односторонний авто-маргин у flex-айтема: весь остаток — сдвигу.
+    let html = r#"<div id="k"><div id="a"><div id="in"></div></div></div>"#;
+    let css = "#k{display:flex;flex-direction:column;width:400px}\
+               #a{display:flex;width:200px;margin-left:auto;height:30px}\
+               #in{width:100px;height:10px}";
+    let r = rects(html, css, &["a"]);
+    assert_eq!(r[0].x, 200.0);
+}

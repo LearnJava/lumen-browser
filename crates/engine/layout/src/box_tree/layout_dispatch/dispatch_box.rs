@@ -542,13 +542,18 @@ pub(in crate::box_tree) fn dispatch_box(
     // Remaining inline space distributes to auto margins: both auto → equal
     // halves (centered block); only left auto → left takes all remaining;
     // only right auto → no x shift (right margin absorbs remainder silently).
-    // Does not apply to: replaced, inline-block, flex/grid containers, floats,
-    // or absolute/fixed positioned elements.
+    // §10.3.4 gives block-level REPLACED elements the same solving once their
+    // width is definite (CSS `width`/`max-width` clamp — the balls logo of
+    // portal.nextera.ru, `display:block; width:180px; margin:0 auto`, stood at
+    // the left edge): both auto → equal halves, one auto → the remainder. With
+    // an auto width the replaced equation stays over-constrained and auto
+    // margins still mean 0 — that case never reaches here (definite-width
+    // guard). Still excluded: inline-block, flex/grid containers, floats,
+    // absolute/fixed positioned elements.
     let ml_is_auto = s.margin_left.is_auto();
     let mr_is_auto = s.margin_right.is_auto();
     if (ml_is_auto || mr_is_auto)
         && (s.width.is_some() || clamped_by_max)
-        && !is_replaced
         && !matches!(
             s.display,
             Display::InlineBlock
