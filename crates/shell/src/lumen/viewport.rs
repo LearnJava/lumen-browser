@@ -68,6 +68,17 @@ impl Lumen {
     /// Текущая логическая (CSS px) высота viewport-а. Если окно ещё не создано —
     /// fallback на layout-viewport 720 px, который у нас hardcoded в pipeline.
     pub(crate) fn viewport_height_css(&self) -> f32 {
+        // MCP-TOTAL-S4a: эмуляция (`set_viewport`) перекрывает реальное окно —
+        // клампинг скролла, колесо и автоматика читают эмулированную высоту.
+        if let Some((_, h)) = self.emulated_content_viewport() {
+            return h;
+        }
+        self.real_viewport_height_css()
+    }
+
+    /// Реальная высота viewport-а без эмуляции (`set_viewport`) — база
+    /// разрешения `emulated_content_viewport`, когда измерение не задано.
+    pub(crate) fn real_viewport_height_css(&self) -> f32 {
         // The live `#contentArea` rect is the truth when chrome is up — the
         // CHROME_H formula cannot know the deck skin's own chrome height
         // (see `relayout_viewport`, same source).
@@ -109,6 +120,17 @@ impl Lumen {
     /// для размещения у правого края. Fallback на layout-viewport 1024 px (тот
     /// же hardcoded размер, что и в pipeline до создания окна).
     pub(crate) fn viewport_width_css(&self) -> f32 {
+        // MCP-TOTAL-S4a: эмулированная ширина перекрывает реальную — см.
+        // `viewport_height_css`.
+        if let Some((w, _)) = self.emulated_content_viewport() {
+            return w;
+        }
+        self.real_viewport_width_css()
+    }
+
+    /// Реальная ширина viewport-а без эмуляции — база разрешения
+    /// `emulated_content_viewport`.
+    pub(crate) fn real_viewport_width_css(&self) -> f32 {
         match (self.window.as_ref(), self.renderer.as_ref()) {
             (Some(w), Some(r)) => {
                 let phys = w.inner_size().width as f32;
@@ -117,6 +139,17 @@ impl Lumen {
             }
             _ => 1024.0,
         }
+    }
+
+    /// Разрешённый эмулированный viewport (MCP-TOTAL-S4a): `None` измерение
+    /// следует реальному окну; нижний зажим 1 px против вырожденного размера,
+    /// из-за которого relayout молча пропускался бы. `None` — эмуляции нет.
+    pub(crate) fn emulated_content_viewport(&self) -> Option<(f32, f32)> {
+        let (ew, eh) = self.emulated_viewport?;
+        Some((
+            ew.unwrap_or_else(|| self.real_viewport_width_css()).max(1.0),
+            eh.unwrap_or_else(|| self.real_viewport_height_css()).max(1.0),
+        ))
     }
 
     /// CSS px ширина области контента страницы — полная ширина окна минус

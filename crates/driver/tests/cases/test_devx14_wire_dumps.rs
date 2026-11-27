@@ -221,3 +221,30 @@ fn live_window_x_surface_stubs_are_honest_errors() {
     check(session.layout_box_by_selector("#a").map(drop));
     check(session.all_layout_boxes_by_selector("#a").map(drop));
 }
+
+/// MCP-TOTAL-S4a: `set_viewport` round-trips through the automation channel —
+/// the fake arm records exactly what arrived, the session gets its `Ack`,
+/// and the reset form (`None`/`None`) carries through too.
+#[test]
+fn live_window_set_viewport_round_trips_through_automation_channel() {
+    let got = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let (tx, rx) = std::sync::mpsc::channel::<lumen_driver::AutomationRequest>();
+    let rec = std::sync::Arc::clone(&got);
+    std::thread::spawn(move || {
+        for (cmd, reply_tx) in rx {
+            let reply = if let AutomationCommand::SetViewport { width, height } = cmd {
+                *rec.lock().unwrap() = Some((width, height));
+                AutomationReply::Ack
+            } else {
+                AutomationReply::Error("unsupported".into())
+            };
+            let _ = reply_tx.send(reply);
+        }
+    });
+    let mut session = LiveWindowSession::new(AutomationHandle::new(tx));
+
+    session.set_viewport(Some(375.0), Some(667.0)).expect("set_viewport failed");
+    assert_eq!(*got.lock().unwrap(), Some((Some(375.0), Some(667.0))));
+    session.set_viewport(None, None).expect("viewport reset failed");
+    assert_eq!(*got.lock().unwrap(), Some((None, None)));
+}

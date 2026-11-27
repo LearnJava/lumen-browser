@@ -667,6 +667,19 @@ pub trait BrowserSession {
         Err(lumen_core::error::Error::Other("set_permission: только для живого окна (--mcp-live-port)".into()))
     }
 
+    /// Эмулировать viewport страницы в CSS px (MCP-TOTAL-S4a, WebDriver BiDi
+    /// `browsingContext.setViewport`): раскладка, `innerWidth`/`innerHeight`
+    /// и медиазапросы следуют эмулированному размеру, OS-окно своего размера
+    /// не меняет. `None` по измерению — следовать реальному окну; оба `None`
+    /// снимают эмуляцию.
+    ///
+    /// Default impl is `Err` (MCP-TOTAL-S1a: headless-сессии эмулируют
+    /// viewport аргументами запуска, а не в рантайме);
+    /// [`LiveWindowSession`] переопределяет метод для реального эффекта.
+    fn set_viewport(&mut self, _width: Option<f32>, _height: Option<f32>) -> Result<()> {
+        Err(lumen_core::error::Error::Other("set_viewport: только для живого окна (--mcp-live-port)".into()))
+    }
+
     /// Role and accessible name of the element the selector chain resolves to
     /// (BUG-1014). `Ok(None)` = no such element.
     ///

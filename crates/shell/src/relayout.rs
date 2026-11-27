@@ -1572,6 +1572,13 @@ impl Lumen {
             vp_w = host.width;
             vp_h = host.height;
         }
+        // MCP-TOTAL-S4a: `set_viewport` emulation wins over the real window —
+        // layout runs at the emulated size (`innerWidth`, media queries, this
+        // pass), the OS window keeps its own. Zoom still applies below.
+        if let Some((w, h)) = self.emulated_content_viewport() {
+            vp_w = w;
+            vp_h = h;
+        }
         // Guard against degenerate viewport (renderer not yet configured or minimized).
         if vp_w <= 0.0 || vp_h <= 0.0 {
             return None;

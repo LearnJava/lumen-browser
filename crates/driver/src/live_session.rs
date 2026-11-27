@@ -289,6 +289,12 @@ impl BrowserSession for LiveWindowSession {
         }
     }
 
+    /// MCP-TOTAL-S4a: emulate the page viewport; `None`/`None` clears it.
+    fn set_viewport(&mut self, width: Option<f32>, height: Option<f32>) -> Result<()> {
+        self.execute(AutomationCommand::SetViewport { width, height })?;
+        Ok(())
+    }
+
     fn switch_tab(&mut self, id: usize) -> Result<()> {
         self.execute(AutomationCommand::SwitchTab(id))?;
         Ok(())
