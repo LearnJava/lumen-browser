@@ -228,6 +228,43 @@ impl Lumen {
         route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
     }
 
+    /// Dispatch a trusted `WheelEvent` to DOM node `nid` (MCP-TOTAL-S7d,
+    /// automation `wheel`): pixel deltas (`deltaMode` 0), `modifiers` — the
+    /// `Key` bit-mask (ctrl 1, shift 2, alt 4, meta 8).
+    #[cfg(feature = "v8")]
+    pub(crate) fn js_wheel_event(
+        &self,
+        nid: u32,
+        x_css: f32,
+        y_css: f32,
+        (delta_x, delta_y): (f32, f32),
+        modifiers: u8,
+    ) {
+        let script = format!(
+            "_lumen_dispatch_wheel_event({}, {}, {}, {}, {}, {})",
+            nid, x_css as i32, y_css as i32, delta_x, delta_y, modifiers,
+        );
+        route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
+    }
+
+    /// [`Self::js_wheel_event`] inside a frame's sub-document (coordinates
+    /// are already in the child's system, like [`Self::frame_mouse_event`]).
+    #[cfg(feature = "v8")]
+    pub(crate) fn frame_wheel_event(
+        &self,
+        frame: usize,
+        nid: u32,
+        at: (f32, f32),
+        deltas: (f32, f32),
+        modifiers: u8,
+    ) {
+        let Some(js) = self.frames.get(frame).and_then(|h| h.js.as_ref()) else { return };
+        js.eval_js(&format!(
+            "_lumen_dispatch_wheel_event({}, {}, {}, {}, {}, {})",
+            nid, at.0 as i32, at.1 as i32, deltas.0, deltas.1, modifiers,
+        ));
+    }
+
     /// Buffer a synthetic pointer-move sample at CSS-pixel viewport
     /// coordinates. Used by [`input::humanlike::HumanLikeSender`] to trace
     /// Bézier-curve paths before a click. Real `CursorMoved` samples are

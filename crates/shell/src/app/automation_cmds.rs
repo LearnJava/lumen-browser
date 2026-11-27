@@ -335,56 +335,72 @@ impl Lumen {
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
                 AutomationCommand::PointerUp => {
-                    let was_down = self.automation_button_down.take();
-                    // CSS `:active` clears on release — same as the real
-                    // `MouseInput(Released)` branch.
-                    if self.active_frame.is_some() {
-                        self.active_frame = None;
-                        self.refresh_frames(None);
-                    }
-                    if self.active_nid.is_some() {
-                        self.active_nid = None;
-                        self.active_from_keyboard = false;
-                        self.sync_active_mirror();
-                        self.relayout_chrome();
-                        self.request_redraw();
-                    }
-                    if was_down.is_some() {
-                        // Release coordinates: the live cursor position when a
-                        // move landed, else the press point.
-                        let dpr = self
-                            .renderer
-                            .as_ref()
-                            .map_or(1.0_f32, |r| r.scale_factor() as f32)
-                            .max(1e-6);
-                        let (xu, yu) = self
-                            .cursor_position
-                            .map(|p| (p.x as f32 / dpr, p.y as f32 / dpr))
-                            .or(was_down)
-                            .unwrap_or((0.0, 0.0));
-                        #[cfg(feature = "v8")]
-                        {
-                            self.flush_pointer_moves();
-                            if let Some(hov) = self.hovered_nid {
-                                self.js_pointer_release(hov.index() as u32, xu, yu);
-                            }
-                            if let Some((f, n)) = self.hovered_frame {
-                                let at = self
-                                    .pointer_target(xu, yu)
-                                    .frame
-                                    .map_or((0.0, 0.0), |t| (t.client.x, t.client.y));
-                                let nid = n.index() as u32;
-                                self.frame_pointer_event(f, nid, "pointerup", at, (0, 0));
-                                self.frame_mouse_event(f, nid, "mouseup", at, (0, 0));
-                            }
+                    self.release_automation_pointer();
+                    let _ = reply_tx.send(AutomationReply::Ack);
+                }
+                // MCP-TOTAL-S7d (BiDi `input.releaseActions`): release
+                // everything automation holds pressed — the `PointerDown`
+                // button (same release half as `PointerUp`) and every
+                // modifier held by `Key` (each gets its `keyup`).
+                // Idempotent when nothing is held.
+                AutomationCommand::ReleaseActions => {
+                    self.release_automation_pointer();
+                    self.release_automation_modifiers();
+                    let _ = reply_tx.send(AutomationReply::Ack);
+                }
+                // MCP-TOTAL-S7d: a wheel notch at the point. Trusted DOM
+                // `wheel` first (the real OS wheel does not reach the page
+                // as a DOM event yet — wheel_scroll.rs reserves that), then
+                // the same scroll routing the window event runs: frame,
+                // overflow container, smooth page scroll; Ctrl+wheel zooms,
+                // Shift+wheel scrolls horizontally. The `wheel` handler's
+                // result is not consulted — a `preventDefault()` still
+                // scrolls, like every wheel path today.
+                AutomationCommand::Wheel { x, y, delta_x, delta_y, modifiers } => {
+                    // Same coordinate contract as `Click`/`PointerDown`:
+                    // content-viewport CSS px → window CSS px via page_offset.
+                    let dpr = self
+                        .renderer
+                        .as_ref()
+                        .map_or(1.0_f64, |r| r.scale_factor())
+                        .max(1e-6);
+                    let (ox, oy) = self.page_offset();
+                    let (wx, wy) = (x + ox, y + oy);
+                    // The wheel lands where the cursor is: refresh hover
+                    // first, so the DOM event and the scroll routing
+                    // hit-test the same node.
+                    self.on_cursor_moved(winit::dpi::PhysicalPosition::new(
+                        f64::from(wx) * dpr,
+                        f64::from(wy) * dpr,
+                    ));
+                    #[cfg(feature = "v8")]
+                    self.flush_pointer_moves();
+                    #[cfg(feature = "v8")]
+                    {
+                        if let Some(hov) = self.hovered_nid {
+                            self.js_wheel_event(hov.index() as u32, wx, wy, (delta_x, delta_y), modifiers);
                         }
-                        // The click half — focus move, `click` dispatch,
-                        // activation — with the press pair already sent, so
-                        // `press_events = false`.
-                        self.handle_release_at_automation(xu, yu);
+                        if let Some((f, n)) = self.hovered_frame {
+                            let at = self
+                                .pointer_target(wx, wy)
+                                .frame
+                                .map_or((0.0, 0.0), |t| (t.client.x, t.client.y));
+                            self.frame_wheel_event(f, n.index() as u32, at, (delta_x, delta_y), modifiers);
+                        }
                     }
-                    self.doc_select = None;
-                    self.text_drag = None;
+                    // Swap the command's modifiers in for the Ctrl/Shift
+                    // branches of the real handler (bit order matches
+                    // `modifier_mask`), restore after.
+                    let saved = std::mem::replace(&mut self.modifiers, automation_modifiers(modifiers));
+                    // px → winit lines: `on_mouse_wheel` multiplies back by
+                    // the same notch step, so the page scroll equals the
+                    // deltas sent.
+                    let step = crate::wheel_scroll::wheel_notch_px(self.viewport_height_css()).max(1e-6);
+                    self.on_mouse_wheel(
+                        MouseScrollDelta::LineDelta(-delta_x / step, -delta_y / step),
+                        TouchPhase::Moved,
+                    );
+                    self.modifiers = saved;
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
                 // BUG-1194: a bare key press/release (Escape, Tab, Shift, …).
@@ -855,6 +871,98 @@ impl Lumen {
             }
         }
     }
+
+    /// The release half of `PointerUp`/`ReleaseActions` (MCP-TOTAL-S7d):
+    /// `pointerup`/`mouseup` under the cursor, the click half, `:active`
+    /// cleared, selection drags ended. Verbatim the old `PointerUp` arm body.
+    fn release_automation_pointer(&mut self) {
+        let was_down = self.automation_button_down.take();
+        // CSS `:active` clears on release — same as the real
+        // `MouseInput(Released)` branch.
+        if self.active_frame.is_some() {
+            self.active_frame = None;
+            self.refresh_frames(None);
+        }
+        if self.active_nid.is_some() {
+            self.active_nid = None;
+            self.active_from_keyboard = false;
+            self.sync_active_mirror();
+            self.relayout_chrome();
+            self.request_redraw();
+        }
+        if was_down.is_some() {
+            // Release coordinates: the live cursor position when a
+            // move landed, else the press point.
+            let dpr = self
+                .renderer
+                .as_ref()
+                .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                .max(1e-6);
+            let (xu, yu) = self
+                .cursor_position
+                .map(|p| (p.x as f32 / dpr, p.y as f32 / dpr))
+                .or(was_down)
+                .unwrap_or((0.0, 0.0));
+            #[cfg(feature = "v8")]
+            {
+                self.flush_pointer_moves();
+                if let Some(hov) = self.hovered_nid {
+                    self.js_pointer_release(hov.index() as u32, xu, yu);
+                }
+                if let Some((f, n)) = self.hovered_frame {
+                    let at = self
+                        .pointer_target(xu, yu)
+                        .frame
+                        .map_or((0.0, 0.0), |t| (t.client.x, t.client.y));
+                    let nid = n.index() as u32;
+                    self.frame_pointer_event(f, nid, "pointerup", at, (0, 0));
+                    self.frame_mouse_event(f, nid, "mouseup", at, (0, 0));
+                }
+            }
+            // The click half — focus move, `click` dispatch,
+            // activation — with the press pair already sent, so
+            // `press_events = false`.
+            self.handle_release_at_automation(xu, yu);
+        }
+        self.doc_select = None;
+        self.text_drag = None;
+    }
+
+    /// `ReleaseActions`: every modifier `Key` holds gets its `keyup` and its
+    /// bit cleared (`injected_modifiers`, same bits as the `Key` arm).
+    fn release_automation_modifiers(&mut self) {
+        const MOD_KEYS: [(u8, &str, &str); 4] = [
+            (0b0001, "Control", "ControlLeft"),
+            (0b0010, "Shift", "ShiftLeft"),
+            (0b0100, "Alt", "AltLeft"),
+            (0b1000, "Meta", "MetaLeft"),
+        ];
+        for (bit, key, code) in MOD_KEYS {
+            if self.injected_modifiers & bit != 0 {
+                self.inject_key_events(key, code, &["keyup"]);
+                self.injected_modifiers &= !bit;
+            }
+        }
+    }
+}
+
+/// `AutomationCommand::Wheel`'s modifier mask → winit state (bit order
+/// matches `modifier_mask`: ctrl 1, shift 2, alt 4, meta 8).
+fn automation_modifiers(mask: u8) -> ModifiersState {
+    let mut mods = ModifiersState::empty();
+    if mask & 0b0001 != 0 {
+        mods |= ModifiersState::CONTROL;
+    }
+    if mask & 0b0010 != 0 {
+        mods |= ModifiersState::SHIFT;
+    }
+    if mask & 0b0100 != 0 {
+        mods |= ModifiersState::ALT;
+    }
+    if mask & 0b1000 != 0 {
+        mods |= ModifiersState::SUPER;
+    }
+    mods
 }
 
 /// A queued `AutomationCommand::Wait` request (SDC-1b), re-checked once per

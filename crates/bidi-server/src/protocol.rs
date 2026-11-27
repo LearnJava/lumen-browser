@@ -2658,7 +2658,7 @@ fn char_dom_code(ch: char) -> String {
     }
 }
 
-/// Replay the pointer and key-input subset of a BiDi `input.performActions`
+/// Replay the pointer, key and wheel subsets of a BiDi `input.performActions`
 /// action chain against a live window (SDC-2 MVP).
 ///
 /// Supported: a `"pointer"` source's `pointerMove {x,y}` moves the cursor
@@ -2667,9 +2667,13 @@ fn char_dom_code(ch: char) -> String {
 /// codes (`\u{E00C}` Escape, `\u{E004}` Tab, ...) become `keydown`/`keyup` with
 /// the proper `key`/`code`, ordinary characters are typed: at the last pointer
 /// position when a pointer action preceded them (click-then-type), otherwise
-/// into the already focused element, without a click. NOT modeled: pauses,
-/// multi-touch/wheel sources, drag gestures, or `pointerUp`-gated release
-/// semantics - full W3C Actions fidelity is future work.
+/// into the already focused element, without a click; a `"wheel"` source's
+/// `scroll {x, y, deltaX, deltaY}` (MCP-TOTAL-S7d) is a wheel notch at the
+/// point — trusted `wheel` event, then the real scroll routing, with the
+/// modifiers a preceding key source still holds (Ctrl+wheel zooms).
+/// NOT modeled: pauses, multi-touch sources, drag gestures, or
+/// `pointerUp`-gated release semantics - full W3C Actions fidelity is future
+/// work.
 fn replay_input_actions(live: &mut LiveWindowSession, sources: &[JsonValue]) {
     let mut last_point: Option<Target> = None;
     // Modifier mask mirrored locally (bits match `AutomationCommand::Key`'s
@@ -2766,6 +2770,21 @@ fn replay_input_actions(live: &mut LiveWindowSession, sources: &[JsonValue]) {
                 }
                 flush_typed_text(live, last_point.as_ref(), &mut text);
             }
+            // MCP-TOTAL-S7d: wheel scroll actions — a notch at (x, y); the
+            // modifiers a preceding key source holds ride along (Ctrl+wheel
+            // zooms, Shift+wheel scrolls horizontally).
+            "wheel" => {
+                for action in actions {
+                    if action.get("type").and_then(|v| v.as_str()) != Some("scroll") {
+                        continue;
+                    }
+                    let x = action.get("x").and_then(|v| v.as_number()).unwrap_or(0.0) as f32;
+                    let y = action.get("y").and_then(|v| v.as_number()).unwrap_or(0.0) as f32;
+                    let delta_x = action.get("deltaX").and_then(|v| v.as_number()).unwrap_or(0.0) as f32;
+                    let delta_y = action.get("deltaY").and_then(|v| v.as_number()).unwrap_or(0.0) as f32;
+                    let _ = live.wheel(x, y, delta_x, delta_y, held_mods);
+                }
+            }
             _ => {}
         }
     }
@@ -2787,8 +2806,12 @@ fn flush_typed_text(live: &mut LiveWindowSession, point: Option<&Target>, text: 
 
 /// `input.releaseActions` — release all active input sources (BiDi §15.7.4).
 ///
-/// Phase 1 stub: validates context, returns ACK.
-fn input_release_actions(id: i64, params: &JsonValue, state: &BidiState) -> DispatchResult {
+/// MCP-TOTAL-S7d: with a live window the release is real — `pointerup`/
+/// `mouseup` for a button held by a previous `pointerDown`, `keyup`s for
+/// modifiers held by key actions. Without a live window the
+/// validate-then-ACK stub stays: in-memory state holds no input state to
+/// release.
+fn input_release_actions(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
     if let Some(ctx_id) = params.get("context").and_then(|v| v.as_str())
         && state.find(ctx_id).is_none()
     {
@@ -2796,6 +2819,15 @@ fn input_release_actions(id: i64, params: &JsonValue, state: &BidiState) -> Disp
             Some(id),
             "no such frame",
             &format!("unknown browsing context: {ctx_id}"),
+        ));
+    }
+    if let Some(live) = &state.live
+        && let Err(e) = live.release_actions()
+    {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "unknown error",
+            &format!("releaseActions: {e}"),
         ));
     }
     DispatchResult::single(make_success(id, empty_obj()))

@@ -372,6 +372,30 @@ pub trait BrowserSession {
         Err(lumen_core::error::Error::Other("type_focused: только для живого окна (--mcp-live-port)".into()))
     }
 
+    /// Отпустить всё зажатое автоматизацией (MCP-TOTAL-S7d, BiDi
+    /// `input.releaseActions`): кнопку `pointer_down` (страница получает
+    /// `pointerup`/`mouseup`, `:active` снят) и все удерживаемые модификаторы
+    /// `key_down` (каждый получает свой `keyup`). Идемпотентно.
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — команду исполняет только живое окно.
+    fn release_actions(&self) -> Result<()> {
+        Err(lumen_core::error::Error::Other("release_actions: только для живого окна (--mcp-live-port)".into()))
+    }
+
+    /// Колесо мыши в `(x, y)` (CSS px вьюпорта, MCP-TOTAL-S7d): страница
+    /// получает доверенный `wheel` с `delta_x`/`delta_y` (px, плюс —
+    /// вправо/вниз), затем прокрутка идёт тем же маршрутом, что у настоящего
+    /// `MouseWheel`; `modifiers` — маска из `press_key` (ctrl 1, shift 2,
+    /// alt 4, meta 8).
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — команду исполняет только живое окно.
+    fn wheel(&self, x: f32, y: f32, delta_x: f32, delta_y: f32, modifiers: u8) -> Result<()> {
+        let _ = (x, y, delta_x, delta_y, modifiers);
+        Err(lumen_core::error::Error::Other("wheel: только для живого окна (--mcp-live-port)".into()))
+    }
+
     /// Неистёкшие cookies активного jar живого окна, `HttpOnly` включительно
     /// (`storage.getCookies`, DEVX-20).
     ///
