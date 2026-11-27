@@ -859,6 +859,57 @@ fn browsing_context_set_viewport_replays_to_live_window() {
     assert_eq!(v.get("error").and_then(|x| x.as_str()), Some("invalid argument"));
 }
 
+/// MCP-TOTAL-S4b: `browsingContext.activate` replays a real `focus_window`
+/// into the live window, an arm error surfaces as `unknown error`, a missing
+/// context stays `no such frame`, and without a live window the old
+/// validate-then-ACK remains.
+#[test]
+fn browsing_context_activate_replays_to_live_window() {
+    use lumen_driver::{AutomationCommand, AutomationHandle, AutomationReply};
+    let (tx, rx) = std::sync::mpsc::channel::<lumen_driver::AutomationRequest>();
+    std::thread::spawn(move || {
+        for (cmd, reply_tx) in rx {
+            let reply = match cmd {
+                AutomationCommand::FocusWindow => AutomationReply::Ack,
+                _ => AutomationReply::Error("unsupported".into()),
+            };
+            let _ = reply_tx.send(reply);
+        }
+    });
+    let mut state = BidiState::with_live_session(LiveWindowSession::new(AutomationHandle::new(tx)), None);
+    let cid = new_session_ctx(&mut state);
+
+    let r = dispatch(
+        &format!(r#"{{"id":1,"method":"browsingContext.activate","params":{{"context":"{cid}"}}}}"#),
+        &mut state,
+    );
+    let v = parse(&r.frames[0]);
+    assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("success"));
+    assert!(
+        v.get("result").and_then(|r| r.as_object()).is_some_and(|o| o.is_empty()),
+        "activate must answer EmptyResult"
+    );
+
+    // Unknown context — no such frame, both with and without a live window.
+    let r = dispatch(
+        r#"{"id":2,"method":"browsingContext.activate","params":{"context":"nope"}}"#,
+        &mut state,
+    );
+    let v = parse(&r.frames[0]);
+    assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("error"));
+    assert_eq!(v.get("error").and_then(|x| x.as_str()), Some("no such frame"));
+
+    // Without a live window: Phase 1 validate-then-ACK.
+    let mut headless = BidiState::new();
+    let cid = new_session_ctx(&mut headless);
+    let r = dispatch(
+        &format!(r#"{{"id":3,"method":"browsingContext.activate","params":{{"context":"{cid}"}}}}"#),
+        &mut headless,
+    );
+    let v = parse(&r.frames[0]);
+    assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("success"));
+}
+
 #[test]
 fn session_status_ready_before_session() {
     let mut state = BidiState::new();

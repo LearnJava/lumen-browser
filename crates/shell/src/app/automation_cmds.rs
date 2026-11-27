@@ -995,6 +995,57 @@ impl Lumen {
                     };
                     let _ = reply_tx.send(reply);
                 }
+                AutomationCommand::SetFullscreen { enabled } => {
+                    // MCP-TOTAL-S4b: OS-fullscreen без fullscreen-элемента —
+                    // дословно хвост Fullscreen API из `about_to_wait`:
+                    // `set_fullscreen` + arm BUG-167, релайаут доедет в
+                    // `poll_fullscreen_resize` (бегает каждый тик). Всё это —
+                    // поток event loop, других вызовов окна и не бывает.
+                    let target = enabled.then_some(winit::window::Fullscreen::Borderless(None));
+                    let prev = self.window.as_ref().map(|w| {
+                        w.set_fullscreen(target);
+                        w.inner_size()
+                    });
+                    if let Some(prev) = prev {
+                        self.arm_fullscreen_resize(prev);
+                    }
+                    let _ = reply_tx.send(AutomationReply::Ack);
+                }
+                AutomationCommand::FocusWindow => {
+                    // MCP-TOTAL-S4b, BiDi `browsingContext.activate`: поднять
+                    // окно на передний план. OS может отказать процессу без
+                    // foreground-привилегии — winit молчит, честного
+                    // подтверждения у нас нет, поэтому Ack безусловный.
+                    if let Some(w) = self.window.as_ref() {
+                        w.focus_window();
+                    }
+                    let _ = reply_tx.send(AutomationReply::Ack);
+                }
+                AutomationCommand::GetWindowRect => {
+                    // MCP-TOTAL-S4b: внешний rect окна в CSS px (та же
+                    // единица, что у всех automation-rect'ов) и флаги
+                    // состояния; без окна — честная ошибка.
+                    let reply = match self.window.as_ref() {
+                        Some(w) => {
+                            let scale = w.scale_factor();
+                            let pos = w
+                                .outer_position()
+                                .map(|p| p.to_logical::<f32>(scale))
+                                .unwrap_or_default();
+                            let size = w.outer_size().to_logical::<f32>(scale);
+                            AutomationReply::WindowRect(WindowRect {
+                                x: pos.x,
+                                y: pos.y,
+                                width: size.width,
+                                height: size.height,
+                                maximized: w.is_maximized(),
+                                minimized: w.is_minimized().unwrap_or(false),
+                            })
+                        }
+                        None => AutomationReply::Error("get_window_rect: нет OS-окна".into()),
+                    };
+                    let _ = reply_tx.send(reply);
+                }
             }
         }
     }

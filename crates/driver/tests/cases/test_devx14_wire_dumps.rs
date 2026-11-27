@@ -248,3 +248,54 @@ fn live_window_set_viewport_round_trips_through_automation_channel() {
     session.set_viewport(None, None).expect("viewport reset failed");
     assert_eq!(*got.lock().unwrap(), Some((None, None)));
 }
+
+/// MCP-TOTAL-S4b: the window tools round-trip through the automation
+/// channel — `enabled` carries into `SetFullscreen`, `FocusWindow` and
+/// `GetWindowRect` arrive as their own commands, and the rect comes back
+/// as the typed [`lumen_driver::WindowRect`].
+#[test]
+fn live_window_window_tools_round_trip_through_automation_channel() {
+    use lumen_driver::WindowRect;
+
+    let got_fullscreen = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let (tx, rx) = std::sync::mpsc::channel::<lumen_driver::AutomationRequest>();
+    let rec = std::sync::Arc::clone(&got_fullscreen);
+    std::thread::spawn(move || {
+        for (cmd, reply_tx) in rx {
+            let reply = match cmd {
+                AutomationCommand::SetFullscreen { enabled } => {
+                    *rec.lock().unwrap() = Some(enabled);
+                    AutomationReply::Ack
+                }
+                AutomationCommand::FocusWindow => AutomationReply::Ack,
+                AutomationCommand::GetWindowRect => AutomationReply::WindowRect(WindowRect {
+                    x: 12.0,
+                    y: 34.0,
+                    width: 1280.0,
+                    height: 720.0,
+                    maximized: false,
+                    minimized: true,
+                }),
+                _ => AutomationReply::Error("unsupported".into()),
+            };
+            let _ = reply_tx.send(reply);
+        }
+    });
+    let session = LiveWindowSession::new(AutomationHandle::new(tx));
+
+    session.set_fullscreen(true).expect("set_fullscreen failed");
+    assert_eq!(*got_fullscreen.lock().unwrap(), Some(true));
+    session.focus_window().expect("focus_window failed");
+    let rect = session.get_window_rect().expect("get_window_rect failed");
+    assert_eq!(
+        rect,
+        WindowRect {
+            x: 12.0,
+            y: 34.0,
+            width: 1280.0,
+            height: 720.0,
+            maximized: false,
+            minimized: true,
+        }
+    );
+}

@@ -40,7 +40,7 @@ pub mod gpu_session;
 pub use types::{
     A11yBounds, A11yNode, A11yState, AxQuery, AutomationCommand, AutomationReply, AutomationDialog, AutomationDownload, BoxModel, ComputedProperties, ConsoleEntry, ConsoleLevel,
     AutomationCookie, ExplainElement, ExplainPage, ExplainPagePhaseTimings, FingerprintProfile, InputCommand, InterceptedRequest,
-    InvariantViolationCounts, NavigationSnapshot, NetworkEntry, NodeRef, ScrollDelta, TabInfo, Target, WaitCondition,
+    InvariantViolationCounts, NavigationSnapshot, NetworkEntry, NodeRef, ScrollDelta, TabInfo, Target, WaitCondition, WindowRect,
 };
 pub use automation::{AutomationHandle, AutomationRequest};
 pub use live_session::LiveWindowSession;
@@ -598,6 +598,34 @@ pub trait BrowserSession {
     /// По умолчанию `Err` — команду исполняет только живое окно.
     fn cancel_download(&self, _id: u32) -> Result<()> {
         Err(lumen_core::error::Error::Other("cancel_download: только для живого окна (--mcp-live-port)".into()))
+    }
+
+    /// OS-fullscreen живого окна (MCP-TOTAL-S4b): `true` — войти,
+    /// `false` — выйти; видовая часть страницы (viewport, `innerWidth`/
+    /// `innerHeight`) доезжает следом за OS-размером, как у Fullscreen API.
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — команду исполняет только живое окно.
+    fn set_fullscreen(&self, _enabled: bool) -> Result<()> {
+        Err(lumen_core::error::Error::Other("set_fullscreen: только для живого окна (--mcp-live-port)".into()))
+    }
+
+    /// Поднять живое окно на передний план (MCP-TOTAL-S4b, BiDi
+    /// `browsingContext.activate`).
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — команду исполняет только живое окно.
+    fn focus_window(&self) -> Result<()> {
+        Err(lumen_core::error::Error::Other("focus_window: только для живого окна (--mcp-live-port)".into()))
+    }
+
+    /// Rect и флаги состояния живого окна (MCP-TOTAL-S4b): позиция и внешний
+    /// размер в CSS px, `maximized`/`minimized`.
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — команду исполняет только живое окно.
+    fn get_window_rect(&self) -> Result<WindowRect> {
+        Err(lumen_core::error::Error::Other("get_window_rect: только для живого окна (--mcp-live-port)".into()))
     }
 
     // ── Isolation & Fingerprinting (Phase 1: 8E/8F) ─────────────────────────

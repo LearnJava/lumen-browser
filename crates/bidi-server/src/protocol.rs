@@ -1284,10 +1284,11 @@ fn bc_traverse_history(id: i64, params: &JsonValue, state: &mut BidiState) -> Di
     }
 }
 
-/// `browsingContext.activate` — пометить контекст активным (ACK).
+/// `browsingContext.activate` — поднять окно контекста на передний план.
 ///
-/// Валидирует существование контекста; реальной активации окна на этом слое
-/// нет (handoff P3).
+/// Валидирует существование контекста; с живым окном активация реальная
+/// (MCP-TOTAL-S4b) — `focus_window` доезжает до OS-окна, ошибка — честный
+/// `unknown error`; без живого окна — прежний validate-then-ACK (Phase 1).
 fn bc_activate(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
     let Some(cid) = params.get("context").and_then(|v| v.as_str()) else {
         return DispatchResult::single(make_error(Some(id), "invalid argument", "missing context"));
@@ -1297,6 +1298,15 @@ fn bc_activate(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchRe
             Some(id),
             "no such frame",
             &format!("no such context: {cid}"),
+        ));
+    }
+    if let Some(live) = &state.live
+        && let Err(e) = live.focus_window()
+    {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "unknown error",
+            &format!("activate: {e}"),
         ));
     }
     DispatchResult::single(make_success(id, empty_obj()))
