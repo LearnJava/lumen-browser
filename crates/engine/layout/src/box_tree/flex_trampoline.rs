@@ -690,7 +690,26 @@ fn column_item_cross_shift(
     // часть сдвига надо вычесть, а не добавить сверху (BUG-1853: карточка
     // портала nextera уезжала на 90px вправо от центра). При auto-ширине
     // §10.3.3 оставляет маргины по нулю — вычитать нечего.
-    let block_applied = if is.width.as_ref().and_then(|l| l.resolve(iem, Some(laid_base), viewport)).is_some() {
+    // Но это верно только для боксов, чей собственный расклад и правда решает
+    // авто-маргины против контейнера: обычный блок/flow-root (§10.3.3),
+    // табличная обёртка (§17.4) и multicol (блочный arm). Вложенный
+    // flex/grid-контейнер (BoxKind::Block, но display Flex/Grid — расклад
+    // выбирается по display), замещаемый бокс и form control кладутся своим
+    // алгоритмом на origin поперечной оси с нулевыми маргинами — им весь
+    // остаток §8.1 должен достаться сдвигом (BUG-1858: `.messages-area`
+    // портала nextera — flex-айтем с `width:820px; margin:auto` — стоял
+    // у левого края: 550−550=0).
+    let self_solved_margins = match item.kind {
+        BoxKind::Table => true,
+        BoxKind::Block | BoxKind::FlowRoot => !matches!(
+            is.display,
+            Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid
+        ),
+        _ => false,
+    };
+    let block_applied = if self_solved_margins
+        && is.width.as_ref().and_then(|l| l.resolve(iem, Some(laid_base), viewport)).is_some()
+    {
         let laid_avail = (laid_base - m_l - m_r).max(0.0);
         let laid_free = (laid_avail - item.rect.width).max(0.0);
         if auto_cross_l && auto_cross_r {
