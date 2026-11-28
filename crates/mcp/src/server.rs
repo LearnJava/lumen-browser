@@ -202,6 +202,17 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                 mime_type: "text/plain".to_string(),
                 experimental: true,
             },
+            // ADR-024 L1 (`x-` prefix + `experimental: true`, MCP-TOTAL-S5c):
+            // the live window's per-frame paint statistics — the same numbers
+            // the `[frame] total …` log line prints under `LUMEN_FRAME_LOG=1`.
+            // Live window only.
+            McpResource {
+                uri: "resource://x-frame-stats".to_string(),
+                name: "x-frame-stats".to_string(),
+                description: "Per-frame paint statistics of the live window (frame total, renderer call, display list size; last 120 frames)".to_string(),
+                mime_type: "text/plain".to_string(),
+                experimental: true,
+            },
         ];
 
         let response = json!({
@@ -1152,6 +1163,12 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                     Err(e) => McpResponse::err(id.clone(), -32603, format!("Mem report error: {e}")),
                 }
             }
+            "resource://x-frame-stats" => {
+                match self.session.frame_stats() {
+                    Ok(stats) => McpResponse::ok(id.clone(), json!({ "contents": [{ "type": "text", "text": stats, "mimeType": "text/plain" }] })),
+                    Err(e) => McpResponse::err(id.clone(), -32603, format!("Frame stats error: {e}")),
+                }
+            }
             _ => McpResponse::err(id.clone(), -32602, format!("Unknown resource: {uri}")),
         }
     }
@@ -2057,6 +2074,10 @@ mod tests {
             Ok("MEM_REPORT dl_cmds=0".to_string())
         }
 
+        fn frame_stats(&self) -> lumen_core::error::Result<String> {
+            Ok("FRAME_STATS shown=1 capacity=120 recorded=1".to_string())
+        }
+
         fn computed_style(&self, _sel: &str) -> lumen_core::error::Result<Option<lumen_driver::ComputedProperties>> {
             Ok(None)
         }
@@ -2238,13 +2259,13 @@ mod tests {
     }
 
     #[test]
-    fn resources_list_returns_seven_resources() {
+    fn resources_list_returns_eight_resources() {
         let mut server = McpServer::new(MockSession, VecTransport::new());
         let req = make_request("resources/list", serde_json::json!({}));
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_none());
         let resources = resp.result.unwrap()["resources"].as_array().cloned().unwrap_or_default();
-        assert_eq!(resources.len(), 7);
+        assert_eq!(resources.len(), 8);
         let uris: Vec<_> = resources.iter().map(|r| r["uri"].as_str().unwrap_or("")).collect();
         assert!(uris.contains(&"resource://screenshot"));
         assert!(uris.contains(&"resource://a11y_tree"));
@@ -2253,6 +2274,7 @@ mod tests {
         assert!(uris.contains(&"resource://network"));
         assert!(uris.contains(&"resource://x-display-list"));
         assert!(uris.contains(&"resource://x-mem-report"));
+        assert!(uris.contains(&"resource://x-frame-stats"));
     }
 
     /// ADR-024 L1: `resource://x-display-list` must carry `"experimental": true`
@@ -2709,6 +2731,20 @@ mod tests {
         let contents = &resp.result.unwrap()["contents"];
         assert_eq!(contents[0]["mimeType"], "text/plain");
         assert_eq!(contents[0]["text"], "MEM_REPORT dl_cmds=0");
+    }
+
+    #[test]
+    fn resources_read_x_frame_stats_ok() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "resources/read",
+            serde_json::json!({ "uri": "resource://x-frame-stats" }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
+        let contents = &resp.result.unwrap()["contents"];
+        assert_eq!(contents[0]["mimeType"], "text/plain");
+        assert_eq!(contents[0]["text"], "FRAME_STATS shown=1 capacity=120 recorded=1");
     }
 
     #[test]

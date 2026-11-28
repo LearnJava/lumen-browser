@@ -206,6 +206,19 @@ pub trait BrowserSession {
         Err(lumen_core::error::Error::Other("mem_report: только для живого окна (--mcp-live-port)".into()))
     }
 
+    /// Покадровая статистика живого окна (MCP-TOTAL-S5c,
+    /// `resource://x-frame-stats`): те же числа, что печатает строка
+    /// `[frame] total …` под `LUMEN_FRAME_LOG=1` — полное время handler'а
+    /// redraw, время вызова рендерера и размер display list — покадрово за
+    /// последние ~2 с (120 кадров).
+    ///
+    /// # Errors
+    /// По умолчанию `Err` — кольцо кадров наполняется в `Lumen` (UI-поток)
+    /// живого окна, headless-сессии кадров не считают.
+    fn frame_stats(&self) -> Result<String> {
+        Err(lumen_core::error::Error::Other("frame_stats: только для живого окна (--mcp-live-port)".into()))
+    }
+
     /// Журнал сетевых запросов с момента последней навигации.
     fn network_log(&self) -> Result<Vec<NetworkEntry>>;
 

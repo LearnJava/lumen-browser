@@ -166,6 +166,16 @@ impl BrowserSession for LiveWindowSession {
         }
     }
 
+    /// MCP-TOTAL-S5c: the per-frame statistics round-trip through
+    /// [`AutomationCommand::FrameStats`] — the arm formats the same ring the
+    /// `[frame] total` log line numbers come from.
+    fn frame_stats(&self) -> Result<String> {
+        match self.execute(AutomationCommand::FrameStats)? {
+            AutomationReply::FrameStats(text) => Ok(text),
+            other => Err(unexpected_reply("FrameStats", &other)),
+        }
+    }
+
     /// MCP-TOTAL-S2d: the computed-style map round-trips through
     /// [`AutomationCommand::ComputedStyle`]; `None` — no page or no match,
     /// the same shape the headless sessions answer.

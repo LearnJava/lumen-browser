@@ -412,6 +412,13 @@ pub(crate) struct Lumen {
     /// Наполняется только при включённом frame-log; сводка p50/p95/p99
     /// печатается по кадансу `LUMEN_MEM_REPORT` и один раз на выходе.
     pub(crate) frame_stats: lumen_paint::FrameStats,
+    /// Кольцо последних кадров для `resource://x-frame-stats`
+    /// (MCP-TOTAL-S5c): полное время handler'а redraw, время вызова
+    /// рендерера и размер display list за последние ~2 с (120 кадров) —
+    /// числа той же строки `[frame] total …`, что и у `frame_stats`, но
+    /// покадрово и БЕЗ условия `LUMEN_FRAME_LOG` (ресурс обязан работать
+    /// и без флага).
+    pub(crate) frame_ring: crate::frame_log::FrameRing,
     /// ADR-016 M2.0: сессионный аккумулятор времени `relayout()` на UI-потоке
     /// (стиль + layout + сборка display-list + доставка JS-observer'ов). Каждый
     /// интерактивный relayout (DOM-мутация из JS, hover/focus, resize, тик

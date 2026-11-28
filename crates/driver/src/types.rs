@@ -686,6 +686,12 @@ pub enum AutomationCommand {
     /// periodic `LUMEN_MEM_REPORT=1` log line carries. Reply:
     /// [`AutomationReply::MemReport`].
     MemReport,
+    /// Per-frame paint statistics of the live window (MCP-TOTAL-S5c, wires
+    /// `resource://x-frame-stats`) — the same numbers the `[frame] total …`
+    /// log line prints under `LUMEN_FRAME_LOG=1` (frame handler total,
+    /// renderer call, display list size), one line per frame for the last
+    /// ~2 s. Reply: [`AutomationReply::FrameStats`].
+    FrameStats,
     /// Box-model snapshot of `selector`'s subtree only (MCP-TOTAL-S2c, wires
     /// `x-scope-layout` to the live window). A selector matching nothing is an
     /// empty snapshot — the same shape the headless sessions answer.
@@ -1028,6 +1034,9 @@ pub enum AutomationReply {
     /// `MemReport` result: the live window's memory-report text
     /// (MCP-TOTAL-S5b).
     MemReport(String),
+    /// `FrameStats` result: the live window's per-frame statistics text
+    /// (MCP-TOTAL-S5c).
+    FrameStats(String),
     /// `ComputedStyle` result: the computed-style property map, `None` when
     /// the selector matched nothing (MCP-TOTAL-S2d).
     ComputedStyle(Option<ComputedProperties>),

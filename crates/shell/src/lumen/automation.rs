@@ -388,6 +388,17 @@ impl Lumen {
             report
         }
 
+        /// Кольцо последних кадров для `AutomationCommand::FrameStats`
+        /// (MCP-TOTAL-S5c, wires `resource://x-frame-stats`) — те же числа,
+        /// что печатает строка `[frame] total …` под `LUMEN_FRAME_LOG=1`:
+        /// полное время handler'а redraw, время вызова рендерера и размер
+        /// display list, покадрово за последние ~2 с. Кольцо кормится на
+        /// каждом `RedrawRequested` без флага, поэтому дамп жив и без
+        /// `LUMEN_FRAME_LOG`.
+        pub(crate) fn automation_frame_stats(&self) -> String {
+            self.frame_ring.dump()
+        }
+
         /// Display-list commands of `selector`'s subtree for
         /// `AutomationCommand::DisplayListScoped` (MCP-TOTAL-S2b) — rebuilt
         /// from the layout tree via DEVX-7 provenance, the same

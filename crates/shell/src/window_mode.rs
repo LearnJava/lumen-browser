@@ -484,6 +484,7 @@ fn run_window_mode_inner(
         last_raf_batch_ms: -RAF_MIN_INTERVAL_MS,
         last_mem_report_s: 0.0,
         frame_stats: lumen_paint::FrameStats::new(),
+        frame_ring: crate::frame_log::FrameRing::new(),
         engine_stats: lumen_paint::FrameStats::new(),
         last_frame_fp: None,
         scroll_cache: lumen_paint::ScrollCache::default_overscan(),
