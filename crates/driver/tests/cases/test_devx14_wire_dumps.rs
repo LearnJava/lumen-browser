@@ -58,6 +58,7 @@ fn fake_live_session(boxes: Vec<BoxModel>, entries: Vec<NetworkEntry>) -> LiveWi
                 AutomationCommand::NetworkLog => AutomationReply::NetworkLog(entries.clone()),
                 AutomationCommand::DisplayList => AutomationReply::DisplayList("whole-page dump".into()),
                 AutomationCommand::MemReport => AutomationReply::MemReport("MEM_REPORT dl_cmds=0".into()),
+                AutomationCommand::FrameStats => AutomationReply::FrameStats("FRAME_STATS shown=1 capacity=120 recorded=1".into()),
                 AutomationCommand::DisplayListScoped { selector } => {
                     AutomationReply::DisplayList(format!("scoped [{selector}] dump"))
                 }
@@ -190,6 +191,22 @@ fn live_window_mem_report_round_trips_and_headless_errors() {
 
     let headless = InProcessSession::new();
     let err = headless.mem_report().expect_err("headless mem_report must be an error");
+    assert!(err.to_string().contains("только для живого окна"), "wrong error: {err}");
+}
+
+/// MCP-TOTAL-S5c: the frame-stats resource round-trips through the
+/// automation channel; a headless session answers the honest "live window
+/// only" error (the trait default — headless sessions count no frames).
+#[test]
+fn live_window_frame_stats_round_trips_and_headless_errors() {
+    let session = fake_live_session(Vec::new(), Vec::new());
+    assert_eq!(
+        session.frame_stats().expect("frame_stats failed"),
+        "FRAME_STATS shown=1 capacity=120 recorded=1"
+    );
+
+    let headless = InProcessSession::new();
+    let err = headless.frame_stats().expect_err("headless frame_stats must be an error");
     assert!(err.to_string().contains("только для живого окна"), "wrong error: {err}");
 }
 

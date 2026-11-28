@@ -100,3 +100,79 @@ pub(crate) fn tail_nanos() -> u64 {
 pub(crate) fn tail_nanos() -> u64 {
     0
 }
+
+/// Вместимость [`FrameRing`] — ~2 с истории на 60 Гц.
+const FRAME_RING_CAPACITY: usize = 120;
+
+/// Кольцо последних кадров для `resource://x-frame-stats` (MCP-TOTAL-S5c).
+///
+/// В отличие от `lumen_paint::FrameStats` (перцентильная сводка за сессию),
+/// хранит ПОКАДРОВЫЕ записи — полное время handler'а redraw, время вызова
+/// рендерера (статья `paint` строки `[frame] total`) и размер display list —
+/// ровно те числа, что печатает `[frame] total …` под `LUMEN_FRAME_LOG=1`.
+/// Кормится безусловно на каждом `RedrawRequested`: ресурс обязан работать и
+/// без флага (инструментация в `redraw_requested.rs`).
+pub(crate) struct FrameRing {
+    /// `(total_ms, paint_ms, dl_cmds)` последних кадров, старые впереди.
+    samples: std::collections::VecDeque<(f32, f32, usize)>,
+    /// Всего учтено кадров с начала сессии (в дамп идёт только хвост).
+    recorded: u64,
+}
+
+impl FrameRing {
+    pub(crate) fn new() -> Self {
+        Self {
+            samples: std::collections::VecDeque::with_capacity(FRAME_RING_CAPACITY),
+            recorded: 0,
+        }
+    }
+
+    /// Учитывает кадр: полное время handler'а redraw, время вызова рендерера
+    /// (мс) и число команд display list.
+    pub(crate) fn record(&mut self, total_ms: f32, paint_ms: f32, dl_cmds: usize) {
+        if self.samples.len() == FRAME_RING_CAPACITY {
+            self.samples.pop_front();
+        }
+        self.samples.push_back((total_ms, paint_ms, dl_cmds));
+        self.recorded += 1;
+    }
+
+    /// Текстовый дамп ресурса: заголовок + по строке на кадр в порядке
+    /// поступления. Формат строки повторяет `[frame] total …`.
+    pub(crate) fn dump(&self) -> String {
+        let mut out = format!(
+            "FRAME_STATS shown={} capacity={FRAME_RING_CAPACITY} recorded={}\n",
+            self.samples.len(),
+            self.recorded,
+        );
+        for (total_ms, paint_ms, dl_cmds) in &self.samples {
+            out.push_str(&format!(
+                "frame total {total_ms:6.2}ms paint {paint_ms:6.2}ms dl {dl_cmds} cmds\n"
+            ));
+        }
+        out
+    }
+
+}
+
+#[cfg(test)]
+mod frame_ring_tests {
+    use super::{FrameRing, FRAME_RING_CAPACITY};
+
+    #[test]
+    fn ring_keeps_only_the_last_frames() {
+        let mut ring = FrameRing::new();
+        for i in 0..(FRAME_RING_CAPACITY + 10) {
+            ring.record(i as f32, i as f32 * 0.5, i);
+        }
+        let dump = ring.dump();
+        assert!(
+            dump.contains("FRAME_STATS shown=120 capacity=120 recorded=130\n"),
+            "header wrong: {dump}"
+        );
+        // Кадры 0..10 вытеснены, 10 и 129 — границы кольца.
+        assert!(dump.contains("dl 10 cmds"), "first kept frame missing: {dump}");
+        assert!(dump.contains("dl 129 cmds"), "last frame missing: {dump}");
+        assert!(!dump.contains("dl 9 cmds"), "evicted frame survived: {dump}");
+    }
+}

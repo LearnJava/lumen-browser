@@ -46,8 +46,11 @@ impl Lumen {
         // Диагностика кадра (LUMEN_FRAME_LOG=1): полное время
         // RedrawRequested (шаги 1–6). Paint-фаза отдельно логируется
         // бэкендом строкой `[frame] paint …`.
-        let frame_log_t0 =
-            lumen_paint::frame_log_enabled().then(std::time::Instant::now);
+        // MCP-TOTAL-S5c: якорь кадра создаётся БЕЗУСЛОВНО — кольцо
+        // x-frame-stats кормится на каждом redraw, а не только под
+        // `LUMEN_FRAME_LOG`; под флагом это тот же `Instant`, что и раньше.
+        let frame_t0 = std::time::Instant::now();
+        let frame_log_t0 = lumen_paint::frame_log_enabled().then_some(frame_t0);
 
         // Warm-frame bench (LUMEN_BENCH): таймер всего RedrawRequested,
         // включая skip-путь — на нём как раз и меряется цена решения
@@ -1623,6 +1626,10 @@ impl Lumen {
         if let Some(t0) = frame_log_t0 {
             marks[4] = t0.elapsed().as_secs_f64() * 1e3;
         }
+        // MCP-TOTAL-S5c: статья `paint` строки `[frame] total` — интервал от
+        // этой метки (та же точка, что `marks[4]`) до возврата из рендерера;
+        // кольцо снимает её безусловно, двумя `Instant::now()` за кадр.
+        let paint_t0 = std::time::Instant::now();
         // Длина overlay-буфера на входе в рендерер: перепись пасса
         // (срез 36) считала её изнутри paint, здесь она нужна рядом с
         // раскладкой хрома, чтобы видеть долю хрома в overlay.
@@ -1785,14 +1792,20 @@ impl Lumen {
             }
         }
 
-        if let Some(t0) = frame_log_t0 {
-            let frame_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        // MCP-TOTAL-S5c: кольцо последних кадров кормится БЕЗУСЛОВНО — это
+        // единственный источник ресурса x-frame-stats, и его числа обязаны
+        // совпадать с тем, что под `LUMEN_FRAME_LOG=1` печатает
+        // `[frame] total …` (тот же `frame_ms`, тот же `paint`-интервал).
+        let frame_ms = frame_t0.elapsed().as_secs_f64() * 1000.0;
+        let paint_ms = paint_t0.elapsed().as_secs_f64() * 1e3;
+        let dl_cmds = self.display_list.len();
+        self.frame_ring.record(frame_ms as f32, paint_ms as f32, dl_cmds);
+        if frame_log_t0.is_some() {
             marks[5] = frame_ms;
             self.frame_stats.record(frame_ms as f32);
             eprintln!(
-                "[frame] total {frame_ms:6.2}ms  (scroll_y {:.0}, dl {} cmds)",
+                "[frame] total {frame_ms:6.2}ms  (scroll_y {:.0}, dl {dl_cmds} cmds)",
                 self.scroll_y,
-                self.display_list.len(),
             );
             // BUG-405 срез 34: шаги handler-а как ИНТЕРВАЛЫ между
             // метками. `scroll` — шаги 1/1.6/1.7 плюс порог
