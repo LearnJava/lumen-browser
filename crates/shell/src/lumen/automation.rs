@@ -806,6 +806,12 @@ pub(crate) fn hit_belongs_to_target(
     target: lumen_dom::NodeId,
     doc: Option<&lumen_dom::Document>,
 ) -> bool {
+    // Псевдо-бокс scroll-контрола (`::scroll-button()`/`::scroll-marker`)
+    // адресуется originating-элементу: клик по кнопке scroller'а — это клик
+    // по самому scroller'у (CSS Overflow L5, WPT `scroll-buttons-scroll-distance`).
+    if hit.pseudo.is_some_and(|p| p.origin == target) {
+        return true;
+    }
     if hit.source_node == target || hit.path.contains(&target) {
         return true;
     }

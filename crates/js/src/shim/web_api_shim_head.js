@@ -114,6 +114,23 @@ function _lumen_page_scroll_max() {
     return [Math.max(0, sw - vp[0]), Math.max(0, sh - vp[1])];
 }
 
+// CSS Overflow L5 §3.1.8 «eventual scroll position»: финальные позиции всех
+// активных smooth-анимаций — шелл подмешивает их в `scroll_offsets` при
+// подсчёте `scroll_marker_relations`, чтобы `:target-current` следовал за
+// позицией, к которой докрутится скролл, а не за промежуточным кадром.
+// Карта пересылается целиком при каждом изменении (`p` — страница, не
+// представима NodeId и не передаётся).
+function _lumen_smooth_targets_push() {
+    if (typeof _lumen_smooth_targets !== 'function') return;
+    var parts = [];
+    for (var k in _lumen_smooth_anims) {
+        if (k === 'p') continue;
+        var a = _lumen_smooth_anims[k];
+        parts.push(k + ',' + a.tx + ',' + a.ty);
+    }
+    _lumen_smooth_targets(parts.join(';'));
+}
+
 function _lumen_smooth_kick() {
     if (_lumen_smooth_raf) return;
     _lumen_smooth_raf = true;
@@ -138,12 +155,14 @@ function _lumen_smooth_scroll(key, tx, ty, snap) {
         sx: cur[0], sy: cur[1], tx: tx, ty: ty, t0: performance.now(),
         hist: [cur[0], cur[1]], fin: 0, landed: false, snap: !!snap && key === 'p'
     };
+    _lumen_smooth_targets_push();
     _lumen_smooth_kick();
 }
 
 // An instant request: whatever was animating stops where it is.
 function _lumen_scroll_instant(key, x, y) {
     delete _lumen_smooth_anims[key];
+    _lumen_smooth_targets_push();
     _lumen_scroller_set(key, x, y);
 }
 
@@ -155,6 +174,11 @@ function _lumen_scroll_to_pos(key, x, y, behavior, snap) {
     // (CSSOM View §Extensions to the Element interface: «return»).
     if (key !== 'p' && !(_lumen_get_scroll_state(key) && _lumen_is_scroll_container(key))) return;
     var cssNid = key === 'p' ? _lumen_u2n(_lumen_get_html_element()) : key;
+    // CSS Overflow L5 §2.1: any scroll (programmatic or animated) drops the
+    // scroll container's explicit `::scroll-marker` current target — the
+    // shell's drain applies the same rule to `scroll_marker_targets`; doing
+    // it here too keeps a same-turn `getComputedStyle` honest.
+    if (cssNid !== null) _lumen_marker_target_clear(cssNid);
     if (_lumen_use_smooth(behavior, cssNid)) _lumen_smooth_scroll(key, x, y, snap);
     else _lumen_scroll_instant(key, x, y);
 }
@@ -212,6 +236,7 @@ function _lumen_smooth_tick() {
         if (t >= 1) { a.fin = _LUMEN_SMOOTH_SETTLE; a.landed = true; }
         more = true;
     }
+    _lumen_smooth_targets_push();
     if (more) _lumen_smooth_kick();
 }
 

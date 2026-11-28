@@ -102,10 +102,17 @@ pub(super) fn expand_nesting(
             }
             let expanded = match combinator {
                 None => {
-                    // `&.foo` → merge parent head with nested head, keep tails.
+                    // `&` — это ВЕСЬ родительский complex-селектор, поэтому
+                    // compound-join продолжается в его ПОСЛЕДНЕМ compound:
+                    // `.a .b { &::marker }` → `.a .b::marker`, `&.x` →
+                    // `.a .b.x` — а не `.a::marker .b` / `.a.x .b`.
+                    // (CSS Nesting L1 §3: `&` представляет родителя целиком.)
                     let mut head = parent.head.clone();
-                    head.parts.extend_from_slice(&n.head.parts);
                     let mut tail = parent.tail.clone();
+                    match tail.last_mut() {
+                        Some((_, last)) => last.parts.extend_from_slice(&n.head.parts),
+                        None => head.parts.extend_from_slice(&n.head.parts),
+                    }
                     tail.extend_from_slice(&n.tail);
                     ComplexSelector { head, tail }
                 }

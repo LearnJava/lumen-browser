@@ -515,6 +515,34 @@ pub fn sheet_has_scroll_button_state(sheet: &Stylesheet) -> bool {
     })
 }
 
+/// CSS Overflow L5 §3.1.7 — whether `sheet` carries a `::scroll-marker`
+/// selector qualified by `:target-current`/`:target-before`/`:target-after`,
+/// i.e. whether marker styles depend on scroll position and the layout must
+/// feed per-target marker relations (`scroll_state::scroll_marker_relations`).
+/// Media-unaware like [`sheet_has_scroll_button_state`]: over-approximation
+/// only costs one tree walk.
+pub fn sheet_has_scroll_marker_target_state(sheet: &Stylesheet) -> bool {
+    all_rules(sheet).any(|r| {
+        r.selectors.iter().any(|s| {
+            let subject = s.tail.last().map_or(&s.head, |(_, c)| c);
+            let mut has_marker = false;
+            let mut has_state = false;
+            for p in &subject.parts {
+                match p {
+                    SimpleSelector::PseudoElement(PseudoElementKind::ScrollMarker) => {
+                        has_marker = true
+                    }
+                    SimpleSelector::PseudoClass(
+                        PseudoClass::TargetCurrent | PseudoClass::TargetBefore | PseudoClass::TargetAfter,
+                    ) => has_state = true,
+                    _ => {}
+                }
+            }
+            has_marker && has_state
+        })
+    })
+}
+
 /// Whether `selector`'s subject compound carries a `::-webkit-scrollbar*`
 /// pseudo-element (`::-webkit-scrollbar`, `-thumb`, `-track`), i.e. whether
 /// `apply_webkit_scrollbar_pseudos` could ever find something to apply.

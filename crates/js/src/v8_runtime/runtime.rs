@@ -118,6 +118,30 @@ pub struct V8JsRuntime {
     /// computed from the previous flush's finished tree — feeds
     /// `::scroll-button():enabled`/`:disabled` through `ScrollHints::edges`.
     pub(super) scroll_button_edges: Arc<Mutex<HashMap<u32, lumen_layout::EdgeFlags>>>,
+    /// CSS Overflow L5 §3.1.7: `::scroll-marker` target → relation to the
+    /// active marker of its group (`NodeId::raw()` → `MARKER_*`), computed
+    /// from the previous flush's finished tree — feeds `:target-current`/
+    /// `:target-before`/`:target-after` through `ScrollHints::markers`.
+    /// The explicit current-target map ([`Self::shell_marker_targets`])
+    /// is applied when the relations are resolved each flush.
+    pub(super) scroll_marker_states: Arc<Mutex<HashMap<u32, u8>>>,
+    /// CSS Overflow L5 §3.1.7/§2.1: the shell's explicit current scroll
+    /// target map (`container NodeId::raw()` → `target NodeId::raw()`) —
+    /// pushed via `notify_scroll_marker_targets` on every mutation and every
+    /// relayout commit. Each flush resolves `::scroll-marker` `:target-*`
+    /// relations itself over its fresh tree
+    /// ([`lumen_layout::scroll_marker_relations`]), so same-tick
+    /// `getComputedStyle` sees activations and scroll clears without a
+    /// one-flush lag.
+    pub(super) shell_marker_targets: Arc<Mutex<HashMap<u32, u32>>>,
+    /// CSS Overflow L5 §3.1.8 «eventual scroll position»: конечная позиция
+    /// каждого smooth-scroll, который шим сейчас анимирует
+    /// (`container NodeId::raw()` → `(tx, ty)`). Шим присылает карту целиком
+    /// при каждом изменении (`_lumen_smooth_targets`); пустая — анимаций нет.
+    /// Шелл подмешивает её в `scroll_offsets` при подсчёте
+    /// `scroll_marker_relations`, чтобы `:target-current` отражал позицию,
+    /// к которой докрутится скролл, а не промежуточный кадр анимации.
+    pub(super) smooth_scroll_targets: Arc<Mutex<HashMap<u32, (f32, f32)>>>,
     /// CSS Anchor Positioning L1 §4.3: the scroll containers each anchor-positioned box follows
     /// (`NodeId::index()` → `(NodeId::raw(), follows x, follows y)` list), refreshed by every flush. Their current offsets
     /// (from [`Self::scroll_states`]) shift the box's `getBoundingClientRect`.
@@ -594,6 +618,9 @@ impl V8JsRuntime {
             lazy_img_requests: Arc::new(Mutex::new(Vec::new())),
             scroll_states: Arc::new(Mutex::new(HashMap::new())),
             scroll_button_edges: Arc::new(Mutex::new(HashMap::new())),
+            scroll_marker_states: Arc::new(Mutex::new(HashMap::new())),
+            shell_marker_targets: Arc::new(Mutex::new(HashMap::new())),
+            smooth_scroll_targets: Arc::new(Mutex::new(HashMap::new())),
             anchor_scrollers: Arc::new(Mutex::new(HashMap::new())),
             pending_scrolls: Arc::new(Mutex::new(Vec::new())),
             pending_page_scrolls: Arc::new(Mutex::new(Vec::new())),
@@ -1423,6 +1450,19 @@ impl V8JsRuntime {
         std::mem::take(&mut *self.pending_page_scrolls.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
+    /// Текущие «eventual scroll position» smooth-анимаций шима
+    /// (`container NodeId::raw()` → `(tx, ty)`), как их прислал
+    /// `_lumen_smooth_targets`. Клон, не дренаж: карта — зеркало состояния,
+    /// а не очередь; пустая после завершения последней анимации.
+    pub fn smooth_scroll_targets(&self) -> Vec<(u32, f32, f32)> {
+        self.smooth_scroll_targets
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|(&k, &(x, y))| (k, x, y))
+            .collect()
+    }
+
     /// Update the page scroll Y exposed to JS `window.scrollY`/`pageYOffset`.
     ///
     /// Returns `true` when the position actually moved since the last call, so
@@ -1938,6 +1978,16 @@ impl V8JsRuntime {
     /// `notify_pseudo_focus` alongside every shell-side focus change.
     pub fn set_pseudo_focus(&self, pf: Option<(u32, u8, u32)>) {
         *self.pseudo_focus.lock().unwrap_or_else(|e| e.into_inner()) = pf;
+    }
+
+    /// CSS Overflow L5 §2.1: record the shell's explicit `::scroll-marker`
+    /// current-target map (`container.raw()` → `target.raw()`) — the flush
+    /// resolves `:target-*` relations over its own fresh tree with it.
+    pub fn set_shell_marker_targets(&self, targets: HashMap<u32, u32>) {
+        *self
+            .shell_marker_targets
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = targets;
     }
 
     /// Returns the DOM node nid that currently holds pointer capture (pointer_id=1).

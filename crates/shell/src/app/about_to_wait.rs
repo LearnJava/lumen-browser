@@ -2044,10 +2044,20 @@ impl Lumen {
     #[cfg(feature = "v8")]
     fn drain_element_scroll_requests(&mut self) {
         let scroll_reqs = self.drain_query_js(|j| j.take_scroll_requests()).unwrap_or_default();
+        // CSS Overflow L5 §3.1.8: «eventual scroll position» активных
+        // smooth-анимаций — зеркало, не очередь; relations маркеров ниже и
+        // `relayout()` читают его как смещения контейнеров.
+        self.eventual_scroll_offsets = self
+            .drain_query_js(|j| j.smooth_scroll_targets())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(k, x, y)| (k, (x, y)))
+            .collect();
         // Вьюпорт — до мутабельного заимствования `layout_box` ниже: им
         // позиционируются `background-attachment: fixed` слои (§3.6).
         let fixed_bg_vp = self.relayout_viewport();
         let mut cmd_ids: Vec<u32> = Vec::new();
+        let mut marker_pf_dirty = false;
         if !scroll_reqs.is_empty()
             && let Some(lb) = self.layout_box.as_mut()
         {
@@ -2058,6 +2068,49 @@ impl Lumen {
                     changed = true;
                     scrolled_nids.push(nid);
                 }
+            }
+            // CSS Overflow L5 §2.1/§3.1.8: программный скролл — тоже «скролл
+            // без цели»: current scroll target контейнера снимается, а фокус
+            // на маркере следует за новой активной целью (тот же хвост, что
+            // `apply_container_scroll` у колеса; `&mut self`-метод здесь
+            // недоступен под заимствованием `lb`, поэтому поля напрямую).
+            for &snid in &scrolled_nids {
+                let node = NodeId::from_index(snid as usize);
+                self.scroll_marker_targets.remove(&node.raw());
+                if let Some((origin, kind, container)) = self.focused_pseudo
+                    && kind == lumen_layout::PseudoKind::ScrollMarker as u8
+                    && container == node
+                {
+                    // «eventual scroll position」 smooth-анимации (§3.1.8) —
+                    // та же подмешка, что в `marker_scroll_offsets` (метод
+                    // недоступен под мутабельным `lb`).
+                    let mut moffs = lumen_layout::scroll_offsets(lb);
+                    for (&raw, &(ex, ey)) in &self.eventual_scroll_offsets {
+                        let e = moffs.entry(raw).or_insert([0.0, 0.0, 0.0, 0.0]);
+                        e[0] = ex;
+                        e[1] = ey;
+                    }
+                    if let Some(active) = lumen_layout::scroll_marker_active_target(
+                        lb,
+                        container,
+                        &self.scroll_marker_targets,
+                        &moffs,
+                    ) && active != origin
+                    {
+                        self.focused_pseudo = Some((active, kind, container));
+                        marker_pf_dirty = true;
+                    }
+                }
+            }
+            if !scrolled_nids.is_empty() {
+                // `&self`-метод здесь недоступен под заимствованием `lb` —
+                // поля напрямую, как у `focused_pseudo` выше.
+                let marker_targets = self.scroll_marker_targets.clone();
+                crate::engine_bridge::route_task_js(
+                    self.engine_thread.as_ref(),
+                    self.js_ctx.as_ref(),
+                    move |j| j.notify_scroll_marker_targets(marker_targets),
+                );
             }
             if changed {
                 // Rebuild display list with the updated scroll offsets.
@@ -2104,6 +2157,9 @@ impl Lumen {
                 }
                 cmd_ids = scrolled_nids_copy;
             }
+        }
+        if marker_pf_dirty {
+            self.notify_pseudo_focus_change();
         }
         if !cmd_ids.is_empty() {
             self.restyle_scroll_state_queries();

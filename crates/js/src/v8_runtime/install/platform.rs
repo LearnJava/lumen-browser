@@ -631,8 +631,19 @@ const INLINE_SRC_FLAG: u32 = 1 << 31;
 /// source node (text node or inline element under the point) first, then the box's own node. The
 /// shim expands the first into the inline-element chain up to the second (CSSOM View §3 — `<a>`,
 /// `<span>` are hit, not just their block container; BUG-1557).
-fn hit_ids(r: &lumen_paint::HitTestResult) -> impl Iterator<Item = u32> {
-    r.inline_source.filter(|s| *s != r.node).map(|s| s.raw() | INLINE_SRC_FLAG).into_iter().chain([r.node.raw()])
+fn hit_ids(r: &lumen_paint::HitTestResult) -> Vec<u32> {
+    // Псевдо-бокс (`::scroll-button()`/`::scroll-marker`) не имеет DOM-узла:
+    // elementFromPoint/element(s)FromPoint отвечают originating-элементом
+    // (`PseudoHit.origin`), тем же, кому адресован клик по нему.
+    if let Some(p) = r.pseudo {
+        return vec![p.origin.raw()];
+    }
+    r.inline_source
+        .filter(|s| *s != r.node)
+        .map(|s| s.raw() | INLINE_SRC_FLAG)
+        .into_iter()
+        .chain([r.node.raw()])
+        .collect()
 }
 
 /// `window.matchMedia` evaluation (CSS Media Queries L4 §4.2).
@@ -1211,6 +1222,8 @@ pub(crate) fn install_scroll_state(
     // into the `_lumen_get_scroll_state` closure below — `_lumen_request_scroll`
     // (BUG-975) needs its own handle on the same cache plus `computed_styles`.
     let ss_for_request = Arc::clone(&flush.scroll_states);
+    let smt_for_clear = Arc::clone(&flush.shell_marker_targets);
+    let sst_for_targets = Arc::clone(&flush.smooth_scroll_targets);
     let cs_for_request = Arc::clone(&flush.computed_styles);
     // BUG-935 S44: this closure is the one non-`getComputedStyle`-family
     // reader of `computed_styles` (S42's audit) — it must set the same
@@ -1279,6 +1292,42 @@ pub(crate) fn install_scroll_state(
             drop(states);
             // CQ-SCROLL-STATE-2: `scroll-state()` queries follow the offset.
             flush_for_request.note_scroll_moved();
+        });
+    }
+    // CSS Overflow L5 §2.1: a programmatic scroll drops the container's
+    // explicit `::scroll-marker` current target — the same rule the shell's
+    // scroll drain applies to `scroll_marker_targets`, mirrored here so a
+    // same-turn `getComputedStyle` sees the clear before the drain runs.
+    {
+        reg!(scope, ctx, store, "_lumen_marker_target_clear", move |nid: u32| {
+            smt_for_clear
+                .lock()
+                .unwrap()
+                .remove(&nid);
+        });
+    }
+    // CSS Overflow L5 §3.1.8 «eventual scroll position»: шим присылает
+    // сериализованную карту `"nid,tx,ty;…"` финальных позиций всех активных
+    // smooth-анимаций (пустая строка — анимаций нет). Полная замена зеркала —
+    // это состояние, а не очередь. Страница-скролл (`p`) не представим
+    // NodeId и пока не передаётся.
+    {
+        let sst = Arc::clone(&sst_for_targets);
+        reg!(scope, ctx, store, "_lumen_smooth_targets", move |data: String| {
+            let mut map = HashMap::new();
+            for part in data.split(';') {
+                let mut it = part.split(',');
+                let (Some(nid), Some(x), Some(y)) = (it.next(), it.next(), it.next())
+                else {
+                    continue;
+                };
+                if let (Ok(n), Ok(x), Ok(y)) =
+                    (nid.parse::<u32>(), x.parse::<f32>(), y.parse::<f32>())
+                {
+                    map.insert(n, (x, y));
+                }
+            }
+            *sst.lock().unwrap() = map;
         });
     }
     // Queues a page-level scroll request from window.scrollTo/scrollBy.

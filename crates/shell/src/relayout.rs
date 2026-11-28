@@ -624,15 +624,30 @@ impl Lumen {
         // to run only for sheets with `scroll-state()` queries; the scroll
         // hints that path also installs are inert without such queries.
         let keep_scroll = self.layout_box.as_ref().map(|lb| {
+            let offsets = lumen_layout::scroll_offsets(lb);
+            // Стороны, к которым контейнеры ещё можно прокрутить, — для
+            // `::scroll-button():enabled`/`:disabled` на новой раскладке.
+            let edges = lumen_layout::scroll_state_edges(lb, viewport);
+            // CSS Overflow L5 §3.1.7 — отношения `::scroll-marker` к
+            // активному маркеру группы для `:target-current`/`:target-before`/
+            // `:target-after`; активная цель — явная (последняя активация)
+            // или позиционная по смещению и геометрии прежнего дерева.
+            // §3.1.8: во время smooth-анимации «eventual scroll position» —
+            // финальная точка анимации, а не промежуточный кадр.
+            let mut marker_offsets = offsets.clone();
+            for (&raw, &(x, y)) in &self.eventual_scroll_offsets {
+                let e = marker_offsets.entry(raw).or_insert([0.0, 0.0, 0.0, 0.0]);
+                e[0] = x;
+                e[1] = y;
+            }
             (
-                lumen_layout::scroll_offsets(lb),
-                // Стороны, к которым контейнеры ещё можно прокрутить, — для
-                // `::scroll-button():enabled`/`:disabled` на новой раскладке.
-                lumen_layout::scroll_state_edges(lb, viewport),
+                offsets,
+                edges,
+                lumen_layout::scroll_marker_relations(lb, &self.scroll_marker_targets, &marker_offsets),
             )
         });
         let (new_dl, lb) = match keep_scroll {
-            Some((offsets, edges)) => {
+            Some((offsets, edges, markers)) => {
                 relayout_page_keeping_scroll(
                     src,
                     viewport,
@@ -642,6 +657,7 @@ impl Lumen {
                     offsets,
                     (self.scroll_x, self.scroll_y),
                     edges,
+                    markers,
                 )
             }
             None => relayout_page(src, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts),
@@ -661,6 +677,16 @@ impl Lumen {
             None,
         );
         self.layout_basis_sig = Some(basis_sig);
+        // CSS Overflow L5 §2.1: explicit current-target карта `::scroll-marker`
+        // — в JS-миррор, чтобы same-tick `getComputedStyle` флаш пересчитал
+        // `:target-*` по своему свежему дереву (см. `poll_engine_commit` —
+        // тот же пуш на job-пути).
+        let marker_targets = self.scroll_marker_targets.clone();
+        crate::engine_bridge::route_task_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            move |j| j.notify_scroll_marker_targets(marker_targets),
+        );
         if let Some(t0) = engine_t0 {
             let engine_ms = t0.elapsed().as_secs_f32() * 1000.0;
             self.engine_stats.record(engine_ms);
@@ -1814,11 +1840,13 @@ pub(crate) fn relayout_page_keeping_scroll(
     offsets: std::collections::HashMap<u32, [f32; 4]>,
     page_scroll: (f32, f32),
     edges: std::collections::HashMap<u32, lumen_layout::EdgeFlags>,
+    marker_states: std::collections::HashMap<u32, u8>,
 ) -> (DisplayList, lumen_layout::LayoutBox) {
     let _hints = lumen_layout::install_scroll_hints(lumen_layout::ScrollHints {
         offsets: offsets.clone(),
         page: page_scroll,
         edges,
+        markers: marker_states,
     });
     #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");

@@ -697,6 +697,13 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// applies each via `set_scroll_position()`. Empty when none are pending.
     #[allow(dead_code)]
     fn take_scroll_requests(&self) -> Vec<(u32, f32, f32)>;
+    /// CSS Overflow L5 §3.1.8 «eventual scroll position»: финальные позиции
+    /// активных smooth-анимаций шима (`container NodeId::raw()` → `(tx, ty)`).
+    /// Зеркало состояния, не очередь — пусто, когда анимаций нет. Шелл
+    /// подмешивает её в `scroll_offsets` при подсчёте `scroll_marker_relations`.
+    fn smooth_scroll_targets(&self) -> Vec<(u32, f32, f32)> {
+        Vec::new()
+    }
     /// Drain `history.pushState` / `history.replaceState` URL-update notifications.
     ///
     /// Each entry is `(is_push, url, new_state_json)` where `is_push = true`
@@ -1055,6 +1062,13 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// element-level `:focus*` guards resolve same-tick.
     #[allow(dead_code)]
     fn notify_pseudo_focus(&self, _pf: Option<(u32, u8, u32)>) {}
+
+    /// CSS Overflow L5 §2.1: the shell's explicit `::scroll-marker`
+    /// current-target map (`container.raw()` → `target.raw()`) — pushed on
+    /// every mutation and relayout commit so the engine thread resolves
+    /// `:target-*` relations over its own fresh tree each flush.
+    #[allow(dead_code)]
+    fn notify_scroll_marker_targets(&self, _targets: HashMap<u32, u32>) {}
 
     /// Whether a style snapshot pushed by a relayout job was computed under a
     /// different interactive state (hover/focus/active/modality) than this
@@ -1623,6 +1637,9 @@ impl PersistentJs for V8PersistentJs {
     fn take_scroll_requests(&self) -> Vec<(u32, f32, f32)> {
         self.rt.take_scroll_requests()
     }
+    fn smooth_scroll_targets(&self) -> Vec<(u32, f32, f32)> {
+        self.rt.smooth_scroll_targets()
+    }
     fn take_history_url_updates(&self) -> Vec<(bool, String, String)> {
         self.rt
             .take_history_url_updates()
@@ -1825,6 +1842,17 @@ impl PersistentJs for V8PersistentJs {
     }
     fn notify_pseudo_focus(&self, pf: Option<(u32, u8, u32)>) {
         self.rt.set_pseudo_focus(pf);
+        // CSS Overflow L5 §3.3: the shim's per-frame focus fixup must not
+        // drop the (often non-focusable) scroll container the shell reports
+        // as `focused_node` while a scroll-control pseudo-element holds
+        // focus — see `_lumen_pseudo_focus_set` in the page shim.
+        let on = i32::from(pf.is_some());
+        self.eval_js(&format!(
+            "if(typeof _lumen_pseudo_focus_set==='function')_lumen_pseudo_focus_set({on});"
+        ));
+    }
+    fn notify_scroll_marker_targets(&self, targets: HashMap<u32, u32>) {
+        self.rt.set_shell_marker_targets(targets);
     }
     fn interactive_snapshot_stale(
         &self,

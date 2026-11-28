@@ -350,6 +350,16 @@ pub enum PseudoClass {
     /// Невалидный/отсутствующий `headingoffset` на узле = 0. Матчер —
     /// `lumen-layout` (`style/matching/forms.rs`), не здесь.
     Heading(Option<i32>),
+    /// `:target-current` / `:target-before` / `:target-after` (CSS Overflow L5
+    /// §3.1.7) — состояния scroll marker-а внутри его scroll marker group:
+    /// `current` — активный маркер (ровно один на группу), `before`/`after` —
+    /// маркеры до/после него в flat tree order. Применимы к scroll markers
+    /// (элементам с scroll target и `::scroll-marker`); матчер —
+    /// `lumen-layout` (`style/pseudo`, `style/matching`), читающий
+    /// scroll-состояние текущей раскладки.
+    TargetCurrent,
+    TargetBefore,
+    TargetAfter,
     /// Неизвестные или ещё-не-реализованные псевдо-классы. Всегда `false`.
     /// Хранится имя для отладки и корректного подсчёта specificity (0-1-0).
     Unsupported(String),
@@ -812,6 +822,9 @@ pub(crate) fn pc_to_css_str(pc: &PseudoClass) -> String {
         PseudoClass::Open => ":open".into(),
         PseudoClass::InterestSource => ":interest-source".into(),
         PseudoClass::InterestTarget => ":interest-target".into(),
+        PseudoClass::TargetCurrent => ":target-current".into(),
+        PseudoClass::TargetBefore => ":target-before".into(),
+        PseudoClass::TargetAfter => ":target-after".into(),
         PseudoClass::Current => ":current".into(),
         PseudoClass::Past => ":past".into(),
         PseudoClass::Future => ":future".into(),

@@ -714,6 +714,8 @@ fn run_window_mode_inner(
         focused_node: None,
         focused_pseudo: None,
         pseudo_nav_pending: false,
+        scroll_marker_targets: std::collections::HashMap::new(),
+        eventual_scroll_offsets: std::collections::HashMap::new(),
         focused_frame: None,
         frame_text_cursor: HashMap::new(),
         field_history: HashMap::new(),

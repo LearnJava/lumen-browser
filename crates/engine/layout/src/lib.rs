@@ -72,7 +72,7 @@ pub use style_map::StyleMap;
 pub mod scoped_collect;
 mod scroll_rollup;
 mod scroll_state;
-pub use scroll_state::{install_scroll_button_states, install_scroll_hints, root_is_scroll_state_container, scroll_offsets, scroll_state_edges, sheet_has_scroll_state_queries, ButtonStatesGuard, ScrollHints, ScrollHintsGuard};
+pub use scroll_state::{install_scroll_button_states, install_scroll_hints, root_is_scroll_state_container, scroll_marker_group_order, scroll_marker_arrow_step, scroll_marker_active_target, scroll_marker_relations, scroll_offsets, scroll_state_edges, sheet_has_scroll_state_queries, ButtonStatesGuard, ScrollHints, ScrollHintsGuard};
 pub use scroll_rollup::RollupCache;
 pub mod paint_eq;
 pub use paint_eq::subtree_paint_eq;
@@ -168,7 +168,8 @@ pub use text_geometry::{
 };
 pub use style::{
     is_highlight_pseudo, compute_selection_style, compute_style, compute_style_from_declarations, compute_target_text_style,
-    compute_view_transition_pseudo_style, compute_view_transition_tree_style, sheet_has_scroll_button_state, ViewTransitionPart,
+    compute_view_transition_pseudo_style, compute_view_transition_tree_style, sheet_has_scroll_button_state,
+    sheet_has_scroll_marker_target_state, ViewTransitionPart,
 };
 pub use selector_query::{
     computed_style_by_selector, computed_style_json, computed_style_json_by_selector,
@@ -893,16 +894,28 @@ pub(crate) fn box_padding(b: &LayoutBox) -> [f32; 4] {
 }
 
 /// The margins `[top, right, bottom, left]` (non-negative px) that CSS Overflow L3
-/// §2.2 adds to the scrollable overflow of `c`: those of a flex or grid item
-/// (a direct child of such a container), zero for everything else — block
-/// children contribute their border box alone, out-of-flow boxes are placed
-/// against the padding box (BUG-1389).
+/// §2.2/§3.3 adds to the scrollable overflow of `c`: those of a flex or grid item
+/// (a direct child of such a container) and of an atomic inline-level box (its
+/// margin box lies inside a line box the scroll container directly contains),
+/// zero for everything else — block children contribute their border box alone,
+/// out-of-flow boxes are placed against the padding box (BUG-1389).
 pub(crate) fn item_margins(parent: &LayoutBox, c: &LayoutBox) -> [f32; 4] {
-    if !matches!(
+    // CSS Overflow L3 §3.3: помимо margin areas flex/grid items в
+    // scrollable overflow входят все line boxes контейнера — margin box
+    // атомарного inline-уровня (`inline-block` и т.п.) лежит внутри line
+    // box и растягивает его (в т.ч. хвостовой margin последнего инлайна).
+    let item = matches!(
         parent.style.display,
         style::Display::Flex | style::Display::InlineFlex | style::Display::Grid | style::Display::InlineGrid
-    ) || matches!(c.style.position, style::Position::Absolute | style::Position::Fixed)
-    {
+    ) || matches!(
+        c.style.display,
+        style::Display::InlineBlock
+            | style::Display::InlineTable
+            | style::Display::InlineFlex
+            | style::Display::InlineGrid
+            | style::Display::WebkitInlineBox
+    );
+    if !item || matches!(c.style.position, style::Position::Absolute | style::Position::Fixed) {
         return [0.0; 4];
     }
     let vp = lumen_core::geom::Size::new(0.0, 0.0);

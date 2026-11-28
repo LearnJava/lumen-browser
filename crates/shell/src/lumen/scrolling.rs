@@ -152,6 +152,7 @@ impl Lumen {
         let asked = self.layout_source.as_ref().is_some_and(|src| {
             lumen_layout::sheet_has_scroll_state_queries(&src.stylesheet)
                 || lumen_layout::sheet_has_scroll_button_state(&src.stylesheet)
+                || lumen_layout::sheet_has_scroll_marker_target_state(&src.stylesheet)
         });
         if asked {
             self.relayout();
@@ -191,6 +192,12 @@ impl Lumen {
         new_y: f32,
     ) -> bool {
         let target_nid = target.index() as u32;
+        // CSS Overflow L5 §2.1: прокрутка без цели сбрасывает current scroll
+        // target контейнера — активный маркер дальше выбирается по позиции.
+        // Активация маркера сама проходит через этот хвост, но ставит цель
+        // ПОСЛЕ него (`activate_scroll_marker`), так что порядок сохраняется.
+        self.scroll_marker_targets.remove(&target.raw());
+        self.push_scroll_marker_targets();
         // Borrow layout_box mutably after releasing the immutable scroll_containers borrow.
         let scrolled = if let Some(lb) = self.layout_box.as_mut() {
             set_scroll_position(lb, target, new_x, new_y)
@@ -198,6 +205,7 @@ impl Lumen {
             false
         };
         if scrolled {
+            self.scroll_marker_focus_follow(target);
             self.restyle_scroll_state_queries();
             // Быстрый путь: точечный патч скролл-слоя в готовом display list —
             // layout детей при скролле не меняется, поэтому полная пересборка
@@ -744,6 +752,12 @@ impl Lumen {
             }
         };
 
+        // CSS Overflow L5 §2.1: current scroll target фиксируется ДО
+        // `apply_pseudo_focus` — его синхронный relayout (pseudo-focus всегда
+        // идёт полным каскадом) уже видит явную цель и считает
+        // `:target-current` по ней, а не только позиционно.
+        self.scroll_marker_targets.insert(container.raw(), target_nid.raw());
+        self.push_scroll_marker_targets();
         // CSS Overflow L5 §3.1.9/§3.3: активация фокусирует маркер — scroll
         // container становится `document.activeElement`, а `:focus*`
         // псевдоклассы резолвятся на самом псевдоэлементе. Следующий Tab
@@ -755,6 +769,111 @@ impl Lumen {
             container,
             false,
         );
+    }
+
+    /// CSS Overflow L5 §3.1.9 — стрелки на сфокусированном `::scroll-marker`:
+    /// переход к соседнему маркеру его группы в направлении стрелки
+    /// (с заворотом по краям) и активация нового маркера. Направление —
+    /// по `writing-mode`/`direction` scroll-контейнера. `true`, когда
+    /// событие поглощено (маркер в фокусе — стрелки принадлежат ему, а не
+    /// прокрутке страницы). `edge` — физическая сторона, куда указывает
+    /// стрелка ([`scroll_marker_arrow_edge`]).
+    pub(crate) fn scroll_marker_arrow_key(
+        &mut self,
+        edge: lumen_layout::style::Edge,
+    ) -> bool {
+        let Some((origin, kind, container)) = self.focused_pseudo else {
+            return false;
+        };
+        if kind != lumen_layout::PseudoKind::ScrollMarker as u8 {
+            return false;
+        }
+        let next = {
+            let Some(lb) = self.layout_box.as_ref() else { return true };
+            let Some(cbox) = crate::forms::find_layout_box(lb, container) else {
+                return true;
+            };
+            let step = lumen_layout::scroll_marker_arrow_step(
+                cbox.style.writing_mode,
+                cbox.style.direction,
+                edge,
+            );
+            let order = lumen_layout::scroll_marker_group_order(lb, container);
+            match order.iter().position(|&n| n == origin) {
+                Some(pos) if order.len() > 1 => Some(
+                    order[(pos as i64 + i64::from(step)).rem_euclid(order.len() as i64) as usize],
+                ),
+                _ => None,
+            }
+        };
+        if let Some(target) = next {
+            self.activate_scroll_marker(target);
+        }
+        true
+    }
+
+    /// CSS Overflow L5 §3.1.8/§3.3: скролл контейнера `target` смещает
+    /// активный маркер его группы; фокус на маркере этого контейнера
+    /// переходит на новую активную цель (без фокуса на маркере — ничего не
+    /// меняется). Явная current-target к этому моменту уже снята — выбор
+    /// позиционный по новому смещению в `layout_box`. Зовётся из обоих
+    /// путей скролла: колеса (`apply_container_scroll`) и JS
+    /// `scrollTop`/`scrollLeft` (`drain_element_scroll_requests`).
+    /// Смещения для `scroll_marker_relations`/`scroll_marker_active_target`:
+    /// фактические `scroll_offsets` дерева с подмешанными «eventual scroll
+    /// position» активных smooth-анимаций (§3.1.8 — активный маркер следует
+    /// за докруткой, а не за промежуточным кадром).
+    pub(crate) fn marker_scroll_offsets(
+        &self,
+        lb: &lumen_layout::LayoutBox,
+    ) -> std::collections::HashMap<u32, [f32; 4]> {
+        let mut offsets = lumen_layout::scroll_offsets(lb);
+        for (&raw, &(x, y)) in &self.eventual_scroll_offsets {
+            let e = offsets.entry(raw).or_insert([0.0, 0.0, 0.0, 0.0]);
+            e[0] = x;
+            e[1] = y;
+        }
+        offsets
+    }
+
+    pub(crate) fn scroll_marker_focus_follow(&mut self, target: lumen_dom::NodeId) {
+        let Some((origin, kind, container)) = self.focused_pseudo else {
+            return;
+        };
+        if kind != lumen_layout::PseudoKind::ScrollMarker as u8 || container != target {
+            return;
+        }
+        let Some(lb) = self.layout_box.as_ref() else { return };
+        let offsets = self.marker_scroll_offsets(lb);
+        let Some(active) = lumen_layout::scroll_marker_active_target(
+            lb,
+            container,
+            &self.scroll_marker_targets,
+            &offsets,
+        ) else {
+            return;
+        };
+        if active == origin {
+            return;
+        }
+        self.focused_pseudo = Some((active, kind, container));
+        self.notify_pseudo_focus_change();
+    }
+
+    /// Имя клавиши-стрелки (`"ArrowLeft"`/`"ArrowUp"`/`"ArrowRight"`/
+    /// `"ArrowDown"` — и `KeyCode`, и WebDriver-строка) → физическая
+    /// сторона, куда она указывает. `None` для остальных клавиш.
+    pub(crate) fn scroll_marker_arrow_edge(
+        key: &str,
+    ) -> Option<lumen_layout::style::Edge> {
+        use lumen_layout::style::Edge as E;
+        Some(match key {
+            "ArrowUp" => E::Top,
+            "ArrowRight" => E::Right,
+            "ArrowDown" => E::Bottom,
+            "ArrowLeft" => E::Left,
+            _ => return None,
+        })
     }
 
     /// CSS Overflow L5 §3.2/§3.3: активация `::scroll-button()` — скролл
@@ -977,7 +1096,38 @@ impl Lumen {
     /// SMOOTH-SCROLL-2: якорный переход `#frag` двигает страницу и по x.
     /// Зеркало [`Self::scroll_to`] по горизонтали: инстантный путь, без snap —
     /// якорь адресует конкретный элемент, а не точку прилипания.
+    /// CSS Overflow L5 §2.1 — страничная прокрутка без цели сбрасывает current
+    /// scroll target корневого контейнера (его маркеры — `:root`-группы).
+    /// Скролл контейнеров идёт через `apply_container_scroll` и чистит свой
+    /// ключ сам.
+    fn clear_root_marker_target(&mut self) {
+        let root = self
+            .layout_source
+            .as_ref()
+            .and_then(|s| s.document.lock().ok())
+            .and_then(|d| d.document_element());
+        if let Some(r) = root {
+            self.scroll_marker_targets.remove(&r.raw());
+            self.push_scroll_marker_targets();
+        }
+    }
+
+    /// CSS Overflow L5 §2.1: зеркалит explicit current-target карту
+    /// `::scroll-marker` в JS-миррор (`shell_marker_targets`) — флаш
+    /// пересчитывает `:target-*` по своему свежему дереву, поэтому
+    /// активация и скролл-сброс видны `getComputedStyle` в тот же тик без
+    /// ожидания relayout-пуша.
+    pub(crate) fn push_scroll_marker_targets(&self) {
+        let targets = self.scroll_marker_targets.clone();
+        crate::engine_bridge::route_task_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            move |j| j.notify_scroll_marker_targets(targets),
+        );
+    }
+
     pub(crate) fn scroll_x_to(&mut self, target: f32) {
+        self.clear_root_marker_target();
         let clamped = clamp_scroll(target, self.max_scroll_x());
         if (clamped - self.scroll_x).abs() > f32::EPSILON {
             self.scroll_x = clamped;
@@ -994,6 +1144,7 @@ impl Lumen {
     /// пользовательских scroll-команд (wheel / keys / page-jump / find) —
     /// `start_smooth_scroll` / `scroll_by_smooth`.
     pub(crate) fn scroll_to(&mut self, target: f32) {
+        self.clear_root_marker_target();
         // Инстант-путь cancel-ит активную анимацию — мы только что
         // *приказали* быть в конкретной точке.
         self.scroll_anim = None;
@@ -1013,6 +1164,7 @@ impl Lumen {
     /// стартует (и текущая сбрасывается). Применяет CSS Scroll Snap L1 если
     /// страница объявляет `scroll-snap-type` на корневом элементе.
     pub(crate) fn start_smooth_scroll(&mut self, target: f32) {
+        self.clear_root_marker_target();
         let max = self.max_scroll();
         let target_clamped = clamp_scroll(target, max);
         // Apply page-level CSS Scroll Snap L1: snap to the nearest declared

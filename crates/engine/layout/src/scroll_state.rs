@@ -12,7 +12,7 @@
 //! Чтобы запрос видел текущую прокрутку, вызывающий ставит [`install_scroll_hints`]
 //! на время раскладки: смещения из подсказок заменяют `scroll_x/y` бокса.
 
-use crate::box_tree::LayoutBox;
+use crate::box_tree::{BoxRole, LayoutBox, PseudoKind};
 use crate::style::{Direction, Edge, EdgeFlags, Overflow, ScrollStateInfo, WritingMode};
 use crate::{padding_box, scrollable_extent_x, scrollable_extent_y};
 use lumen_core::geom::Size;
@@ -32,7 +32,20 @@ pub struct ScrollHints {
     /// раскладке (CSS Overflow L5 §3.2). Считается по ПРЕЖНЕМУ дереву до
     /// пересборки: геометрии нового ещё нет.
     pub edges: HashMap<u32, EdgeFlags>,
+    /// CSS Overflow L5 §3.1.7 — `NodeId::raw()` цели → её отношение к
+    /// активному `::scroll-marker` её группы ([`MARKER_BEFORE`]/
+    /// [`MARKER_CURRENT`]/[`MARKER_AFTER`]). Считается по ПРЕЖНЕМУ дереву
+    /// ([`scroll_marker_relations`]): позиции целей и смещения там финальные.
+    pub markers: HashMap<u32, u8>,
 }
+
+/// `::scroll-marker` цели стоит в flat tree order ДО активного маркера её
+/// scroll marker group (`:target-before`).
+pub const MARKER_BEFORE: u8 = 1;
+/// `::scroll-marker` — активный маркер группы (`:target-current`).
+pub const MARKER_CURRENT: u8 = 2;
+/// `::scroll-marker` цели стоит ПОСЛЕ активного маркера (`:target-after`).
+pub const MARKER_AFTER: u8 = 3;
 
 thread_local! {
     /// Подсказки текущей раскладки этого потока (см. [`install_scroll_hints`]).
@@ -301,12 +314,294 @@ pub fn scroll_state_edges(root: &LayoutBox, viewport: Size) -> HashMap<u32, Edge
     out
 }
 
+/// Отношение `::scroll-marker` узла `node` к активному маркеру его группы —
+/// [`MARKER_BEFORE`]/[`MARKER_CURRENT`]/[`MARKER_AFTER`], `None` без данных
+/// (матчер тогда не матчит `:target-*`).
+pub(crate) fn scroll_marker_relation(node: lumen_dom::NodeId) -> Option<u8> {
+    HINTS.with(|h| {
+        h.borrow().as_ref().and_then(|h| h.markers.get(&node.raw()).copied())
+    })
+}
+
 /// Подсказанные [`scroll_state_edges`] для узла на время текущей раскладки —
 /// `None`, когда подсказок нет (первая раскладка, движок без keeping-scroll).
 pub(crate) fn hinted_scroll_edges(node: lumen_dom::NodeId) -> Option<EdgeFlags> {
     HINTS.with(|h| {
         h.borrow().as_ref().and_then(|h| h.edges.get(&node.raw()).copied())
     })
+}
+
+/// CSS Overflow L5 §3.1.7/§3.1.8 — отношение каждого `::scroll-marker` к
+/// активному маркеру его группы по УЖЕ свёрстанному дереву `root` (геометрия
+/// и смещения финальные — зовётся шеллом до пересборки, результат уходит в
+/// [`ScrollHints::markers`]).
+///
+/// `explicit` — `NodeId::raw()` scroll-контейнера → `NodeId::raw()` цели,
+/// которую последняя активация маркера сделала current scroll target
+/// (шелл помнит её между раскладками); она выигрывает у позиционного выбора.
+/// Без неё активный маркер — последняя цель, чья scroll-into-view позиция по
+/// главной прокручиваемой оси не дальше текущего смещения (спека выбирает по
+/// «eventual scroll position» с redistribution краёв — здесь берётся
+/// основная часть алгоритма без неё), при равенстве/пустом выборе — первая.
+pub fn scroll_marker_relations(
+    root: &LayoutBox,
+    explicit: &HashMap<u32, u32>,
+    scroll_offsets: &HashMap<u32, [f32; 4]>,
+) -> HashMap<u32, u8> {
+    // Все `::scroll-marker-group` боксы дерева (каждый — одна группа).
+    let mut groups: Vec<&LayoutBox> = Vec::new();
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        if b.origin.role == BoxRole::Pseudo(PseudoKind::ScrollMarkerGroup) {
+            groups.push(b);
+        }
+        stack.extend(b.children.iter());
+    }
+    let mut out = HashMap::new();
+    for g in groups {
+        let Some(container) = g.origin.node else { continue };
+        // Цели группы в flat tree order: прямой обход поддерева группы,
+        // первый `::scroll-marker` бокс на ветку (его inline-run несёт тот же
+        // `PseudoKind`, но не спускаемся внутрь найденного).
+        let mut targets: Vec<lumen_dom::NodeId> = Vec::new();
+        // Стек: `pop` снимает конец — детей кладём в обратном порядке, чтобы
+        // обход шёл в flat tree order, как `collect_markers` собирал маркеры.
+        let mut tstack: Vec<&LayoutBox> = g.children.iter().rev().collect();
+        while let Some(b) = tstack.pop() {
+            if b.origin.role == BoxRole::Pseudo(PseudoKind::ScrollMarker) {
+                if let Some(n) = b.origin.node {
+                    targets.push(n);
+                }
+                continue;
+            }
+            tstack.extend(b.children.iter().rev());
+        }
+        if targets.is_empty() {
+            continue;
+        }
+        let active_raw = explicit
+            .get(&container.raw())
+            .copied()
+            .filter(|raw| targets.iter().any(|t| t.raw() == *raw));
+        let active_idx = match active_raw {
+            Some(raw) => targets.iter().position(|t| t.raw() == raw).unwrap_or(0),
+            None => marker_active_by_position(root, container, &targets, scroll_offsets),
+        };
+        for (i, t) in targets.iter().enumerate() {
+            out.insert(
+                t.raw(),
+                if i < active_idx {
+                    MARKER_BEFORE
+                } else if i == active_idx {
+                    MARKER_CURRENT
+                } else {
+                    MARKER_AFTER
+                },
+            );
+        }
+    }
+    out
+}
+
+/// Позиционный выбор активного маркера — пример алгоритма §3.1.8: ось —
+/// block-ось writing-mode контейнера, если по ней есть диапазон прокрутки,
+/// иначе inline-ось; позиции целей — scroll-into-view (start-align) с
+/// redistribution краёв; активна наибольшая позиция, не дальше текущего
+/// («eventual») смещения или не дальше полупорта ВПЕРЕДИ неё при условии,
+/// что предыдущая цель дальше полупорта ПОЗАДИ; без кандидатов — первая.
+fn marker_active_by_position(
+    root: &LayoutBox,
+    container: lumen_dom::NodeId,
+    targets: &[lumen_dom::NodeId],
+    scroll_offsets: &HashMap<u32, [f32; 4]>,
+) -> usize {
+    let Some(cbox) = find_element_box(root, container) else { return 0 };
+    let clip = padding_box(cbox);
+    // Смещения могут быть новее дерева (JS-флаш считает отношения по
+    // basis-дереву предыдущего флаша, а `scroll_states` уже видит
+    // same-tick `scrollLeft=`) — тогда карта побеждает запечённое в боксе.
+    let (scroll_x, scroll_y) = scroll_offsets
+        .get(&container.raw())
+        .map(|s| (s[0], s[1]))
+        .unwrap_or((cbox.scroll_x, cbox.scroll_y));
+    // Главная ось — block-направление writing-mode: у `horizontal-tb` это Y,
+    // у вертикальных/sideways — X.
+    let primary_y = matches!(cbox.style.writing_mode, WritingMode::HorizontalTb);
+    let axes = if primary_y { [true, false] } else { [false, true] };
+    // `(offset, origin, scrollport, scroll_range)` выбранной оси.
+    let mut axis = axes[0];
+    let mut geom = (scroll_y, clip.y, clip.height, 0.0f32);
+    for &a in &axes {
+        let (extent_min, extent_max, port, off, orig) = if a {
+            let (min_y, max_y) = scrollable_extent_y(cbox);
+            (min_y, max_y, clip.height, scroll_y, clip.y)
+        } else {
+            let (min_x, max_x) = scrollable_extent_x(cbox);
+            (min_x, max_x, clip.width, scroll_x, clip.x)
+        };
+        let range = extent_max - extent_min - port;
+        if range > 0.5 {
+            axis = a;
+            geom = (off, orig, port, range);
+            break;
+        }
+    }
+    let (offset, origin, scrollport, scroll_range) = geom;
+    // Scroll-into-view позиции целей вдоль оси (start-align: смещение, при
+    // котором начало цели совпадает с началом scrollport). Цели без бокса
+    // пропускаются — активный выбор идёт по остальным.
+    let mut positions: Vec<Option<f32>> = Vec::with_capacity(targets.len());
+    for &t in targets {
+        positions.push(
+            find_element_box(root, t)
+                .map(|tb| if axis { tb.rect.y - origin } else { tb.rect.x - origin }),
+        );
+    }
+    // §3.1.8 redistribution: недостижимые края диапазона сжимаются в
+    // `distribute range = min(scrollport/8, scroll range/2)` у обоих концов.
+    let dr = (scrollport / 8.0).min(scroll_range / 2.0);
+    if dr > 0.0 {
+        let mut before_min = f32::INFINITY;
+        let mut after_max = f32::NEG_INFINITY;
+        for p in positions.iter().flatten() {
+            if *p < dr {
+                before_min = before_min.min(*p);
+            } else if *p > scroll_range - dr {
+                after_max = after_max.max(*p);
+            }
+        }
+        for p in positions.iter_mut().flatten() {
+            if *p < dr && dr > before_min {
+                *p = (*p - before_min) / (dr - before_min) * dr;
+            } else if *p > scroll_range - dr && after_max > scroll_range - dr {
+                *p = (*p - (scroll_range - dr)) / (after_max - (scroll_range - dr)) * dr
+                    + (scroll_range - dr);
+            }
+        }
+    }
+    // Выбор — Chromium `ScrollMarkerChooser::ChooseInternal`: кандидаты по
+    // возрастанию позиции; «before» — позиция <= текущего смещения (побеждает
+    // наибольшая), «after» — позиция < смещения + полупорта (побеждает
+    // наименьшая); after выигрывает только при строго меньшем расстоянии.
+    // Первый кандидат всегда становится before-победителем — когда все цели
+    // впереди, выбирается ближайшая к текущей позиции.
+    let mut order: Vec<(f32, usize)> = positions
+        .iter()
+        .enumerate()
+        .filter_map(|(i, p)| p.map(|p| (p, i)))
+        .collect();
+    order.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.1.cmp(&b.1))
+    });
+    let half = scrollport / 2.0;
+    let intended = offset.abs();
+    let mut before: Option<(f32, usize)> = None;
+    let mut after: Option<(f32, usize)> = None;
+    for &(pos, idx) in &order {
+        let pos = pos.abs();
+        match before {
+            None => before = Some((pos, idx)),
+            Some((bp, _)) if pos <= intended && pos > bp => before = Some((pos, idx)),
+            _ => {}
+        }
+        if pos > intended && pos < intended + half && after.is_none_or(|(ap, _)| pos < ap) {
+            after = Some((pos, idx));
+        }
+    }
+    match (before, after) {
+        (Some((bp, bi)), Some((ap, ai))) => {
+            if ap - intended < intended - bp { ai } else { bi }
+        }
+        (Some((_, bi)), None) => bi,
+        (None, Some((_, ai))) => ai,
+        (None, None) => 0,
+    }
+}
+
+/// Цели `::scroll-marker` группы контейнера `container` в flat tree order —
+/// `origin.node` каждого `::scroll-marker` бокса, найденного внутри его
+/// `::scroll-marker-group` (обход как в [`scroll_marker_relations`]). Пусто,
+/// когда группы или маркеров нет. Зовётся шеллом для arrow-навигации
+/// (§3.1.9: стрелки на сфокусированном маркере ходят по целям группы).
+pub fn scroll_marker_group_order(root: &LayoutBox, container: lumen_dom::NodeId) -> Vec<lumen_dom::NodeId> {
+    let mut out = Vec::new();
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        let is_group = b.origin.role == BoxRole::Pseudo(PseudoKind::ScrollMarkerGroup)
+            && b.origin.node == Some(container);
+        if is_group {
+            let mut tstack: Vec<&LayoutBox> = b.children.iter().rev().collect();
+            while let Some(m) = tstack.pop() {
+                if m.origin.role == BoxRole::Pseudo(PseudoKind::ScrollMarker) {
+                    if let Some(n) = m.origin.node {
+                        out.push(n);
+                    }
+                    continue;
+                }
+                tstack.extend(m.children.iter().rev());
+            }
+            return out;
+        }
+        stack.extend(b.children.iter());
+    }
+    out
+}
+
+/// Активная цель группы `::scroll-marker` контейнера `container` — явная
+/// current-target (как в [`scroll_marker_relations`]) или позиционный выбор
+/// ([`marker_active_by_position`]). `None`, когда группы или маркеров нет.
+/// Зовётся шеллом при скролле: фокус на маркере следует за новой активной
+/// целью (§3.1.8 scroll tracking + §3.3 focus).
+pub fn scroll_marker_active_target(
+    root: &LayoutBox,
+    container: lumen_dom::NodeId,
+    explicit: &HashMap<u32, u32>,
+    scroll_offsets: &HashMap<u32, [f32; 4]>,
+) -> Option<lumen_dom::NodeId> {
+    let targets = scroll_marker_group_order(root, container);
+    if targets.is_empty() {
+        return None;
+    }
+    let active_raw = explicit
+        .get(&container.raw())
+        .copied()
+        .filter(|raw| targets.iter().any(|t| t.raw() == *raw));
+    let idx = match active_raw {
+        Some(raw) => targets.iter().position(|t| t.raw() == raw)?,
+        None => marker_active_by_position(root, container, &targets, scroll_offsets),
+    };
+    Some(targets[idx])
+}
+
+/// CSS Overflow L5 §3.1.9 — сдвиг по группе `::scroll-marker` для стрелки,
+/// указывающей в физическую сторону `edge`: `1` — по ходу чтения группы
+/// (block-end/inline-end), `-1` — против хода. Порядок группы — flat tree
+/// order ([`scroll_marker_group_order`]), совпадающий с порядком чтения.
+pub fn scroll_marker_arrow_step(mode: WritingMode, dir: Direction, edge: Edge) -> i8 {
+    let (block_start, inline_start) = logical_starts(mode, dir);
+    let opposite = |e: Edge| match e {
+        Edge::Top => Edge::Bottom,
+        Edge::Right => Edge::Left,
+        Edge::Bottom => Edge::Top,
+        Edge::Left => Edge::Right,
+    };
+    if edge == opposite(block_start) || edge == opposite(inline_start) {
+        1
+    } else {
+        -1
+    }
+}
+
+/// Первый element-бокс узла `node` в pre-order (как `find_box_by_node`, но
+/// только `BoxRole::Element` — псевдо-боксы делят `node` с родителем и не
+/// должны перехватывать поиск).
+fn find_element_box(root: &LayoutBox, node: lumen_dom::NodeId) -> Option<&LayoutBox> {
+    if root.origin.role == BoxRole::Element && root.node == node {
+        return Some(root);
+    }
+    root.children.iter().find_map(|c| find_element_box(c, node))
 }
 
 #[cfg(test)]

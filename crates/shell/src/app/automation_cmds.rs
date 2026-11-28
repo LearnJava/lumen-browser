@@ -520,6 +520,19 @@ impl Lumen {
                     }
                     let event = if down { "keydown" } else { "keyup" };
                     self.inject_key_events(&key, &code, &[event]);
+                    // CSS Overflow L5 §3.1.9: injected arrows on a focused
+                    // `::scroll-marker` navigate its group — the winit
+                    // `handle_key` path never sees BiDi/WebDriver keys, so the
+                    // marker branch lives here too. No held modifiers, same
+                    // rule as the real-key path.
+                    if down
+                        && mod_bit == 0
+                        && self.injected_modifiers == 0
+                        && Self::scroll_marker_arrow_edge(&key)
+                            .is_some_and(|edge| self.scroll_marker_arrow_key(edge))
+                    {
+                        self.request_redraw();
+                    }
                     // Alt+key is the page's `accesskey` — the same chord a
                     // real Alt press resolves in `keyboard.rs`. WebDriver
                     // sends Shift+Alt (Windows) or Ctrl+Alt (macOS); Alt is

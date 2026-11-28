@@ -1102,6 +1102,16 @@ impl Lumen {
             ack(epoch);
         }
         self.layout_basis_sig = Some(basis_sig);
+        // CSS Overflow L5 §2.1: explicit current-target карта `::scroll-marker`
+        // — в JS-миррор на каждом коммите, чтобы same-tick `getComputedStyle`
+        // флаш пересчитывал `:target-*` по свежему дереву (см. `relayout()` —
+        // тот же пуш на синхронном пути).
+        let marker_targets = self.scroll_marker_targets.clone();
+        crate::engine_bridge::route_task_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            move |j| j.notify_scroll_marker_targets(marker_targets),
+        );
         // ADR-016 M2.0/M2.2: record the off-thread compute cost. Unlike the
         // synchronous path this excludes the UI-thread apply (observers etc.),
         // and is tagged `(off-thread)` so the summary reflects the work moved off

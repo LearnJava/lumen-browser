@@ -256,16 +256,19 @@ pub(crate) fn render_source_to_png(
     // с одновременно скролл-зависимыми и focus-стилями редка (WPT reftest).
     if scrolled
         && (lumen_layout::sheet_has_scroll_state_queries(&parsed.stylesheet)
-            || lumen_layout::sheet_has_scroll_button_state(&parsed.stylesheet))
+            || lumen_layout::sheet_has_scroll_button_state(&parsed.stylesheet)
+            || lumen_layout::sheet_has_scroll_marker_target_state(&parsed.stylesheet))
     {
         let offsets = lumen_layout::scroll_offsets(&parsed.layout);
         let edges = lumen_layout::scroll_state_edges(&parsed.layout, vp);
+        let markers = lumen_layout::scroll_marker_relations(&parsed.layout, &Default::default(), &Default::default());
         if let Ok(doc) = parsed.document.lock() {
             let new_layout = {
                 let _hints = lumen_layout::install_scroll_hints(lumen_layout::ScrollHints {
                     offsets: offsets.clone(),
                     page: (0.0, 0.0),
                     edges,
+                    markers,
                 });
                 let mut l = lumen_layout::layout_measured_hyp(
                     &doc,

@@ -1420,6 +1420,19 @@ pub(crate) struct Lumen {
     /// next Tab press then continues at the scroll target, not at the next
     /// pseudo stop. Tab-focused markers leave this `false`.
     pub(crate) pseudo_nav_pending: bool,
+    /// CSS Overflow L5 §2.1/§3.1.8 — current scroll target контейнеров:
+    /// `NodeId::raw()` scroll-контейнера → `NodeId::raw()` цели, которую
+    /// последняя активация `::scroll-marker` сделала текущей. Задаёт
+    /// `activate_scroll_marker`, снимает любая прокрутка без цели
+    /// (`apply_container_scroll`, страничный скролл) — тогда активный маркер
+    /// выбирается по позиции (§3.1.8).
+    pub(crate) scroll_marker_targets: std::collections::HashMap<u32, u32>,
+    /// CSS Overflow L5 §3.1.8 «eventual scroll position»: финальные позиции
+    /// активных smooth-анимаций шима (`container NodeId::raw()` → `(tx, ty)`),
+    /// обновляется каждый дренаж scroll-запросов. Подмешивается в
+    /// `scroll_offsets` при подсчёте `scroll_marker_relations`, чтобы
+    /// `:target-current` следовал за докруткой, а не за промежуточным кадром.
+    pub(crate) eventual_scroll_offsets: std::collections::HashMap<u32, (f32, f32)>,
     /// `(индекс фрейма, узел ЕГО документа)`, если последний клик пришёлся
     /// ВНУТРЬ содержимого фрейма (BUG-480 срезы 22/23).
     ///

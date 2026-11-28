@@ -148,6 +148,11 @@ pub(in crate::style) fn matches_pseudo_class(p: &PseudoClass, doc: &Document, no
         // мост через скрытый атрибут, его ставит JS-шим при показе интереса.
         PseudoClass::InterestSource => doc.get(node).get_attr("data-lumen-interest-source").is_some(),
         PseudoClass::InterestTarget => doc.get(node).get_attr("data-lumen-interest-target").is_some(),
+        // CSS Overflow L5 §3.1.7 — `:target-current`/`:target-before`/
+        // `:target-after` наных scroll markers (`<a>` и т.п.) пока не
+        // поддержаны: состояние считается только для `::scroll-marker`
+        // (см. `style::pseudo::scroll_pseudo_part_matches`).
+        PseudoClass::TargetCurrent | PseudoClass::TargetBefore | PseudoClass::TargetAfter => false,
         // CSS Selectors L4 §17.4 `:state(name)` — WHATWG HTML §4.13.2
         // `ElementInternals.states` (`CustomStateSet`). Runtime-only, same
         // sentinel-attribute pattern as `:fullscreen`/`:modal`: the JS shim

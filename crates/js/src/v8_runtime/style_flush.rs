@@ -113,6 +113,29 @@ pub(crate) struct FlushHandles {
     /// CSS Overflow L5 §3.2: scrollability edges of the previous flush's tree —
     /// `ScrollHints::edges` for `::scroll-button():enabled`/`:disabled`.
     pub(crate) scroll_button_edges: Arc<Mutex<HashMap<u32, lumen_layout::EdgeFlags>>>,
+    /// CSS Overflow L5 §3.1.7: `::scroll-marker` → active-marker relation of
+    /// the previous flush's tree — last-known `:target-*` map, used as the
+    /// pre-layout `ScrollHints::markers` approximation until the fresh
+    /// relations are resolved below.
+    pub(crate) scroll_marker_states: Arc<Mutex<HashMap<u32, u8>>>,
+    /// CSS Overflow L5 §2.1: the shell's explicit `::scroll-marker`
+    /// current-target map (`container.raw()` → `target.raw()`), pushed via
+    /// `notify_scroll_marker_targets`. Each flush resolves `:target-*`
+    /// relations over its own fresh tree with it, so same-tick
+    /// `getComputedStyle` sees activations and scroll clears without a
+    /// one-flush lag.
+    pub(crate) shell_marker_targets: Arc<Mutex<HashMap<u32, u32>>>,
+    /// CSS Overflow L5 §3.1.8 «eventual scroll position»: конечные позиции
+    /// smooth-анимаций шима (`_lumen_smooth_targets` → зеркало в
+    /// [`super::runtime::V8JsRuntime::smooth_scroll_targets`]). Шелл читает
+    /// через `PersistentJs::smooth_scroll_targets` и подмешивает в
+    /// `scroll_offsets` при подсчёте `scroll_marker_relations`.
+    pub(crate) smooth_scroll_targets: Arc<Mutex<HashMap<u32, (f32, f32)>>>,
+    /// The relations map actually installed into `ScrollHints::markers` by
+    /// the current snapshot — the twin of [`Self::last_flushed_pseudo_focus`],
+    /// so an activation that only flipped `:target-current` still triggers a
+    /// flush and a full pseudo collect.
+    pub(crate) last_flushed_marker_relations: Arc<Mutex<Option<HashMap<u32, u8>>>>,
     /// See [`super::runtime::V8JsRuntime::anchor_scrollers`].
     pub(crate) anchor_scrollers: Arc<Mutex<lumen_layout::AnchorScrollers>>,
     /// CQ-SCROLL-STATE-2: the page's scroll position as `window.scrollY`/`scrollX` read it —
@@ -620,6 +643,14 @@ impl FlushHandles {
         // CSS Overflow L5 §3.3: marker→marker focus keeps the same container
         // nid — the pseudo triple is its own change signal.
         let current_pseudo = *self.pseudo_focus.lock().unwrap_or_else(|e| e.into_inner());
+        // Отдельно от `focus_changed`: смена pseudo-focus не попадает в
+        // dirty-план scoped-сборщиков, поэтому pseudo-стили scroll-контролов
+        // собираются целиком (см. блок `pseudo_styles_needed` ниже).
+        let pseudo_changed = *self
+            .last_flushed_pseudo_focus
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            != current_pseudo;
         // BUG-1458: the same for the pointer — `:hover` flips on a hit-test
         // change, which touches no DOM node either.
         let focus_changed = *self.last_flushed_focus.lock().unwrap_or_else(|e| e.into_inner())
@@ -789,11 +820,66 @@ impl FlushHandles {
         // стороны прокрутки из тех же подсказок — по дереву ПРОШЛОГО флаша
         // (см. `scroll_button_edges` ниже).
         let need_scroll_edges = lumen_layout::sheet_has_scroll_button_state(&sheet);
-        let _scroll_hints = (lumen_layout::sheet_has_scroll_state_queries(&sheet) || need_scroll_edges).then(|| {
+        let need_marker_states = lumen_layout::sheet_has_scroll_marker_target_state(&sheet);
+        // `ScrollHints::markers` feeds `:target-*` matching INSIDE the
+        // cascade below — pseudo-element styles are baked into the boxes
+        // then, so the relations must be resolved BEFORE layout. The fresh
+        // tree does not exist yet; the previous flush's basis tree does —
+        // relations are recomputed on it with the CURRENT explicit
+        // current-target map and CURRENT scroll offsets (same-tick
+        // `scrollLeft=`/activation are already in the mirrors), which is
+        // what makes `getComputedStyle(::scroll-marker)` same-tick honest.
+        // First flush (no basis) falls back to the stored relations.
+        // §3.1.8: для выбора активного маркера смещение контейнера —
+        // «eventual scroll position» его smooth-анимации (финал), а не
+        // промежуточный кадр; `ScrollHints::offsets` ниже остаётся
+        // фактическим — `scroll-state()` обязан видеть текущую прокрутку.
+        let marker_scroll_offsets = need_marker_states.then(|| {
+            let mut o = self
+                .scroll_states
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            for (&raw, &(x, y)) in self
+                .smooth_scroll_targets
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+            {
+                let e = o.entry(raw).or_insert([0.0, 0.0, 0.0, 0.0]);
+                e[0] = x;
+                e[1] = y;
+            }
+            o
+        });
+        let last_marker_relations = need_marker_states.then(|| {
+            let explicit = self
+                .shell_marker_targets
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            let offsets = marker_scroll_offsets.clone().unwrap_or_default();
+            let basis = self
+                .incr_basis
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .map(|b| {
+                    lumen_layout::scroll_marker_relations(&b.layout, &explicit, &offsets)
+                });
+            basis.unwrap_or_else(|| {
+                self.scroll_marker_states
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone()
+            })
+        });
+        let _scroll_hints = (lumen_layout::sheet_has_scroll_state_queries(&sheet) || need_scroll_edges || need_marker_states).then(|| {
             lumen_layout::install_scroll_hints(lumen_layout::ScrollHints {
                 offsets: self.scroll_states.lock().unwrap_or_else(|e| e.into_inner()).clone(),
                 page: self.page_scroll(),
                 edges: self.scroll_button_edges.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+                markers: last_marker_relations.clone().unwrap_or_default(),
             })
         });
         let incr_scope_guard = lumen_core::profile::scope("flush.try_incremental");
@@ -811,7 +897,7 @@ impl FlushHandles {
         // means the full path ran and every collector below must rebuild its
         // whole-document map from scratch, same as before this slice.
         drop(incr_scope_guard);
-        let (mut layout_root, mut counters, incr_scope, mut cached_rollups) = match incr {
+        let (mut layout_root, mut counters, mut incr_scope, mut cached_rollups) = match incr {
             Some((lr, c, dirty_roots, prev_node_ids, prev_node_raw_ids, content_nodes, scroll_rollups)) => {
                 (lr, c, Some((dirty_roots, prev_node_ids, prev_node_raw_ids, content_nodes)), scroll_rollups)
             }
@@ -840,6 +926,112 @@ impl FlushHandles {
             &mut layout_root,
             &self.scroll_states.lock().unwrap_or_else(|e| e.into_inner()),
         );
+        // CSS Overflow L5 §3.1.7: `:target-*` стили `::scroll-marker` запекаются
+        // в каскад по `ScrollHints::markers` — кандидату, посчитанному по дереву
+        // ПРОШЛОГО флаша (или пустому на первом). Если на свежем дереве
+        // отношения другие, запечённые стили отстают навсегда: incremental
+        // путь переиспользует кэш и relations-пересчёт сам по себе рестайл не
+        // запускает. Один лишний полный проход с relations свежего дерева
+        // сходится сразу (relations зависят от геометрии слабо), а стоит он
+        // только на флашах, где активный маркер реально сменился.
+        if need_marker_states {
+            let explicit = self
+                .shell_marker_targets
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            let offsets = self
+                .scroll_states
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            let moffs = marker_scroll_offsets.clone().unwrap_or_default();
+            let used = last_marker_relations.clone().unwrap_or_default();
+            let fresh0 =
+                lumen_layout::scroll_marker_relations(&layout_root, &explicit, &moffs);
+            if fresh0 != used {
+                let _hints2 = lumen_layout::install_scroll_hints(lumen_layout::ScrollHints {
+                    offsets: offsets.clone(),
+                    page: self.page_scroll(),
+                    edges: self
+                        .scroll_button_edges
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .clone(),
+                    markers: fresh0,
+                });
+                // `clear_interactive_state` выше уже снял focus/hover/pseudo —
+                // второй проход должен видеть те же `:focus*`/`::scroll-*:focus`,
+                // что и первый.
+                lumen_layout::set_interactive_state(
+                    current_hover.map(lumen_dom::NodeId::from_raw),
+                    focus_node,
+                    None,
+                );
+                lumen_layout::set_keyboard_focus(current_keyboard);
+                lumen_layout::set_pseudo_focus(match current_pseudo {
+                    Some((o, k, c)) => lumen_layout::PseudoFocus {
+                        origin: o,
+                        kind: k,
+                        container: c,
+                    },
+                    None => lumen_layout::PseudoFocus::NONE,
+                });
+                let (mut lr2, c2) =
+                    lumen_layout::layout_measured_with_counters(&doc_guard, &sheet, viewport, &measurer);
+                lumen_layout::restore_scroll_positions(
+                    &mut lr2,
+                    &self.scroll_states.lock().unwrap_or_else(|e| e.into_inner()),
+                );
+                layout_root = lr2;
+                counters = c2;
+                // Дерево второго прохода собрано не incremental-движком —
+                // scoped dirty-план и rollup-кэш первого прохода к нему не
+                // относятся, коллекторы идут полным путём.
+                incr_scope = None;
+                cached_rollups = lumen_layout::RollupCache::default();
+                lumen_layout::clear_interactive_state();
+            }
+        }
+        // CSS Overflow L5: входы pseudo-стилей scroll-контролов, которые
+        // scoped dirty-план не видит — `:target-*` отношения маркеров и
+        // стороны прокрутки кнопок. Считаются один раз по готовому дереву;
+        // изменение любого из них (или pseudo-focus выше) заставляет
+        // `pseudo_styles_needed`-блок ниже собрать pseudo-стили целиком,
+        // а не хранить записи для nid вне плана.
+        // CSS Overflow L5 §2.1: relations resolved on THIS flush's tree with
+        // the shell-pushed explicit current-target map — `:target-current`
+        // survives scroll clears and group re-creation in the same tick,
+        // where a pre-relayout snapshot would lag one flush.
+        let fresh_marker_relations = need_marker_states.then(|| {
+            let explicit = self
+                .shell_marker_targets
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            let offsets = marker_scroll_offsets.clone().unwrap_or_default();
+            lumen_layout::scroll_marker_relations(&layout_root, &explicit, &offsets)
+        });
+        let marker_states_changed = fresh_marker_relations.as_ref().is_some_and(|m| {
+            *m != *self.scroll_marker_states.lock().unwrap_or_else(|e| e.into_inner())
+        });
+        let fresh_scroll_edges = need_scroll_edges.then(|| {
+            lumen_layout::scroll_state_edges(&layout_root, viewport)
+        });
+        let scroll_edges_changed = fresh_scroll_edges.as_ref().is_some_and(|e| {
+            *e != *self.scroll_button_edges.lock().unwrap_or_else(|e| e.into_inner())
+        });
+        // Relations resolved this flush vs the ones baked into the previous
+        // snapshot — catches `:target-*` flips the positional comparison
+        // (`marker_states_changed`) cannot see, e.g. an explicit activation
+        // whose geometry did not move.
+        let marker_relations_changed =
+            *self.last_flushed_marker_relations.lock().unwrap_or_else(|e| e.into_inner())
+                != fresh_marker_relations;
+        let pseudo_inputs_changed = pseudo_changed
+            || marker_states_changed
+            || marker_relations_changed
+            || scroll_edges_changed;
         // BUG-1211 (post-collectors): when the incremental cascade+layout
         // path ran, the four collectors below re-walk only what could have
         // changed instead of the whole document — they were, until that slice,
@@ -1057,7 +1249,10 @@ impl FlushHandles {
             let _pseudo_scope = lumen_core::profile::scope("flush.pseudo_styles");
             let mut pseudo = self.pseudo_computed_styles.lock().unwrap_or_else(|e| e.into_inner());
             match (&scoped_plan, scoped_ids) {
-                (Some(plan), Some(ids)) if self.pseudo_styles_collected.load(Ordering::Relaxed) => {
+                (Some(plan), Some(ids))
+                    if self.pseudo_styles_collected.load(Ordering::Relaxed)
+                        && !pseudo_inputs_changed =>
+                {
                     for nid in ids {
                         if !plan.keeps_published(*nid) {
                             lumen_layout::forget_pseudo_computed_styles(&mut pseudo, *nid);
@@ -1213,9 +1408,15 @@ impl FlushHandles {
         // CSS Overflow L5 §3.2: стороны прокрутки контейнеров по ГОТОВОМУ
         // дереву — их прочитает `ScrollHints::edges` следующего флаша для
         // `::scroll-button():enabled`/`:disabled`.
-        if need_scroll_edges {
-            *self.scroll_button_edges.lock().unwrap_or_else(|e| e.into_inner()) =
-                lumen_layout::scroll_state_edges(&layout_root, viewport);
+        if need_scroll_edges && let Some(edges) = fresh_scroll_edges {
+            *self.scroll_button_edges.lock().unwrap_or_else(|e| e.into_inner()) = edges;
+        }
+        // CSS Overflow L5 §3.1.7: отношения `::scroll-marker` по ГОТОВОМУ
+        // дереву — `ScrollHints::markers` следующего флаша для `:target-*`.
+        // Явной current-target здесь нет (она живёт в шелле) — выбор
+        // позиционный.
+        if need_marker_states && let Some(markers) = fresh_marker_relations.clone() {
+            *self.scroll_marker_states.lock().unwrap_or_else(|e| e.into_inner()) = markers;
         }
         if verify_scope_prune() {
             self.verify_pruned(scoped_plan.as_ref(), &layout_root, &doc_guard, &counters, viewport, &sheet, &measurer);
@@ -1264,6 +1465,10 @@ impl FlushHandles {
             .last_flushed_pseudo_focus
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = current_pseudo;
+        *self
+            .last_flushed_marker_relations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = fresh_marker_relations;
         // CSSOM-8 вариант C: `cssom_deltas` itself is never cleared — it is
         // replayed onto every future cascade rebuild too (see the field's doc
         // comment) — only the "has something changed since the last flush"
