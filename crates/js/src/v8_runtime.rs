@@ -359,6 +359,9 @@ impl V8JsRuntime {
             let lazy_img_requests = Arc::clone(&self.lazy_img_requests);
             let scroll_states = Arc::clone(&self.scroll_states);
             let scroll_button_edges = Arc::clone(&self.scroll_button_edges);
+            let scroll_marker_states = Arc::clone(&self.scroll_marker_states);
+            let shell_marker_targets = Arc::clone(&self.shell_marker_targets);
+            let smooth_scroll_targets = Arc::clone(&self.smooth_scroll_targets);
             let pending_scrolls = Arc::clone(&self.pending_scrolls);
             let pending_page_scrolls = Arc::clone(&self.pending_page_scrolls);
             let page_scroll_y = Arc::clone(&self.page_scroll_y);
@@ -410,6 +413,9 @@ impl V8JsRuntime {
                 never_flushed: Arc::clone(&self.style_never_flushed),
                 scroll_states: Arc::clone(&scroll_states),
                 scroll_button_edges: Arc::clone(&scroll_button_edges),
+                scroll_marker_states: Arc::clone(&scroll_marker_states),
+                shell_marker_targets: Arc::clone(&shell_marker_targets),
+                smooth_scroll_targets: Arc::clone(&smooth_scroll_targets),
                 anchor_scrollers: Arc::clone(&self.anchor_scrollers),
                 page_scroll_y: Arc::clone(&page_scroll_y),
                 page_scroll_x: Arc::clone(&page_scroll_x),
@@ -420,6 +426,7 @@ impl V8JsRuntime {
                 last_flushed_hover: Arc::clone(&self.last_flushed_hover),
                 keyboard_focus: Arc::clone(&self.keyboard_focus),
                 last_flushed_keyboard_focus: Arc::clone(&self.last_flushed_keyboard_focus),
+                last_flushed_marker_relations: Arc::new(Mutex::new(None)),
                 pseudo_focus: Arc::clone(&self.pseudo_focus),
                 last_flushed_pseudo_focus: Arc::new(Mutex::new(None)),
                 style_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),

@@ -320,7 +320,9 @@ impl Lumen {
             // UX-STATUS-BUBBLE: ссылка ищется от узла-источника попадания (как
             // при клике), а не от `hovered_nid`; над фреймом пузыря нет.
             self.status_hover_source = if target.frame.is_none() {
-                target.page.as_ref().map(|r| r.source_node)
+                target.page.as_ref().map(|r| {
+                    r.pseudo.map(|p| p.origin).unwrap_or(r.source_node)
+                })
             } else {
                 None
             };
@@ -331,7 +333,11 @@ impl Lumen {
             let new_hovered = if frame_target.is_some() {
                 None
             } else {
-                target.page.map(|r| r.node)
+                // CSS Overflow L5: у псевдо-боксов (`::scroll-button()`,
+                // `::scroll-marker`) нет DOM-узла — `:hover` и события
+                // адресуются originating-элементу (`PseudoHit.origin`),
+                // поэтому `scroller:hover` срабатывает и над его кнопкой.
+                target.page.map(|r| r.pseudo.map(|p| p.origin).unwrap_or(r.node))
             };
             // BUG-480 срез 23: признак считается ДО обеих `cfg`-веток ниже —
             // каждая из них присваивает `hovered_frame` сама, а `:hover`

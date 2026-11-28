@@ -687,6 +687,24 @@ impl Lumen {
             return;
         }
 
+        // CSS Overflow L5 §3.1.9: стрелки на сфокусированном
+        // `::scroll-marker` листают маркеры его группы, а не страницу.
+        // Только без модификаторов — Ctrl/Alt+стрелки остаются браузерными
+        // шорткатами keybinding-таблицы ниже.
+        let marker_arrow_edge = match code {
+            KeyCode::ArrowUp => Some(lumen_layout::style::Edge::Top),
+            KeyCode::ArrowRight => Some(lumen_layout::style::Edge::Right),
+            KeyCode::ArrowDown => Some(lumen_layout::style::Edge::Bottom),
+            KeyCode::ArrowLeft => Some(lumen_layout::style::Edge::Left),
+            _ => None,
+        };
+        if self.modifiers.is_empty()
+            && marker_arrow_edge.is_some_and(|edge| self.scroll_marker_arrow_key(edge))
+        {
+            self.request_redraw();
+            return;
+        }
+
         // Ctrl+C over a page-text selection copies it (minus `user-select:
         // none` text). A focused typeable field keeps its own handling.
         if code == KeyCode::KeyC

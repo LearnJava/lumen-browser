@@ -223,6 +223,12 @@ fn matches_complex_for_pseudo(
                     | PseudoClass::Active,
                 ) => true,
                 SimpleSelector::PseudoClass(PseudoClass::Enabled | PseudoClass::Disabled) => is_button,
+                // CSS Overflow L5 §3.1.7 — `:target-current`/`:target-before`/
+                // `:target-after` описывают состояние самого `::scroll-marker`
+                // в его группе, а не originating-элемента.
+                SimpleSelector::PseudoClass(
+                    PseudoClass::TargetCurrent | PseudoClass::TargetBefore | PseudoClass::TargetAfter,
+                ) => is_marker,
                 _ => false,
             }
     };
@@ -311,6 +317,20 @@ fn scroll_pseudo_part_matches(
                 None => want_enabled,
             }
         }
+        // CSS Overflow L5 §3.1.7 — отношение `::scroll-marker` к активному
+        // маркеру его группы приходит из `ScrollHints::markers` (посчитано по
+        // прежнему дереву до пересборки).
+        PseudoClass::TargetCurrent | PseudoClass::TargetBefore | PseudoClass::TargetAfter => {
+            if !is_marker {
+                return false;
+            }
+            let want = match pc {
+                PseudoClass::TargetCurrent => crate::scroll_state::MARKER_CURRENT,
+                PseudoClass::TargetBefore => crate::scroll_state::MARKER_BEFORE,
+                _ => crate::scroll_state::MARKER_AFTER,
+            };
+            crate::scroll_state::scroll_marker_relation(node) == Some(want)
+        }
         _ => scroll_pseudo_focus_matches(node, pseudo_base, p),
     }
 }
@@ -338,7 +358,11 @@ fn scroll_pseudo_focus_matches(
     let kind_ok = if is_marker {
         pf.kind == crate::PseudoKind::ScrollMarker as u8
     } else if is_group {
+        // Группа никогда не фокусируется сама, но её `:focus-within` живёт,
+        // пока фокус держит `::scroll-marker` её группы (kind=ScrollMarker) —
+        // пускать оба kind, точное pseudo-class решение ниже.
         pf.kind == crate::PseudoKind::ScrollMarkerGroup as u8
+            || pf.kind == crate::PseudoKind::ScrollMarker as u8
     } else {
         (crate::PseudoKind::ScrollButtonBlockStart as u8
             ..=crate::PseudoKind::ScrollButtonBlockEnd as u8)

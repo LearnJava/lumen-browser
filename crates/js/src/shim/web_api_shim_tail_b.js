@@ -966,7 +966,18 @@ __lumen_C._lumen_focus_update = _lumen_focus_update;
 // `document.body` — exactly what `_lumen_focus_update(-1)` already produces
 // via `activeElement`'s no-focus branch. Called from `_lumen_run_raf_callbacks`
 // (`web_api_shim_mid_b.js`), the shim's stand-in for that per-frame step.
+// CSS Overflow L5 §3.3: while a scroll-control pseudo-element (`::scroll-
+// marker`/`::scroll-button()`) holds focus the shell reports the scroll
+// container as `focused_node` — but the container is not a focusable area,
+// so the fixup below would drop it (and `_lumen_request_blur` would then
+// clear the shell's pseudo focus on the next pump). The flag mirrors
+// `notify_pseudo_focus`; `activeElement` keeps reading the container nid.
+var _lumen_pseudo_focus_on = false;
+function _lumen_pseudo_focus_set(on) { _lumen_pseudo_focus_on = !!on; }
+__lumen_C._lumen_pseudo_focus_set = _lumen_pseudo_focus_set;
+
 function _lumen_focus_fixup() {
+    if (_lumen_pseudo_focus_on) return;
     var nid = _lumen_last_focused_nid;
     if (nid === null || nid === undefined || nid === -1) return;
     if (!_lumen_is_focusable(nid) || _lumen_focus_not_rendered(nid)) _lumen_focus_drop();

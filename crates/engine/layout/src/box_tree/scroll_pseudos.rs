@@ -97,7 +97,6 @@ pub(super) fn inject_scroll_pseudos(
         let mut before: Vec<LayoutBox> = Vec::new();
         let mut after: Vec<LayoutBox> = Vec::new();
         let mut group_after = None;
-        let mut group_is_before = false;
         let group = child
             .style
             .scroll_marker_group
@@ -106,20 +105,17 @@ pub(super) fn inject_scroll_pseudos(
             });
         if let Some((placement, g)) = group {
             match placement {
-                // `before`: группа — внешний бокс, кнопки между ней и элементом.
-                ScrollMarkerGroupPlacement::Before => {
-                    before.push(g);
-                    group_is_before = true;
-                }
+                ScrollMarkerGroupPlacement::Before => before.push(g),
                 ScrollMarkerGroupPlacement::After => group_after = Some(g),
             }
         }
         if buttons {
-            // CSS Overflow L5 §3.2 + WPT box-order (`relative-box-order-*`,
-            // `scroll-buttons-enabled-ref`): группа всегда внешний бокс —
-            // `before` даёт [group][buttons][el], `after`/нет группы —
-            // [el][buttons][group]. Кнопки идут в порядке block-start,
-            // inline-start, inline-end, block-end (`BUTTONS`).
+            // CSS Overflow L5 §3.2 + WPT (`scroll-button-and-scroll-marker-not-in-event-path`,
+            // `scroll-buttons-enabled-ref`, `relative-box-order-of-pseudo-elements-ref`):
+            // кнопки — внешние боксы сразу за элементом (после его `::after`), группа —
+            // перед (`before`) или за (`after`) всей тройкой: `before` даёт
+            // [group][el][buttons], `after`/нет группы — [el][buttons][group]. Кнопки идут
+            // в порядке block-start, inline-start, inline-end, block-end (`BUTTONS`).
             let states = button_states(node, &child.style);
             let _guard = crate::scroll_state::install_scroll_button_states(states);
             let btns: Vec<LayoutBox> = BUTTONS
@@ -127,11 +123,7 @@ pub(super) fn inject_scroll_pseudos(
                 .filter_map(|&kind| build_button(cx, node, &child.style, kind))
                 .collect();
             drop(_guard);
-            if group_is_before {
-                before.extend(btns);
-            } else {
-                after.extend(btns);
-            }
+            after.extend(btns);
         }
         if let Some(g) = group_after {
             after.push(g);
@@ -271,7 +263,13 @@ pub fn scroll_button_box_enabled(
         crate::scroll_state::DIR_LEFT => 3,
         _ => return true,
     };
-    edges.get(&node.raw()).map(|e| e.0[idx]).unwrap_or(true)
+    edges
+        .get(&node.raw())
+        .map(|e| e.0[idx])
+        // Пустая таблица — данных о прокрутке нет вовсе (нет вьюпорта),
+        // считаем кнопку активной; НЕпустая без узла — контейнер не является
+        // scroll-контейнером (`overflow: visible` и т.п.), кнопка `:disabled`.
+        .unwrap_or(edges.is_empty())
 }
 
 /// Та же проверка, что [`scroll_button_box_enabled`], но по аргументам —
@@ -293,7 +291,10 @@ pub fn scroll_button_dir_enabled(
         crate::scroll_state::DIR_LEFT => 3,
         _ => return true,
     };
-    edges.get(&node.raw()).map(|e| e.0[idx]).unwrap_or(true)
+    edges
+        .get(&node.raw())
+        .map(|e| e.0[idx])
+        .unwrap_or(edges.is_empty())
 }
 
 /// The request string for a `::scroll-button()` box: every spelling it answers to.

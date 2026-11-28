@@ -870,7 +870,9 @@ impl Lumen {
             hit_result.as_ref().and_then(|r| {
                 self.layout_source.as_ref().map(|src| {
                     let doc = src.document.lock().unwrap_or_else(|e| e.into_inner());
-                    let mut n = r.source_node;
+                    // Псевдо-бокс (`::scroll-button()`/`::scroll-marker`) не
+                    // имеет DOM-узла: press адресуется originating-элементу.
+                    let mut n = r.pseudo.map(|p| p.origin).unwrap_or(r.source_node);
                     while !matches!(doc.get(n).data, NodeData::Element { .. })
                         && let Some(p) = doc.get(n).parent
                     {
@@ -1082,7 +1084,10 @@ impl Lumen {
             let target_node = match self.layout_source.as_ref() {
                 Some(src) => {
                     let doc = src.document.lock().unwrap();
-                    let mut n = result.source_node;
+                    // Псевдо-бокс (`::scroll-button()`/`::scroll-marker`) не
+                    // имеет DOM-узла: `event.target` — originating-элемент
+                    // (`PseudoHit.origin`), путь события идёт от него.
+                    let mut n = result.pseudo.map(|p| p.origin).unwrap_or(result.source_node);
                     while !matches!(doc.get(n).data, NodeData::Element { .. })
                         && let Some(p) = doc.get(n).parent
                     {
